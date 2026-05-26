@@ -62,7 +62,7 @@ export function Button({
     if (pressTimer.current) clearTimeout(pressTimer.current);
   }, []);
 
-  const { ref, focused } = useFocusable<HTMLButtonElement>({
+  const { ref, focused } = useFocusable({
     focusable: !disabled,
     onEnterPress: () => {
       if (disabled || !onClick) return;

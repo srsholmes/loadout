@@ -42,14 +42,35 @@ if [ ! -d "$PROJECT_ROOT/node_modules" ]; then
   (cd "$PROJECT_ROOT" && bun install)
 fi
 
+# Pre-bundle every plugin backend so the installed layout (no workspace
+# node_modules) can still load them. `bundleBackend()` in @loadout/server
+# checks mtime and reuses these bundles at runtime.
+info "Pre-bundling plugin backends..."
+for plugin_dir in "$PROJECT_ROOT"/plugins/*/; do
+  backend="$plugin_dir/backend.ts"
+  [ -f "$backend" ] || continue
+  plugin_name="$(basename "$plugin_dir")"
+  cache_dir="$plugin_dir.cache"
+  mkdir -p "$cache_dir"
+  info "  $plugin_name/backend.ts"
+  (cd "$PROJECT_ROOT" && bun build "$backend" \
+    --target=bun \
+    --format=esm \
+    --outdir="$cache_dir" \
+    --entry-naming="backend.bundle.js") >/dev/null
+done
+
 info "Building webview (vite)..."
 (cd "$OVERLAY_DIR" && bunx vite build)
 
 info "Bundling overlay (electrobun)..."
-RELEASE_FLAG=""
+# `electrobun build` accepts `--env=stable|canary|dev` (default: dev). The
+# `--release` flag from earlier docs is silent-no-op — it ended up under
+# `dev-*-x64/` either way. Stable env produces `release-*/loadout/`.
+ENV_FLAG="--env=dev"
 case "${1:-}" in
-  --release) RELEASE_FLAG="--release" ;;
+  --release|--stable) ENV_FLAG="--env=stable" ;;
 esac
-(cd "$OVERLAY_DIR" && bunx electrobun build $RELEASE_FLAG)
+(cd "$OVERLAY_DIR" && bunx electrobun build $ENV_FLAG)
 
 success "Build complete. Tree under: $OVERLAY_DIR/build/"

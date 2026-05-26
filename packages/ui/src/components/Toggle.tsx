@@ -12,7 +12,7 @@ export function Toggle({
   disabled?: boolean;
   size?: "small" | "default";
 }) {
-  const { ref, focused } = useFocusable<HTMLInputElement>({
+  const { ref, focused } = useFocusable({
     focusable: !disabled,
     onEnterPress: () => {
       if (!disabled) onChange(!checked);

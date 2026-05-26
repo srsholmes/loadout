@@ -45,6 +45,17 @@ export function PluginHost({ plugin }: { plugin: PluginInfo }) {
           throw new Error(`Plugin "${plugin.id}" does not export a mount function`);
         }
         const result = mount(container, { parentFocusKey: "content" });
+        // If the effect cleanup already ran (cancelled between await and now),
+        // the React root we just mounted has no other reference. Tear it down
+        // immediately so we don't leak.
+        if (cancelled) {
+          if (typeof result === "function") {
+            try {
+              result();
+            } catch {}
+          }
+          return;
+        }
         unmountRef.current = typeof result === "function" ? result : null;
         setLoading(false);
       } catch (err) {

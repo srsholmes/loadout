@@ -19,21 +19,32 @@ export { Spinner } from "./components/Spinner";
 export {
   useFocusable,
   FocusContext,
+  init as initSpatialNav,
   setFocus,
   getCurrentFocusKey,
   navigateByDirection,
   pauseNav,
   resumeNav,
+  updateAllLayouts,
+  destroyNav,
+  doesFocusableExist,
+  setKeyMap,
+  setThrottle,
+  updateRtl,
+  ROOT_FOCUS_KEY,
+  SpatialNavigation,
   pushBackInterceptor,
   tryRunBackInterceptor,
 } from "./spatial-nav";
+export type { BackInterceptor } from "./spatial-nav";
 export type {
-  FocusableLayout,
-  FocusDetails,
   UseFocusableConfig,
   UseFocusableResult,
-  BackInterceptor,
-} from "./spatial-nav";
+  FocusableComponentLayout,
+  FocusDetails,
+  KeyPressDetails,
+  Direction,
+} from "@noriginmedia/norigin-spatial-navigation";
 
 export { applyFocusPulse, focusScaleClass } from "./focus-style";
 

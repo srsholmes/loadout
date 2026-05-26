@@ -25,7 +25,7 @@ export function IconButton({
   className?: string;
   style?: CSSProperties;
 }) {
-  const { ref, focused } = useFocusable<HTMLButtonElement>({
+  const { ref, focused } = useFocusable({
     focusable: !disabled,
     onEnterPress: () => !disabled && onClick(),
   });

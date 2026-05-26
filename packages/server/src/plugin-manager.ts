@@ -16,6 +16,13 @@ export interface LoadPluginsArgs {
   broadcast: (msg: RpcEvent) => void;
 }
 
+/**
+ * Plugin id charset. Constrained so the id is safe in URL paths, log lines,
+ * filesystem cache dirs, and JSON keys — no traversal, no shell-interesting
+ * chars. Reject leading dash so `--foo`-style switches can't be smuggled.
+ */
+const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
 async function readManifest(pluginDir: string): Promise<PluginManifest | undefined> {
   const pluginJson = Bun.file(join(pluginDir, "plugin.json"));
   if (await pluginJson.exists()) {
@@ -62,6 +69,12 @@ export async function loadPlugins({
     }
     if (!manifest) {
       log.debug(`Skipping ${entry}: no plugin.json or package.json with plugin field`);
+      continue;
+    }
+    if (!PLUGIN_ID_RE.test(manifest.id)) {
+      log.warn(
+        `Skipping ${entry}: plugin id ${JSON.stringify(manifest.id)} does not match ${PLUGIN_ID_RE}`,
+      );
       continue;
     }
 

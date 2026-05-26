@@ -1,7 +1,8 @@
 // Electrobun webview entry. Wires:
 //   - Electroview instance (so window.__electroview exists for the RPC shim)
-//   - Session token fetch → window.__LOADOUT_TOKEN__ → WS connect
-//   - Spatial-nav singleton install (shell + plugins share the same focus tree)
+//   - Session token from the URL (passed by the Bun side at window create)
+//   - Spatial-nav singleton init (one focus tree across every React root)
+//   - Vendor globals (React + @loadout/ui shared with plugin bundles)
 //   - Bun→webview channel bridges: visibility, action, scroll, open-plugin, etc.
 //   - React root rendering @loadout/overlay-shell's <App/>
 
@@ -34,26 +35,33 @@ import {
   type OverlayAction,
 } from "./lib/electrobun";
 
-// Expose React + @loadout/ui as globals so plugin bundles compiled with
-// `vendorGlobalsPlugin` resolve to the SAME React instance — sharing hooks
-// across plugin React roots requires one canonical React.
-window.__LOADOUT_REACT = React;
-window.__LOADOUT_REACT_JSX_RUNTIME = ReactJsxRuntime;
-window.__LOADOUT_REACT_JSX_DEV_RUNTIME = ReactJsxDevRuntime;
-window.__LOADOUT_REACT_DOM = ReactDOM;
-window.__LOADOUT_REACT_DOM_CLIENT = ReactDOMClient;
-window.__LOADOUT_UI = LoadoutUi;
+// Expose the shell's React + @loadout/ui instances as window globals so
+// plugin bundles (compiled by the server with `vendorGlobalsPlugin`) resolve
+// imports to the same instances. Without this, plugins bundle their own
+// React copy and hooks break across roots.
+type GlobalRefs = {
+  __LOADOUT_REACT: typeof React;
+  __LOADOUT_REACT_JSX_RUNTIME: typeof ReactJsxRuntime;
+  __LOADOUT_REACT_JSX_DEV_RUNTIME: typeof ReactJsxDevRuntime;
+  __LOADOUT_REACT_DOM: typeof ReactDOM;
+  __LOADOUT_REACT_DOM_CLIENT: typeof ReactDOMClient;
+  __LOADOUT_UI: typeof LoadoutUi;
+};
+const w = window as unknown as Window & GlobalRefs;
+w.__LOADOUT_REACT = React;
+w.__LOADOUT_REACT_JSX_RUNTIME = ReactJsxRuntime;
+w.__LOADOUT_REACT_JSX_DEV_RUNTIME = ReactJsxDevRuntime;
+w.__LOADOUT_REACT_DOM = ReactDOM;
+w.__LOADOUT_REACT_DOM_CLIENT = ReactDOMClient;
+w.__LOADOUT_UI = LoadoutUi;
 
-// Install the shared spatial-navigation singleton on window.__LOADOUT_SPATIAL_NAV.
 installSpatialNav();
 
-// Electroview MUST exist so window.__electroview is non-null for the RPC shim.
 const electro = new Electroview({
   rpc: Electroview.defineRPC({ handlers: { requests: {}, messages: {} } }),
 });
 window.__electroview = electro;
 
-// Catch-all error logging so screen-captures + log greps land on a known prefix.
 window.addEventListener("error", (e) => {
   console.error(`[window.error] ${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`, e.error);
 });
@@ -61,21 +69,23 @@ window.addEventListener("unhandledrejection", (e) => {
   console.error(`[unhandledrejection]`, e.reason);
 });
 
-async function fetchToken(): Promise<string> {
-  const res = await fetch("http://127.0.0.1:33820/api/token");
-  if (!res.ok) throw new Error(`token fetch failed: ${res.status}`);
-  const data = (await res.json()) as { token: string };
-  return data.token;
+function readToken(): string {
+  // Token is passed via URL search params by the Bun side at window construction.
+  // Throws when empty so we fail loud in dev rather than 401-loop the WS reconnect.
+  const fromUrl = new URLSearchParams(window.location.search).get("token");
+  if (fromUrl) return fromUrl;
+  throw new Error(
+    "Missing ?token= in webview URL. The Bun host must pass the session token via the BrowserWindow URL.",
+  );
 }
 
-async function navigate(hash: string) {
+function navigate(hash: string) {
   if (window.location.hash !== hash) window.location.hash = hash;
 }
 
 async function boot() {
   console.log("[overlay] boot");
-  const token = await fetchToken();
-  window.__LOADOUT_TOKEN__ = token;
+  window.__LOADOUT_TOKEN__ = readToken();
 
   const root = createRoot(document.getElementById("root")!);
   root.render(<App />);
@@ -86,6 +96,8 @@ async function boot() {
     event: "reload",
     handler: () => {
       // Plugin source changed on disk — reload to pick up the new bundle.
+      // Plugin React state is not preserved; saved config is plugin-owned
+      // and reloaded on next mount, so this is fine for dev iteration.
       location.reload();
     },
   });

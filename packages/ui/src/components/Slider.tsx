@@ -31,7 +31,7 @@ export function Slider({
   accentColor?: string;
   style?: CSSProperties;
 }) {
-  const { ref, focused } = useFocusable<HTMLInputElement>({
+  const { ref, focused } = useFocusable({
     focusable: !disabled,
     onArrowPress: (direction) => {
       if (direction !== "left" && direction !== "right") return true;

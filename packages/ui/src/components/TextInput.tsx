@@ -26,7 +26,7 @@ export function TextInput({
   className?: string;
   style?: CSSProperties;
 }) {
-  const { ref, focused } = useFocusable<HTMLInputElement>({
+  const { ref, focused } = useFocusable({
     focusable: !disabled,
     onEnterPress: () => {
       if (disabled) return;

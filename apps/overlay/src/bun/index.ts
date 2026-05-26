@@ -1,6 +1,6 @@
 // Bun main process for the Loadout overlay. Owns:
-//   - the single overlay BrowserWindow (hidden on boot)
 //   - the @loadout/server Bun.serve instance (spawned in-process)
+//   - the single overlay BrowserWindow (hidden on boot)
 //   - RPC handlers registered via Electrobun's defineRPC
 //   - the evdev input interceptor (F16 toggle, EVIOCGRAB, NavController)
 //   - the X11 / Gamescope atom loop
@@ -36,13 +36,14 @@ import { startServer } from "@loadout/server";
 import { join } from "node:path";
 
 // ---- Server (in-process) ---------------------------------------------------
-// Boot the HTTP+WS server before opening the window so the webview's first
-// fetch of /api/token succeeds.
+// Block at boot until the server is up. The webview will read its session
+// token from window.location.search (passed in the BrowserWindow URL), so
+// we must have the token in hand before constructing the window.
 
 const projectRoot = process.env.LOADOUT_PROJECT_ROOT ?? process.cwd();
 const pluginsDir = process.env.LOADOUT_PLUGINS_DIR ?? join(projectRoot, "plugins");
 
-const serverPromise = startServer({ projectRoot, pluginsDir }).catch((err) => {
+const serverHandle = await startServer({ projectRoot, pluginsDir }).catch((err) => {
   console.error("[overlay] server failed to start:", err);
   process.exit(1);
 });
@@ -93,13 +94,20 @@ function sendToWebview<K extends keyof WebviewMessages>(
   }
 }
 
+// Token is injected into the webview via the URL search params instead of
+// an unauthenticated /api/token endpoint. CEF's custom-scheme URLs aren't
+// shared with any other local process, so this stays local-only.
+const baseUrl =
+  process.env.ELECTROBUN_DEV_URL ?? "views://overlay/index.html";
+const overlayUrl = `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}token=${encodeURIComponent(serverHandle.token)}`;
+
 const overlay = new BrowserWindow({
   title: "Loadout Overlay",
   frame: { x: 0, y: 0, width: 1280, height: 800 },
   titleBarStyle: "default",
   transparent: false,
   hidden: !DESKTOP_DEV,
-  url: process.env.ELECTROBUN_DEV_URL ?? "views://overlay/index.html",
+  url: overlayUrl,
   rpc,
 });
 
@@ -231,7 +239,12 @@ overlayManagementLoop({
   process.exit(1);
 });
 
-function runShutdown(): Promise<void> {
+async function runShutdown(): Promise<void> {
+  try {
+    serverHandle.close();
+  } catch (err) {
+    console.warn("[overlay] server close error:", err);
+  }
   return shutdown({
     running: managementLoopRunning,
     pendingResumeTimer,
@@ -243,11 +256,3 @@ function runShutdown(): Promise<void> {
 }
 process.on("SIGINT", runShutdown);
 process.on("SIGTERM", runShutdown);
-
-// Hold the server reference so it's not GC'd. Server lifecycle is bound
-// to the process — shutdown above lets it die with the parent.
-serverPromise.then((srv) => {
-  if (srv) {
-    process.on("exit", () => srv.close());
-  }
-});

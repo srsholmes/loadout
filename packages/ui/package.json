@@ -10,7 +10,8 @@
     "./styles.css": "./src/styles.css"
   },
   "dependencies": {
-    "@loadout/types": "*"
+    "@loadout/types": "*",
+    "@noriginmedia/norigin-spatial-navigation": "^3.0.0"
   },
   "peerDependencies": {
     "react": "^18.3.0",

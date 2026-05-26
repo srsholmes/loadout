@@ -14,7 +14,7 @@ function Tab({
   active: boolean;
   onSelect: (id: string) => void;
 }) {
-  const { ref, focused } = useFocusable<HTMLButtonElement>({
+  const { ref, focused } = useFocusable({
     onEnterPress: () => onSelect(id),
   });
 

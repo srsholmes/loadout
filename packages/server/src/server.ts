@@ -11,10 +11,13 @@ export interface ServerOptions {
   port?: number;
   pluginsDir?: string;
   projectRoot?: string;
+  /** Hard cap on concurrent WS connections. Defaults to 16 — overlay needs one. */
+  maxWsClients?: number;
 }
 
 interface WsClient {
   send(data: string): void;
+  close?(): void;
 }
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -35,9 +38,13 @@ export async function startServer(options: ServerOptions = {}) {
   const port = options.port ?? 33820;
   const projectRoot = options.projectRoot ?? process.cwd();
   const pluginsDir = options.pluginsDir ?? join(projectRoot, "plugins");
+  const maxWsClients = options.maxWsClients ?? 16;
 
   const auth = createSessionAuth();
-  log.info(`Session token: ${auth.token}`);
+  // Token is no longer exposed via HTTP — the Bun host hands it to the webview
+  // through the BrowserWindow URL at construction time. Log a redacted form so
+  // local-debug callers can still tell things are wired.
+  log.info(`Session token issued (${auth.token.slice(0, 6)}…)`);
 
   const wsClients = new Set<WsClient>();
   function broadcast(msg: RpcEvent) {
@@ -66,7 +73,7 @@ export async function startServer(options: ServerOptions = {}) {
     }
     const cached = bundleCache.get(pluginId);
     if (cached) return jsResponse(cached);
-    const result = await compileBrowserBundle(join(plugin.dir, "app.tsx"));
+    const result = await compileBrowserBundle(join(plugin.dir, "app.tsx"), plugin.dir);
     if (result.ok) bundleCache.set(pluginId, result.code);
     return jsResponse(result.code, result.ok);
   }
@@ -87,14 +94,16 @@ export async function startServer(options: ServerOptions = {}) {
 
       if (url.pathname === "/up") return new Response("ok");
 
-      if (url.pathname === "/api/token") {
-        // Returns the token to in-process callers only. Bound to 127.0.0.1 so
-        // anything off-host can't reach this surface.
-        return jsonResponse({ token: auth.token });
-      }
+      // `/ws` and `/api/*` are token-gated. There is intentionally no
+      // unauthenticated `/api/token` route — the token is delivered to the
+      // webview via the BrowserWindow URL at construction time, so no other
+      // local process can fetch it from this server.
 
       if (url.pathname === "/ws") {
         if (!auth.validateRequest(req)) return new Response("Unauthorized", { status: 401 });
+        if (wsClients.size >= maxWsClients) {
+          return new Response("Too many WS clients", { status: 503 });
+        }
         const ok = srv.upgrade(req, { data: { type: "rpc" } });
         return ok ? (undefined as unknown as Response) : new Response("upgrade failed", { status: 400 });
       }
@@ -134,7 +143,8 @@ export async function startServer(options: ServerOptions = {}) {
   log.info(`Loadout server running at http://127.0.0.1:${port}`);
 
   // Hot reload: any change inside a plugin dir invalidates its bundle and
-  // broadcasts a reload event so the overlay can re-import.
+  // broadcasts a reload event so the overlay can re-import. Watcher already
+  // ignores .cache/ + .build/ + node_modules.
   const watchers: ReturnType<typeof watchDir>[] = [];
   for (const [id, plugin] of plugins) {
     const w = watchDir(plugin.dir, (filename) => {
@@ -151,7 +161,7 @@ export async function startServer(options: ServerOptions = {}) {
     plugins,
     close() {
       for (const w of watchers) w.close();
-      server.stop();
+      server.stop(true);
     },
   };
 }

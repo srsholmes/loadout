@@ -12,9 +12,26 @@ describe("createRpcHandler", () => {
     expect(await h("not json")).toBeNull();
   });
 
-  it("returns null when required fields are missing", async () => {
+  it("returns null when id is missing too", async () => {
     const h = createRpcHandler(new Map());
-    expect(await h(JSON.stringify({ id: "1" }))).toBeNull();
+    expect(await h(JSON.stringify({ plugin: "x", method: "y" }))).toBeNull();
+  });
+
+  it("returns error envelope when required fields are missing but id is present", async () => {
+    const h = createRpcHandler(new Map());
+    const raw = await h(JSON.stringify({ id: "1" }));
+    expect(raw).not.toBeNull();
+    const res = JSON.parse(raw!);
+    expect(res).toEqual({ id: "1", error: "Malformed RPC request" });
+  });
+
+  it("rejects oversized args arrays", async () => {
+    const h = createRpcHandler(new Map());
+    const raw = await h(
+      JSON.stringify({ id: "1", plugin: "x", method: "y", args: new Array(100).fill(0) }),
+    );
+    const res = JSON.parse(raw!);
+    expect(res.error).toMatch(/Too many args/);
   });
 
   it("returns plugin-not-found error", async () => {

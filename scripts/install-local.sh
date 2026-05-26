@@ -59,7 +59,15 @@ for plugin in "$PLUGINS_SRC"/*/; do
   echo "Copying plugin: $name"
   rm -rf "$PLUGINS_DST/$name"
   cp -a "$plugin" "$PLUGINS_DST/$name"
-  rm -rf "$PLUGINS_DST/$name/.cache"
+  # Keep .cache/backend.bundle.js — it's the pre-bundled backend produced
+  # by scripts/build.sh, and the install layout has no workspace node_modules
+  # to fall back on at runtime.
+  rm -rf "$PLUGINS_DST/$name/node_modules"
+  if [ -f "$plugin/backend.ts" ] && [ ! -f "$PLUGINS_DST/$name/.cache/backend.bundle.js" ]; then
+    echo "ERROR: $name has backend.ts but no .cache/backend.bundle.js." >&2
+    echo "Run 'bash scripts/build.sh' before install — it pre-bundles plugin backends." >&2
+    exit 1
+  fi
 done
 
 # Install systemd unit.
@@ -68,6 +76,19 @@ cp "$PROJECT_ROOT/loadout.service" "$SERVICE_DIR/loadout.service"
 
 systemctl --user daemon-reload
 systemctl --user enable loadout
+
+# Propagate gamescope/X11/Wayland env into the user systemd manager so the
+# overlay service inherits DISPLAY/GAMESCOPE_DISPLAY/etc. Without this the
+# Bun-side gamescope detection sees an empty env and falls back to desktop
+# mode even under a gamescope session.
+if [ -n "${GAMESCOPE_DISPLAY:-}${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+  systemctl --user import-environment \
+    DISPLAY WAYLAND_DISPLAY \
+    GAMESCOPE_DISPLAY GAMESCOPE_WAYLAND_DISPLAY \
+    XDG_RUNTIME_DIR XDG_SESSION_TYPE \
+    XAUTHORITY 2>/dev/null || true
+fi
+
 systemctl --user restart loadout
 
 echo "Done. Check status: systemctl --user status loadout"
