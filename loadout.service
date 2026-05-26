@@ -1,0 +1,15 @@
+[Unit]
+Description=Loadout overlay
+# Loopback-only; no After=network.target so boot isn't gated on DNS/network.
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/loadout/bin/launcher
+WorkingDirectory=%h/.local/share/loadout
+Restart=on-failure
+RestartSec=5
+Environment=LOADOUT_PROJECT_ROOT=%h/.local/share/loadout
+Environment=LOADOUT_PLUGINS_DIR=%h/.local/share/loadout/plugins
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,28 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.cache/
+loadout
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Coverage
+coverage/
+*.lcov
+
+# Editor
+.vscode-test
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ESLint / Prettier cache
+.eslintcache

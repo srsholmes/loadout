@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "types": ["bun"],
+    "paths": {
+      "@loadout/ui": ["../../packages/ui/src"],
+      "@loadout/ui/*": ["../../packages/ui/src/*"],
+      "@loadout/types": ["../../packages/types/src"],
+      "@loadout/types/*": ["../../packages/types/src/*"],
+      "@loadout/server": ["../../packages/server/src"],
+      "@loadout/overlay-shell": ["../../packages/overlay-shell/src"],
+      "@loadout/device": ["../../packages/device/src"],
+      "@loadout/exec": ["../../packages/exec/src"]
+    }
+  },
+  "include": ["src/**/*", "electrobun.config.ts", "vite.config.ts"]
+}

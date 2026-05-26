@@ -1,0 +1,20 @@
+{
+  "name": "@loadout/overlay-shell",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@loadout/types": "*",
+    "@loadout/ui": "*",
+    "@noriginmedia/norigin-spatial-navigation": "^3.0.0"
+  },
+  "peerDependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  }
+}

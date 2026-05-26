@@ -1,0 +1,13 @@
+/*
+ * Loadout UI base styles. Imported by the overlay shell so every plugin
+ * inherits the focus-pulse keyframe and any future global rules.
+ */
+
+@keyframes focusPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-primary) 60%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in oklch, var(--color-primary) 30%, transparent);
+  }
+}

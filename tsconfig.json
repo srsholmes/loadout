@@ -1,0 +1,43 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "noEmit": true,
+    "types": ["bun"],
+    "paths": {
+      "@loadout/types": ["./packages/types/src"],
+      "@loadout/types/*": ["./packages/types/src/*"],
+      "@loadout/device": ["./packages/device/src"],
+      "@loadout/device/*": ["./packages/device/src/*"],
+      "@loadout/server": ["./packages/server/src"],
+      "@loadout/server/*": ["./packages/server/src/*"],
+      "@loadout/ui": ["./packages/ui/src"],
+      "@loadout/ui/*": ["./packages/ui/src/*"],
+      "@loadout/overlay-shell": ["./packages/overlay-shell/src"],
+      "@loadout/overlay-shell/*": ["./packages/overlay-shell/src/*"]
+    }
+  },
+  "include": [
+    "types/**/*.d.ts",
+    "apps/*/src/**/*.ts",
+    "apps/*/src/**/*.tsx",
+    "packages/*/src/**/*.ts",
+    "packages/*/src/**/*.tsx",
+    "plugins/*/backend.ts",
+    "plugins/*/app.tsx",
+    "test/**/*.ts"
+  ]
+}

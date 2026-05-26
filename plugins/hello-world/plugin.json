@@ -1,0 +1,8 @@
+{
+  "id": "hello-world",
+  "name": "Hello World",
+  "version": "0.0.1",
+  "description": "M1 smoke test plugin",
+  "author": "loadout",
+  "target": { "type": "panel", "title": "Hello World" }
+}

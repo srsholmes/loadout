@@ -1,0 +1,22 @@
+{
+  "name": "@loadout/plugin-hello-world",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "plugin": {
+    "id": "hello-world",
+    "name": "Hello World",
+    "description": "M1 smoke test: renders a panel, calls one backend RPC, reports the device.",
+    "author": "loadout",
+    "target": { "type": "panel", "title": "Hello World" }
+  },
+  "dependencies": {
+    "@loadout/device": "*",
+    "@loadout/types": "*"
+  },
+  "peerDependencies": {
+    "@loadout/ui": "*",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  }
+}
