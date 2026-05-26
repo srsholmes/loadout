@@ -93,3 +93,21 @@ systemctl --user restart loadout
 
 echo "Done. Check status: systemctl --user status loadout"
 echo "Logs:               journalctl --user -u loadout -f"
+
+# Steam Deck back-paddle wake hint. The Deck's controller HID is owned by
+# Steam Input under gamescope; the only way to fire an evdev key event the
+# overlay can see is to route a button through InputPlumber → F16. That
+# requires root, so install-local.sh (user-level) can't do it itself.
+PRODUCT="$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)"
+VENDOR="$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || true)"
+case "$VENDOR/$PRODUCT" in
+  Valve/Galileo|Valve/Jupiter)
+    if [ ! -f /etc/systemd/system/loadout-ip-profile.service ]; then
+      echo
+      echo "Steam Deck detected ($PRODUCT). To toggle the overlay from a back paddle:"
+      echo "  sudo bash $PROJECT_ROOT/scripts/setup-deck.sh"
+      echo
+      echo "(Reboot after; defaults to all four paddles. See docs/steam-deck-overlay-trigger.md.)"
+    fi
+    ;;
+esac
