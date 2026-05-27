@@ -1,42 +1,61 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, mock } from "bun:test";
 import { render, fireEvent } from "../../../../../test/render";
-import { Sidebar } from "./Sidebar";
 import type { PluginInfo } from "../hooks/usePlugins";
 
-// Stub the spatial-nav GamepadNav module so the sidebar can mount in
-// a pure DOM without booting the full norigin-spatial-navigation
-// runtime. We only assert click handlers + DOM presence here — focus
-// behaviour is exercised by spatial-nav's own specs.
-vi.mock("./GamepadNav", () => ({
+// Real modules captured before mock.module() runs — bun's module mocks
+// are process-global and persist across files, so we spread the real
+// module and override only what we need. Full replacement would hide
+// the module's other exports from sibling specs in the same run.
+import * as actualGamepadNav from "./GamepadNav";
+import * as actualUi from "@loadout/ui";
+import * as actualArtwork from "@loadout/steam-paths/artwork";
+import * as actualPluginIcons from "../hooks/usePluginIcons";
+import * as actualFavorites from "../hooks/useFavorites";
+import * as actualScrollFade from "../hooks/useScrollFade";
+
+// Stub the spatial-nav GamepadNav module so the sidebar can mount in a
+// pure DOM without booting norigin-spatial-navigation. We assert click
+// handlers + DOM presence here — focus behaviour has its own specs.
+mock.module("./GamepadNav", () => ({
+  ...actualGamepadNav,
   useFocusable: () => ({ ref: { current: null }, focusKey: "", focused: false, focusSelf: () => {} }),
   FocusContext: { Provider: ({ children }: { children: React.ReactNode }) => children },
   Focusable: ({ children }: { children: React.ReactNode }) => children,
   setFocus: () => {},
 }));
 
-vi.mock("@loadout/ui", () => ({
+mock.module("@loadout/ui", () => ({
+  ...actualUi,
   useCurrentGame: () => null,
   Spinner: () => <span data-testid="spinner" />,
 }));
 
-vi.mock("@loadout/steam-paths/artwork", () => ({
+mock.module("@loadout/steam-paths/artwork", () => ({
+  ...actualArtwork,
   steamArtworkUrls: () => ({ capsule: "", hero: "", logo: "" }),
 }));
 
-vi.mock("../hooks/usePluginIcons", () => ({
+mock.module("../hooks/usePluginIcons", () => ({
+  ...actualPluginIcons,
   usePluginIcons: () => ({}),
 }));
 
-vi.mock("../hooks/useFavorites", () => ({
+mock.module("../hooks/useFavorites", () => ({
+  ...actualFavorites,
   useFavorites: () => ({
     favorites: [] as string[],
     toggleFavorite: () => {},
   }),
 }));
 
-vi.mock("../hooks/useScrollFade", () => ({
+mock.module("../hooks/useScrollFade", () => ({
+  ...actualScrollFade,
   useScrollFade: () => ({ ref: { current: null } }),
 }));
+
+// SUT imported dynamically *after* the mocks register (mock.module is
+// not hoisted, unlike vitest's vi.mock).
+const { Sidebar } = await import("./Sidebar");
 
 function makePlugin(id: string, name: string): PluginInfo {
   return {
@@ -51,7 +70,7 @@ function makePlugin(id: string, name: string): PluginInfo {
 
 describe("Sidebar — Settings entry (issue #135)", () => {
   it("renders a Settings row pinned below the plugin list", () => {
-    const onSelectSettings = vi.fn();
+    const onSelectSettings = mock();
     const { getByText } = render(
       <Sidebar
         plugins={[makePlugin("alpha", "Alpha"), makePlugin("beta", "Beta")]}
@@ -65,12 +84,11 @@ describe("Sidebar — Settings entry (issue #135)", () => {
         onToggleSidebar={() => {}}
       />,
     );
-    // The Settings row label is what the user sees.
     expect(getByText("Settings")).toBeTruthy();
   });
 
   it("fires onSelectSettings when the Settings row is clicked", () => {
-    const onSelectSettings = vi.fn();
+    const onSelectSettings = mock();
     const { getByText } = render(
       <Sidebar
         plugins={[makePlugin("alpha", "Alpha")]}
@@ -84,8 +102,6 @@ describe("Sidebar — Settings entry (issue #135)", () => {
         onToggleSidebar={() => {}}
       />,
     );
-    // SidebarRow uses a `<button>` internally — clicking the Settings
-    // label text reaches that button via event bubbling.
     fireEvent.click(getByText("Settings"));
     expect(onSelectSettings).toHaveBeenCalledTimes(1);
   });
@@ -104,12 +120,6 @@ describe("Sidebar — Settings entry (issue #135)", () => {
         onToggleSidebar={() => {}}
       />,
     );
-    // SidebarRow renders the active row with a "active" or
-    // primary-tinted class. We assert the *parent button* of the
-    // label text carries some active-state signal — we don't pin a
-    // specific class name (it can change) but DO pin that the
-    // rendered DOM differs from the inactive case (covered by the
-    // other tests' implicit non-active class).
     const labelNode = getByText("Settings");
     const button = labelNode.closest("button");
     expect(button).not.toBeNull();

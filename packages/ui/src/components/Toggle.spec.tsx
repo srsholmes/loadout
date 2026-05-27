@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, mock } from "bun:test";
 import { render, screen, fireEvent } from "../../../../test/render";
 import { Toggle } from "./Toggle";
 
@@ -21,21 +21,21 @@ describe("Toggle", () => {
   });
 
   it("calls onChange with toggled value on click", () => {
-    const fn = vi.fn();
+    const fn = mock();
     render(<Toggle checked={false} onChange={fn} />);
     fireEvent.click(screen.getByRole("checkbox"));
     expect(fn).toHaveBeenCalledWith(true);
   });
 
   it("calls onChange with false when unchecking", () => {
-    const fn = vi.fn();
+    const fn = mock();
     render(<Toggle checked={true} onChange={fn} />);
     fireEvent.click(screen.getByRole("checkbox"));
     expect(fn).toHaveBeenCalledWith(false);
   });
 
   it("does not call onChange when disabled", () => {
-    const fn = vi.fn();
+    const fn = mock();
     render(<Toggle checked={false} onChange={fn} disabled />);
     fireEvent.click(screen.getByRole("checkbox"));
     expect(fn).not.toHaveBeenCalled();

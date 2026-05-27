@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, mock } from "bun:test";
 import { render, screen } from "../../../../test/render";
 import { Button } from "./Button";
 
@@ -9,14 +9,14 @@ describe("Button", () => {
   });
 
   it("calls onClick when clicked", () => {
-    const fn = vi.fn();
+    const fn = mock();
     render(<Button onClick={fn}>Go</Button>);
     screen.getByRole("button").click();
-    expect(fn).toHaveBeenCalledOnce();
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 
   it("does not call onClick when disabled", () => {
-    const fn = vi.fn();
+    const fn = mock();
     render(
       <Button onClick={fn} disabled>
         Nope

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, mock } from "bun:test";
 import { render, screen, fireEvent } from "../../../../test/render";
 import { Select } from "./Select";
 
@@ -50,7 +50,7 @@ describe("Select", () => {
   });
 
   it("fires onChange with the option value when an option is clicked", () => {
-    const onChange = vi.fn();
+    const onChange = mock();
     render(
       <Select
         value="a"
@@ -61,7 +61,7 @@ describe("Select", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /Alpha/ }));
     fireEvent.click(screen.getByRole("option", { name: "Charlie" }));
-    expect(onChange).toHaveBeenCalledOnce();
+    expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenCalledWith("c");
   });
 
@@ -128,7 +128,7 @@ describe("Select", () => {
   });
 
   it("supports {value, label} option objects", () => {
-    const onChange = vi.fn();
+    const onChange = mock();
     render(
       <Select
         value="x"

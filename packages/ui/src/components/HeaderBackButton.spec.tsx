@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, mock, afterEach } from "bun:test";
 import { render, screen, fireEvent } from "../../../../test/render";
 import { HeaderBackButton, useHeaderBack } from "./HeaderBackButton";
 import { tryRunBackInterceptor } from "../spatial-nav";
@@ -42,23 +42,23 @@ describe("HeaderBackButton", () => {
   });
 
   it("calls onBack when clicked", () => {
-    const onBack = vi.fn();
+    const onBack = mock();
     render(<HeaderBackButton onBack={onBack} />);
     fireEvent.click(screen.getByRole("button"));
-    expect(onBack).toHaveBeenCalledOnce();
+    expect(onBack).toHaveBeenCalledTimes(1);
   });
 
   it("pushes a back interceptor that runs onBack on B/Escape", () => {
-    const onBack = vi.fn();
+    const onBack = mock();
     render(<HeaderBackButton onBack={onBack} />);
     // Simulate the shell's back chain firing.
     const handled = tryRunBackInterceptor();
     expect(handled).toBe(true);
-    expect(onBack).toHaveBeenCalledOnce();
+    expect(onBack).toHaveBeenCalledTimes(1);
   });
 
   it("pops the interceptor on unmount so further back presses fall through", () => {
-    const onBack = vi.fn();
+    const onBack = mock();
     const { unmount } = render(<HeaderBackButton onBack={onBack} />);
     unmount();
     const handled = tryRunBackInterceptor();
@@ -68,10 +68,10 @@ describe("HeaderBackButton", () => {
 
   it("useHeaderBack always invokes the latest onBack closure", () => {
     let latest = 0;
-    const first = vi.fn(() => {
+    const first = mock(() => {
       latest = 1;
     });
-    const second = vi.fn(() => {
+    const second = mock(() => {
       latest = 2;
     });
     function Harness({ cb }: { cb: () => void }) {
@@ -81,7 +81,7 @@ describe("HeaderBackButton", () => {
     const { rerender } = render(<Harness cb={first} />);
     rerender(<Harness cb={second} />);
     tryRunBackInterceptor();
-    expect(second).toHaveBeenCalledOnce();
+    expect(second).toHaveBeenCalledTimes(1);
     expect(first).not.toHaveBeenCalled();
     expect(latest).toBe(2);
   });

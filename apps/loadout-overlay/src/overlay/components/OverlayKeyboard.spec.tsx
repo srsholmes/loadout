@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, jest, beforeEach, afterEach } from "bun:test";
 import { render, act, fireEvent } from "../../../../../test/render";
 import { OverlayKeyboard } from "./OverlayKeyboard";
 import {
@@ -36,11 +36,11 @@ describe("OverlayKeyboard", () => {
     // between tests.
     setKeyboardDefaultHandler(null);
     setKeyboardVisible(false);
-    vi.useFakeTimers();
+    jest.useFakeTimers();
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    jest.useRealTimers();
     setKeyboardDefaultHandler(null);
     setKeyboardVisible(false);
   });
@@ -85,13 +85,13 @@ describe("OverlayKeyboard", () => {
 
     // Before the 500ms delay, no repeats.
     act(() => {
-      vi.advanceTimersByTime(499);
+      jest.advanceTimersByTime(499);
     });
     expect(received).toHaveLength(1);
 
     // Cross the delay threshold + a couple of intervals.
     act(() => {
-      vi.advanceTimersByTime(1 + 40 + 40);
+      jest.advanceTimersByTime(1 + 40 + 40);
     });
     // 1 initial + 2 repeats = 3
     expect(received.length).toBeGreaterThanOrEqual(3);
@@ -110,13 +110,13 @@ describe("OverlayKeyboard", () => {
 
     act(() => pressKey("a"));
     act(() => {
-      vi.advanceTimersByTime(500 + 40 + 40); // 2 repeats fired
+      jest.advanceTimersByTime(500 + 40 + 40); // 2 repeats fired
     });
     const afterHold = received.length;
 
     act(() => releaseKey("a"));
     act(() => {
-      vi.advanceTimersByTime(1000);
+      jest.advanceTimersByTime(1000);
     });
     expect(received.length).toBe(afterHold);
     unsub();
@@ -141,7 +141,7 @@ describe("OverlayKeyboard", () => {
 
     act(() => pressKey("a"));
     act(() => {
-      vi.advanceTimersByTime(500 + 40 * 3); // ~3 repeats deep
+      jest.advanceTimersByTime(500 + 40 * 3); // ~3 repeats deep
     });
     const beforeSecondPress = received.length;
     expect(beforeSecondPress).toBeGreaterThanOrEqual(2);
@@ -156,7 +156,7 @@ describe("OverlayKeyboard", () => {
     act(() => releaseKey("b"));
     const atRelease = received.length;
     act(() => {
-      vi.advanceTimersByTime(2000);
+      jest.advanceTimersByTime(2000);
     });
     expect(received.length).toBe(atRelease);
     unsub();
@@ -174,7 +174,7 @@ describe("OverlayKeyboard", () => {
     act(() => pressKey("a"));
     // Push past delay, get a repeat.
     act(() => {
-      vi.advanceTimersByTime(500 + 40);
+      jest.advanceTimersByTime(500 + 40);
     });
     const beforeStop = received.length;
     // Fire pointerup on the document (not the button itself) — the
@@ -184,7 +184,7 @@ describe("OverlayKeyboard", () => {
       document.dispatchEvent(new Event("pointerup", { bubbles: true }));
     });
     act(() => {
-      vi.advanceTimersByTime(1000);
+      jest.advanceTimersByTime(1000);
     });
     expect(received.length).toBe(beforeStop);
     unsub();
@@ -203,7 +203,7 @@ describe("OverlayKeyboard", () => {
     // Drive the clock well past delay + interval — shift swaps the
     // layout but should never produce repeat dispatches.
     act(() => {
-      vi.advanceTimersByTime(5000);
+      jest.advanceTimersByTime(5000);
     });
     expect(received).toHaveLength(0);
     unsub();

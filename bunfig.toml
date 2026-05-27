@@ -1,2 +1,12 @@
 [install]
 peer = false
+
+[test]
+# Keep test files themselves out of the coverage numbers.
+coverageSkipTestFiles = true
+# NOTE: bun's `coverageThreshold` is enforced PER-FILE, not as a total
+# floor — several integration/e2e-only modules (injector internals,
+# loader HTTP routes) sit at ~0% unit coverage, so a per-file threshold
+# can't stand in for the old total-coverage ratchet. Coverage is reported
+# via `bun run test:coverage`; a gate (per-file floor + an exclude list
+# for the e2e-covered subsystems, or similar) is a follow-up decision.
