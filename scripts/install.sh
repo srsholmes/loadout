@@ -741,9 +741,9 @@ SERVICEEOF
         cat > "$OVERLAY_SERVICE_FILE" <<'OVERLAYEOF'
 [Unit]
 Description=Loadout Overlay
-# The backend (loadout.service) is a *system* service running as root, so
-# this *user* unit can't Requires=/After= it across managers. Ordering is
-# handled by the ExecStartPre curl-`/up` wait loop below.
+# The backend (loadout.service) is now a *system* service running as root,
+# so this *user* unit can't Requires=/After= it across managers. Ordering
+# is handled instead by the ExecStartPre curl-`/up` wait loop below.
 After=graphical-session.target
 PartOf=graphical-session.target
 
