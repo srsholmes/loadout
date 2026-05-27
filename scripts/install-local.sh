@@ -2,6 +2,16 @@
 # Install Loadout from local build output (dist/)
 set -e
 
+# Run as your normal user — NOT via sudo. The backend is installed as a
+# root *system* service, but the script elevates only the few steps that
+# need it (via `sudo` internally). Running the whole thing as root would
+# resolve $HOME / `id -un` to root and bake the wrong paths into the unit.
+if [ "$(id -u)" = "0" ]; then
+    echo "ERROR: run this as your normal user, not root/sudo." >&2
+    echo "       It will prompt for sudo only for the system-service step." >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DIST_DIR="$PROJECT_ROOT/dist"
@@ -9,18 +19,16 @@ INSTALL_DIR="$HOME/.local/share/loadout"
 OVERLAY_INSTALL_DIR="$HOME/.local/share/loadout-overlay"
 OVERLAY_BUILD_DIR="$PROJECT_ROOT/apps/loadout-overlay/build/dev-linux-x64/loadout-overlay-dev"
 SERVICE_DIR="$HOME/.config/systemd/user"
-LEGACY_OVERLAY_INSTALL_DIR="$HOME/.local/share/loadout-overlay-electrobun"
 
 if [ ! -f "$DIST_DIR/loadout" ]; then
     echo "ERROR: dist/loadout not found. Run 'bun run build' first."
     exit 1
 fi
 
-# Stop existing services. Includes the transitional Electrobun unit
-# name (loadout-overlay-electrobun) so pre-collapse installs
-# upgrade cleanly — both units would otherwise race for evdev grabs.
+# Stop running services before we replace their files. The backend used
+# to be a `--user` service; it's now a root system unit, so stop the old
+# user one here (the system one is restarted at the end).
 systemctl --user stop loadout-overlay 2>/dev/null || true
-systemctl --user stop loadout-overlay-electrobun 2>/dev/null || true
 systemctl --user stop loadout 2>/dev/null || true
 
 # Copy binaries
@@ -67,13 +75,6 @@ sh "$SCRIPT_DIR/prepare-plugins.sh" "$INSTALL_DIR"
 # bin/ with CEF libs, symlinks to libcef.so, etc. — not a single
 # binary — so we copy the whole tree to its own prefix.
 if [ -d "$OVERLAY_BUILD_DIR" ] && [ -x "$OVERLAY_BUILD_DIR/bin/launcher" ]; then
-    # Legacy-path cleanup: earlier installs landed under a
-    # "-electrobun" suffix. Nuking it here prevents stale binaries
-    # from ever getting picked up by misconfigured unit overrides.
-    if [ -d "$LEGACY_OVERLAY_INSTALL_DIR" ]; then
-        echo "Removing legacy install at $LEGACY_OVERLAY_INSTALL_DIR..."
-        rm -rf "$LEGACY_OVERLAY_INSTALL_DIR"
-    fi
     echo "Installing overlay to $OVERLAY_INSTALL_DIR..."
     rm -rf "$OVERLAY_INSTALL_DIR"
     mkdir -p "$OVERLAY_INSTALL_DIR"
@@ -86,26 +87,43 @@ else
     exit 1
 fi
 
-# Copy service files. The Electrobun-named unit (loadout-overlay-
-# electrobun.service) from the previous transitional layout is removed
-# on every install; we now ship a single loadout-overlay.service.
+# --- Backend: root system service ---
+# The backend runs as root so plugins can write hardware sysfs / run
+# privileged tools without per-op sudo prompts at runtime (HHD/Decky
+# model). A system unit can't expand %h — that would be root's home — so
+# substitute the concrete home + user into the template and install it
+# system-wide. This is the ONE step that needs admin rights.
+TARGET_USER="$(id -un)"
+SYSTEM_UNIT="/etc/systemd/system/loadout.service"
+
+echo ""
+echo "Installing the backend as a root system service (loadout.service)."
+echo "sudo is needed once here — the backend then writes hardware directly,"
+echo "so plugins never trigger a password prompt at runtime."
+
+# The backend moved from a --user service to this root system unit, so
+# disable + remove the old per-user one.
+systemctl --user disable loadout 2>/dev/null || true
+rm -f "$SERVICE_DIR/loadout.service"
+
+GENERATED_UNIT="$(mktemp)"
+sed -e "s#__HOME__#${HOME}#g" -e "s#__USER__#${TARGET_USER}#g" \
+    "$PROJECT_ROOT/loadout.service" > "$GENERATED_UNIT"
+sudo cp "$GENERATED_UNIT" "$SYSTEM_UNIT"
+rm -f "$GENERATED_UNIT"
+sudo systemctl daemon-reload
+sudo systemctl enable loadout
+sudo systemctl restart loadout
+
+# --- Overlay: user service ---
 mkdir -p "$SERVICE_DIR"
-cp "$PROJECT_ROOT/loadout.service" "$SERVICE_DIR/loadout.service"
 cp "$PROJECT_ROOT/loadout-overlay.service" "$SERVICE_DIR/loadout-overlay.service"
-rm -f "$SERVICE_DIR/loadout-overlay-electrobun.service"
-
-# Disable + enable what we actually want running. daemon-reload picks
-# up the rewritten unit file so `restart` below uses the new paths.
-systemctl --user disable loadout-overlay-electrobun 2>/dev/null || true
 systemctl --user daemon-reload
-systemctl --user enable loadout
 systemctl --user enable loadout-overlay
-systemctl --user restart loadout
 
-# Wait for the plugin server to be up before kicking the overlay so
-# the webview doesn't race its initial fetch. Honour LOADOUT_PORT
-# so the wait targets the same port the server is actually bound to
-# (Audit 2026-05 H-006).
+# Wait for the (root) server to be up before kicking the overlay so the
+# webview doesn't race its initial fetch. Honour LOADOUT_PORT so the wait
+# targets the same port the server is actually bound to (Audit H-006).
 PORT="${LOADOUT_PORT:-33820}"
 echo "Waiting for server on port ${PORT}..."
 for i in $(seq 1 30); do

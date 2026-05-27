@@ -25,6 +25,28 @@ export interface PluginPermissions {
   filesystem?: string[];
   steam_apis?: string[];
   system?: string[];
+  /**
+   * External commands (binary names) this plugin is allowed to run
+   * through `@loadout/exec` — e.g. `["ryzenadj", "systemctl", "tee"]`.
+   *
+   * Enforced at the `@loadout/exec` choke point: the loader scopes a
+   * per-plugin command policy (see `withCommandPolicy`) around `onLoad`
+   * and every RPC call, and each `run`/`runFull`/`runCode`/`runStreaming`/
+   * `spawn` checks `basename(cmd[0])` against this list. An undeclared
+   * binary is **denied** (deny-by-default — an empty/missing list blocks
+   * all commands), mirroring the `network` model in `sandboxed-fetch.ts`.
+   *
+   * Binary-level, not argument-level: matching is on the executable name
+   * only, so a plugin allowed to run `tee` can pass it any path. This is
+   * a deliberate trade-off — argument matching would be brittle for the
+   * plugins that build commands dynamically.
+   *
+   * Known gap: a plugin that writes `/sys` or `/dev/hidraw*` *directly*
+   * via `fs` (not a subprocess) bypasses this check. Declare those paths
+   * in `filesystem` for visibility; a filesystem-write allow-list is a
+   * follow-up.
+   */
+  commands?: string[];
 }
 
 export interface PluginPatchReplacement {
