@@ -9,7 +9,7 @@
  * the appropriate plugin backend (tdp-control).
  */
 
-import type { CDPClient } from "@loadout/steam-cdp";
+import type { CDPClient } from "../steam-cdp";
 
 // ---------------------------------------------------------------------------
 // Types

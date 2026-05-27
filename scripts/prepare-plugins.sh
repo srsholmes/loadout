@@ -73,7 +73,7 @@ rm -rf "$NM_DST"
 mkdir -p "$NM_DST/@loadout"
 
 # Workspace packages used by every plugin.
-for pkg in types exec steam-paths ui injector steam-cdp; do
+for pkg in types exec steam-paths ui; do
     if [ -d "$PROJECT_ROOT/packages/$pkg" ]; then
         cp -r "$PROJECT_ROOT/packages/$pkg" "$NM_DST/@loadout/$pkg"
     fi

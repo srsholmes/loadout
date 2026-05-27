@@ -38,7 +38,7 @@ cd "$ROOT_DIR"
 # needs the same list (e.g. test-coverage.sh) should invoke this script
 # with --list instead of duplicating the find expression.
 list_specs() {
-  find packages plugins \
+  find apps packages plugins \
     -name '*.spec.ts' \
     ! -name '*.integration.spec.ts' \
     ! -path '*.e2e.*' \

@@ -25,7 +25,7 @@ import {
   vendorGlobalsPlugin,
   type InjectBundles,
 } from "./inject-builder";
-import { SteamInjector } from "@loadout/injector";
+import { SteamInjector } from "../injector";
 import { dispatchRoute, type RouteContext } from "./routes";
 
 // Global error handlers — prevent plugin crashes from killing the server.

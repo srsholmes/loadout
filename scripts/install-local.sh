@@ -7,7 +7,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DIST_DIR="$PROJECT_ROOT/dist"
 INSTALL_DIR="$HOME/.local/share/loadout"
 OVERLAY_INSTALL_DIR="$HOME/.local/share/loadout-overlay"
-OVERLAY_BUILD_DIR="$PROJECT_ROOT/packages/overlay-electrobun/build/dev-linux-x64/loadout-overlay-dev"
+OVERLAY_BUILD_DIR="$PROJECT_ROOT/apps/loadout-overlay/build/dev-linux-x64/loadout-overlay-dev"
 SERVICE_DIR="$HOME/.config/systemd/user"
 LEGACY_OVERLAY_INSTALL_DIR="$HOME/.local/share/loadout-overlay-electrobun"
 
@@ -47,7 +47,7 @@ if [ "$SMOKE_RC" -ne 0 ]; then
     echo "       The binary may be corrupted or truncated. Re-run 'bun run build'." >&2
     exit 1
 fi
-# Recognisable line is "loadout <version>" — see packages/dev-server/src/index.ts
+# Recognisable line is "loadout <version>" — see apps/loadout/src/index.ts
 if ! printf '%s' "$SMOKE_OUT" | grep -q '^loadout '; then
     echo "ERROR: '$INSTALL_DIR/loadout --version' did not print a recognisable version line." >&2
     echo "       Got: $SMOKE_OUT" >&2

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, act, fireEvent } from "../../../../test/render";
+import { render, act, fireEvent } from "../../../../../test/render";
 import { OverlayKeyboard } from "./OverlayKeyboard";
 import {
   setKeyboardVisible,

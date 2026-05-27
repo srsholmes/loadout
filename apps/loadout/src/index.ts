@@ -8,8 +8,8 @@
 
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { startServer } from "@loadout/loader";
-import { log, LOG_PATH } from "@loadout/loader/src/logger";
+import { startServer } from "./loader";
+import { log, LOG_PATH } from "./loader/logger";
 
 // Compile-time defines from scripts/build.sh (--define
 // __LOADOUT_VERSION__='"…"'). Fall back to "dev" when running
