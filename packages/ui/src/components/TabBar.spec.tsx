@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, mock } from "bun:test";
 import { render, screen, fireEvent } from "../../../../test/render";
 import { TabBar } from "./TabBar";
 
@@ -23,7 +23,7 @@ describe("TabBar", () => {
   });
 
   it("calls onTabChange with tab id when clicked", () => {
-    const fn = vi.fn();
+    const fn = mock();
     render(<TabBar tabs={tabs} activeTab="general" onTabChange={fn} />);
     fireEvent.click(screen.getByText("Advanced"));
     expect(fn).toHaveBeenCalledWith("advanced");
@@ -43,7 +43,7 @@ describe("TabBar", () => {
   });
 
   it("handles clicking multiple tabs", () => {
-    const fn = vi.fn();
+    const fn = mock();
     render(<TabBar tabs={tabs} activeTab="general" onTabChange={fn} />);
     fireEvent.click(screen.getByText("Advanced"));
     fireEvent.click(screen.getByText("About"));

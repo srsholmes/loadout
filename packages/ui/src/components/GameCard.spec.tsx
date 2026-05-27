@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, mock } from "bun:test";
 import { render, screen, fireEvent } from "../../../../test/render";
 import { GameCard, collectionBadgeVariant } from "./GameCard";
 
@@ -62,7 +62,7 @@ describe("GameCard", () => {
   });
 
   it("renders as a <button> when onPick is provided and fires onPick on click", () => {
-    const onPick = vi.fn();
+    const onPick = mock();
     render(
       <GameCard
         imageUrl="https://example.invalid/header.jpg"
@@ -73,7 +73,7 @@ describe("GameCard", () => {
     const btn = screen.getByRole("button");
     expect(btn.tagName).toBe("BUTTON");
     btn.click();
-    expect(onPick).toHaveBeenCalledOnce();
+    expect(onPick).toHaveBeenCalledTimes(1);
   });
 
   it("renders as a passive <div> when onPick is omitted", () => {
