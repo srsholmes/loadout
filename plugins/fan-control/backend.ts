@@ -195,7 +195,7 @@ const CPU_LABEL_KEYWORDS = ["tctl", "tdie", "cpu", "soc", "package"];
  *         lifts the percent to a hardware-safe floor whenever temp ≥
  *         75 °C, forces 100 % at ≥ 85 °C, fails-safe to 100 % on any
  *         temp-read error. Non-disablable; runs after the user curve.
- *      d. writeHwmon          (sudo tee → /sys/class/hwmon/.../pwmN)
+ *      d. writeHwmon          (tee → /sys/class/hwmon/.../pwmN)
  *      e. emit fan-update     (UI tile + slider + warning chip)
  *
  * Issue #97 — the maintainer's device thermal-tripped (power-off) when a
@@ -1205,9 +1205,10 @@ export default class FanControlBackend implements PluginBackend {
     }
   }
 
-  /** Writes a value to a hwmon sysfs file using sudo tee. */
+  /** Writes a value to a hwmon sysfs file via tee. The backend runs as
+   *  root (system service), so no sudo/pkexec is needed. */
   private async writeHwmon(path: string, value: string): Promise<void> {
-    const { stderr, exitCode } = await runFull(["sudo", "tee", path], {
+    const { stderr, exitCode } = await runFull(["tee", path], {
       stdin: value,
     });
     if (exitCode !== 0) {

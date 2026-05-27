@@ -79,7 +79,7 @@ const internals = (b: FanControlBackend): FanBackendInternals =>
 type SpawnedLike = Pick<Subprocess, "stdout" | "stderr" | "stdin" | "exited">;
 const asSpawned = (m: SpawnedLike): Subprocess => m as unknown as Subprocess;
 
-/** Bun.spawn argv. Tests inspect cmd[0] / cmd[1] / cmd[2]. */
+/** Bun.spawn argv. Tests inspect cmd[0] / cmd[1]. */
 type SpawnArgv = readonly string[];
 
 describe("FanControlBackend", () => {
@@ -191,7 +191,7 @@ describe("FanControlBackend", () => {
         hasPwmControl: true,
       };
 
-      // Mock writeHwmon via sudo tee
+      // Mock writeHwmon via tee
       spawnSpy.mockImplementation(
         (() =>
           asSpawned({
@@ -240,8 +240,8 @@ describe("FanControlBackend", () => {
       const teeWrites: { path: string; value: string }[] = [];
       spawnSpy.mockImplementation(
         ((cmd: SpawnArgv) => {
-          if (cmd[0] === "sudo" && cmd[1] === "tee") {
-            const path = cmd[2];
+          if (cmd[0] === "tee") {
+            const path = cmd[1];
             teeWrites.push({ path, value: "" }); // value comes via stdin
           }
           return asSpawned({
@@ -566,8 +566,8 @@ describe("FanControlBackend", () => {
       const teeWrites: string[] = [];
       spawnSpy.mockImplementation(
         ((cmd: SpawnArgv) => {
-          if (cmd[0] === "sudo" && cmd[1] === "tee") {
-            teeWrites.push(cmd[2]);
+          if (cmd[0] === "tee") {
+            teeWrites.push(cmd[1]);
           }
           return asSpawned({
             stdout: new ReadableStream({ start(c) { c.close(); } }),
@@ -615,8 +615,8 @@ describe("FanControlBackend", () => {
       const teeWrites: string[] = [];
       spawnSpy.mockImplementation(
         ((cmd: SpawnArgv) => {
-          if (cmd[0] === "sudo" && cmd[1] === "tee") {
-            teeWrites.push(cmd[2]);
+          if (cmd[0] === "tee") {
+            teeWrites.push(cmd[1]);
           }
           return asSpawned({
             stdout: new ReadableStream({ start(c) { c.close(); } }),
@@ -711,8 +711,8 @@ describe("FanControlBackend", () => {
       const teeWrites: string[] = [];
       spawnSpy.mockImplementation(
         ((cmd: SpawnArgv) => {
-          if (cmd[0] === "sudo" && cmd[1] === "tee") {
-            teeWrites.push(cmd[2]);
+          if (cmd[0] === "tee") {
+            teeWrites.push(cmd[1]);
           }
           return asSpawned({
             stdout: new ReadableStream({ start(c) { c.close(); } }),
@@ -771,14 +771,14 @@ describe("FanControlBackend", () => {
       ];
     };
 
-    /** Captures (path, stdinPromise) pairs written via `sudo tee`. The
+    /** Captures (path, stdinPromise) pairs written via `tee`. The
      *  exec helper wraps stdin in a ReadableStream<Uint8Array>, so we
      *  drain it back to a string to verify the value that was written. */
     const captureTeeWrites = () => {
       const writes: { path: string; valuePromise: Promise<string> }[] = [];
       spawnSpy.mockImplementation(
         ((cmd: SpawnArgv, opts: { stdin?: ReadableStream<Uint8Array> }) => {
-          if (cmd[0] === "sudo" && cmd[1] === "tee") {
+          if (cmd[0] === "tee") {
             const valuePromise = (async () => {
               if (!opts?.stdin) return "";
               const reader = opts.stdin.getReader();
@@ -797,7 +797,7 @@ describe("FanControlBackend", () => {
               }
               return new TextDecoder().decode(merged);
             })();
-            writes.push({ path: cmd[2], valuePromise });
+            writes.push({ path: cmd[1], valuePromise });
           }
           return asSpawned({
             stdout: new ReadableStream({ start(c) { c.close(); } }),
@@ -1048,7 +1048,7 @@ describe("FanControlBackend", () => {
       const writes: { path: string; valuePromise: Promise<string> }[] = [];
       spawnSpy.mockImplementation(
         ((cmd: SpawnArgv, opts: { stdin?: ReadableStream<Uint8Array> }) => {
-          if (cmd[0] === "sudo" && cmd[1] === "tee") {
+          if (cmd[0] === "tee") {
             const valuePromise = (async () => {
               if (!opts?.stdin) return "";
               const reader = opts.stdin.getReader();
@@ -1067,7 +1067,7 @@ describe("FanControlBackend", () => {
               }
               return new TextDecoder().decode(merged);
             })();
-            writes.push({ path: cmd[2], valuePromise });
+            writes.push({ path: cmd[1], valuePromise });
           }
           return asSpawned({
             stdout: new ReadableStream({ start(c) { c.close(); } }),
@@ -1104,7 +1104,7 @@ describe("FanControlBackend", () => {
       const writes: { path: string; valuePromise: Promise<string> }[] = [];
       spawnSpy.mockImplementation(
         ((cmd: SpawnArgv, opts: { stdin?: ReadableStream<Uint8Array> }) => {
-          if (cmd[0] === "sudo" && cmd[1] === "tee") {
+          if (cmd[0] === "tee") {
             const valuePromise = (async () => {
               if (!opts?.stdin) return "";
               const reader = opts.stdin.getReader();
@@ -1123,7 +1123,7 @@ describe("FanControlBackend", () => {
               }
               return new TextDecoder().decode(merged);
             })();
-            writes.push({ path: cmd[2], valuePromise });
+            writes.push({ path: cmd[1], valuePromise });
           }
           return asSpawned({
             stdout: new ReadableStream({ start(c) { c.close(); } }),

@@ -15,7 +15,7 @@
     "name": "Fan Control",
     "description": "Monitor and control fan speed, temperature, and fan curve presets",
     "permissions": {
-      "system": ["hwmon", "ectool"]
+      "commands": ["ectool", "tee"]
     },
     "category": "Performance",
     "subtitle": "Fan speed + thermal profiles"
