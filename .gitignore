@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+*.tsbuildinfo
+.build/
+.sdk-build/
+.inject-build/
+.vendor-build/
+.cache/
+# Root-level compiled binary only. MUST stay anchored (`/loadout`): a bare
+# `loadout` matches the `apps/loadout/` directory component and silently
+# ignores every *untracked* file under it (e.g. new loader modules) —
+# which is exactly how loader/target-user.ts went missing from a commit.
+/loadout
+
+# Test artifacts
+test-results/
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Coverage
+coverage/
+*.lcov
+
+# Editor
+.vscode-test
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ESLint / Prettier cache
+.eslintcache
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+.gstack/
+overlay.trace
+freeze-watch.log
+freeze-watch.sh
+qam-watch.sh
+qam-watch.log
+
+# Stale loadout marketing screenshots — loadout will add its own
+screenshots/
+
+# background-agent git worktrees — never track
+.worktrees/

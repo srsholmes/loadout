@@ -1,0 +1,13 @@
+Loadout
+Copyright (c) 2026 Simon Holmes
+Licensed under BSD-3-Clause (see LICENSE).
+
+This software incorporates third-party components under their respective
+licenses. Verbatim license text for incorporated upstreams lives in
+`THIRD_PARTY_LICENSES.md`.
+
+This branch is a minimal proof-of-concept: it ships the overlay platform
+plus a single example plugin (`steam-gamescope-ipc`). The overlay shell is
+built on Electrobun (MIT). As each additional plugin is migrated in, its
+per-plugin attribution returns alongside it — see the `NOTICE` file inside
+each plugin directory for the precise language.

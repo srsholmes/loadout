@@ -1,0 +1,1151 @@
+@import "tailwindcss";
+@import "react-grid-layout/css/styles.css";
+@import "react-resizable/css/styles.css";
+@import "react-simple-keyboard/build/css/index.css";
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+/* ─── DaisyUI — register the four Loadout themes ────────────────────────
+ * We disable DaisyUI's built-in theme set and register Midnight, Paper,
+ * Synth, and Terminal (per the Loadout handoff). Each theme also seeds
+ * the Loadout-specific tokens (--bg-0…-3, --fg-1…-3, --line, --accent-soft,
+ * --grid-dot) that our custom utilities read. */
+
+@plugin "daisyui";
+
+@plugin "daisyui/theme" {
+  name: "midnight";
+  default: true;
+  prefersdark: true;
+  color-scheme: dark;
+
+  --color-base-100: oklch(0.215 0.014 260);
+  --color-base-200: oklch(0.245 0.015 260);
+  --color-base-300: oklch(0.285 0.017 260);
+  --color-base-content: oklch(0.97 0.005 260);
+
+  --color-primary: oklch(0.68 0.19 282);
+  --color-primary-content: oklch(0.99 0 0);
+  --color-secondary: oklch(0.72 0.008 260);
+  --color-secondary-content: oklch(0.18 0.012 260);
+  --color-accent: oklch(0.78 0.17 282);
+  --color-accent-content: oklch(0.15 0.01 260);
+  --color-neutral: oklch(0.32 0.015 260);
+  --color-neutral-content: oklch(0.97 0.005 260);
+
+  --color-info: oklch(0.78 0.14 230);
+  --color-info-content: oklch(0.15 0.02 230);
+  --color-success: oklch(0.78 0.18 155);
+  --color-success-content: oklch(0.12 0.02 155);
+  --color-warning: oklch(0.82 0.16 85);
+  --color-warning-content: oklch(0.18 0.02 85);
+  --color-error: oklch(0.72 0.19 27);
+  --color-error-content: oklch(0.99 0 0);
+
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.875rem;
+
+  /* Loadout tokens */
+  --bg-0: oklch(0.18 0.012 260);
+  --bg-1: oklch(0.215 0.014 260);
+  --bg-2: oklch(0.245 0.015 260);
+  --bg-3: oklch(0.285 0.017 260);
+  --bg-inset: oklch(0.155 0.012 260);
+  --line: oklch(0.32 0.015 260 / 0.7);
+  --line-strong: oklch(0.4 0.02 260);
+  --fg-1: oklch(0.97 0.005 260);
+  --fg-2: oklch(0.72 0.008 260);
+  --fg-3: oklch(0.55 0.01 260);
+  --accent: oklch(0.68 0.19 282);
+  --accent-hi: oklch(0.78 0.17 282);
+  --accent-lo: oklch(0.42 0.18 282);
+  --accent-soft: oklch(0.68 0.19 282 / 0.15);
+  --grid-dot: oklch(0.32 0.015 260 / 0.4);
+  --glow-accent: 0 0 0 1px oklch(0.68 0.19 282 / 0.3), 0 8px 28px oklch(0.68 0.19 282 / 0.18);
+}
+
+@plugin "daisyui/theme" {
+  name: "paper";
+  color-scheme: light;
+
+  --color-base-100: oklch(1 0 0);
+  --color-base-200: oklch(0.975 0.004 80);
+  --color-base-300: oklch(0.94 0.006 80);
+  --color-base-content: oklch(0.22 0.012 260);
+
+  --color-primary: oklch(0.55 0.2 275);
+  --color-primary-content: oklch(0.99 0 0);
+  --color-secondary: oklch(0.45 0.012 260);
+  --color-secondary-content: oklch(0.99 0 0);
+  --color-accent: oklch(0.6 0.22 275);
+  --color-accent-content: oklch(0.99 0 0);
+  --color-neutral: oklch(0.78 0.008 80);
+  --color-neutral-content: oklch(0.22 0.012 260);
+
+  --color-info: oklch(0.55 0.16 230);
+  --color-info-content: oklch(0.99 0 0);
+  --color-success: oklch(0.58 0.16 155);
+  --color-success-content: oklch(0.99 0 0);
+  --color-warning: oklch(0.7 0.16 75);
+  --color-warning-content: oklch(0.18 0.02 75);
+  --color-error: oklch(0.58 0.2 27);
+  --color-error-content: oklch(0.99 0 0);
+
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.875rem;
+
+  --bg-0: oklch(0.985 0.003 80);
+  --bg-1: oklch(1 0 0);
+  --bg-2: oklch(0.975 0.004 80);
+  --bg-3: oklch(0.94 0.006 80);
+  --bg-inset: oklch(0.96 0.004 80);
+  --line: oklch(0.88 0.006 80);
+  --line-strong: oklch(0.78 0.008 80);
+  --fg-1: oklch(0.22 0.012 260);
+  --fg-2: oklch(0.45 0.012 260);
+  --fg-3: oklch(0.6 0.01 260);
+  --accent: oklch(0.55 0.2 275);
+  --accent-hi: oklch(0.6 0.22 275);
+  --accent-lo: oklch(0.42 0.2 275);
+  --accent-soft: oklch(0.55 0.2 275 / 0.1);
+  --grid-dot: oklch(0.82 0.008 80);
+  --glow-accent: 0 0 0 1px oklch(0.55 0.2 275 / 0.2), 0 6px 24px oklch(0.55 0.2 275 / 0.15);
+}
+
+@plugin "daisyui/theme" {
+  name: "synth";
+  color-scheme: dark;
+
+  --color-base-100: oklch(0.21 0.05 295);
+  --color-base-200: oklch(0.25 0.06 295);
+  --color-base-300: oklch(0.3 0.07 295);
+  --color-base-content: oklch(0.98 0.02 320);
+
+  --color-primary: oklch(0.72 0.28 340);
+  --color-primary-content: oklch(0.12 0.03 295);
+  --color-secondary: oklch(0.82 0.22 180);
+  --color-secondary-content: oklch(0.12 0.03 295);
+  --color-accent: oklch(0.82 0.25 340);
+  --color-accent-content: oklch(0.12 0.03 295);
+  --color-neutral: oklch(0.55 0.15 320);
+  --color-neutral-content: oklch(0.98 0.02 320);
+
+  --color-info: oklch(0.78 0.2 195);
+  --color-info-content: oklch(0.12 0.03 295);
+  --color-success: oklch(0.82 0.22 180);
+  --color-success-content: oklch(0.12 0.03 295);
+  --color-warning: oklch(0.85 0.2 90);
+  --color-warning-content: oklch(0.18 0.02 85);
+  --color-error: oklch(0.7 0.24 15);
+  --color-error-content: oklch(0.99 0 0);
+
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.875rem;
+
+  --bg-0: oklch(0.16 0.04 295);
+  --bg-1: oklch(0.21 0.05 295);
+  --bg-2: oklch(0.25 0.06 295);
+  --bg-3: oklch(0.3 0.07 295);
+  --bg-inset: oklch(0.13 0.04 295);
+  --line: oklch(0.4 0.08 310 / 0.5);
+  --line-strong: oklch(0.55 0.15 320);
+  --fg-1: oklch(0.98 0.02 320);
+  --fg-2: oklch(0.78 0.07 320);
+  --fg-3: oklch(0.6 0.08 320);
+  --accent: oklch(0.72 0.28 340);
+  --accent-hi: oklch(0.82 0.25 340);
+  --accent-lo: oklch(0.5 0.26 340);
+  --accent-soft: oklch(0.72 0.28 340 / 0.18);
+  --grid-dot: oklch(0.45 0.12 310 / 0.5);
+  --glow-accent: 0 0 0 1px oklch(0.72 0.28 340 / 0.5), 0 0 32px oklch(0.72 0.28 340 / 0.35);
+}
+
+@plugin "daisyui/theme" {
+  name: "terminal";
+  color-scheme: dark;
+
+  --color-base-100: oklch(0.17 0.015 150);
+  --color-base-200: oklch(0.2 0.02 150);
+  --color-base-300: oklch(0.25 0.025 150);
+  --color-base-content: oklch(0.92 0.12 150);
+
+  --color-primary: oklch(0.82 0.24 145);
+  --color-primary-content: oklch(0.12 0.01 150);
+  --color-secondary: oklch(0.72 0.1 150);
+  --color-secondary-content: oklch(0.12 0.01 150);
+  --color-accent: oklch(0.9 0.22 145);
+  --color-accent-content: oklch(0.12 0.01 150);
+  --color-neutral: oklch(0.45 0.08 150);
+  --color-neutral-content: oklch(0.92 0.12 150);
+
+  --color-info: oklch(0.78 0.18 195);
+  --color-info-content: oklch(0.12 0.01 150);
+  --color-success: oklch(0.85 0.22 150);
+  --color-success-content: oklch(0.12 0.01 150);
+  --color-warning: oklch(0.85 0.2 85);
+  --color-warning-content: oklch(0.18 0.02 85);
+  --color-error: oklch(0.7 0.22 20);
+  --color-error-content: oklch(0.99 0 0);
+
+  --radius-selector: 0.375rem;
+  --radius-field: 0.375rem;
+  --radius-box: 0.625rem;
+
+  --bg-0: oklch(0.13 0.01 150);
+  --bg-1: oklch(0.17 0.015 150);
+  --bg-2: oklch(0.2 0.02 150);
+  --bg-3: oklch(0.25 0.025 150);
+  --bg-inset: oklch(0.1 0.01 150);
+  --line: oklch(0.32 0.04 150 / 0.6);
+  --line-strong: oklch(0.45 0.08 150);
+  --fg-1: oklch(0.92 0.12 150);
+  --fg-2: oklch(0.72 0.1 150);
+  --fg-3: oklch(0.52 0.08 150);
+  --accent: oklch(0.82 0.24 145);
+  --accent-hi: oklch(0.9 0.22 145);
+  --accent-lo: oklch(0.6 0.2 145);
+  --accent-soft: oklch(0.82 0.24 145 / 0.15);
+  --grid-dot: oklch(0.3 0.04 150 / 0.5);
+  --glow-accent: 0 0 0 1px oklch(0.82 0.24 145 / 0.4), 0 0 20px oklch(0.82 0.24 145 / 0.25);
+}
+
+@plugin "daisyui/theme" {
+  name: "nord";
+  color-scheme: dark;
+
+  --color-base-100: oklch(0.295 0.024 252);
+  --color-base-200: oklch(0.33 0.026 252);
+  --color-base-300: oklch(0.375 0.028 252);
+  --color-base-content: oklch(0.93 0.015 220);
+
+  --color-primary: oklch(0.78 0.09 220);
+  --color-primary-content: oklch(0.22 0.02 252);
+  --color-secondary: oklch(0.78 0.018 220);
+  --color-secondary-content: oklch(0.22 0.02 252);
+  --color-accent: oklch(0.85 0.1 220);
+  --color-accent-content: oklch(0.22 0.02 252);
+  --color-neutral: oklch(0.44 0.03 252);
+  --color-neutral-content: oklch(0.93 0.015 220);
+
+  --color-info: oklch(0.75 0.1 240);
+  --color-info-content: oklch(0.22 0.02 252);
+  --color-success: oklch(0.76 0.12 155);
+  --color-success-content: oklch(0.22 0.02 252);
+  --color-warning: oklch(0.82 0.13 80);
+  --color-warning-content: oklch(0.22 0.02 252);
+  --color-error: oklch(0.7 0.14 22);
+  --color-error-content: oklch(0.99 0 0);
+
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.875rem;
+
+  --bg-0: oklch(0.255 0.022 252);
+  --bg-1: oklch(0.295 0.024 252);
+  --bg-2: oklch(0.33 0.026 252);
+  --bg-3: oklch(0.375 0.028 252);
+  --bg-inset: oklch(0.225 0.02 252);
+  --line: oklch(0.44 0.03 252 / 0.55);
+  --line-strong: oklch(0.52 0.035 252);
+  --fg-1: oklch(0.93 0.015 220);
+  --fg-2: oklch(0.78 0.018 220);
+  --fg-3: oklch(0.6 0.02 220);
+  --accent: oklch(0.78 0.09 220);
+  --accent-hi: oklch(0.85 0.1 220);
+  --accent-lo: oklch(0.62 0.11 230);
+  --accent-soft: oklch(0.78 0.09 220 / 0.18);
+  --grid-dot: oklch(0.44 0.03 252 / 0.45);
+  --glow-accent: 0 0 0 1px oklch(0.78 0.09 220 / 0.32), 0 8px 24px oklch(0.78 0.09 220 / 0.15);
+}
+
+@plugin "daisyui/theme" {
+  name: "dracula";
+  color-scheme: dark;
+
+  --color-base-100: oklch(0.275 0.03 285);
+  --color-base-200: oklch(0.32 0.032 285);
+  --color-base-300: oklch(0.38 0.035 285);
+  --color-base-content: oklch(0.96 0.015 90);
+
+  --color-primary: oklch(0.72 0.18 310);
+  --color-primary-content: oklch(0.18 0.02 285);
+  --color-secondary: oklch(0.82 0.13 220);
+  --color-secondary-content: oklch(0.18 0.02 285);
+  --color-accent: oklch(0.82 0.16 310);
+  --color-accent-content: oklch(0.18 0.02 285);
+  --color-neutral: oklch(0.42 0.035 285);
+  --color-neutral-content: oklch(0.96 0.015 90);
+
+  --color-info: oklch(0.82 0.13 220);
+  --color-info-content: oklch(0.18 0.02 285);
+  --color-success: oklch(0.86 0.2 150);
+  --color-success-content: oklch(0.18 0.02 285);
+  --color-warning: oklch(0.88 0.17 90);
+  --color-warning-content: oklch(0.18 0.02 285);
+  --color-error: oklch(0.72 0.22 0);
+  --color-error-content: oklch(0.99 0 0);
+
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.875rem;
+
+  --bg-0: oklch(0.235 0.028 285);
+  --bg-1: oklch(0.275 0.03 285);
+  --bg-2: oklch(0.32 0.032 285);
+  --bg-3: oklch(0.38 0.035 285);
+  --bg-inset: oklch(0.195 0.025 285);
+  --line: oklch(0.42 0.035 285 / 0.55);
+  --line-strong: oklch(0.5 0.04 285);
+  --fg-1: oklch(0.96 0.015 90);
+  --fg-2: oklch(0.78 0.02 90);
+  --fg-3: oklch(0.62 0.03 285);
+  --accent: oklch(0.72 0.18 310);
+  --accent-hi: oklch(0.82 0.16 310);
+  --accent-lo: oklch(0.56 0.2 315);
+  --accent-soft: oklch(0.72 0.18 310 / 0.18);
+  --grid-dot: oklch(0.42 0.035 285 / 0.5);
+  --glow-accent: 0 0 0 1px oklch(0.72 0.18 310 / 0.38), 0 8px 28px oklch(0.72 0.18 310 / 0.22);
+}
+
+@plugin "daisyui/theme" {
+  name: "gruvbox";
+  color-scheme: dark;
+
+  --color-base-100: oklch(0.27 0.018 60);
+  --color-base-200: oklch(0.315 0.02 60);
+  --color-base-300: oklch(0.38 0.025 60);
+  --color-base-content: oklch(0.92 0.05 85);
+
+  --color-primary: oklch(0.78 0.14 75);
+  --color-primary-content: oklch(0.2 0.015 60);
+  --color-secondary: oklch(0.78 0.06 85);
+  --color-secondary-content: oklch(0.2 0.015 60);
+  --color-accent: oklch(0.86 0.16 80);
+  --color-accent-content: oklch(0.2 0.015 60);
+  --color-neutral: oklch(0.42 0.025 60);
+  --color-neutral-content: oklch(0.92 0.05 85);
+
+  --color-info: oklch(0.72 0.1 215);
+  --color-info-content: oklch(0.2 0.015 60);
+  --color-success: oklch(0.78 0.15 130);
+  --color-success-content: oklch(0.2 0.015 60);
+  --color-warning: oklch(0.82 0.15 88);
+  --color-warning-content: oklch(0.2 0.015 60);
+  --color-error: oklch(0.7 0.18 28);
+  --color-error-content: oklch(0.99 0 0);
+
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.75rem;
+
+  --bg-0: oklch(0.22 0.015 60);
+  --bg-1: oklch(0.27 0.018 60);
+  --bg-2: oklch(0.315 0.02 60);
+  --bg-3: oklch(0.38 0.025 60);
+  --bg-inset: oklch(0.18 0.012 60);
+  --line: oklch(0.42 0.025 60 / 0.6);
+  --line-strong: oklch(0.52 0.03 60);
+  --fg-1: oklch(0.92 0.05 85);
+  --fg-2: oklch(0.78 0.06 85);
+  --fg-3: oklch(0.6 0.06 85);
+  --accent: oklch(0.78 0.14 75);
+  --accent-hi: oklch(0.86 0.16 80);
+  --accent-lo: oklch(0.62 0.15 65);
+  --accent-soft: oklch(0.78 0.14 75 / 0.17);
+  --grid-dot: oklch(0.4 0.025 60 / 0.5);
+  --glow-accent: 0 0 0 1px oklch(0.78 0.14 75 / 0.35), 0 8px 26px oklch(0.78 0.14 75 / 0.2);
+}
+
+@plugin "daisyui/theme" {
+  name: "tokyo";
+  color-scheme: dark;
+
+  --color-base-100: oklch(0.245 0.038 265);
+  --color-base-200: oklch(0.285 0.04 265);
+  --color-base-300: oklch(0.335 0.042 265);
+  --color-base-content: oklch(0.92 0.02 255);
+
+  --color-primary: oklch(0.8 0.12 220);
+  --color-primary-content: oklch(0.18 0.028 265);
+  --color-secondary: oklch(0.76 0.04 255);
+  --color-secondary-content: oklch(0.18 0.028 265);
+  --color-accent: oklch(0.88 0.11 220);
+  --color-accent-content: oklch(0.18 0.028 265);
+  --color-neutral: oklch(0.4 0.05 265);
+  --color-neutral-content: oklch(0.92 0.02 255);
+
+  --color-info: oklch(0.72 0.14 285);
+  --color-info-content: oklch(0.18 0.028 265);
+  --color-success: oklch(0.78 0.15 145);
+  --color-success-content: oklch(0.18 0.028 265);
+  --color-warning: oklch(0.82 0.14 75);
+  --color-warning-content: oklch(0.18 0.028 265);
+  --color-error: oklch(0.7 0.2 10);
+  --color-error-content: oklch(0.99 0 0);
+
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.875rem;
+
+  --bg-0: oklch(0.21 0.035 265);
+  --bg-1: oklch(0.245 0.038 265);
+  --bg-2: oklch(0.285 0.04 265);
+  --bg-3: oklch(0.335 0.042 265);
+  --bg-inset: oklch(0.175 0.03 265);
+  --line: oklch(0.4 0.05 265 / 0.55);
+  --line-strong: oklch(0.5 0.06 265);
+  --fg-1: oklch(0.92 0.02 255);
+  --fg-2: oklch(0.76 0.04 255);
+  --fg-3: oklch(0.55 0.045 255);
+  --accent: oklch(0.8 0.12 220);
+  --accent-hi: oklch(0.88 0.11 220);
+  --accent-lo: oklch(0.65 0.13 225);
+  --accent-soft: oklch(0.8 0.12 220 / 0.18);
+  --grid-dot: oklch(0.4 0.05 265 / 0.5);
+  --glow-accent: 0 0 0 1px oklch(0.8 0.12 220 / 0.35), 0 8px 28px oklch(0.8 0.12 220 / 0.2);
+}
+
+@plugin "daisyui/theme" {
+  name: "one-dark";
+  color-scheme: dark;
+
+  --color-base-100: oklch(0.290 0.020 260);
+  --color-base-200: oklch(0.315 0.020 260);
+  --color-base-300: oklch(0.390 0.020 260);
+  --color-base-content: oklch(0.760 0.025 255);
+
+  --color-primary: oklch(0.730 0.120 235);
+  --color-primary-content: oklch(0.240 0.018 258);
+  --color-secondary: oklch(0.720 0.080 200);
+  --color-secondary-content: oklch(0.240 0.018 258);
+  --color-accent: oklch(0.670 0.180 305);
+  --color-accent-content: oklch(0.240 0.018 258);
+  --color-neutral: oklch(0.390 0.020 260);
+  --color-neutral-content: oklch(0.880 0.015 255);
+
+  --color-info: oklch(0.720 0.080 200);
+  --color-info-content: oklch(0.240 0.018 258);
+  --color-success: oklch(0.760 0.140 135);
+  --color-success-content: oklch(0.240 0.018 258);
+  --color-warning: oklch(0.800 0.120 80);
+  --color-warning-content: oklch(0.240 0.018 258);
+  --color-error: oklch(0.670 0.160 18);
+  --color-error-content: oklch(0.99 0 0);
+
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.875rem;
+
+  --bg-0: oklch(0.260 0.020 258);
+  --bg-1: oklch(0.290 0.020 260);
+  --bg-2: oklch(0.315 0.020 260);
+  --bg-3: oklch(0.390 0.020 260);
+  --bg-inset: oklch(0.240 0.018 258);
+  --line: oklch(0.390 0.020 260 / 0.55);
+  --line-strong: oklch(0.390 0.020 260);
+  --fg-1: oklch(0.760 0.025 255);
+  --fg-2: oklch(0.620 0.020 255);
+  --fg-3: oklch(0.480 0.020 255);
+  --accent: oklch(0.730 0.120 235);
+  --accent-hi: oklch(0.800 0.110 230);
+  --accent-lo: oklch(0.570 0.130 235);
+  --accent-soft: oklch(0.730 0.120 235 / 0.18);
+  --grid-dot: oklch(0.480 0.020 255 / 0.5);
+  --glow-accent: 0 0 0 1px oklch(0.730 0.120 235 / 0.35), 0 8px 28px oklch(0.730 0.120 235 / 0.2);
+}
+
+@plugin "daisyui/theme" {
+  name: "monokai-pro";
+  color-scheme: dark;
+
+  --color-base-100: oklch(0.280 0.010 340);
+  --color-base-200: oklch(0.360 0.010 340);
+  --color-base-300: oklch(0.490 0.010 340);
+  --color-base-content: oklch(0.980 0.005 90);
+
+  --color-primary: oklch(0.720 0.200 0);
+  --color-primary-content: oklch(0.190 0.006 340);
+  --color-secondary: oklch(0.700 0.130 285);
+  --color-secondary-content: oklch(0.190 0.006 340);
+  --color-accent: oklch(0.880 0.140 90);
+  --color-accent-content: oklch(0.190 0.006 340);
+  --color-neutral: oklch(0.490 0.010 340);
+  --color-neutral-content: oklch(0.980 0.005 90);
+
+  --color-info: oklch(0.830 0.090 200);
+  --color-info-content: oklch(0.190 0.006 340);
+  --color-success: oklch(0.820 0.140 130);
+  --color-success-content: oklch(0.190 0.006 340);
+  --color-warning: oklch(0.880 0.140 90);
+  --color-warning-content: oklch(0.190 0.006 340);
+  --color-error: oklch(0.720 0.200 0);
+  --color-error-content: oklch(0.99 0 0);
+
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.875rem;
+
+  --bg-0: oklch(0.230 0.008 340);
+  --bg-1: oklch(0.280 0.010 340);
+  --bg-2: oklch(0.360 0.010 340);
+  --bg-3: oklch(0.490 0.010 340);
+  --bg-inset: oklch(0.190 0.006 340);
+  --line: oklch(0.490 0.010 340 / 0.55);
+  --line-strong: oklch(0.490 0.010 340);
+  --fg-1: oklch(0.980 0.005 90);
+  --fg-2: oklch(0.680 0.006 320);
+  --fg-3: oklch(0.550 0.008 320);
+  --accent: oklch(0.720 0.200 0);
+  --accent-hi: oklch(0.800 0.180 0);
+  --accent-lo: oklch(0.560 0.220 5);
+  --accent-soft: oklch(0.720 0.200 0 / 0.18);
+  --grid-dot: oklch(0.550 0.008 320 / 0.5);
+  --glow-accent: 0 0 0 1px oklch(0.720 0.200 0 / 0.35), 0 8px 28px oklch(0.720 0.200 0 / 0.2);
+}
+
+@plugin "daisyui/theme" {
+  name: "catppuccin-mocha";
+  color-scheme: dark;
+
+  --color-base-100: oklch(0.244 0.020 280);
+  --color-base-200: oklch(0.340 0.028 275);
+  --color-base-300: oklch(0.415 0.028 275);
+  --color-base-content: oklch(0.870 0.040 275);
+
+  --color-primary: oklch(0.770 0.160 300);
+  --color-primary-content: oklch(0.244 0.020 280);
+  --color-secondary: oklch(0.850 0.080 180);
+  --color-secondary-content: oklch(0.244 0.020 280);
+  --color-accent: oklch(0.850 0.100 330);
+  --color-accent-content: oklch(0.244 0.020 280);
+  --color-neutral: oklch(0.415 0.028 275);
+  --color-neutral-content: oklch(0.870 0.040 275);
+
+  --color-info: oklch(0.740 0.140 258);
+  --color-info-content: oklch(0.244 0.020 280);
+  --color-success: oklch(0.860 0.150 145);
+  --color-success-content: oklch(0.244 0.020 280);
+  --color-warning: oklch(0.800 0.130 45);
+  --color-warning-content: oklch(0.244 0.020 280);
+  --color-error: oklch(0.720 0.170 5);
+  --color-error-content: oklch(0.99 0 0);
+
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.875rem;
+
+  --bg-0: oklch(0.205 0.022 280);
+  --bg-1: oklch(0.244 0.020 280);
+  --bg-2: oklch(0.340 0.028 275);
+  --bg-3: oklch(0.415 0.028 275);
+  --bg-inset: oklch(0.165 0.025 280);
+  --line: oklch(0.415 0.028 275 / 0.6);
+  --line-strong: oklch(0.500 0.025 275);
+  --fg-1: oklch(0.870 0.040 275);
+  --fg-2: oklch(0.740 0.028 270);
+  --fg-3: oklch(0.575 0.025 270);
+  --accent: oklch(0.770 0.160 300);
+  --accent-hi: oklch(0.850 0.100 330);
+  --accent-lo: oklch(0.660 0.170 300);
+  --accent-soft: oklch(0.770 0.160 300 / 0.18);
+  --grid-dot: oklch(0.415 0.028 275 / 0.5);
+  --glow-accent: 0 0 0 1px oklch(0.770 0.160 300 / 0.38), 0 8px 28px oklch(0.770 0.160 300 / 0.22);
+}
+
+@plugin "daisyui/theme" {
+  name: "rose-pine";
+  color-scheme: dark;
+
+  --color-base-100: oklch(0.205 0.028 285);
+  --color-base-200: oklch(0.235 0.030 285);
+  --color-base-300: oklch(0.275 0.035 285);
+  --color-base-content: oklch(0.900 0.025 280);
+
+  --color-primary: oklch(0.760 0.120 305);
+  --color-primary-content: oklch(0.205 0.028 285);
+  --color-secondary: oklch(0.820 0.060 205);
+  --color-secondary-content: oklch(0.205 0.028 285);
+  --color-accent: oklch(0.820 0.045 15);
+  --color-accent-content: oklch(0.205 0.028 285);
+  --color-neutral: oklch(0.390 0.025 285);
+  --color-neutral-content: oklch(0.900 0.025 280);
+
+  --color-info: oklch(0.820 0.060 205);
+  --color-info-content: oklch(0.205 0.028 285);
+  --color-success: oklch(0.750 0.100 150);
+  --color-success-content: oklch(0.205 0.028 285);
+  --color-warning: oklch(0.820 0.120 70);
+  --color-warning-content: oklch(0.205 0.028 285);
+  --color-error: oklch(0.680 0.170 5);
+  --color-error-content: oklch(0.99 0 0);
+
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.875rem;
+
+  --bg-0: oklch(0.225 0.025 285);
+  --bg-1: oklch(0.205 0.028 285);
+  --bg-2: oklch(0.235 0.030 285);
+  --bg-3: oklch(0.275 0.035 285);
+  --bg-inset: oklch(0.175 0.025 285);
+  --line: oklch(0.390 0.025 285 / 0.55);
+  --line-strong: oklch(0.390 0.025 285);
+  --fg-1: oklch(0.900 0.025 280);
+  --fg-2: oklch(0.640 0.030 285);
+  --fg-3: oklch(0.520 0.035 285);
+  --accent: oklch(0.760 0.120 305);
+  --accent-hi: oklch(0.820 0.110 305);
+  --accent-lo: oklch(0.660 0.150 305);
+  --accent-soft: oklch(0.760 0.120 305 / 0.18);
+  --grid-dot: oklch(0.390 0.025 285 / 0.5);
+  --glow-accent: 0 0 0 1px oklch(0.760 0.120 305 / 0.35), 0 8px 28px oklch(0.760 0.120 305 / 0.2);
+}
+
+@plugin "daisyui/theme" {
+  name: "solarized-dark";
+  color-scheme: dark;
+
+  --color-base-100: oklch(0.245 0.035 215);
+  --color-base-200: oklch(0.290 0.035 215);
+  --color-base-300: oklch(0.335 0.030 215);
+  --color-base-content: oklch(0.630 0.012 205);
+
+  --color-primary: oklch(0.620 0.140 240);
+  --color-primary-content: oklch(0.245 0.035 215);
+  --color-secondary: oklch(0.545 0.130 280);
+  --color-secondary-content: oklch(0.975 0.020 95);
+  --color-accent: oklch(0.660 0.100 185);
+  --color-accent-content: oklch(0.245 0.035 215);
+  --color-neutral: oklch(0.480 0.018 215);
+  --color-neutral-content: oklch(0.920 0.025 95);
+
+  --color-info: oklch(0.660 0.100 185);
+  --color-info-content: oklch(0.245 0.035 215);
+  --color-success: oklch(0.660 0.150 130);
+  --color-success-content: oklch(0.245 0.035 215);
+  --color-warning: oklch(0.630 0.130 75);
+  --color-warning-content: oklch(0.245 0.035 215);
+  --color-error: oklch(0.585 0.200 28);
+  --color-error-content: oklch(0.99 0 0);
+
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.875rem;
+
+  --bg-0: oklch(0.215 0.035 215);
+  --bg-1: oklch(0.245 0.035 215);
+  --bg-2: oklch(0.290 0.035 215);
+  --bg-3: oklch(0.390 0.028 215);
+  --bg-inset: oklch(0.195 0.035 215);
+  --line: oklch(0.48 0.018 215 / 0.55);
+  --line-strong: oklch(0.480 0.018 215);
+  --fg-1: oklch(0.630 0.012 205);
+  --fg-2: oklch(0.540 0.015 215);
+  --fg-3: oklch(0.480 0.018 215);
+  --accent: oklch(0.620 0.140 240);
+  --accent-hi: oklch(0.700 0.130 240);
+  --accent-lo: oklch(0.500 0.160 240);
+  --accent-soft: oklch(0.620 0.140 240 / 0.17);
+  --grid-dot: oklch(0.480 0.018 215 / 0.5);
+  --glow-accent: 0 0 0 1px oklch(0.620 0.140 240 / 0.35), 0 8px 28px oklch(0.620 0.140 240 / 0.2);
+}
+
+/* Terminal swaps the UI font wholesale — a signature move. */
+html[data-theme="terminal"] {
+  --font-sans: "JetBrains Mono", ui-monospace, monospace;
+}
+
+@source "./";
+@source "../../ui/src";
+@source "../../../plugins";
+
+/* Desktop app — pull every daisyUI utility into the bundle so plugin code
+   that uses semantic colors renders correctly even if no scanned source
+   file references them. */
+@source inline("{btn,badge,alert}-{neutral,primary,secondary,accent,info,success,warning,error}");
+@source inline("{btn,badge}-{outline,soft,dash,ghost,link,xs,sm,md,lg,xl}");
+
+/* ─── Sidebar-state variants ────────────────────────────────────────────
+ *
+ * The shell's App component mirrors `sidebarCollapsed` onto
+ * `<html data-sidebar="open|collapsed">`. These two custom variants
+ * make that state readable from any descendant — picker plugins use
+ * them to flip grid column counts (4 with the sidebar open, 6 with
+ * it collapsed). The variants traverse upwards via the ancestor
+ * combinator, so plugin mount roots see the value even though they
+ * live in a separate React tree from the shell.
+ *
+ * Container queries would also work in theory, but the
+ * `<main>` content uses `.page-content { max-width: 860px }` which
+ * caps the container inline-size below the 1024px @5xl breakpoint,
+ * so `@5xl:` never fires on the bigger overlay window — html-level
+ * data attributes don't have that problem. */
+@custom-variant sidebar-open (html[data-sidebar="open"] &);
+@custom-variant sidebar-collapsed (html[data-sidebar="collapsed"] &);
+
+/* ─── Base reset ──────────────────────────────────────────────────────── */
+
+:root {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+body {
+  color: var(--color-base-content);
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Scrollbars — hidden everywhere; content still scrolls. */
+* { scrollbar-width: none; }
+*::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+/* ─── Loadout utilities ──────────────────────────────────────────────
+ * Class names lifted from the Loadout handoff's `loadout.css` + `app.css`
+ * so plugin UIs (authored against these) don't need a parallel set. */
+
+.mono,
+.font-mono,
+.metric-value,
+.metric-label,
+[data-readout] {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum" 1, "zero" 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* Centered readable-width content column used across plugin pages. */
+.page-content {
+  max-width: 860px;
+  margin-inline: auto;
+  display: grid;
+  gap: 16px;
+}
+.page-content.wide { max-width: 1080px; }
+
+/* Subsection inside a card — groups related settings without splitting
+   into multiple cards. */
+.subsection {
+  padding: 20px 22px;
+  border-top: 1px solid var(--line);
+}
+.subsection:first-child { border-top: none; }
+
+.subsection-label {
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.subsection-desc {
+  font-size: 12px;
+  color: var(--fg-3);
+  margin-top: 8px;
+}
+
+/* Big-number live readout. */
+.metric-value {
+  font-size: 40px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+.metric-unit { font-size: 14px; color: var(--fg-2); font-weight: 500; }
+.metric-label {
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  font-weight: 600;
+}
+
+/* Segmented control — inset track with a solid active pill. Pair with
+   `segmented-item.active` on the selected button. */
+.segmented {
+  display: inline-flex;
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 3px;
+  gap: 2px;
+}
+.segmented > button {
+  border: none;
+  background: transparent;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  color: var(--fg-2);
+  border-radius: 6px;
+  font-weight: 500;
+  transition: all 120ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  cursor: pointer;
+}
+.segmented > button:hover { color: var(--fg-1); }
+.segmented > button.active {
+  background: var(--color-base-100);
+  color: var(--fg-1);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.15);
+}
+
+/* Small mono "chip" — a monospace pill for status / metadata. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  white-space: nowrap;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--bg-2);
+  color: var(--fg-2);
+  border: 1px solid var(--line);
+  font-family: var(--font-mono);
+}
+.chip-success { background: color-mix(in oklab, var(--color-success) 15%, transparent); color: var(--color-success); border-color: color-mix(in oklab, var(--color-success) 30%, transparent); }
+.chip-warn    { background: color-mix(in oklab, var(--color-warning) 15%, transparent); color: var(--color-warning); border-color: color-mix(in oklab, var(--color-warning) 30%, transparent); }
+.chip-danger  { background: color-mix(in oklab, var(--color-error) 15%, transparent); color: var(--color-error); border-color: color-mix(in oklab, var(--color-error) 30%, transparent); }
+.chip-accent  { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in oklab, var(--accent) 30%, transparent); }
+
+/* Row: label/value pair used throughout plugin pages. */
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 2px;
+  font-size: 13px;
+}
+.row + .row { border-top: 1px solid var(--line); }
+.row-label { color: var(--fg-2); }
+.row-value { color: var(--fg-1); font-family: var(--font-mono); font-size: 12.5px; white-space: nowrap; }
+
+/* Progress rail + live-fill gradient. */
+.rail {
+  height: 6px;
+  background: var(--bg-inset);
+  border-radius: 999px;
+  overflow: hidden;
+  position: relative;
+}
+.rail > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-lo), var(--accent));
+  border-radius: 999px;
+  transition: width 180ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* Multi-segment heat bar (fan / thermal gauge). */
+.heat-bar {
+  display: flex;
+  gap: 2px;
+  height: 24px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--bg-inset);
+}
+.heat-bar > span {
+  flex: 1;
+  background: var(--accent);
+  border-radius: 2px;
+  opacity: 0.15;
+  transition: opacity 120ms;
+}
+.heat-bar > span.on { opacity: 1; }
+
+/* Keycap + d-pad hint for gamepad affordances. */
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  min-width: 22px;
+  height: 22px;
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  font-weight: 500;
+}
+.dpad-hint {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--fg-3);
+  font-size: 11.5px;
+}
+
+/* Grid dot background — used on empty/placeholder states. */
+.grid-bg {
+  background-image: radial-gradient(circle, var(--grid-dot) 1px, transparent 1px);
+  background-size: 22px 22px;
+  background-position: 0 0;
+}
+
+/* ─── Card / Widget shells ──────────────────────────────────────────────
+ * DaisyUI's `.card` is a tabular grid primitive — completely different
+ * shape from Loadout's bordered content panel. These rules override
+ * DaisyUI's zero-specificity `.card:where(...)` defaults so the
+ * handoff's card / card-header / card-body / widget structure paints
+ * with the right background, border, and rounding. Every plugin page
+ * depends on these being here; without them pages render as flat
+ * content against the page background with no visible container. */
+.card {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  /* Reset DaisyUI's display:grid / text-align */
+  display: block;
+  text-align: start;
+}
+.card-header {
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  gap: 10px;
+}
+.card-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* DaisyUI also sets .card-title to 1.25rem / 600 / flex — override */
+  line-height: 1.4;
+  margin: 0;
+}
+.card-body {
+  padding: 18px;
+  /* DaisyUI: display:flex; flex-direction:column — we want plain block */
+  display: block;
+}
+.card-body.p-sm { padding: 14px; }
+
+/* Home widget outer frame — same shell as `.card` but with a hover
+ * highlight and a drag-state box-shadow; grid items wrap this. */
+.widget {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  position: relative;
+  transition:
+    border-color 120ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    box-shadow 120ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    transform 120ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.widget:hover { border-color: var(--line-strong); }
+.widget.dragging {
+  box-shadow: 0 16px 40px rgb(0 0 0 / .45);
+  cursor: grabbing;
+  z-index: 5;
+  border-color: var(--accent);
+}
+
+/* Drag grip: hidden until widget hover (or edit mode via parent
+ * class). Plugins render it inside the widget frame. */
+.widget-handle {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  color: var(--fg-3);
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 120ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.widget:hover .widget-handle { opacity: 1; }
+.widget-handle:active { cursor: grabbing; }
+.widget-handle svg { width: 12px; height: 12px; }
+
+/* ─── Focus ring (gamepad pulse) ────────────────────────────────────── */
+
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-primary) 50%, transparent);
+  animation: focusPulse 2s ease-in-out infinite;
+}
+
+@keyframes focusPulse {
+  0%, 100% { box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-primary) 50%, transparent); }
+  50%      { box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-primary) 25%, transparent); }
+}
+
+@keyframes viewEnter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideInRight {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* Toggle bounce — spring overshoot on knob. */
+.toggle::after {
+  transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+}
+
+/* Slider thumb glow when focused. */
+.range:focus::-webkit-slider-thumb {
+  box-shadow: 0 0 8px 2px color-mix(in oklch, var(--color-primary) 50%, transparent);
+}
+
+/* Scroll edge fades — driven by data-scroll-fade attribute set via JS. */
+.scroll-fade[data-scroll-fade="both"] {
+  mask-image: linear-gradient(to bottom, transparent, black 32px, black calc(100% - 32px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 32px, black calc(100% - 32px), transparent);
+}
+.scroll-fade[data-scroll-fade="top"] {
+  mask-image: linear-gradient(to bottom, transparent, black 32px, black 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 32px, black 100%);
+}
+.scroll-fade[data-scroll-fade="bottom"] {
+  mask-image: linear-gradient(to bottom, black 0%, black calc(100% - 32px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, black calc(100% - 32px), transparent);
+}
+
+/* Subtle noise texture overlay for depth. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.015;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 256px 256px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ─── On-screen keyboard — bind react-simple-keyboard's default theme
+ *      to our project tokens so it inherits theme switching for free.
+ *      RSK ships fixed grays in `hg-theme-default`; we scope every
+ *      override under `#overlay-osk` so our specificity (1,0,2,0)
+ *      beats RSK's default `.simple-keyboard .hg-button` (0,0,2,0)
+ *      regardless of import order or how Vite reorders @import-ed CSS.
+ * ──────────────────────────────────────────────────────────────────── */
+#overlay-osk {
+  background: var(--bg-1);
+  border-top: 1px solid var(--line);
+  max-height: 38vh;
+}
+#overlay-osk .simple-keyboard.hg-theme-default {
+  background: transparent;
+  padding: 10px 12px 12px;
+  font-family: var(--font-sans, "Inter", system-ui, sans-serif);
+}
+#overlay-osk .simple-keyboard .hg-button {
+  background: var(--bg-2);
+  color: var(--fg-1);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  height: 42px;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: none;
+  transition: background 80ms, border-color 120ms, box-shadow 120ms;
+}
+#overlay-osk .simple-keyboard .hg-button:hover {
+  background: color-mix(in oklab, var(--bg-2) 85%, var(--accent) 15%);
+}
+#overlay-osk .simple-keyboard .hg-button:active,
+#overlay-osk .simple-keyboard .hg-activeButton {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+#overlay-osk .simple-keyboard .hg-button-enter {
+  background: var(--accent);
+  color: var(--bg-0);
+  font-weight: 600;
+  border-color: var(--accent);
+}
+#overlay-osk .simple-keyboard .hg-button-bksp,
+#overlay-osk .simple-keyboard .hg-button-close,
+#overlay-osk .simple-keyboard .hg-button-shift,
+#overlay-osk .simple-keyboard .hg-button-symbols,
+#overlay-osk .simple-keyboard .hg-button-layout {
+  /* Slightly tinted so action keys read distinct from the alpha
+     cluster. */
+  background: var(--bg-1);
+}
+#overlay-osk .simple-keyboard .hg-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  border-color: var(--accent);
+}
+/* Char keys use mono so 1/l/I and 0/O are unambiguous on small keys.
+ * Action keys (`{shift}`, `{enter}`, `{symbols}`, `{close}`) carry
+ * data-skbtn names starting with `{`; everything else is a literal
+ * character. */
+#overlay-osk .simple-keyboard .hg-button[data-skbtn]:not([data-skbtn^="{"]) {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+}
+
+/* react-grid-layout's default resize handle is a faint grey arrow that
+ * disappears on dark themes. While the homepage is in edit mode, paint
+ * a high-contrast white corner so users can see where to grab. */
+.react-grid-item > .react-resizable-handle {
+  width: 18px;
+  height: 18px;
+  bottom: 4px;
+  right: 4px;
+  background-image: none;
+  opacity: 0.95;
+}
+.react-grid-item > .react-resizable-handle::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-right: 3px solid #fff;
+  border-bottom: 3px solid #fff;
+  border-bottom-right-radius: 4px;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+}
+.react-grid-item > .react-resizable-handle:hover::after,
+.react-grid-item > .react-resizable-handle:active::after {
+  border-color: var(--color-primary, #fff);
+}
