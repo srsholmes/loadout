@@ -57,5 +57,4 @@ HLTB pill never appears on the actual Steam BPM game page even though the plugin
 - ~~Error Reporting~~ — `error-reporter.ts` utility, clipboard copy, save to ~/Downloads, global handlers.
 - ~~Overlay Polish~~ — Error boundaries, expanded Settings (boot/update/version), CEF status indicator.
 - ~~Installer + Uninstaller~~ — Two-phase install, distro detection, systemd service, idempotent.
-- ~~Flatpak Wrapper~~ — `flatpak/org.steamloader.Overlay.yml` for WebKitGTK on SteamOS.
 - ~~`bun build --compile` Packaging~~ — `scripts/build.sh` with version stamping.

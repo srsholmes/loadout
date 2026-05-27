@@ -75,13 +75,13 @@ A plugin is a single folder. The exact file set depends on where the UI
 renders:
 
 ```
-# Overlay plugin (dominant pattern — 28 of 29 plugins)
+# Overlay plugin (the default pattern)
 my-plugin/
 ├── package.json     # Plugin metadata under the `plugin` field
 ├── backend.ts       # PluginBackend class with RPC methods
 └── app.tsx          # React component rendered in the Electrobun overlay
 
-# Steam-injection plugin (game-browser is currently the only one)
+# Steam-injection plugin (renders into Steam's own UI instead)
 my-plugin/
 ├── package.json
 ├── backend.ts

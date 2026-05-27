@@ -1,9 +1,0 @@
-{
-  "id": "disable-controller-input",
-  "name": "Disable Controller Input",
-  "version": "1.0.0",
-  "description": "Silence individual controllers by telling InputPlumber to drop their virtual targets — useful for handhelds where the built-in pad is hogging player 1",
-  "author": "Loadout",
-  "category": "Device",
-  "subtitle": "Silence controllers via InputPlumber"
-}
