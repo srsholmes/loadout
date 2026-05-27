@@ -24,6 +24,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import { log } from "./logger";
+import { chownToTarget } from "./target-user";
 
 export type UserConfig = Record<string, unknown>;
 
@@ -52,6 +53,9 @@ async function atomicWriteFile(path: string, data: string): Promise<void> {
   const tmp = `${path}.tmp.${process.pid}.${Date.now()}`;
   await writeFile(tmp, data, "utf8");
   await rename(tmp, path);
+  // Root service writing under the user's home — keep the file user-owned
+  // so it stays inspectable/hand-editable. No-op for dev runs (no target).
+  chownToTarget(path);
 }
 
 async function readRaw(): Promise<UserConfig> {
@@ -81,6 +85,7 @@ async function readRaw(): Promise<UserConfig> {
 
 async function writeRaw(config: UserConfig): Promise<void> {
   await mkdir(configDir(), { recursive: true });
+  chownToTarget(configDir());
   await atomicWriteFile(userConfigPath(), JSON.stringify(config, null, 2) + "\n");
 }
 

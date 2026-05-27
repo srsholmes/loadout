@@ -31,38 +31,52 @@ fi
 systemctl --user stop loadout-overlay 2>/dev/null || true
 systemctl --user stop loadout 2>/dev/null || true
 
-# Copy binaries
+# The plugin tree lives in the user's home; the binary does NOT — SELinux
+# (enforcing on Bazzite) denies a root system service `execute` on a binary
+# labelled data_home_t under ~/.local/share. It must exec from a system
+# path (bin_t), exactly like HHD's /usr/bin/hhd. So the binary goes to
+# /usr/local/bin (writable on ostree → /var/usrlocal, labels bin_t).
 mkdir -p "$INSTALL_DIR/plugins"
-cp "$DIST_DIR/loadout" "$INSTALL_DIR/loadout"
-chmod +x "$INSTALL_DIR/loadout"
-echo "Installed $INSTALL_DIR/loadout"
+# The binary used to live here; it's a system-path binary now. Drop the
+# stale copy so the install dir only holds the plugin tree.
+rm -f "$INSTALL_DIR/loadout"
+SYSTEM_BIN="/usr/local/bin/loadout"
 
-# Smoke-check the just-copied binary. A truncated / corrupted build still
-# passes cp + chmod, then the service silently fails on next start with
-# a confusing "Exec format error" or similar. Catch that here so the
-# operator gets a clear error pointing at re-running the build, instead
-# of a cryptic systemd failure later. Audit 2026-05 H-008.
-#
-# `set -e` would exit on `--version` failure before we got a chance to
-# print a nice error, so capture stdout+stderr+rc explicitly and gate
-# the failure ourselves.
+# Smoke-check the freshly built binary BEFORE installing it system-wide.
+# A truncated / corrupted build still copies fine, then the service
+# silently fails on next start with a confusing "Exec format error".
+# Catch it here with a clear pointer to re-run the build (Audit H-008).
+# `set -e` would exit on `--version` failure before we print a nice
+# error, so capture stdout+stderr+rc explicitly and gate it ourselves.
 SMOKE_OUT=""
 SMOKE_RC=0
-SMOKE_OUT="$("$INSTALL_DIR/loadout" --version 2>&1)" || SMOKE_RC=$?
+SMOKE_OUT="$("$DIST_DIR/loadout" --version 2>&1)" || SMOKE_RC=$?
 if [ "$SMOKE_RC" -ne 0 ]; then
-    echo "ERROR: '$INSTALL_DIR/loadout --version' exited $SMOKE_RC." >&2
+    echo "ERROR: '$DIST_DIR/loadout --version' exited $SMOKE_RC." >&2
     echo "       Output: $SMOKE_OUT" >&2
     echo "       The binary may be corrupted or truncated. Re-run 'bun run build'." >&2
     exit 1
 fi
 # Recognisable line is "loadout <version>" — see apps/loadout/src/index.ts
 if ! printf '%s' "$SMOKE_OUT" | grep -q '^loadout '; then
-    echo "ERROR: '$INSTALL_DIR/loadout --version' did not print a recognisable version line." >&2
+    echo "ERROR: '$DIST_DIR/loadout --version' did not print a recognisable version line." >&2
     echo "       Got: $SMOKE_OUT" >&2
     echo "       Re-run 'bun run build' to produce a fresh dist/loadout." >&2
     exit 1
 fi
 echo "Smoke check OK: $SMOKE_OUT"
+
+# Install the binary system-wide (needs sudo). restorecon forces the
+# bin_t label so init_t can exec it even if the default context drifts.
+echo "Installing the backend binary to $SYSTEM_BIN (needs sudo)..."
+sudo install -m 0755 "$DIST_DIR/loadout" "$SYSTEM_BIN"
+command -v restorecon >/dev/null 2>&1 && sudo restorecon -F "$SYSTEM_BIN" 2>/dev/null || true
+echo "Installed $SYSTEM_BIN"
+
+# The root service writes plugin build caches (.cache/) into this tree as
+# root. Reclaim ownership before staging so the user-run prepare-plugins
+# can overwrite them. Needs sudo; no-op on a fresh install.
+sudo chown -R "$(id -un):$(id -gn)" "$INSTALL_DIR" 2>/dev/null || true
 
 # Stage the plugin tree + a single hoisted node_modules/ shared by every
 # plugin. The PR-48 design: one copy of react / react-dom / scheduler /

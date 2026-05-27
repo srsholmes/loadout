@@ -12,7 +12,11 @@ set -e
 REPO="srsholmes/loadout"
 INSTALL_DIR="$HOME/.local/share/loadout"
 BINARY_NAME="loadout"
-BINARY_PATH="$INSTALL_DIR/$BINARY_NAME"
+# System path (SELinux bin_t) so the root service can exec it — exec from
+# ~/.local/share (data_home_t) is denied for a system-domain service.
+# /usr/local/bin is writable on ostree (→ /var/usrlocal) and persists
+# across updates. Mirrors HHD's /usr/bin/hhd.
+BINARY_PATH="/usr/local/bin/$BINARY_NAME"
 BIN_LINK="$HOME/.local/bin/loadout"
 SERVICE_DIR="$HOME/.config/systemd/user"
 # Legacy per-user backend unit — removed on install now the backend is a
@@ -382,9 +386,12 @@ phase1() {
         exit 1
     fi
 
-    # Move binary into place
-    mv "$TEMP_FILE" "$BINARY_PATH"
-    chmod +x "$BINARY_PATH"
+    # Install binary into the system path (needs sudo). restorecon forces
+    # the bin_t label so the root service (init_t) can exec it.
+    info "Installing the binary to $BINARY_PATH (needs sudo)..."
+    sudo install -m 0755 "$TEMP_FILE" "$BINARY_PATH"
+    rm -f "$TEMP_FILE"
+    command -v restorecon >/dev/null 2>&1 && sudo restorecon -F "$BINARY_PATH" 2>/dev/null || true
     success "Binary installed to $BINARY_PATH"
 
     # Download the overlay binary
@@ -606,6 +613,10 @@ download_plugins() {
     fi
 
     info "Extracting plugins + hoisted node_modules to $INSTALL_DIR/..."
+    # The root service writes plugin build caches (.cache/) here as root;
+    # reclaim ownership so the wipe below can remove them (needs sudo;
+    # no-op on a fresh install).
+    sudo chown -R "$(id -un):$(id -gn)" "$INSTALL_DIR" 2>/dev/null || true
     # Wipe both targets first so deleted plugins and stale deps don't
     # linger across reinstalls. Tarball contains plugins/ + node_modules/
     # at the top level, extracted directly into $INSTALL_DIR.
@@ -692,7 +703,7 @@ Type=simple
 # --user chowns files written under it back to the user.
 Environment=HOME=$HOME
 Environment=PLUGINS_DIR=$HOME/.local/share/loadout/plugins
-ExecStart=$HOME/.local/share/loadout/loadout --user $(id -un)
+ExecStart=$BINARY_PATH --user $(id -un)
 WorkingDirectory=$HOME/.local/share/loadout
 Restart=on-failure
 RestartSec=5
