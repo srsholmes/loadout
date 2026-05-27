@@ -1,0 +1,48 @@
+# Third-party licenses
+
+This file aggregates verbatim license text for upstream projects whose code,
+data, or templates have been incorporated into this repository.
+
+This branch is a minimal proof-of-concept: it ships the overlay platform plus
+a single example plugin (`steam-gamescope-ipc`, original code with no
+upstream). The only incorporated upstream is **Electrobun** (below). Per-plugin
+attribution will be added back alongside each plugin as it is migrated in —
+each plugin carries its own `NOTICE` file with the precise language.
+
+A separate audit is still needed for runtime/build-time dependencies (npm
+packages, Bun, daisyUI, react-icons, etc.).
+
+---
+
+## Electrobun (used by `packages/overlay-electrobun`)
+
+Source: <https://github.com/blackboardsh/electrobun>
+SPDX: `MIT`
+
+The overlay shell at `packages/overlay-electrobun` is built on Electrobun
+(CEF). Per the MIT license, the upstream copyright notice and license
+text are reproduced here verbatim:
+
+```
+MIT License
+
+Copyright (c) 2024 Blackboard Technologies inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

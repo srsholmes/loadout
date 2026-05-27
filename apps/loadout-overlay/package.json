@@ -1,0 +1,37 @@
+{
+  "name": "@loadout/loadout-overlay",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "electrobun dev",
+    "build": "vite build && electrobun build --release",
+    "build:dev": "vite build && electrobun build",
+    "webview:dev": "vite",
+    "webview:build": "vite build",
+    "electrobun:only": "electrobun build"
+  },
+  "dependencies": {
+    "@noriginmedia/norigin-spatial-navigation": "^3.0.0",
+    "@loadout/types": "workspace:*",
+    "@loadout/ui": "workspace:*",
+    "@loadout/steam-paths": "workspace:*",
+    "daisyui": "^5.5.19",
+    "electrobun": "^1.0.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-grid-layout": "^2.2.3",
+    "react-hot-toast": "^2.4.1",
+    "react-simple-keyboard": "^3.8.197"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/react-grid-layout": "^2.1.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  }
+}

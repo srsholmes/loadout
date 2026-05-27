@@ -1,0 +1,42 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "composite": false,
+    "noEmit": true,
+    "paths": {
+      "@loadout/types": ["./packages/types/src"],
+      "@loadout/types/*": ["./packages/types/src/*"],
+      "@loadout/ui": ["./packages/ui/src"],
+      "@loadout/ui/*": ["./packages/ui/src/*"],
+      "@overlay/*": ["./apps/loadout-overlay/src/overlay/*"],
+      "electrobun/bun": ["./types/electrobun-shims.d.ts"],
+      "electrobun/view": ["./types/electrobun-shims.d.ts"]
+    }
+  },
+  "include": [
+    "types/**/*.d.ts",
+    "packages/*/src/**/*.ts",
+    "packages/*/src/**/*.tsx",
+    "apps/*/src/**/*.ts",
+    "apps/*/src/**/*.tsx",
+    "plugins/*/backend.ts",
+    "plugins/*/panel.tsx",
+    "plugins/*/app.tsx"
+  ]
+}
