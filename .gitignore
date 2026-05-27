@@ -47,3 +47,6 @@ qam-watch.log
 
 # Stale loadout marketing screenshots — loadout will add its own
 screenshots/
+
+# background-agent git worktrees — never track
+.worktrees/
