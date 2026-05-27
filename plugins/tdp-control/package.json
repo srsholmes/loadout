@@ -1,0 +1,25 @@
+{
+  "name": "@loadout/plugin-tdp-control",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "TDP (Thermal Design Power) control for Linux handhelds — adjust wattage via ryzenadj or sysfs",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-icons": "^5.6.0",
+    "@loadout/ui": "workspace:*",
+    "@loadout/types": "workspace:*",
+    "@loadout/exec": "workspace:*",
+    "@loadout/steam-paths": "workspace:*"
+  },
+  "plugin": {
+    "id": "tdp-control",
+    "name": "TDP Control",
+    "description": "Adjust CPU/APU TDP wattage with presets and a slider",
+    "permissions": {
+      "system": ["ryzenadj", "intel-rapl", "platform_profile", "sysfs"]
+    },
+    "category": "Performance",
+    "subtitle": "CPU/GPU power limits"
+  }
+}
