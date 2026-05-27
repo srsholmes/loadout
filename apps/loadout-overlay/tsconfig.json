@@ -13,11 +13,11 @@
     "noEmit": true,
     "types": ["bun-types"],
     "paths": {
-      "@loadout/ui": ["../ui/src"],
-      "@loadout/ui/*": ["../ui/src/*"],
-      "@loadout/types": ["../types/src"],
-      "@loadout/types/*": ["../types/src/*"],
-      "@overlay/*": ["../overlay/src/*"]
+      "@loadout/ui": ["../../packages/ui/src"],
+      "@loadout/ui/*": ["../../packages/ui/src/*"],
+      "@loadout/types": ["../../packages/types/src"],
+      "@loadout/types/*": ["../../packages/types/src/*"],
+      "@overlay/*": ["./src/overlay/*"]
     }
   },
   "include": ["src/**/*", "electrobun.config.ts", "vite.config.ts"]

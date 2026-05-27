@@ -55,7 +55,7 @@ jobs:
           # 2. Overlay tree — tar.xz the directory Electrobun produced.
           #    Compressed size is roughly ~250–300 MB on a 617 MB raw tree;
           #    well under GitHub's 2 GB per-asset cap.
-          OVERLAY_DIR="packages/overlay-electrobun/build/dev-linux-x64"
+          OVERLAY_DIR="apps/loadout-overlay/build/dev-linux-x64"
           if [ ! -d "$OVERLAY_DIR/loadout-overlay-dev" ]; then
             echo "::error::Expected overlay tree at $OVERLAY_DIR/loadout-overlay-dev"
             exit 1

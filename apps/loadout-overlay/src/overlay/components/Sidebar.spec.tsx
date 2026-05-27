@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, fireEvent } from "../../../../test/render";
+import { render, fireEvent } from "../../../../../test/render";
 import { Sidebar } from "./Sidebar";
 import type { PluginInfo } from "../hooks/usePlugins";
 

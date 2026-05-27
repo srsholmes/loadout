@@ -27,8 +27,6 @@ export default defineConfig({
     alias: {
       "@loadout/ui": resolve(__dirname, "packages/ui/src"),
       "@loadout/types": resolve(__dirname, "packages/types/src"),
-      "@loadout/loader": resolve(__dirname, "packages/loader/src"),
-      "@loadout/injector": resolve(__dirname, "packages/injector/src"),
     },
   },
   test: {
@@ -70,7 +68,7 @@ export default defineConfig({
         "**/node_modules/**",
         "**/dist/**",
         "**/.cache/**",
-        "packages/dev-server/**",
+        "apps/loadout/**",
       ],
       // Audit 2026-05 Q-005 follow-up — coverage ratchet.
       // Floors are 1pp below the values measured at the time the ratchet

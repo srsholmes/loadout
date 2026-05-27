@@ -5,7 +5,7 @@
  * Monitors for page reloads and reinjects as needed.
  */
 
-import { CDPClient } from "@loadout/steam-cdp";
+import { CDPClient } from "../steam-cdp";
 import { findSharedJSContext, findBigPictureTab, type CEFTab, type GetTabsOptions } from "./tabs";
 import { buildComponentDiscoveryScript } from "./steam-components";
 import { buildMenuPatchScript, type MenuPluginEntry } from "./menu-patcher";

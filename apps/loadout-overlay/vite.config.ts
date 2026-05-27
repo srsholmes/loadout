@@ -5,9 +5,11 @@ import path from "node:path";
 
 const BACKEND_URL = "http://localhost:33820";
 
-/** Strip `crossorigin` from HTML tags — Electrobun's views:// protocol
- *  doesn't return CORS headers, so crossorigin-tagged scripts fail to load. */
-function stripCrossorigin(): import("vite").Plugin { // eslint-disable-line @typescript-eslint/consistent-type-imports
+import type { Plugin } from "vite";
+
+// Strip `crossorigin` from HTML script/link tags: CEF rejects
+// crossorigin-tagged scripts loaded from the views:// custom scheme.
+function stripCrossorigin(): Plugin {
   return {
     name: "strip-crossorigin",
     transformIndexHtml(html) {
@@ -18,10 +20,12 @@ function stripCrossorigin(): import("vite").Plugin { // eslint-disable-line @typ
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), stripCrossorigin()],
+  root: "src/webview",
   resolve: {
     alias: {
-      "@loadout/ui": path.resolve(__dirname, "../ui/src"),
-      "@loadout/types": path.resolve(__dirname, "../types/src"),
+      "@loadout/ui": path.resolve(__dirname, "../../packages/ui/src"),
+      "@loadout/types": path.resolve(__dirname, "../../packages/types/src"),
+      "@overlay": path.resolve(__dirname, "src/overlay"),
     },
   },
   server: {
@@ -34,7 +38,10 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: "dist",
+    // Relative to `root: src/webview`, so this lands at
+    // apps/loadout-overlay/webview-dist/ — safe to `rm -rf` and
+    // well away from the repo-root dist/ that ships loadout.
+    outDir: "../../webview-dist",
     emptyOutDir: true,
   },
 });
