@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Loadout
+Comment=Plugin manager overlay for Steam
+Exec=loadout-overlay.sh
+Type=Application
+Terminal=false
+Categories=Game;Utility;
+Keywords=steam;plugins;overlay;deck;
+StartupWMClass=Loadout

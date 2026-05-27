@@ -1,0 +1,112 @@
+name: Release
+
+# Manual-only release workflow. Builds the Loadout binary + Electrobun
+# overlay tree and replaces a single rolling GitHub Release tagged `rolling`,
+# marked as the GitHub-latest.
+#
+# Auto-trigger on push-to-main was removed (audit 2026-05 Q-001 / owner
+# decision): releases ship before CI gates, and a hotfix off a stale base
+# or a force-push would sail through unchecked. Until release.yml runs
+# `needs: ci`, the safer default is to require explicit operator intent.
+#
+# Workflow: land changes on main, run CI, then trigger this manually from
+# the Actions tab (or via `gh workflow run release.yml`).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write  # required by softprops/action-gh-release@v2 to create the release
+
+concurrency:
+  group: release
+  cancel-in-progress: false  # don't kill a half-uploaded release
+
+jobs:
+  build-and-release:
+    name: Build x86_64 + publish rolling release
+    # TODO(arm): add a matrix entry for aarch64 once we have hardware to test on.
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0  # so scripts/build.sh can read git short SHA for dev-<sha> versioning
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build (binary + Electrobun overlay tree)
+        run: bun run build
+
+      - name: Package release artifacts
+        id: package
+        run: |
+          set -eu
+
+          # 1. Backend binary — a straight rename to match install.sh's
+          #    expected asset name (loadout-${ARCH}).
+          cp dist/loadout loadout-x86_64
+
+          # 2. Overlay tree — tar.xz the directory Electrobun produced.
+          #    Compressed size is roughly ~250–300 MB on a 617 MB raw tree;
+          #    well under GitHub's 2 GB per-asset cap.
+          OVERLAY_DIR="apps/loadout-overlay/build/dev-linux-x64"
+          if [ ! -d "$OVERLAY_DIR/loadout-overlay-dev" ]; then
+            echo "::error::Expected overlay tree at $OVERLAY_DIR/loadout-overlay-dev"
+            exit 1
+          fi
+          tar -C "$OVERLAY_DIR" -cJf loadout-overlay-x86_64.tar.xz loadout-overlay-dev
+
+          # 3. Plugin tree — stage every plugin alongside a single hoisted
+          #    node_modules/ (react/react-dom/scheduler/react-icons +
+          #    @loadout/*). One copy shared by all 29 plugins instead
+          #    of per-plugin duplication that ballooned the tarball to
+          #    ~250 MB compressed. inject-builder.ts resolves deps from
+          #    the hoisted location at runtime. Without this, curl|sh
+          #    installs end up with an empty plugins/ dir and nothing
+          #    renders (audit 2026-05 H-002).
+          PLUGIN_STAGE_DIR="$RUNNER_TEMP/staged-install-root"
+          bash scripts/prepare-plugins.sh "$PLUGIN_STAGE_DIR"
+          tar -C "$PLUGIN_STAGE_DIR" -cJf loadout-plugins-x86_64.tar.xz plugins node_modules
+
+          # 4. Checksums so install.sh can verify integrity.
+          sha256sum \
+            loadout-x86_64 \
+            loadout-overlay-x86_64.tar.xz \
+            loadout-plugins-x86_64.tar.xz \
+            > SHA256SUMS
+
+          ls -lh \
+            loadout-x86_64 \
+            loadout-overlay-x86_64.tar.xz \
+            loadout-plugins-x86_64.tar.xz \
+            SHA256SUMS
+
+      - name: Publish rolling release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
+        with:
+          tag_name: rolling
+          name: Rolling build (latest main)
+          body: |
+            Rolling release built from `main` at commit ${{ github.sha }}.
+
+            **Latest commit:** ${{ github.event.head_commit.message }}
+
+            Install with:
+            ```sh
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | sh
+            ```
+
+            Each push to `main` overwrites this release. For pinned versions, see tagged releases (when available).
+          prerelease: false
+          make_latest: "true"
+          files: |
+            loadout-x86_64
+            loadout-overlay-x86_64.tar.xz
+            loadout-plugins-x86_64.tar.xz
+            SHA256SUMS

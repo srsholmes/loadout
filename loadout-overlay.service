@@ -1,0 +1,81 @@
+[Unit]
+Description=Loadout Overlay
+# The backend (loadout.service) is now a *system* service running as root,
+# so this *user* unit can't Requires=/After= it across managers. Ordering
+# is handled instead by the ExecStartPre curl-`/up` wait loop below.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+
+# Wipe Chromium/CEF singleton symlinks before launch. These encode
+# <hostname>-<pid> and stop CEF from starting if they reference a
+# different host (e.g. $HOME is shared across multiple handhelds via
+# Syncthing / an SD card / NFS) or a dead PID from a crashed prior
+# run. If the overlay is actually still alive, systemctl already
+# killed it before this point — any lock we see here is stale.
+ExecStartPre=-/bin/sh -c 'rm -f %h/.cache/com.loadout.overlay/dev/CEF/SingletonLock %h/.cache/com.loadout.overlay/dev/CEF/SingletonCookie %h/.cache/com.loadout.overlay/dev/CEF/SingletonSocket'
+
+# Wait for the plugin server to be up before launching so the webview
+# doesn't race its initial fetch.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do curl -sf "http://localhost:${LOADOUT_PORT:-33820}/up" >/dev/null 2>&1 && exit 0; sleep 1; done; exit 0'
+
+# HOME must match the canonical path on Fedora/Bazzite, otherwise CEF's
+# root_cache_path/cache_path consistency check fails (see the comment in
+# src/bun/native/display-detect.ts).
+Environment=HOME=%h
+
+# CEF remote DevTools — attach Chrome to http://localhost:9222 on the
+# device or over SSH tunnel. Port is baked into the build via
+# electrobun.config.ts → build.linux.chromiumFlags.
+
+# DISPLAY detection: Electrobun's libNativeWrapper opens X in
+# startEventLoop() on the main thread of the Bun process, before our
+# app's worker thread ever runs — we can't mutate process.env.DISPLAY
+# from JS in time. So we detect inline here.
+#   1. If $GAMESCOPE_DISPLAY is in the unit env, use it.
+#   2. Read /proc/<steam-pid>/environ for GAMESCOPE_DISPLAY (set when
+#      Steam was launched inside gamescope-session).
+#   3. Fall back to $DISPLAY already in env.
+#   4. Last resort: :0 (the conventional gamescope inner display).
+# Works in both gaming mode (gamescope inner X) and desktop (KDE/GNOME).
+ExecStart=/bin/sh -c '\
+  GS_DISPLAY=""; \
+  GS_WAYLAND=""; \
+  PID=$(pgrep -x steam | head -n1); \
+  if [ -n "$PID" ] && [ -r "/proc/$PID/environ" ]; then \
+    GS_DISPLAY=$(tr "\\0" "\\n" < "/proc/$PID/environ" | sed -n "s/^GAMESCOPE_DISPLAY=//p" | head -n1); \
+    GS_WAYLAND=$(tr "\\0" "\\n" < "/proc/$PID/environ" | sed -n "s/^GAMESCOPE_WAYLAND_DISPLAY=//p" | head -n1); \
+  fi; \
+  # gamescope's kernel comm name on Linux is "gamescope-wl" so `pgrep -x`
+  # on it fails. Match via -f against a pattern. steamcompmgr is a
+  # reliable secondary signal.
+  if [ -z "$GS_DISPLAY" ] && pgrep -f "gamescope[- ]" > /dev/null 2>&1; then \
+    GS_DISPLAY=":0"; \
+    [ -z "$GS_WAYLAND" ] && GS_WAYLAND="gamescope-0"; \
+  fi; \
+  if [ -n "$GS_DISPLAY" ]; then \
+    export DISPLAY="$GS_DISPLAY"; \
+    [ -n "$GS_WAYLAND" ] && export GAMESCOPE_WAYLAND_DISPLAY="$GS_WAYLAND"; \
+    export GAMESCOPE_DISPLAY="$GS_DISPLAY"; \
+  else \
+    export DISPLAY="${DISPLAY:-:0}"; \
+  fi; \
+  echo "[loadout-overlay] DISPLAY=$DISPLAY GAMESCOPE_DISPLAY=${GAMESCOPE_DISPLAY:-unset} GAMESCOPE_WAYLAND_DISPLAY=${GAMESCOPE_WAYLAND_DISPLAY:-unset}"; \
+  exec %h/.local/share/loadout-overlay/bin/launcher'
+
+WorkingDirectory=%h/.local/share/loadout-overlay
+Restart=on-failure
+RestartSec=5
+
+# Belt-and-braces safety net: if the overlay dies ungracefully with
+# Steam still SIGSTOP'd, the whole machine looks frozen. Our Bun
+# shutdown handler calls SIGCONT first, but it may not run on
+# SIGKILL / segfault / OOM-kill. This ExecStopPost runs regardless
+# of exit status ('-' prefix) and is a no-op if Steam is already
+# running.
+ExecStopPost=-/bin/sh -c 'pkill -CONT -x steam || true'
+
+[Install]
+WantedBy=graphical-session.target
