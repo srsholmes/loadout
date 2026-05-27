@@ -8,7 +8,8 @@ set -e
 # Configuration
 INSTALL_DIR="$HOME/.local/share/loadout"
 OVERLAY_INSTALL_DIR="$HOME/.local/share/loadout-overlay"
-BINARY_PATH="$INSTALL_DIR/loadout"
+# Binary lives in a system path now (root service execs it; SELinux).
+BINARY_PATH="/usr/local/bin/loadout"
 BIN_LINK="$HOME/.local/bin/loadout"
 SERVICE_DIR="$HOME/.config/systemd/user"
 # Obsolete per-user backend unit (the backend is now a root system unit).
@@ -122,24 +123,26 @@ main() {
 
     echo ""
 
+    # --- Remove the system binary (root-owned, needs sudo) ---
+    if [ -f "$BINARY_PATH" ]; then
+        info "Removing $BINARY_PATH (needs sudo)..."
+        sudo rm -f "$BINARY_PATH"
+        success "Binary removed."
+    else
+        info "Binary not found at $BINARY_PATH (already removed)."
+    fi
+
     # --- Ask about plugin data ---
     if [ -d "$INSTALL_DIR" ]; then
-        if prompt_yn "Remove all Loadout data (binary, plugins, helpers)? (y/N)"; then
-            info "Removing all Loadout data..."
+        if prompt_yn "Remove plugin data at $INSTALL_DIR? (y/N)"; then
+            info "Removing plugin data..."
             rm -rf "$INSTALL_DIR"
             success "Removed $INSTALL_DIR"
         else
-            info "Keeping data. Removing only the binary..."
-            if [ -f "$BINARY_PATH" ]; then
-                rm -f "$BINARY_PATH"
-                success "Binary removed."
-            else
-                info "Binary not found (already removed)."
-            fi
             info "Plugin data preserved at: $INSTALL_DIR"
         fi
     else
-        info "Install directory not found (already removed)."
+        info "Plugin data directory not found (already removed)."
     fi
 
     # --- Remove overlay install directory ---

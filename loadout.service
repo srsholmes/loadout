@@ -13,6 +13,14 @@ Type=simple
 # (per-plugin command capability policy) to bound what running-as-root
 # means for them.
 #
+# The binary lives in /usr/local/bin (a system path, SELinux `bin_t`) —
+# NOT the user's home. A system-domain service (init_t) is denied `execute`
+# on a binary labelled `data_home_t` under ~/.local/share (SELinux is
+# enforcing on Bazzite), so it must exec from a system path. This mirrors
+# HHD, whose root service execs /usr/bin/hhd (its RPM-installed, bin_t
+# binary). The plugins, config, and logs still live under the user's home
+# — a system service CAN read/write there, only `execute` is blocked.
+#
 # This file is a TEMPLATE: install-local.sh / install.sh substitute
 # __HOME__ and __USER__ (a system unit can't expand %h — that would be
 # root's home) and install the result to /etc/systemd/system/loadout.service.
@@ -22,7 +30,7 @@ Type=simple
 # --user chowns files written under that home back to the user.
 Environment=HOME=__HOME__
 Environment=PLUGINS_DIR=__HOME__/.local/share/loadout/plugins
-ExecStart=__HOME__/.local/share/loadout/loadout --user __USER__
+ExecStart=/usr/local/bin/loadout --user __USER__
 WorkingDirectory=__HOME__/.local/share/loadout
 Restart=on-failure
 RestartSec=5

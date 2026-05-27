@@ -5,6 +5,7 @@ import type { PluginMeta, PluginBackend, RpcEvent } from "@loadout/types";
 import { withCommandPolicy, type CommandPolicy } from "@loadout/exec";
 import { createSandboxedFetch } from "./sandboxed-fetch";
 import { log, createPluginLogger } from "./logger";
+import { chownToTarget } from "./target-user";
 
 export interface LoadedPlugin {
   meta: PluginMeta;
@@ -210,6 +211,10 @@ async function bundleBackend(
   }
 
   await mkdir(cacheDir, { recursive: true });
+  // The root service writes this cache into the user's home. Chown it back
+  // so a later user-run `prepare-plugins` (reinstall) can overwrite it —
+  // otherwise the root-owned .cache dir is unwritable by the user.
+  chownToTarget(cacheDir);
 
   const result = await Bun.build({
     entrypoints: [backendPath],
@@ -225,5 +230,6 @@ async function bundleBackend(
     throw new Error(`Backend bundle failed for ${pluginId}:\n${logs}`);
   }
 
+  chownToTarget(bundlePath);
   return bundlePath;
 }
