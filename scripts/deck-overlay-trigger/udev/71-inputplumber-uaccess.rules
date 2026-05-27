@@ -1,9 +1,0 @@
-# Grant the active-session user (uaccess ACL) on InputPlumber's virtual
-# input devices. Without this the overlay can't open() IP's virtual
-# keyboard and logs "open failed for .../InputPlumber Keyboard".
-#
-# SteamOS ships /usr/lib/udev/rules.d/90-steam-inputplumber.rules which
-# applies the same TAG only when ENV{USE_INPUTPLUMBER}=="1" — that flag
-# isn't set on the Deck, so the rule never fires. This one is
-# unconditional for IP devices.
-SUBSYSTEM=="input", ATTRS{name}=="InputPlumber*", TAG+="uaccess"

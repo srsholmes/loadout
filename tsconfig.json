@@ -28,9 +28,7 @@
       "@loadout/loader/*": ["./packages/loader/src/*"],
       "@loadout/injector": ["./packages/injector/src"],
       "@loadout/injector/*": ["./packages/injector/src/*"],
-      "@loadout/overlay-app": ["./packages/overlay-app/src"],
       "@overlay/*": ["./packages/overlay/src/*"],
-      "@recomp/sdk": ["./plugins/recomp/lib/sdk/index.ts"],
       "electrobun/bun": ["./types/electrobun-shims.d.ts"],
       "electrobun/view": ["./types/electrobun-shims.d.ts"]
     }
@@ -41,8 +39,6 @@
     "packages/*/src/**/*.tsx",
     "plugins/*/backend.ts",
     "plugins/*/panel.tsx",
-    "plugins/*/app.tsx",
-    "plugins/recomp/lib/**/*.ts",
-    "plugins/recomp/games/*/setup.ts"
+    "plugins/*/app.tsx"
   ]
 }

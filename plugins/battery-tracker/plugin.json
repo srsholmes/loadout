@@ -1,9 +1,0 @@
-{
-  "id": "battery-tracker",
-  "name": "Battery Tracker",
-  "version": "1.0.0",
-  "description": "Battery level, charge rate, estimated time remaining, and charge history",
-  "author": "Loadout",
-  "category": "Performance",
-  "subtitle": "Real-time power monitoring"
-}

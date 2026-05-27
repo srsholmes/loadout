@@ -6,8 +6,8 @@
 >
 > | Surface | UI entry | When to use |
 > |---|---|---|
-> | Electrobun overlay (default) | `app.tsx` | The user opens the overlay (QAM tile, F16, Ctrl+Shift+O); your plugin renders inside it. **This is what 28 of 29 plugins do.** |
-> | Steam CEF injection | `panel.tsx` | Your plugin needs to render directly inside Steam's UI (e.g. a game-library overlay like `game-browser/`). |
+> | Electrobun overlay (default) | `app.tsx` | The user opens the overlay (QAM tile, F16, Ctrl+Shift+O); your plugin renders inside it. **This is the default for most plugins.** |
+> | Steam CEF injection | `panel.tsx` | Your plugin needs to render directly inside Steam's UI (e.g. a game-library overlay). |
 >
 > Plugin metadata also moved from a separate `plugin.json` to a `plugin`
 > field on the workspace `package.json` — see any of the live plugins for
