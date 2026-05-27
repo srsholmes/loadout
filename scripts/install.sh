@@ -15,16 +15,16 @@ BINARY_NAME="loadout"
 BINARY_PATH="$INSTALL_DIR/$BINARY_NAME"
 BIN_LINK="$HOME/.local/bin/loadout"
 SERVICE_DIR="$HOME/.config/systemd/user"
+# Legacy per-user backend unit — removed on install now the backend is a
+# root system service. The overlay stays a user unit (see below).
 SERVICE_FILE="$SERVICE_DIR/loadout.service"
+SYSTEM_SERVICE_FILE="/etc/systemd/system/loadout.service"
 DESKTOP_DIR="$HOME/.local/share/applications"
 DESKTOP_FILE="$DESKTOP_DIR/loadout.desktop"
 OVERLAY_INSTALL_DIR="$HOME/.local/share/loadout-overlay"
 OVERLAY_LAUNCHER="$OVERLAY_INSTALL_DIR/bin/launcher"
 OVERLAY_SERVICE_FILE="$SERVICE_DIR/loadout-overlay.service"
 OVERLAY_PORT="${LOADOUT_PORT:-33820}"
-POLKIT_POLICY="com.loadout.tdp-helper.policy"
-POLKIT_DIR="/usr/share/polkit-1/actions"
-TDP_HELPER_DIR="$INSTALL_DIR/helpers"
 
 # Colors (only if terminal supports them)
 if [ -t 1 ]; then
@@ -324,10 +324,10 @@ phase1() {
         fi
     fi
 
-    # Stop existing service if running
-    if systemctl --user is-active loadout >/dev/null 2>&1; then
+    # Stop existing service if running (backend is a root system service)
+    if systemctl is-active loadout >/dev/null 2>&1; then
         info "Stopping existing Loadout service..."
-        systemctl --user stop loadout || true
+        sudo systemctl stop loadout || true
     fi
 
     # Download the binary
@@ -600,9 +600,9 @@ download_plugins() {
 
     # Stop the server before replacing plugins so the hot-reload watcher
     # doesn't try to rebuild against a half-extracted tree.
-    if systemctl --user is-active loadout >/dev/null 2>&1; then
+    if systemctl is-active loadout >/dev/null 2>&1; then
         info "Stopping loadout before staging plugins..."
-        systemctl --user stop loadout || true
+        sudo systemctl stop loadout || true
     fi
 
     info "Extracting plugins + hoisted node_modules to $INSTALL_DIR/..."
@@ -666,43 +666,55 @@ DESKTOPEOF
 }
 
 setup_service() {
-    info "Writing systemd user service file..."
-    mkdir -p "$SERVICE_DIR"
+    # Backend runs as ROOT (a system service) so it can write hardware
+    # sysfs / run privileged tools without per-op sudo at runtime — the
+    # HHD/Decky model. A system unit can't expand %h (that's root's home),
+    # so bake the concrete home + user in. This is the one step that needs
+    # admin rights; sudo prompts once here.
+    info "Installing the backend as a root system service (needs sudo once)..."
 
-    cat > "$SERVICE_FILE" <<'SERVICEEOF'
+    # Backend moved from a --user service to a system unit — drop the old
+    # per-user one if present.
+    systemctl --user disable --now loadout 2>/dev/null || true
+    rm -f "$SERVICE_FILE"
+
+    TMP_UNIT="$(mktemp)"
+    cat > "$TMP_UNIT" <<SERVICEEOF
 [Unit]
-Description=Loadout
-# No After=network.target — the loader only listens on 127.0.0.1:33820;
-# the system bus + loopback are up well before any "user" unit starts.
-# Forcing network.target here just delayed boot for no benefit (audit
-# H-014).
+Description=Loadout (backend)
+# Loopback-only socket (127.0.0.1:$OVERLAY_PORT); no network.target needed.
 
 [Service]
 Type=simple
-ExecStart=%h/.local/share/loadout/loadout
-WorkingDirectory=%h/.local/share/loadout
+# Runs as root (no User=). Plugins are sandboxed at the @loadout/exec
+# choke point (per-plugin command capability policy). \$HOME is set so
+# os.homedir()/@loadout/steam-paths resolve the user's config + Steam;
+# --user chowns files written under it back to the user.
+Environment=HOME=$HOME
+Environment=PLUGINS_DIR=$HOME/.local/share/loadout/plugins
+ExecStart=$HOME/.local/share/loadout/loadout --user $(id -un)
+WorkingDirectory=$HOME/.local/share/loadout
 Restart=on-failure
 RestartSec=5
-Environment=PLUGINS_DIR=%h/.local/share/loadout/plugins
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 SERVICEEOF
-    success "Service file written to $SERVICE_FILE"
+    sudo cp "$TMP_UNIT" "$SYSTEM_SERVICE_FILE"
+    rm -f "$TMP_UNIT"
+    success "Service file written to $SYSTEM_SERVICE_FILE"
 
-    # Reload systemd and enable the service
-    info "Reloading systemd user daemon..."
-    systemctl --user daemon-reload
-
-    info "Enabling and starting loadout service..."
-    systemctl --user enable --now loadout
+    info "Reloading systemd + enabling the loadout service..."
+    sudo systemctl daemon-reload
+    sudo systemctl enable loadout
+    sudo systemctl restart loadout
 
     # Verify the service started
     sleep 1
-    if systemctl --user is-active loadout >/dev/null 2>&1; then
+    if systemctl is-active loadout >/dev/null 2>&1; then
         success "Loadout service is running!"
     else
-        warn "Service may not have started yet. Check with: systemctl --user status loadout"
+        warn "Service may not have started yet. Check with: systemctl status loadout"
     fi
 
     # Install overlay service if the overlay launcher is present.
@@ -718,8 +730,10 @@ SERVICEEOF
         cat > "$OVERLAY_SERVICE_FILE" <<'OVERLAYEOF'
 [Unit]
 Description=Loadout Overlay
-After=loadout.service graphical-session.target
-Requires=loadout.service
+# The backend (loadout.service) is a *system* service running as root, so
+# this *user* unit can't Requires=/After= it across managers. Ordering is
+# handled by the ExecStartPre curl-`/up` wait loop below.
+After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
@@ -811,7 +825,7 @@ OVERLAYEOF
     fi
     info "Symlink:  $BIN_LINK"
     info "Desktop:  $DESKTOP_FILE"
-    info "Service:  $SERVICE_FILE"
+    info "Service:  $SYSTEM_SERVICE_FILE"
     info "UI:       http://localhost:$OVERLAY_PORT"
     info "Plugins:  $INSTALL_DIR/plugins"
     echo ""
@@ -827,7 +841,6 @@ phase2() {
 
     phase2_input_group
     phase2_inputplumber
-    phase2_polkit
 
     echo ""
     success "=== Phase 2 complete ==="
@@ -947,104 +960,6 @@ phase2_inputplumber() {
     fi
 }
 
-phase2_polkit() {
-    echo ""
-    info "--- TDP helper polkit policy (optional) ---"
-    info "The TDP plugin needs a polkit policy to adjust CPU power limits."
-    echo ""
-
-    # Check if already installed
-    if [ -f "$POLKIT_DIR/$POLKIT_POLICY" ]; then
-        success "Polkit policy already installed."
-        return
-    fi
-
-    if ! prompt_yn "Install polkit policy for TDP helper? (y/N)"; then
-        info "Skipping polkit policy. TDP control will not work without it."
-        return
-    fi
-
-    # Install the TDP helper script
-    mkdir -p "$TDP_HELPER_DIR"
-    cat > "$TDP_HELPER_DIR/loadout-tdp-helper.sh" <<'TDPEOF'
-#!/bin/sh
-# Loadout TDP Helper
-# Called via pkexec to write TDP values to sysfs.
-# Only writes to /sys/class/hwmon/*/power*_cap paths.
-# Validates input is a number within safe bounds.
-
-set -e
-
-VALUE="$1"
-
-# Validate: must be a number
-case "$VALUE" in
-  ''|*[!0-9]*) echo "ERROR: Value must be a positive integer (microwatts)" >&2; exit 1 ;;
-esac
-
-# Validate: 3W-30W in microwatts (3000000-30000000)
-if [ "$VALUE" -lt 3000000 ] || [ "$VALUE" -gt 30000000 ]; then
-  echo "ERROR: Value out of range (3000000-30000000 microwatts)" >&2
-  exit 1
-fi
-
-# Find the hwmon path
-HWMON_PATH=""
-for p in /sys/class/hwmon/hwmon*/power1_cap; do
-  if [ -w "$p" ] || [ -e "$p" ]; then
-    HWMON_PATH="$p"
-    break
-  fi
-done
-
-if [ -z "$HWMON_PATH" ]; then
-  echo "ERROR: No writable power1_cap found in /sys/class/hwmon/" >&2
-  exit 1
-fi
-
-echo "$VALUE" > "$HWMON_PATH"
-
-HWMON_DIR=$(dirname "$HWMON_PATH")
-if [ -e "$HWMON_DIR/power2_cap" ]; then
-  echo "$VALUE" > "$HWMON_DIR/power2_cap"
-fi
-
-echo "OK: Set TDP to $VALUE microwatts via $HWMON_PATH"
-TDPEOF
-    chmod +x "$TDP_HELPER_DIR/loadout-tdp-helper.sh"
-    success "TDP helper installed to $TDP_HELPER_DIR/loadout-tdp-helper.sh"
-
-    # Install the polkit policy (requires sudo)
-    HELPER_PATH="$TDP_HELPER_DIR/loadout-tdp-helper.sh"
-
-    POLICY_CONTENT="<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<!DOCTYPE policyconfig PUBLIC \"-//freedesktop//DTD polkit Policy Configuration 1.0//EN\"
-  \"http://www.freedesktop.org/standards/polkit/1.0/policyconfig.dtd\">
-<policyconfig>
-  <action id=\"com.loadout.tdp-helper\">
-    <description>Loadout: Set CPU TDP</description>
-    <message>Loadout wants to change the CPU power limit</message>
-    <defaults>
-      <allow_any>auth_admin</allow_any>
-      <allow_inactive>auth_admin</allow_inactive>
-      <allow_active>auth_admin_keep</allow_active>
-    </defaults>
-    <annotate key=\"org.freedesktop.policykit.exec.path\">$HELPER_PATH</annotate>
-    <annotate key=\"org.freedesktop.policykit.exec.allow_gui\">true</annotate>
-  </action>
-</policyconfig>"
-
-    info "Installing polkit policy (requires sudo)..."
-    if printf '%s\n' "$POLICY_CONTENT" | sudo tee "$POLKIT_DIR/$POLKIT_POLICY" >/dev/null; then
-        success "Polkit policy installed to $POLKIT_DIR/$POLKIT_POLICY"
-    else
-        error "Failed to install polkit policy."
-        warn "TDP control will not work without the polkit policy."
-        info "You can install it manually later:"
-        info "  sudo cp scripts/loadout-tdp.policy $POLKIT_DIR/$POLKIT_POLICY"
-    fi
-}
-
 # ============================================================
 # Main
 # ============================================================
@@ -1059,12 +974,12 @@ main() {
     phase1
 
     echo ""
-    if prompt_yn "Run Phase 2 (input group + InputPlumber + TDP polkit)? May require sudo. (y/N)"; then
+    if prompt_yn "Run Phase 2 (input group + InputPlumber)? May require sudo. (y/N)"; then
         phase2
     else
         info "Skipping Phase 2."
-        info "Without it: overlay can't grab controllers (input group), controller-button"
-        info "wake-in-game won't work (InputPlumber), and TDP control won't work (polkit)."
+        info "Without it: overlay can't grab controllers (input group), and controller-button"
+        info "wake-in-game won't work (InputPlumber)."
         info "Re-run the installer or use the welcome wizard inside the app to add any later."
     fi
 
@@ -1073,12 +988,12 @@ main() {
     success "  Installation complete!"
     success "========================================="
     echo ""
-    info "Commands:"
-    info "  Status:  systemctl --user status loadout"
-    info "  Logs:    journalctl --user -u loadout -f"
-    info "  Stop:    systemctl --user stop loadout"
-    info "  Start:   systemctl --user start loadout"
-    info "  Restart: systemctl --user restart loadout"
+    info "Commands (backend is a root system service):"
+    info "  Status:  systemctl status loadout"
+    info "  Logs:    journalctl -u loadout -f"
+    info "  Stop:    sudo systemctl stop loadout"
+    info "  Start:   sudo systemctl start loadout"
+    info "  Restart: sudo systemctl restart loadout"
     echo ""
     info "Overlay:   http://localhost:$OVERLAY_PORT"
     info "Plugins:   $INSTALL_DIR/plugins"

@@ -1,17 +1,31 @@
 [Unit]
-Description=Loadout
+Description=Loadout (backend)
 # No After=network.target — the loader only listens on 127.0.0.1:33820;
-# the system bus + loopback are up well before any "user" unit starts.
-# Forcing network.target here just delayed boot for no benefit (audit
-# H-014).
+# the system bus + loopback are up well before this unit starts. Forcing
+# network.target here just delayed boot for no benefit (audit H-014).
 
 [Service]
 Type=simple
-ExecStart=%h/.local/share/loadout/loadout
-WorkingDirectory=%h/.local/share/loadout
+# Runs as ROOT (no User=). The backend writes privileged hardware sysfs
+# and runs privileged tools directly, so there are no per-op sudo/pkexec
+# prompts at runtime (one admin prompt at install time instead) — the
+# HHD/Decky model. Plugins are sandboxed at the @loadout/exec choke point
+# (per-plugin command capability policy) to bound what running-as-root
+# means for them.
+#
+# This file is a TEMPLATE: install-local.sh / install.sh substitute
+# __HOME__ and __USER__ (a system unit can't expand %h — that would be
+# root's home) and install the result to /etc/systemd/system/loadout.service.
+#
+# $HOME is set so os.homedir() / @loadout/steam-paths resolve ~/.config
+# and the user's Steam as the user, even though the process is root.
+# --user chowns files written under that home back to the user.
+Environment=HOME=__HOME__
+Environment=PLUGINS_DIR=__HOME__/.local/share/loadout/plugins
+ExecStart=__HOME__/.local/share/loadout/loadout --user __USER__
+WorkingDirectory=__HOME__/.local/share/loadout
 Restart=on-failure
 RestartSec=5
-Environment=PLUGINS_DIR=%h/.local/share/loadout/plugins
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

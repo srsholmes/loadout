@@ -10,9 +10,22 @@
 import { mkdirSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { chownToTarget, getTargetUser } from "./target-user";
 
 const LOG_DIR = join(homedir(), ".config", "loadout", "logs");
 const LOG_FILE = join(LOG_DIR, "loadout.log");
+
+// The root service creates the log dir/file as root before `--user` is
+// parsed. Once a target user is set we chown them back to the user, once
+// — not on every line. Both append to the same file, so a single chown of
+// dir + file is enough for the whole run.
+let logsChowned = false;
+function chownLogsOnce(): void {
+  if (logsChowned || !getTargetUser()) return;
+  chownToTarget(LOG_DIR);
+  chownToTarget(LOG_FILE);
+  logsChowned = true;
+}
 
 // Ensure log directory exists on import
 try {
@@ -34,6 +47,7 @@ function formatMessage(level: LogLevel, tag: string, message: string): string {
 function writeLog(line: string): void {
   try {
     appendFileSync(LOG_FILE, line + "\n");
+    chownLogsOnce();
   } catch {
     // log file not writable — still output to console
   }

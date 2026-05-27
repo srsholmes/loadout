@@ -2,6 +2,7 @@ import { readdir, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { PluginMeta, PluginBackend, RpcEvent } from "@loadout/types";
+import { withCommandPolicy, type CommandPolicy } from "@loadout/exec";
 import { createSandboxedFetch } from "./sandboxed-fetch";
 import { log, createPluginLogger } from "./logger";
 
@@ -9,6 +10,14 @@ export interface LoadedPlugin {
   meta: PluginMeta;
   instance: PluginBackend;
   sandboxedFetch: typeof globalThis.fetch;
+  /**
+   * Per-plugin command capability gate, enforced at the `@loadout/exec`
+   * choke point. Built from `meta.permissions.commands` (deny-by-default).
+   * The rpc-handler scopes this around every RPC call, the same way
+   * `sandboxedFetch` scopes network access. Omitted for trusted core
+   * (`__core:*`) services, which run unrestricted.
+   */
+  commandPolicy?: CommandPolicy;
   hasApp: boolean;
 }
 
@@ -112,6 +121,15 @@ export async function loadPlugins({
     // Create a scoped logger for this plugin and patch console for its context
     const pluginLog = createPluginLogger(meta.id);
 
+    // Build the per-plugin command policy. Every subprocess the plugin
+    // launches through @loadout/exec is checked against this (deny-by-
+    // default) and logged via the plugin's own logger for an audit trail.
+    const commandPolicy: CommandPolicy = {
+      pluginId: meta.id,
+      allowed: meta.permissions?.commands ?? [],
+      log: (m) => pluginLog.info(m),
+    };
+
     // Bundle and load backend (optional — CEF-only plugins may not have one).
     // Compiled Bun binaries can't resolve node_modules from dynamically
     // imported files. Bun.build() resolves all imports at bundle time,
@@ -138,9 +156,12 @@ export async function loadPlugins({
       };
       instance.log = pluginLog;
 
-      // Call onLoad with sandboxed fetch
+      // Call onLoad inside both gates: command policy (subprocess
+      // capability) wrapping the sandboxed fetch (network capability).
       try {
-        await withSandboxedFetch(sandboxedFetch, () => instance.onLoad?.());
+        await withCommandPolicy(commandPolicy, () =>
+          withSandboxedFetch(sandboxedFetch, () => instance.onLoad?.()),
+        );
         log.info(`onLoad completed for ${meta.id}`);
       } catch (err) {
         log.error(`onLoad failed for ${meta.id}: ${err}`);
@@ -154,7 +175,7 @@ export async function loadPlugins({
     const hasApp = await Bun.file(appPath).exists();
 
     // Frontend bundles are compiled on the fly when requested via HTTP
-    loaded.set(meta.id, { meta, instance, sandboxedFetch, hasApp });
+    loaded.set(meta.id, { meta, instance, sandboxedFetch, commandPolicy, hasApp });
     log.info(`Loaded plugin: ${meta.name} (${meta.id}) [backend=${hasBackend ? "yes" : "no"}, frontend=${hasApp ? "yes" : "no"}]`);
   }
 
