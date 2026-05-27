@@ -5,8 +5,12 @@ name: CI
 # the binary and loads plugins. Releases are NOT done here — see
 # release.yml (manual-only, workflow_dispatch).
 on:
-  push:
+  # PRs are the primary gate. `push` is scoped to main so we don't
+  # double-run on PR branches (a push to an open PR's branch already
+  # fires `pull_request`) — main still gets a post-merge run.
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
