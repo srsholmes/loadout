@@ -1,0 +1,36 @@
+{
+  "name": "@loadout/plugin-theme-loader",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Browse, install, and toggle community CSS themes for Steam's Big Picture UI",
+  "author": "Loadout",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@loadout/ui": "workspace:*"
+  },
+  "plugin": {
+    "id": "theme-loader",
+    "name": "Theme Loader",
+    "description": "Browse, install, and toggle community CSS themes for Steam's Big Picture UI",
+    "permissions": {
+      "network": [
+        "localhost",
+        "api.deckthemes.com",
+        "share.deckthemes.com",
+        "cdn.deckthemes.com",
+        "github.com",
+        "codeload.github.com"
+      ],
+      "filesystem": [
+        "~/.local/share/loadout/css-themes",
+        "~/.cache/loadout/theme-loader"
+      ],
+      "system": [
+        "exec"
+      ]
+    },
+    "category": "Steam",
+    "subtitle": "Inject CSS into Steam Big Picture"
+  }
+}

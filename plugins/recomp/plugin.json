@@ -1,0 +1,28 @@
+{
+  "id": "recomp",
+  "name": "RecompHub",
+  "version": "0.1.0",
+  "description": "Browse, install, and play recompiled retro games natively",
+  "author": "Loadout",
+  "permissions": {
+    "network": [
+      "api.github.com",
+      "github.com",
+      "objects.githubusercontent.com",
+      "cdn2.steamgriddb.com",
+      "www.steamgriddb.com",
+      "sm64pc.info",
+      "localhost"
+    ],
+    "filesystem": [
+      "read:~/.local/share/Steam",
+      "write:~/.local/share/Steam/userdata/*/config/grid",
+      "read:~/.config/loadout/steamgriddb",
+      "write:~/.config/loadout/recomp",
+      "write:~/.cache/loadout/recomp",
+      "write:~/.local/share/recomp-hub"
+    ],
+    "system": ["exec"]
+  },
+  "category": "Game"
+}

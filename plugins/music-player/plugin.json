@@ -1,0 +1,9 @@
+{
+  "id": "music-player",
+  "name": "Music Player",
+  "version": "1.0.0",
+  "description": "Play background music and ambient theme tracks",
+  "author": "Loadout",
+  "category": "Tools",
+  "subtitle": "Background music and ambient tracks"
+}

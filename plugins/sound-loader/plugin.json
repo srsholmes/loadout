@@ -1,0 +1,22 @@
+{
+  "id": "sound-loader",
+  "name": "Sound Loader",
+  "version": "0.1.0",
+  "description": "Browse, install, and toggle community UI sound packs from deckthemes.com",
+  "author": "Loadout",
+  "loadOnStartup": true,
+  "permissions": {
+    "filesystem": [
+      "~/.local/share/loadout/sound-packs",
+      "~/.local/share/Steam/steamui/sounds_custom/loadout",
+      "~/.cache/loadout/sound-loader"
+    ],
+    "network": [
+      "api.deckthemes.com",
+      "localhost",
+      "127.0.0.1"
+    ]
+  },
+  "category": "Device",
+  "subtitle": "Custom UI sound packs"
+}

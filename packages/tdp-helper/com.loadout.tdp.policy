@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<!--
+  Polkit policy for Loadout TDP Helper
+
+  This policy allows the loadout-tdp-helper.sh script to write
+  TDP (Thermal Design Power) values to sysfs without requiring a
+  password prompt each time.
+
+  The helper script itself enforces:
+    - Hardcoded sysfs path (/sys/class/hwmon/*/power*_cap)
+    - Value range validation (3-30W / 3000000-30000000 microwatts)
+-->
+<policyconfig>
+
+  <vendor>Loadout</vendor>
+  <vendor_url>https://github.com/srsholmes/loadout</vendor_url>
+
+  <action id="com.loadout.tdp.set">
+    <description>Set TDP power limit</description>
+    <message>Loadout needs permission to change the TDP power limit.</message>
+    <icon_name>power-profile-performance-symbolic</icon_name>
+    <defaults>
+      <!-- On handhelds, the active console user should be able to adjust TDP
+           without entering a password each time. auth_admin_keep requires
+           password once and caches it for the session. -->
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">HELPER_PATH</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+</policyconfig>

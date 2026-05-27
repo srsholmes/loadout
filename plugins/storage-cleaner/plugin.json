@@ -1,0 +1,9 @@
+{
+  "id": "storage-cleaner",
+  "name": "Storage Cleaner",
+  "version": "1.0.0",
+  "description": "Shows disk usage, shader cache sizes, and lets users clean up space",
+  "author": "Loadout",
+  "category": "Tools",
+  "subtitle": "Disk + shader cache management"
+}

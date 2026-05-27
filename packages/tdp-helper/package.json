@@ -1,0 +1,9 @@
+{
+  "name": "@loadout/tdp-helper",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Polkit-authorized TDP helper that writes to sysfs power caps",
+  "scripts": {
+    "install-helper": "bash install.sh"
+  }
+}

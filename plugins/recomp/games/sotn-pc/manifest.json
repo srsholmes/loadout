@@ -1,0 +1,18 @@
+{
+  "id": "sotn-pc",
+  "name": "Castlevania: Symphony of the Night",
+  "project": "SOTN Decomp (PC Port)",
+  "platform": "ps1",
+  "repo": "xeeynamo/sotn-decomp",
+  "description": "Native PC port of Castlevania: SOTN via decompilation. SDL2+OpenGL renderer. Builds from source — requires original PS1 disc image.",
+  "requiresRom": true,
+  "romInfo": {
+    "description": "Select your SOTN PS1 disc image (US version, BIN format).",
+    "validChecksums": [],
+    "extractionCommand": "",
+    "fileType": "data_file",
+    "extensions": ["bin", "iso", "img"]
+  },
+  "tags": ["castlevania", "ps1", "action-rpg", "metroidvania"],
+  "steamGridDbId": 37654
+}

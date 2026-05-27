@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ShadowBlip/InputPlumber/main/rootfs/usr/share/inputplumber/schema/composite_device_v1.json
+#
+# Steam Deck device override — let InputPlumber claim the controller at boot.
+#
+# Mirrors the layout of the upstream config shipped at
+# /usr/share/inputplumber/devices/50-steam_deck.yaml, with one change:
+#
+#   options.auto_manage: true
+#
+# Steam Input owns the Deck's hid-steam interface by default; without
+# auto_manage the daemon will see the device but won't take it over. We need
+# IP managing it so the per-button profile we ship can actually map paddles.
+#
+# Deployed to /etc/inputplumber/devices.d/50-steam_deck.yaml — /etc takes
+# priority over /usr/share, so this overrides the shipped config cleanly.
+version: 1
+kind: CompositeDevice
+name: Steam Deck
+single_source: false
+matches:
+  - dmi_data: { product_name: Galileo, sys_vendor: Valve, cpu_vendor: AuthenticAMD }
+  - dmi_data: { product_name: Jupiter, sys_vendor: Valve, cpu_vendor: AuthenticAMD }
+source_devices:
+  - group: gamepad
+    hidraw: { vendor_id: 0x28de, product_id: 0x1205, interface_num: 2 }
+  - group: keyboard
+    evdev: { name: AT Translated Set 2 keyboard, phys_path: isa0060/serio0/input0, handler: event* }
+options:
+  auto_manage: true
+target_devices: [ deck-uhid, mouse, keyboard, touchpad ]

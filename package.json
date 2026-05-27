@@ -1,0 +1,59 @@
+{
+  "name": "loadout",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
+  "scripts": {
+    "dev": "bun run packages/dev-server/src/index.ts",
+    "dev:overlay": "bash scripts/dev-overlay.sh",
+    "dev:electrobun": "bun --filter @loadout/overlay-electrobun dev",
+    "build": "sh scripts/build.sh",
+    "install-local": "sh scripts/install-local.sh",
+    "build-and-install": "sh scripts/build.sh && sh scripts/install-local.sh",
+    "typecheck": "tsc --noEmit",
+    "test": "bun run test:backend && bun run test:ui",
+    "test:backend": "sh scripts/test-backend.sh",
+    "test:ui": "vitest run",
+    "test:ui:coverage": "vitest run --coverage",
+    "test:backend:coverage": "sh scripts/test-backend.sh --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/backend",
+    "test:coverage": "bash scripts/test-coverage.sh",
+    "test:tdp-helper": "sh packages/tdp-helper/loadout-tdp-helper.test.sh && sh packages/tdp-helper/install.test.sh",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "check:specs": "sh scripts/check-plugin-specs.sh",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@tailwindcss/browser": "^4.2.2",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-icons": "^5.6.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@happy-dom/global-registrator": "^20.9.0",
+    "@playwright/test": "^1.58.2",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/bun": "^1.3.10",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitest/coverage-v8": "4.1.6",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^10.0.0",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "happy-dom": "^20.9.0",
+    "prettier": "^3.4.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.0.0",
+    "vite-tsconfig-paths": "^6.1.1",
+    "vitest": "4.1.6"
+  }
+}

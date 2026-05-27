@@ -1,0 +1,434 @@
+// Bun main process for the overlay. Owns:
+//   - the single overlay BrowserWindow (hidden on boot)
+//   - RPC handlers registered via Electrobun's defineRPC
+//   - the evdev worker (emits NavController actions to the webview)
+//   - the X11 / Gamescope atom loop (50 ms active / 500 ms idle)
+
+// DISPLAY detection MUST happen before `electrobun/bun` is imported — the
+// native wrapper dlopens libNativeWrapper.so on module load and that in
+// turn triggers GTK's X11 connection via its ctor. ES module imports run
+// in source order, so placing this side-effect import first guarantees
+// process.env.DISPLAY is set before libNativeWrapper is even resolved.
+import "./native/display-detect";
+import { detectOverlayDisplay } from "./native/display-detect";
+const DISPLAY = detectOverlayDisplay();
+
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore — resolved at runtime once electrobun is installed.
+import { BrowserWindow, BrowserView, GlobalShortcut } from "electrobun/bun";
+import { existsSync } from "node:fs";
+import type {
+  ControllerShortcuts,
+} from "../webview/lib/electrobun";
+import { GamescopeAtoms } from "./native/gamescope-atoms";
+import {
+  startInputIntercept,
+  type InputInterceptHandle,
+  type WakeEvent,
+} from "./native/input-intercept";
+import type { WebviewMessages } from "@loadout/types";
+import {
+  findSteamPid,
+  suspendSteam,
+  resumeSteam,
+} from "./native/process-control";
+
+import { trace } from "./native/trace";
+import { createOverlayState } from "./lib/overlay-state";
+import { routeWake } from "./lib/wake-routing";
+
+// ---- State ------------------------------------------------------------------
+// PendingFlags + the flag-lifecycle helpers live in lib/overlay-state.ts so
+// the pure logic is unit-testable without booting the full main process.
+//
+// Desktop smoke test: start visible so the window shows immediately, no QAM
+// trigger required. Gaming-mode / Gamescope path still uses `hidden: true`
+// + show()/minimize() via the management loop. Hoisted up here so the
+// initial overlay state agrees with the BrowserWindow's `hidden` option
+// in a single place rather than via a follow-up `state.isOpen = ...`
+// assignment after the BrowserWindow constructor.
+const DESKTOP_SMOKE_TEST = process.env.DECK_OVERLAY_DESKTOP_DEV === "1";
+
+const state = createOverlayState(DESKTOP_SMOKE_TEST);
+
+// TODO(stage-2): persist to disk (XDG config) like the Rust version does —
+// currently this resets on every process restart.
+//
+// Guide+A and Guide+Y are reserved by Steam / InputPlumber on Bazzite
+// (QAM and guide menu respectively). Even if a saved user config has them
+// bound, onWake() ignores those events to avoid the focus flicker between
+// our overlay and Steam's UI.
+// Wrapped as a ref (B-030 step 3) so setControllerShortcuts (in
+// rpc-handlers.ts) and onWake (down below) see the same mutation.
+const shortcuts: { current: ControllerShortcuts } = {
+  current: {
+    guide_a: { type: "None" },
+    guide_b: { type: "None" },
+    guide_x: { type: "ToggleOverlay" },
+    guide_y: { type: "None" },
+  },
+};
+
+// Resolve Steam's sounds dir once — install layout doesn't change mid-session.
+const STEAM_SOUNDS_CANDIDATES = (() => {
+  const home = process.env.HOME ?? "";
+  return [
+    `${home}/.local/share/Steam/steamui/sounds`,
+    `${home}/.steam/steam/steamui/sounds`,
+    `${home}/.var/app/com.valvesoftware.Steam/data/Steam/steamui/sounds`,
+  ];
+})();
+const cachedSteamSoundsPath: string | null =
+  STEAM_SOUNDS_CANDIDATES.find((p) => existsSync(p)) ?? null;
+
+const gamescopeMode = detectGamescopeMode();
+
+function detectGamescopeMode(): boolean {
+  return !!process.env.GAMESCOPE_DISPLAY || !!process.env.GAMESCOPE_WAYLAND_DISPLAY;
+}
+
+// Audit B-030 (2026-05): the orchestrator's body was split out into
+// three sibling modules so this file stays a wire-up entry point:
+//   - rpc-handlers.ts   — the BrowserView.defineRPC handlers factory
+//   - lifecycle.ts      — the management loop + SIGINT/SIGTERM shutdown
+//   - system-actions.ts — polkit-gated + service-restart RPCs
+// Mutable singletons that handlers / lifecycle helpers mutate are
+// wrapped as `{ current: T }` refs below so all sides share the same
+// instance without an exported setter dance.
+import { buildRpcHandlers } from "./rpc-handlers";
+import { overlayManagementLoop, shutdown } from "./lifecycle";
+
+// ---- Singleton refs ---------------------------------------------------------
+// Mutable state index.ts owns, wrapped as `{ current: T }` refs so
+// rpc-handlers / lifecycle / toggleOverlay can all read and write the
+// same value without an exported setter for every field. Hoisted above
+// the BrowserView.defineRPC call below (which feeds them into the RPC
+// factory).
+
+// Cached on first open — stable for the session. `findSteamPid()` is
+// a /proc scan; we don't want to run it on every toggle. Wrapped in
+// a ref (B-030 step 2) so shutdown() in ./lifecycle can read the
+// latest value without re-exporting a setter.
+const steamPid: { current: number | null } = { current: null };
+
+// Audit B-027: handle for the close-path 250ms deferred SIGCONT. Held
+// so shutdown() can cancel it and so back-to-back close events
+// reset rather than stack timers. Wrapped in a ref (B-030 step 2)
+// alongside steamPid for the same reason.
+const pendingResumeTimer: { current: ReturnType<typeof setTimeout> | null } = {
+  current: null,
+};
+
+// Input interceptor — opens every controller + keyboard + QAM device
+// up-front and toggles EVIOCGRAB on the controllers when the overlay
+// shows/hides. Also emits wake events (F16 / Guide+B / Ctrl+4) that
+// route back into toggleOverlay(). Wrapped as a ref so the async
+// startup .then() assignment below is visible to lifecycle.shutdown()
+// and to the close-path `intercept.current?.release()` inside
+// toggleOverlay.
+const intercept: { current: InputInterceptHandle | null } = { current: null };
+
+// ---- Window -----------------------------------------------------------------
+//
+// Minimize-on-close model: one persistent BrowserWindow created hidden at
+// boot. `show()` brings it up for the QAM toggle; `minimize()` iconifies
+// on close. Keeps React state, WS subscriptions, and spatial-nav focus
+// position across open/close cycles.
+//
+// Electrobun v1.16 gotchas:
+//   - WindowOptions are `frame: {x,y,width,height}`, `titleBarStyle`,
+//     `hidden`; no `label`, `wmClass`, `alwaysOnTop`, `skipTaskbar`,
+//     `resizable`. The X11 bits (WM_CLASS, atoms) land in X11Overlay.
+//   - `rpc` must be a `BrowserView.defineRPC({handlers: ...})` handle,
+//     not a plain methods object — otherwise createStreams() crashes
+//     with `setTransport is not a function`.
+//   - TODO(stage-2): if Gamescope ignores iconify (its WM story is
+//     minimal), swap minimize/show for destroy/rebuild with localStorage
+//     rehydration. One-line change, not worth doing speculatively.
+
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore — defineRPC schema is typed generically at runtime.
+const rpc = BrowserView.defineRPC({
+  handlers: buildRpcHandlers({
+    state,
+    shortcuts,
+    gamescopeMode,
+    cachedSteamSoundsPath,
+    steamPid,
+  }),
+});
+
+// ---- Webview-bound message schema -----------------------------------------
+// `BrowserView.defineRPC` is `@ts-ignore`'d above (its schema is generic at
+// runtime), so `rpc.send` arrives here untyped. Rather than scatter
+// `(rpc as any).send?.(...)` + eslint-disable across every call site, we
+// centralize the cast once and expose a typed surface. The `WebviewMessages`
+// schema lives in `@loadout/types` so plugins and other consumers can
+// import the channel surface without depending on overlay-electrobun.
+
+type RpcSendable = { send?: (name: string, payload: unknown) => void };
+
+function sendToWebview<K extends keyof WebviewMessages>(
+  name: K,
+  payload: WebviewMessages[K],
+): void {
+  // Errors here are non-fatal — `rpc.send` can throw mid-reload, and a
+  // dropped channel-message is much better than crashing the input loop
+  // or the visibility broadcaster. `.send?.` also silently drops to
+  // unsubscribed channels, so calling before the webview connects is OK.
+  try {
+    (rpc as unknown as RpcSendable).send?.(name, payload);
+  } catch (err) {
+    console.warn(`[overlay] rpc.send(${name}) failed:`, err);
+  }
+}
+
+const overlay = new BrowserWindow({
+  title: "Loadout Overlay",
+  frame: { x: 0, y: 0, width: 1280, height: 800 },
+  titleBarStyle: "default",
+  transparent: false,
+  hidden: !DESKTOP_SMOKE_TEST,
+  url: process.env.ELECTROBUN_DEV_URL ?? "views://overlay/index.html",
+  rpc,
+});
+
+// ---- QAM / F16 toggle (evdev) ----------------------------------------------
+//
+// Read /dev/input/event* directly and watch for KEY_F16 press events. This
+// is how the Tauri overlay (input_interceptor.rs) does it, and it's the
+// only path that works in both desktop X11 and Gamescope — Gamescope
+// intercepts input before it reaches any X11 global grab, so
+// Electrobun's GlobalShortcut can't see the QAM press under a game.
+//
+// Requires membership in the `input` group (so /dev/input/event* is
+// readable). Doesn't EVIOCGRAB yet — that's the gaming-mode piece that
+// prevents Steam from also seeing the QAM press and opening its own
+// QAM menu underneath ours.
+
+// Gamescope atom lifecycle — set STEAM_OVERLAY=1 etc on show, zero on
+// hide. Without this under Gamescope, the overlay either never renders
+// (no atoms) or traps all input with no way to escape (atoms never
+// cleared). Uses xprop subprocess until the xcb FFI port lands.
+const atoms = new GamescopeAtoms({
+  display: DISPLAY,
+  windowName: "Loadout Overlay",
+  // Kill switch: set OVERLAY_FORCE_XPROP=1 to bypass the libxcb fast
+  // path and use the original xprop-subprocess writes. Useful for
+  // bisecting if the libxcb port is suspected of new bugs.
+  forceXprop: process.env.OVERLAY_FORCE_XPROP === "1",
+});
+
+// Wait ~500 ms for Electrobun to actually create the X window, then
+// run prepare() so it starts hidden even in gamescope.
+setTimeout(() => {
+  atoms.prepare().catch((e) => console.warn("[overlay] atoms.prepare:", e));
+}, 500);
+
+// Tell the webview when the overlay opens / closes. The webview uses
+// this to gate useGamepadInput so its Web Gamepad API poller doesn't
+// keep dispatching synthetic keyboard events into spatial-nav while
+// the overlay window is hidden (which under gamescope doesn't flip
+// document.hidden on the page). Safe to call before the webview is
+// connected — rpc.send silently drops to unsubscribed channels.
+function broadcastOverlayVisibility(): void {
+  sendToWebview("overlay-visibility", { isOpen: state.isOpen });
+}
+
+// Suspending Steam is off by default now that the input interceptor
+// reads physical controllers directly + dispatches synthetic keyboard
+// events into the webview (matches the Tauri behavior). SIGSTOP is
+// kept as an optional belt-and-braces mechanism behind an env flag in
+// case hardware surfaces a path we missed.
+const SUSPEND_STEAM_ENABLED =
+  process.env.DECK_OVERLAY_SUSPEND_STEAM === "1";
+
+// Minimum gap between toggleOverlay() calls. On the OXP Apex, InputPlumber
+// emits F16 on several evdev nodes simultaneously when the user presses
+// the hardware QAM-adjacent button — Gaming Mouse Keyboard, Apple Magic
+// Keyboard, and InputPlumber Keyboard all see the same key event.
+// Without this guard, each firing onWake("QamToggle") would call
+// toggleOverlay in the same tick and we'd end up open→close→open on a
+// single user press — the "overlay flickering on its own" bug.
+//
+// 200 ms is well under any human double-tap interval while still
+// collapsing the multi-device storm into one toggle.
+// 600ms is long enough to collapse the 1Hz flicker observed on Apex
+// (game/Konsole + Steam QAM + our overlay) while staying well below
+// human rapid-tap intent. Original 200ms wasn't enough — cycles were
+// ~1s apart, well past the old debounce window.
+const TOGGLE_DEBOUNCE_MS = 600;
+let lastToggleAt = 0;
+
+function toggleOverlay(source: string) {
+  const now = performance.now();
+  if (now - lastToggleAt < TOGGLE_DEBOUNCE_MS) {
+    trace(
+      `[toggle] ${source} → IGNORED (debounced, ${Math.round(now - lastToggleAt)}ms since last)`,
+    );
+    return;
+  }
+  lastToggleAt = now;
+
+  if (state.isOpen) {
+    // --- Close path: hide visually first, then release input. Order
+    // matches input_interceptor.rs::close_overlay — atoms go down
+    // before the grab releases so Gamescope re-focuses the game
+    // before any queued controller events slip through.
+    overlay.minimize();
+    atoms.hide().catch((e) => console.warn("[overlay] atoms.hide:", e));
+    intercept.current?.release();
+    // Always SIGCONT Steam on close, even when SUSPEND_STEAM_ENABLED is
+    // off. Users have reported Steam appearing frozen after the overlay
+    // closes (menu visible but inputs ignored) — if anything left Steam
+    // TASK_STOPPED earlier (a prior session with the flag on, a stuck
+    // suspend, etc.) the only recovery without this is a reboot. SIGCONT
+    // on a running process is a kernel no-op, so this is free.
+    if (steamPid.current === null) steamPid.current = findSteamPid();
+    if (steamPid.current !== null) {
+      const pid = steamPid.current;
+      // Audit B-027: track the handle so shutdown() can cancel a
+      // pending resume; otherwise the deferred SIGCONT fires post-exit
+      // and logs spurious "process exited" noise from the helper.
+      if (pendingResumeTimer.current !== null) clearTimeout(pendingResumeTimer.current);
+      pendingResumeTimer.current = setTimeout(() => {
+        pendingResumeTimer.current = null;
+        resumeSteam(pid);
+      }, 250);
+    }
+    state.isOpen = false;
+    broadcastOverlayVisibility();
+    trace(`[toggle] ${source} → MINIMIZE`);
+  } else {
+    // --- Open path: suspend Steam (if enabled), grab controllers,
+    // raise the window, set atoms. Also matches open_overlay().
+    if (SUSPEND_STEAM_ENABLED) {
+      if (steamPid.current === null) steamPid.current = findSteamPid();
+      if (steamPid.current !== null) suspendSteam(steamPid.current);
+    }
+    intercept.current?.grab();
+    overlay.show();
+    atoms.show().catch((e) => console.warn("[overlay] atoms.show:", e));
+    state.isOpen = true;
+    broadcastOverlayVisibility();
+    trace(`[toggle] ${source} → SHOW`);
+  }
+}
+
+// Wake events from the interceptor that should open/close the overlay.
+//
+// QamToggle / CtrlThree / CtrlFour stay hardcoded — they're keyboard
+// wake shortcuts, not part of the user-configurable ControllerShortcuts.
+// F16 is treated as a toggle here because InputPlumber on the OXP Apex
+// (and most Bazzite handhelds) maps the hardware Keyboard button to
+// it. If a machine uses F16 for something else, QamToggle should be
+// disabled. TODO: make wake triggers configurable via a separate
+// KeyboardShortcuts map so these aren't hardcoded.
+//
+// Guide+A/B/X/Y go through the user-configurable `shortcuts` map so the
+// UI's controller-shortcut bindings actually take effect (previously
+// these were a hardcoded subset that ignored the config — Guide+X
+// did nothing despite defaulting to ToggleOverlay).
+function onWake(event: WakeEvent): void {
+  // The branch-table for "which wake event does what given the current
+  // shortcut config" is pure — extracted into lib/wake-routing.ts so
+  // the table is unit-tested without booting the full main process.
+  const action = routeWake(event, shortcuts.current);
+  if (action.kind === "ignore") return;
+  if (action.kind === "toggle") {
+    toggleOverlay(action.reason);
+    return;
+  }
+  // Every other kind needs the overlay open first — the webview
+  // listener is always live (window is minimized, not destroyed) so
+  // we could send in either order, but opening first lines up the
+  // visual transition with the navigation / OSK reveal.
+  if (!state.isOpen) toggleOverlay(action.reason);
+  if (action.kind === "open-plugin") {
+    sendToWebview("overlay-open-plugin", { pluginId: action.pluginId });
+    return;
+  }
+  if (action.kind === "open-settings") {
+    sendToWebview("overlay-open-settings", {});
+    return;
+  }
+  if (action.kind === "open-home") {
+    sendToWebview("overlay-open-home", {});
+    return;
+  }
+  if (action.kind === "toggle-keyboard") {
+    sendToWebview("overlay-toggle-keyboard", {});
+    return;
+  }
+}
+
+startInputIntercept({
+  onWake,
+  onAction: (action) => {
+    // Bridge to the webview. onOverlayAction() in main.tsx turns these
+    // into synthetic KeyboardEvents (ArrowUp/Down/Enter/Escape/...) so
+    // norigin-spatial-navigation picks them up unchanged.
+    sendToWebview("overlay-action", { action });
+  },
+  onAxis: (axis, value) => {
+    // Right-stick analog values — webview drives smooth scroll of the
+    // main content area with its own rAF + momentum loop.
+    sendToWebview("overlay-scroll", { axis, value });
+  },
+  onReady: (c) =>
+    console.log(
+      `[overlay] input intercept ready — ${c.controllers} controller(s), ${c.keyboards} keyboard(s), ${c.qam} qam device(s)`,
+    ),
+})
+  .then((handle) => {
+    intercept.current = handle;
+  })
+  .catch((err) => {
+    console.error("[overlay] input intercept failed to start:", err);
+  });
+
+// Backup shortcut for desktop dev — works whether or not evdev picks up
+// the QAM button correctly. Useful when we're investigating why F16
+// isn't firing. Override via DECK_OVERLAY_TOGGLE=<accelerator>.
+const TOGGLE_ACCELERATOR =
+  process.env.DECK_OVERLAY_TOGGLE ?? "CommandOrControl+Shift+O";
+const shortcutRegistered = GlobalShortcut.register(TOGGLE_ACCELERATOR, () =>
+  toggleOverlay(TOGGLE_ACCELERATOR),
+);
+if (!shortcutRegistered) {
+  console.warn(
+    `[overlay] failed to register ${TOGGLE_ACCELERATOR} global shortcut — ` +
+      "another process may already have it grabbed.",
+  );
+}
+
+// ---- X11 / Gamescope loop + shutdown ---------------------------------------
+// Audit B-030 step 2 (2026-05): the management loop and the
+// SIGINT/SIGTERM-driven shutdown ladder now live in ./lifecycle so the
+// orchestrator stays a wire-up file. Mutable singletons (steamPid,
+// pendingResumeTimer, managementLoopRunning) are passed as `{ current: T }`
+// refs so the lifecycle helpers and the in-file toggleOverlay see the
+// same value without a setter dance.
+const managementLoopRunning: { current: boolean } = { current: true };
+
+overlayManagementLoop({
+  state,
+  running: managementLoopRunning,
+  toggleOverlay,
+}).catch((e) => {
+  console.error("[overlay] management loop crashed:", e);
+  process.exit(1);
+});
+
+function runShutdown(): Promise<void> {
+  return shutdown({
+    running: managementLoopRunning,
+    pendingResumeTimer,
+    steamPid,
+    atoms,
+    intercept,
+    globalShortcut: GlobalShortcut,
+  });
+}
+process.on("SIGINT", runShutdown);
+process.on("SIGTERM", runShutdown);

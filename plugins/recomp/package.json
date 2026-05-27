@@ -1,0 +1,18 @@
+{
+  "name": "recomp",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@loadout/external-cache": "workspace:*",
+    "@loadout/file-picker": "workspace:*",
+    "@loadout/plugin-storage": "workspace:*",
+    "@loadout/sgdb-art": "workspace:*",
+    "@loadout/steam-cdp": "workspace:*",
+    "@loadout/steam-shortcut": "workspace:*",
+    "@loadout/steam-paths": "workspace:*",
+    "@loadout/types": "workspace:*",
+    "@loadout/ui": "workspace:*",
+    "@loadout/vdf": "workspace:*",
+    "fuzzysort": "^3.1.0"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "@loadout/plugin-storage-cleaner",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Disk usage analyzer and Steam cache cleaner",
+  "author": "Loadout",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@loadout/ui": "workspace:*",
+    "@loadout/steam-paths": "workspace:*"
+  },
+  "plugin": {
+    "id": "storage-cleaner",
+    "name": "Storage Cleaner",
+    "description": "Shows disk usage, shader cache sizes, and lets users clean up space",
+    "permissions": {
+      "filesystem": [
+        "read:~/.local/share/Steam",
+        "write:~/.local/share/Steam"
+      ],
+      "system": [
+        "exec"
+      ]
+    },
+    "category": "Tools",
+    "subtitle": "Disk + shader cache management"
+  }
+}
