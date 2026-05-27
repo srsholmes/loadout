@@ -64,6 +64,7 @@ One plugin per issue, migrated one at a time.
 - **backend / pure-logic → `*.test.ts`**, run by `bun test test.ts` in bun's native env (no DOM). `backend.ts` ≥ 100 LOC → `backend.test.ts`; any `lib/**/*.ts` ≥ 100 LOC → sibling `.test.ts`. (Enforced by `scripts/check-plugin-specs.sh`, MIN_LOC = 100.)
 - **React / DOM (UI) → `*.spec.tsx`**, run by `bun test spec.tsx --preload ./test/bun-test-setup.ts` (happy-dom). `app.tsx` ≥ 100 LOC → `app.spec.tsx`.
 - Use the **`bun:test` API**, NOT vitest: `import { describe, it, expect, mock } from "bun:test"`. `mock()` replaces `vi.fn`. For module mocks, `mock.module(spec, () => ({ ...real, ...overrides }))` — capture the real module via a static `import * as real` first and `await import()` the SUT **after** the mock (bun's `mock.module` isn't hoisted). Fake timers: `jest.useFakeTimers()` / `jest.advanceTimersByTime()`. Subprocess mocking via `Bun.spawn` stubs is fine in tests.
+- **Single-process gotcha:** backend specs run in ONE process (`bun test test.ts`) and `mock.module` **persists across files**. For **built-in or shared modules** (`fs`, `node:fs/promises`, `@loadout/*`), a top-level `mock.module` leaks into sibling specs and causes phantom failures — use `spyOn(obj, "method")` instead (or partial-mock + restore). See `docs/test-mock-contamination.md`.
 - Port the source plugin's tests, converting vitest→`bun:test`; don't drop coverage.
 
 ---
