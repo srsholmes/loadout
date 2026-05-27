@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, mock } from "bun:test";
 import { render, screen, fireEvent } from "../../../../test/render";
 import { TextInput } from "./TextInput";
 
@@ -17,7 +17,7 @@ describe("TextInput", () => {
   });
 
   it("calls onChange with new value on input", () => {
-    const fn = vi.fn();
+    const fn = mock();
     render(<TextInput value="" onChange={fn} />);
     const input = screen.getByRole("textbox");
     fireEvent.change(input, { target: { value: "world" } });

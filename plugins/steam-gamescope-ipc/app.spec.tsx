@@ -13,30 +13,30 @@
  * `useCurrentGame` (so we can flip between connected / idle states).
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import type * as UiModule from "@loadout/ui";
+import { describe, it, expect, mock, beforeEach } from "bun:test";
+// Captured BEFORE mock.module() runs below, so this holds the real
+// module for the partial-mock spread. (bun's mock.module is not hoisted,
+// unlike vitest's vi.mock — static imports evaluate first.)
+import * as actualUi from "@loadout/ui";
 import { waitFor, fireEvent } from "../../test/render";
 
-const callMock = vi.fn((method: string) => Promise.resolve(null));
+const callMock = mock((method: string) => Promise.resolve(null));
 const eventHandlers = new Map<string, (data: unknown) => void>();
 
 let currentGameValue: { appId: number; gameName: string; startTime: number } | null = null;
 
-vi.mock("@loadout/ui", async () => {
-  const actual = await vi.importActual<typeof UiModule>("@loadout/ui");
-  return {
-    ...actual,
-    PluginProvider: ({ children }: any) => children,
-    useBackend: () => ({
-      call: callMock,
-      useEvent: ({ event, handler }: any) => {
-        eventHandlers.set(event, handler);
-      },
-      ready: true,
-    }),
-    useCurrentGame: () => currentGameValue,
-  };
-});
+mock.module("@loadout/ui", () => ({
+  ...actualUi,
+  PluginProvider: ({ children }: any) => children,
+  useBackend: () => ({
+    call: callMock,
+    useEvent: ({ event, handler }: any) => {
+      eventHandlers.set(event, handler);
+    },
+    ready: true,
+  }),
+  useCurrentGame: () => currentGameValue,
+}));
 
 const mockRecentSessions = [
   {
@@ -120,7 +120,7 @@ describe("steam-gamescope-ipc plugin", () => {
   });
 
   it("invokes SteamClient.URL.ExecuteSteamURL when the user launches a game", async () => {
-    const executeSteamURL = vi.fn();
+    const executeSteamURL = mock();
     (globalThis as any).SteamClient = { URL: { ExecuteSteamURL: executeSteamURL } };
 
     const container = document.createElement("div");
@@ -151,7 +151,7 @@ describe("steam-gamescope-ipc plugin", () => {
   });
 
   it("ignores launch attempts with an empty or invalid AppID", async () => {
-    const executeSteamURL = vi.fn();
+    const executeSteamURL = mock();
     (globalThis as any).SteamClient = { URL: { ExecuteSteamURL: executeSteamURL } };
 
     const container = document.createElement("div");

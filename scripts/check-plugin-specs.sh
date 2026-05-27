@@ -34,7 +34,7 @@ for backend in plugins/*/backend.ts; do
   loc=$(wc -l < "$backend")
   if [ "$loc" -lt "$MIN_LOC" ]; then continue; fi
   dir=$(dirname "$backend")
-  spec="$dir/backend.spec.ts"
+  spec="$dir/backend.test.ts"
   if [ ! -f "$spec" ]; then
     echo "MISSING SPEC: $backend ($loc LOC ≥ $MIN_LOC) — add $spec" >&2
     missing=$((missing + 1))
@@ -112,7 +112,7 @@ for dir in $SPEC_SCOPED_LIB_DIRS; do
     loc=$(wc -l < "$lib")
     if [ "$loc" -lt "$MIN_LOC" ]; then continue; fi
     base="${lib%.ts}"
-    spec="$base.spec.ts"
+    spec="$base.test.ts"
     if [ ! -f "$spec" ]; then
       echo "MISSING SPEC: $lib ($loc LOC ≥ $MIN_LOC) — add $spec" >&2
       missing=$((missing + 1))
@@ -137,7 +137,7 @@ for dir in $SPEC_SCOPED_PACKAGES; do
     loc=$(wc -l < "$src")
     if [ "$loc" -lt "$MIN_LOC" ]; then continue; fi
     base="${src%.ts}"
-    spec="$base.spec.ts"
+    spec="$base.test.ts"
     if [ ! -f "$spec" ]; then
       echo "MISSING SPEC: $src ($loc LOC ≥ $MIN_LOC) — add $spec" >&2
       missing=$((missing + 1))

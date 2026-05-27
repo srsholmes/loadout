@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, mock } from "bun:test";
 import { render, screen, fireEvent } from "../../../../test/render";
 import { Slider } from "./Slider";
 
@@ -30,7 +30,7 @@ describe("Slider", () => {
   });
 
   it("calls onChange with numeric value on change", () => {
-    const fn = vi.fn();
+    const fn = mock();
     render(<Slider value={50} onChange={fn} />);
     const input = screen.getByRole("slider");
     fireEvent.change(input, { target: { value: "75" } });
