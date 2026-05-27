@@ -4,12 +4,12 @@
 # Idempotent: safe to run multiple times
 #
 # Supports: SteamOS (Arch), Bazzite (Fedora/rpm-ostree), CachyOS/Arch, Ubuntu/Debian, Fedora, openSUSE
-# Usage: curl -fsSL https://raw.githubusercontent.com/srsholmes/linux-gaming-plugin-manager/main/scripts/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/install.sh | sh
 
 set -e
 
 # Configuration
-REPO="srsholmes/linux-gaming-plugin-manager"
+REPO="srsholmes/loadout"
 INSTALL_DIR="$HOME/.local/share/loadout"
 BINARY_NAME="loadout"
 BINARY_PATH="$INSTALL_DIR/$BINARY_NAME"

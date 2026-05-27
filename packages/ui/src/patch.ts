@@ -18,8 +18,8 @@ type InsteadPatchHandler = (
 ) => unknown;
 
 interface PatchedFunction {
-  __steamLoaderOriginal?: (...args: unknown[]) => unknown;
-  __steamLoaderPatches?: Array<{ type: string; handler: unknown }>;
+  __loadoutOriginal?: (...args: unknown[]) => unknown;
+  __loadoutPatches?: Array<{ type: string; handler: unknown }>;
 }
 
 /**
@@ -57,7 +57,7 @@ export function afterPatch<T = unknown>(
     return result;
   } as unknown as PatchedFunction;
 
-  patched.__steamLoaderOriginal = original as (...args: unknown[]) => unknown;
+  patched.__loadoutOriginal = original as (...args: unknown[]) => unknown;
   obj[method] = patched;
 
   return function unpatch() {
@@ -102,7 +102,7 @@ export function beforePatch(
     return (original as (...a: unknown[]) => unknown).apply(this, args);
   } as unknown as PatchedFunction;
 
-  patched.__steamLoaderOriginal = original as (...args: unknown[]) => unknown;
+  patched.__loadoutOriginal = original as (...args: unknown[]) => unknown;
   obj[method] = patched;
 
   return function unpatch() {
@@ -148,7 +148,7 @@ export function insteadPatch(
     }
   } as unknown as PatchedFunction;
 
-  patched.__steamLoaderOriginal = original as (...args: unknown[]) => unknown;
+  patched.__loadoutOriginal = original as (...args: unknown[]) => unknown;
   obj[method] = patched;
 
   return function unpatch() {

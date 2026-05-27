@@ -29,7 +29,7 @@
  * shared React tree would fail under `vite dev`. Typing structurally
  * here means no runtime import is needed at the call site.
  */
-interface SteamLoaderElectroview {
+interface LoadoutElectroview {
   rpc?: {
     /** Map of registered request names → handlers. Each entry returns
      *  whatever the Bun host returned, opaque from the webview side. */
@@ -62,7 +62,7 @@ declare global {
   interface Window {
     /** Electroview RPC handle, set by
      *  `packages/overlay-electrobun/src/webview/main.tsx`. */
-    __electroview?: SteamLoaderElectroview;
+    __electroview?: LoadoutElectroview;
     /** Truthy when the Electrobun runtime is present in this webview. */
     __electrobun?: unknown;
 

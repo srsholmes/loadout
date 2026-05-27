@@ -5,10 +5,8 @@ handhelds and desktops running Gamescope. Think **Decky Loader re-imagined in
 one language**: the plugin host, plugin backends, plugin UIs, and the overlay
 itself are all TypeScript on Bun — no Python service, no multi-runtime interop.
 
-> **Status: early.** This repository is a freshly-rebuilt, minimal version of
-> the project (previously "Steam Loader" /
-> [linux-gaming-plugin-manager](https://github.com/srsholmes/linux-gaming-plugin-manager)).
-> It currently ships the full platform plus **one example plugin**
+> **Status: early.** This repository is a minimal, freshly-rebuilt version of
+> the project. It currently ships the full platform plus **one example plugin**
 > (`steam-gamescope-ipc`) as a proof-of-concept. The remaining plugins are
 > being migrated back in one at a time, each reviewed as it lands.
 

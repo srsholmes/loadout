@@ -79,7 +79,7 @@ function afterPatch(obj, method, handler) {
   };
   // Preserve displayName for React DevTools
   obj[method].displayName = original.displayName || original.name;
-  obj[method].__steamLoaderOriginal = original;
+  obj[method].__loadoutOriginal = original;
   return function unpatch() {
     obj[method] = original;
   };

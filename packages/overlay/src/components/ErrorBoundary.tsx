@@ -142,7 +142,7 @@ function ErrorPanel({
             </div>
             <div className="flex gap-2 py-[3px] text-xs">
               <span className="text-base-content/60 font-medium shrink-0">Version:</span>
-              <span className="text-base-content break-words">{report.steamLoaderVersion}</span>
+              <span className="text-base-content break-words">{report.loadoutVersion}</span>
             </div>
             <div className="flex gap-2 py-[3px] text-xs">
               <span className="text-base-content/60 font-medium shrink-0">Platform:</span>
