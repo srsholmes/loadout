@@ -1,0 +1,21 @@
+{
+  "id": "game-browser",
+  "name": "Game Browser",
+  "version": "0.1.0",
+  "description": "Browse your Steam library with artwork — filter games and jump to their Steam page",
+  "author": "Loadout",
+  "permissions": {
+    "filesystem": [
+      "read:~/.local/share/Steam"
+    ],
+    "steam_apis": [
+      "SteamClient.Apps"
+    ]
+  },
+  "target": {
+    "type": "qam",
+    "title": "Games"
+  },
+  "category": "Steam",
+  "subtitle": "Steam library browser"
+}

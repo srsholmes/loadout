@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
+  <title>Loadout</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; font-family: inherit; }
+    html, body, #root { width: 100%; height: 100%; overflow: hidden; background: transparent; }
+    body {
+      color: #dcdedf;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Scrollbar styling */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #3d4450; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #4c5565; }
+
+    /* ---- Gamepad / keyboard focus states ---- */
+
+    :focus-visible {
+      outline: 3px solid #1a9fff;
+      outline-offset: 2px;
+    }
+
+    button, a, input, select, textarea, [tabindex], [data-focusable] {
+      transition: outline-color 0.15s ease-out, outline-offset 0.15s ease-out;
+    }
+
+    /* Range sliders — minimum height for d-pad reachability, outline on thumb */
+    input[type="range"] {
+      min-height: 44px;
+    }
+    input[type="range"]:focus-visible {
+      outline: none;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      transition: box-shadow 0.15s ease-out, transform 0.15s ease-out;
+    }
+    input[type="range"]:focus-visible::-webkit-slider-thumb {
+      box-shadow: 0 0 0 3px #1a9fff;
+      transform: scale(1.4);
+    }
+
+    /* Quick menu slide-in animation */
+    @keyframes slideInRight {
+      from { transform: translateX(100%); }
+      to { transform: translateX(0); }
+    }
+
+    /* Content fade-in on plugin switch */
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    /* Spinner animation */
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Widget loading shimmer */
+    @keyframes sl-widget-load {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+
+    /* Responsive: reduce root padding on narrow viewports */
+    @media (max-width: 640px) {
+      html, body, #root { touch-action: manipulation; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/overlay/app.js"></script>
+</body>
+</html>

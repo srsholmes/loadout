@@ -1,0 +1,29 @@
+{
+  "name": "@loadout/plugin-game-browser",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Browse your Steam library with artwork — filter games and jump to their Steam page",
+  "author": "Loadout",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@loadout/ui": "workspace:*",
+    "@loadout/steam-paths": "workspace:*",
+    "@loadout/vdf": "workspace:*"
+  },
+  "plugin": {
+    "id": "game-browser",
+    "name": "Game Browser",
+    "description": "Browse your Steam library with artwork — filter games and jump to their Steam page",
+    "category": "Steam",
+    "subtitle": "Steam library browser"
+  },
+  "permissions": {
+    "filesystem": [
+      "read:~/.local/share/Steam"
+    ],
+    "steam_apis": [
+      "SteamClient.Apps"
+    ]
+  }
+}

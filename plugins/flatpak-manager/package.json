@@ -1,0 +1,25 @@
+{
+  "name": "@loadout/plugin-flatpak-manager",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Manage and update Flatpak applications without leaving your game",
+  "author": "Loadout",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@loadout/ui": "workspace:*",
+    "@loadout/exec": "workspace:*"
+  },
+  "plugin": {
+    "id": "flatpak-manager",
+    "name": "Flatpak Manager",
+    "description": "Manage and update Flatpak applications without leaving your game",
+    "category": "Tools",
+    "subtitle": "Flatpak app management"
+  },
+  "permissions": {
+    "system": [
+      "exec"
+    ]
+  }
+}

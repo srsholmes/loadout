@@ -1,0 +1,32 @@
+{
+  "name": "@loadout/plugin-protondb-badges",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Shows ProtonDB compatibility ratings for Steam games",
+  "author": "Loadout",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@loadout/external-cache": "workspace:*",
+    "@loadout/steam-paths": "workspace:*",
+    "@loadout/ui": "workspace:*"
+  },
+  "plugin": {
+    "id": "protondb-badges",
+    "name": "ProtonDB Badges",
+    "description": "Injects ProtonDB compatibility badges into Steam library and store pages",
+    "permissions": {
+      "network": [
+        "www.protondb.com",
+        "store.steampowered.com",
+        "localhost"
+      ],
+      "filesystem": [
+        "~/.config/loadout/protondb-badges/",
+        "~/.cache/loadout/protondb-badges/"
+      ]
+    },
+    "category": "Steam",
+    "subtitle": "Proton compatibility badges"
+  }
+}

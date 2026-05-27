@@ -1,0 +1,9 @@
+{
+  "id": "network-info",
+  "name": "Network Info",
+  "version": "1.0.0",
+  "description": "Network information, WiFi details, and Cloudflare speed test",
+  "author": "Loadout",
+  "category": "Device",
+  "subtitle": "Network interfaces + speed test"
+}

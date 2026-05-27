@@ -1,0 +1,17 @@
+{
+  "name": "store-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@loadout/exec": "workspace:*",
+    "@loadout/external-cache": "workspace:*",
+    "@loadout/plugin-storage": "workspace:*",
+    "@loadout/sgdb-art": "workspace:*",
+    "@loadout/steam-cdp": "workspace:*",
+    "@loadout/steam-paths": "workspace:*",
+    "@loadout/steam-shortcut": "workspace:*",
+    "@loadout/types": "workspace:*",
+    "@loadout/ui": "workspace:*",
+    "@loadout/vdf": "workspace:*"
+  }
+}

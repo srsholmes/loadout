@@ -1,0 +1,40 @@
+{
+  "id": "store-bridge",
+  "name": "Store Bridge",
+  "version": "0.1.0",
+  "description": "Surface Epic, GOG, Amazon, Ubisoft and xCloud libraries as Steam shortcuts",
+  "author": "Loadout",
+  "permissions": {
+    "network": [
+      "api.github.com",
+      "github.com",
+      "objects.githubusercontent.com",
+      "api.epicgames.dev",
+      "launcher-public-service-prod06.ol.epicgames.com",
+      "cdn1.epicgames.com",
+      "cdn2.unrealengine.com",
+      "cdn2.steamgriddb.com",
+      "www.steamgriddb.com",
+      "localhost"
+    ],
+    "filesystem": [
+      "read:~/.local/share/Steam",
+      "write:~/.local/share/Steam/userdata/*/config/grid",
+      "read:~/.config/legendary",
+      "write:~/.config/legendary",
+      "read:~/.config/loadout/steamgriddb",
+      "write:~/.config/loadout/store-bridge",
+      "write:~/.cache/loadout/store-bridge",
+      "write:~/.local/share/loadout/store-bridge",
+      "write:~/Games/store-bridge",
+      "read:~/Games",
+      "read:~/.local/share/Heroic",
+      "read:~/.steam/steam/steamapps",
+      "read:/run/media",
+      "read:/media",
+      "read:/mnt"
+    ],
+    "system": ["exec"]
+  },
+  "category": "Game"
+}

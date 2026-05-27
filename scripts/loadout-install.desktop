@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Install Loadout
+Exec=sh -c 'curl -fsSL https://raw.githubusercontent.com/srsholmes/linux-gaming-plugin-manager/main/scripts/install.sh | sh'
+Type=Application
+Terminal=true
+Icon=application-x-executable

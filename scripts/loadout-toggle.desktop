@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Toggle Loadout
+Comment=Toggle the Loadout overlay on/off
+Exec=dbus-send --session --type=method_call --dest=com.loadout.overlay /com/loadout/overlay com.loadout.overlay.Toggle
+Type=Application
+Terminal=false
+Icon=utilities-system-monitor
+Categories=Game;
+NoDisplay=true

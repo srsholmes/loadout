@@ -1,0 +1,17 @@
+[Unit]
+Description=Loadout: load overlay-trigger InputPlumber profile
+# Order: IP must be up so its D-Bus surface exists; graphical.target must
+# be down so the overlay enumerates input devices AFTER the profile is loaded
+# (the profile adds IP's virtual keyboard, which the overlay only sees on
+# device enumeration at startup).
+After=inputplumber.service
+Requires=inputplumber.service
+Before=graphical.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/loadout/inputplumber/ip-load-profile.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical.target

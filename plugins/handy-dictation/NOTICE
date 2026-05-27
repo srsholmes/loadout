@@ -1,0 +1,23 @@
+Handy Dictation plugin
+Copyright (c) 2026 Simon Holmes
+Licensed under BSD-3-Clause (see LICENSE).
+
+This plugin is a thin wrapper around Handy, an external offline
+speech-to-text application:
+
+  https://github.com/cjpais/Handy
+  Copyright (c) 2025 CJ Pais (MIT)
+
+This plugin does **not** bundle, redistribute, or modify Handy. At
+runtime the plugin downloads `Handy.AppImage` directly from CJ Pais'
+GitHub Releases for the user's own machine (see `backend.ts`,
+`HANDY_RELEASES_API`). The downloaded AppImage remains the property of
+its authors and is governed by Handy's own MIT license; consult Handy's
+LICENSE inside the AppImage for the canonical terms.
+
+This plugin's source code (UI, configuration management, lifecycle) was
+written independently from scratch; no source code from Handy was copied
+or transliterated. The interfaces named `HandyConfig`, `HandyStatus`,
+and `HandySettings` in this plugin describe the *shape of data we read
+from Handy at runtime* — they are interoperability declarations, not
+copies of Handy's own type definitions.

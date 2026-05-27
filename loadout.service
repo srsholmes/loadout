@@ -1,0 +1,17 @@
+[Unit]
+Description=Loadout
+# No After=network.target — the loader only listens on 127.0.0.1:33820;
+# the system bus + loopback are up well before any "user" unit starts.
+# Forcing network.target here just delayed boot for no benefit (audit
+# H-014).
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/loadout/loadout
+WorkingDirectory=%h/.local/share/loadout
+Restart=on-failure
+RestartSec=5
+Environment=PLUGINS_DIR=%h/.local/share/loadout/plugins
+
+[Install]
+WantedBy=default.target

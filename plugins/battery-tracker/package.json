@@ -1,0 +1,24 @@
+{
+  "name": "@loadout/plugin-battery-tracker",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Battery level, charge rate, estimated time remaining, and charge history",
+  "author": "Loadout",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@loadout/ui": "workspace:*"
+  },
+  "plugin": {
+    "id": "battery-tracker",
+    "name": "Battery Tracker",
+    "description": "Battery level, charge rate, estimated time remaining, and charge history",
+    "category": "Performance",
+    "subtitle": "Real-time power monitoring"
+  },
+  "permissions": {
+    "filesystem": [
+      "read:/sys/class/power_supply"
+    ]
+  }
+}
