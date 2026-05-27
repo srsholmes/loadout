@@ -1,5 +1,6 @@
 import { mkdir, open, readFile, rename } from "node:fs/promises";
 import { dirname } from "node:path";
+import { chownToTarget } from "./target-user";
 
 /**
  * Atomically write JSON to a file. Writes to a `.tmp` sibling first,
@@ -20,6 +21,9 @@ export async function atomicWriteJSON(
 ): Promise<void> {
   const dir = dirname(filePath);
   await mkdir(dir, { recursive: true });
+  // Root service writes config under the user's home — keep it user-owned
+  // so it stays inspectable/hand-editable. No-op for dev runs.
+  chownToTarget(dir);
 
   const tmpPath = `${filePath}.tmp`;
   const json = JSON.stringify(data, null, 2) + "\n";
@@ -37,6 +41,7 @@ export async function atomicWriteJSON(
     await fh.close();
   }
   await rename(tmpPath, filePath);
+  chownToTarget(filePath);
 }
 
 /**

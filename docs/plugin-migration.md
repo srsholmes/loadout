@@ -36,7 +36,7 @@ One plugin per issue, migrated one at a time.
       "id": "{{PLUGIN_ID}}",
       "name": "{{PLUGIN_NAME}}",
       "description": "…",
-      "permissions": { "network": [] },
+      "permissions": { "network": [], "commands": [] },
       "category": "…",
       "target": { "type": "overlay" }
     }
@@ -56,7 +56,9 @@ One plugin per issue, migrated one at a time.
 
 **Imports allowed** (runtime-hoisted by `scripts/prepare-plugins.sh`): ONLY `@loadout/ui`, `@loadout/types`, `@loadout/exec`, `@loadout/steam-paths`, plus `react`, `react-dom`, `react-icons`. Anything else must be either declared in this plugin's `package.json` `dependencies` OR inlined into `lib/`. **Never import another plugin** — relative cross-plugin imports and `@loadout/plugin-*` imports are blocked by the plugin-seal rules in `eslint.config.js`.
 
-**Subprocess:** route through `@loadout/exec` (`run` / `runFull` / `runCode` / `spawn`). Never call `Bun.spawn` / `Bun.spawnSync` directly — eslint-enforced (spec files may mock).
+**Subprocess:** route through `@loadout/exec` (`run` / `runFull` / `runCode` / `runStreaming` / `spawn`). Never call `Bun.spawn` / `Bun.spawnSync` directly — eslint-enforced (spec files may mock).
+
+**Commands (capability gate):** the backend runs as **root** (a system service), so plugins can write hardware sysfs and call privileged tools **directly** — do NOT shell out to `sudo` / `pkexec`; drop those wrappers from the ported code (e.g. `sudo tee /sys/...` becomes `tee /sys/...`, or just an `fs` write). In exchange, declare every external binary you run in `plugin.permissions.commands` (binary names, e.g. `["ryzenadj", "systemctl", "tee"]`). The loader scopes a per-plugin policy around `onLoad` + every RPC call and `@loadout/exec` *actively denies* any undeclared binary — deny-by-default, so an empty/missing list blocks all commands (`packages/exec/src/index.ts` → `withCommandPolicy`, mirrors the network sandbox). Matching is on `basename(cmd[0])` only (not arguments). Every command a plugin runs is logged to `~/.config/loadout/logs`. **Known gap:** writing `/sys` or `/dev/hidraw*` *directly via `fs`* (not a subprocess) is not command-gated — declare those paths in `permissions.filesystem` for visibility.
 
 **Network:** declare every domain you fetch in `plugin.permissions.network`. The loader's sandboxed fetch *actively blocks* undeclared hosts (`apps/loadout/src/loader/sandboxed-fetch.ts`); an empty/missing list blocks all network.
 
@@ -145,4 +147,5 @@ All green from the TARGET repo root (`/var/home/srsholmes/Work/loadout`):
 - **Removed-package deps used:** (e.g. plugin-storage, vdf) → inline target(s)
 - **Network domains to declare:** …
 - **Subprocess usage:** y/n (must route through `@loadout/exec`)
+- **Commands to declare** (`permissions.commands`): … (binary names; drop any `sudo`/`pkexec` — backend is root)
 - **Notable risks / gotchas:** …

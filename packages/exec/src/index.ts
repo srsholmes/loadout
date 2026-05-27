@@ -1,3 +1,81 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { basename } from "node:path";
+
+/**
+ * A per-plugin command policy. The loader scopes one of these around a
+ * plugin's `onLoad` and every RPC call (see `withCommandPolicy`); every
+ * subprocess launched through this module while the policy is active is
+ * checked against `allowed` and logged.
+ */
+export interface CommandPolicy {
+  /** Plugin id, for clear deny messages + audit lines. */
+  pluginId: string;
+  /** Allowed binary names (basenames), e.g. `["ryzenadj", "tee"]`. */
+  allowed: string[];
+  /**
+   * Optional sink for the audit trail — called once per command attempt
+   * (allowed or denied) with a human-readable line. The loader wires this
+   * to the plugin's scoped logger so every command a plugin runs lands in
+   * `~/.config/loadout/logs`.
+   */
+  log?: (message: string) => void;
+}
+
+// The policy store must be shared across *every* copy of this module.
+// Plugin backends are bundled (Bun.build inlines @loadout/exec into each
+// plugin), so a plain module-level AsyncLocalStorage in the loader's copy
+// would be invisible to a plugin's bundled copy. Keying the single ALS
+// off a global Symbol bridges all copies — the same trick the loader's
+// `globalThis.fetch` proxy relies on for the network sandbox.
+const POLICY_KEY = Symbol.for("loadout.exec.commandPolicy");
+const policyStorage = (((globalThis as Record<symbol, unknown>)[POLICY_KEY] ??=
+  new AsyncLocalStorage<CommandPolicy>()) as AsyncLocalStorage<CommandPolicy>);
+
+/**
+ * Run `fn` with `policy` as the active command policy. Any subprocess
+ * launched through this module (`run`/`runFull`/`runCode`/`runStreaming`/
+ * `spawn`) from within `fn` — including deeply-nested async — is checked
+ * against the policy. Restores the previous policy when `fn` settles.
+ *
+ * No active policy (core/overlay calls that never enter this scope) ⇒
+ * subprocesses are unrestricted. This keeps the loader's own internal
+ * `exec` use unaffected; only plugin-scoped code is gated.
+ */
+export function withCommandPolicy<T>(
+  policy: CommandPolicy,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  return policyStorage.run(policy, async () => fn());
+}
+
+/**
+ * Gate a subprocess launch against the active command policy. Throws (and
+ * logs the remediation) if a policy is active and `cmd[0]`'s basename is
+ * not in its allowed list. No-op when no policy is active.
+ *
+ * Deliberately mirrors `sandboxed-fetch.ts`: deny-by-default, a clear
+ * message naming the offending binary and the exact manifest edit to
+ * allow it.
+ */
+function enforceCommandPolicy(cmd: string[]): void {
+  const policy = policyStorage.getStore();
+  if (!policy) return; // unscoped (core/overlay) — unrestricted
+
+  const bin = basename(cmd[0] ?? "");
+  policy.log?.(`[exec] plugin "${policy.pluginId}" runs: ${cmd.join(" ")}`);
+
+  if (!policy.allowed.includes(bin)) {
+    const msg =
+      policy.allowed.length === 0
+        ? `[permissions] Plugin "${policy.pluginId}" attempted to run "${bin}" but has no command permissions declared. ` +
+          `Add "permissions": { "commands": ["${bin}"] } to package.json to allow this command.`
+        : `[permissions] Plugin "${policy.pluginId}" attempted to run "${bin}" which is not in its allowed commands [${policy.allowed.join(", ")}]. ` +
+          `Add "${bin}" to the "permissions.commands" array in package.json to allow this command.`;
+    policy.log?.(msg);
+    throw new Error(msg);
+  }
+}
+
 export interface RunOptions {
   /** Kill the subprocess if it hasn't exited within this many ms.
    *  `run()` / `runFull()` return `{ stdout: "", stderr: "", exitCode: -1 }`
@@ -81,6 +159,7 @@ export async function runFull(
   cmd: string[],
   opts: RunOptions = {},
 ): Promise<RunResult> {
+  enforceCommandPolicy(cmd);
   const proc = Bun.spawn(cmd, buildOpts(opts));
   let timer: ReturnType<typeof setTimeout> | null = null;
   let timedOut = false;
@@ -108,6 +187,7 @@ export async function runFull(
  * silenced (Bun.spawn with `"ignore"` on both).
  */
 export async function runCode(cmd: string[]): Promise<number> {
+  enforceCommandPolicy(cmd);
   const proc = Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore" });
   return proc.exited;
 }
@@ -147,6 +227,7 @@ export async function runStreaming(
     onSpawn?: (proc: ReturnType<typeof Bun.spawn>) => void;
   },
 ): Promise<{ exitCode: number }> {
+  enforceCommandPolicy(cmd);
   const proc = Bun.spawn(cmd, buildOpts({ env: opts.env, cwd: opts.cwd }));
   opts.onSpawn?.(proc);
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -194,8 +275,15 @@ export async function runStreaming(
  */
 export async function commandExists(name: string): Promise<boolean> {
   try {
-    const { exitCode } = await run(["which", name]);
-    return exitCode === 0;
+    // Spawn `which` directly rather than via run(): this is a read-only
+    // existence probe, not running `name` itself, so it is intentionally
+    // exempt from the command policy (a plugin shouldn't have to declare
+    // `which` just to feature-detect a binary it will then declare).
+    const proc = Bun.spawn(["which", name], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    return (await proc.exited) === 0;
   } catch {
     return false;
   }
@@ -217,5 +305,17 @@ export async function commandExists(name: string): Promise<boolean> {
  * intercepted — the const form would capture the real `Bun.spawn` at
  * module-load and ignore later mocks.
  */
-export const spawn: typeof Bun.spawn = ((...args: Parameters<typeof Bun.spawn>) =>
-  Bun.spawn(...args)) as typeof Bun.spawn;
+export const spawn: typeof Bun.spawn = ((...args: Parameters<typeof Bun.spawn>) => {
+  // Bun.spawn accepts either (cmds, opts?) or ({ cmd, ... }); gate both.
+  const first = args[0] as unknown;
+  if (Array.isArray(first)) {
+    enforceCommandPolicy(first as string[]);
+  } else if (
+    first &&
+    typeof first === "object" &&
+    Array.isArray((first as { cmd?: unknown }).cmd)
+  ) {
+    enforceCommandPolicy((first as { cmd: string[] }).cmd);
+  }
+  return Bun.spawn(...args);
+}) as typeof Bun.spawn;

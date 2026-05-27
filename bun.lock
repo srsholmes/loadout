@@ -33,6 +33,7 @@
       "name": "@loadout/loadout-server",
       "version": "0.0.1",
       "dependencies": {
+        "@loadout/exec": "workspace:*",
         "@loadout/steam-paths": "workspace:*",
         "@loadout/types": "workspace:*",
         "react": "^18.3.0",

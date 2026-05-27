@@ -11,6 +11,7 @@
 import { join, sep } from "node:path";
 import type { RpcEvent } from "@loadout/types";
 import { resolveMethod } from "@loadout/types";
+import { withCommandPolicy } from "@loadout/exec";
 import { loadPlugins, withSandboxedFetch } from "./plugin-manager";
 import { createRpcHandler } from "./rpc-handler";
 import { log } from "./logger";
@@ -251,7 +252,11 @@ export async function startServer(options: ServerOptions = {}) {
     new Map(
       [...plugins].map(([id, p]) => [
         id,
-        { instance: p.instance, sandboxedFetch: p.sandboxedFetch },
+        {
+          instance: p.instance,
+          sandboxedFetch: p.sandboxedFetch,
+          commandPolicy: p.commandPolicy,
+        },
       ]),
     ),
   );
@@ -270,7 +275,13 @@ export async function startServer(options: ServerOptions = {}) {
       if (fn) {
         called++;
         try {
-          await withSandboxedFetch(p.sandboxedFetch, () => fn(...args));
+          // Same dual scope as the RPC handler: command policy (if any)
+          // outside, sandboxed fetch inside. Core services have no policy.
+          const inner = () =>
+            withSandboxedFetch(p.sandboxedFetch, () => fn(...args));
+          await (p.commandPolicy
+            ? withCommandPolicy(p.commandPolicy, inner)
+            : inner());
         } catch (err) {
           log.error(`[broadcast] ${method} failed on plugin ${id}: ${err}`);
         }
@@ -307,6 +318,11 @@ export async function startServer(options: ServerOptions = {}) {
   // purely so `server.upgrade()` accepts the data slot.
   const server = Bun.serve<{ type: "rpc" }>({
     port,
+    // Loopback-only. The backend runs as root (system service), so the
+    // socket must never be reachable off-box — the overlay and Steam's
+    // CEF both talk to it over localhost. Session-token auth (auth.ts)
+    // still guards /api and /ws on top of this.
+    hostname: "127.0.0.1",
 
     async fetch(req, server) {
       const url = new URL(req.url);
