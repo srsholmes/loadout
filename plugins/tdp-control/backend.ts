@@ -1,4 +1,5 @@
 import type { PluginBackend, EmitPayload } from "@loadout/types";
+import { readdir } from "node:fs/promises";
 import { runFull, commandExists } from "@loadout/exec";
 import {
   createTdpProfileEngine,
@@ -1337,8 +1338,9 @@ export default class TdpControlBackend implements PluginBackend {
 
   private async detectGpu(): Promise<void> {
     try {
-      const { stdout } = await runCommand(["ls", "/sys/class/drm/"]);
-      const entries = stdout.split(/\s+/).filter(Boolean);
+      // Enumerate via readdir (not `ls`) — no subprocess, so no command
+      // grant needed and it works directly as root.
+      const entries = await readdir("/sys/class/drm/");
       // Find card directories (card0, card1, etc.) — skip render nodes
       const cards = entries
         .filter((e) => /^card\d+$/.test(e))
@@ -1374,8 +1376,7 @@ export default class TdpControlBackend implements PluginBackend {
 
   private async detectAcPower(): Promise<void> {
     try {
-      const { stdout } = await runCommand(["ls", "/sys/class/power_supply/"]);
-      const entries = stdout.split(/\s+/).filter(Boolean);
+      const entries = await readdir("/sys/class/power_supply/");
       for (const entry of entries) {
         const onlinePath = `/sys/class/power_supply/${entry}/online`;
         const text = await readFileText(onlinePath);
