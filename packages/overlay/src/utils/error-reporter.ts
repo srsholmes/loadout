@@ -22,7 +22,7 @@ export interface ErrorReport {
   /** ISO-8601 timestamp */
   timestamp: string;
   /** System / build info */
-  steamLoaderVersion: string;
+  loadoutVersion: string;
   userAgent: string;
   platform: string;
 }
@@ -51,7 +51,7 @@ export function createErrorReport(
     errorMessage: error.message,
     stackTrace: error.stack ?? "No stack trace available",
     timestamp: new Date().toISOString(),
-    steamLoaderVersion: VERSION,
+    loadoutVersion: VERSION,
     userAgent: navigator.userAgent,
     platform: navigator.platform ?? "unknown",
   };
@@ -70,7 +70,7 @@ export function formatErrorReport(report: ErrorReport): string {
     "",
     `Plugin:    ${report.pluginName} (${report.pluginId})`,
     `Timestamp: ${report.timestamp}`,
-    `Version:   ${report.steamLoaderVersion}`,
+    `Version:   ${report.loadoutVersion}`,
     `Platform:  ${report.platform}`,
     `UA:        ${report.userAgent}`,
     "",

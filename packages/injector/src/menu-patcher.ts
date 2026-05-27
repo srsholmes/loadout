@@ -217,7 +217,7 @@ export function buildMenuPatchScript(plugins: MenuPluginEntry[]): string {
       var hs = fiber.memoizedState;
       while (hs) {
         if (hs.queue && hs.queue.dispatch) {
-          try { hs.queue.dispatch({ __steamLoaderForce: Date.now() }); } catch(e) {}
+          try { hs.queue.dispatch({ __loadoutForce: Date.now() }); } catch(e) {}
           break;
         }
         hs = hs.next;
@@ -238,7 +238,7 @@ export function buildMenuPatchScript(plugins: MenuPluginEntry[]): string {
         var h = f.memoizedState;
         while (h) {
           if (h.queue && h.queue.dispatch) {
-            try { h.queue.dispatch({ __steamLoaderForce: Date.now() }); } catch(e) {}
+            try { h.queue.dispatch({ __loadoutForce: Date.now() }); } catch(e) {}
             break;
           }
           h = h.next;

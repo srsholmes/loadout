@@ -59,7 +59,7 @@ export interface InjectorOptions {
   onGiveUp?: (info: { reason: string; crashCount: number }) => void;
 }
 
-const GLOBAL_FLAG = "steamLoaderHasLoaded";
+const GLOBAL_FLAG = "loadoutHasLoaded";
 
 /**
  * Decide whether the injector has exhausted its crash-retry budget,
@@ -164,7 +164,7 @@ export function buildPanelMountScript(opts: PanelMountScriptOptions): string {
     loadStrategy,
     bailOnMissingReact,
     pluginGlobalPrefix = "__LOADOUT_PLUGIN_",
-    providerExpr = "sdk.SteamLoaderProvider || React.Fragment",
+    providerExpr = "sdk.LoadoutProvider || React.Fragment",
   } = opts;
 
   // Bracket form so double-underscore names don't trip future linters.
@@ -538,7 +538,7 @@ export class SteamInjector {
     }
 
     // Step 4: Set the loaded flag
-    await this.cdp!.evaluate(`window.steamLoaderHasLoaded = true;`);
+    await this.cdp!.evaluate(`window.loadoutHasLoaded = true;`);
   }
 
   /**
@@ -644,7 +644,7 @@ export class SteamInjector {
       authHeader: this.sessionToken ? `Bearer ${this.sessionToken}` : "",
       containerId: "loadout-root",
       containerStyle: PANEL_CONTAINER_STYLE,
-      globalSentinel: "__steamLoaderPanelsMounted",
+      globalSentinel: "__loadoutPanelsMounted",
       logPrefix: "[loadout:bpm]",
       bundleLoader: "scriptTag",
       loadStrategy: "loadOnlyPanel",
@@ -854,8 +854,8 @@ export class SteamInjector {
 
   var style = document.createElement("style");
   style.id = "${styleId}";
-  style.dataset.steamLoaderPlugin = "${pluginId}";
-  style.dataset.steamLoaderStyle = "${filename}";
+  style.dataset.loadoutPlugin = "${pluginId}";
+  style.dataset.loadoutStyle = "${filename}";
   style.textContent = \`${escapedCSS}\`;
   document.head.appendChild(style);
   console.log("[loadout:css] Injected ${filename} for ${pluginId} (inline)");
@@ -1082,7 +1082,7 @@ export class SteamInjector {
     // Clear BPM tab state
     if (this.bpmCdp?.connected) {
       await this.bpmCdp.evaluate(`
-        delete window.__steamLoaderPanelsMounted;
+        delete window.__loadoutPanelsMounted;
         delete window.__LOADOUT_SDK;
         document.getElementById("loadout-root")?.remove();
       `).catch(() => {});

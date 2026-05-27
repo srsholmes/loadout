@@ -12,13 +12,13 @@ import { FocusContext } from "./spatial-nav";
 import { ensureConnected, call as wsCall, subscribe } from "./ws-client";
 import { PluginHeaderSlotProvider } from "./components/PluginHeader";
 
-interface SteamLoaderContextValue {
+interface LoadoutContextValue {
   ready: boolean;
 }
 
-export const SteamLoaderContext = createContext<SteamLoaderContextValue>({ ready: false });
+export const LoadoutContext = createContext<LoadoutContextValue>({ ready: false });
 
-export function SteamLoaderProvider({ children }: { children: ReactNode }) {
+export function LoadoutProvider({ children }: { children: ReactNode }) {
   const readyRef = useRef(false);
 
   useEffect(() => {
@@ -29,9 +29,9 @@ export function SteamLoaderProvider({ children }: { children: ReactNode }) {
   const value = useMemo(() => ({ ready: true }), []);
 
   return (
-    <SteamLoaderContext.Provider value={value}>
+    <LoadoutContext.Provider value={value}>
       {children}
-    </SteamLoaderContext.Provider>
+    </LoadoutContext.Provider>
   );
 }
 
@@ -60,18 +60,18 @@ export function PluginProvider({
   headerSlot?: HTMLElement | null;
 }) {
   return (
-    <SteamLoaderProvider>
+    <LoadoutProvider>
       <FocusContext.Provider value={parentFocusKey ?? "content"}>
         <PluginHeaderSlotProvider slot={headerSlot ?? null}>
           {children}
         </PluginHeaderSlotProvider>
       </FocusContext.Provider>
-    </SteamLoaderProvider>
+    </LoadoutProvider>
   );
 }
 
 export function useBackend(pluginId: string) {
-  const ctx = useContext(SteamLoaderContext);
+  const ctx = useContext(LoadoutContext);
 
   const call = useCallback(
     (method: string, ...args: unknown[]): Promise<unknown> => {

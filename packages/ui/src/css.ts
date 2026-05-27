@@ -44,7 +44,7 @@ export function injectCSS(css: string): () => void {
   const style = document.createElement("style");
   style.id = id;
   style.textContent = css;
-  style.dataset.steamLoader = "plugin-css";
+  style.dataset.loadout = "plugin-css";
   document.head.appendChild(style);
 
   return function cleanup() {

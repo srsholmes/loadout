@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect, useCallback, useMemo, type CSSProperties } from "react";
 import { Toaster, toast } from "react-hot-toast";
-import { SteamLoaderProvider, TOAST_EVENT, type ToastEventDetail } from "@loadout/ui";
+import { LoadoutProvider, TOAST_EVENT, type ToastEventDetail } from "@loadout/ui";
 import { Sidebar } from "./components/Sidebar";
 import { PluginHost } from "./components/PluginHost";
 import {
@@ -89,7 +89,7 @@ function loadScale(gamescope: boolean): number {
  * right that renders the active plugin's React app. The shell provides routing,
  * theme, and the WebSocket provider so every plugin has access to its backend.
  *
- * Wrapped in SteamLoaderProvider (WebSocket) and GamepadNavProvider (d-pad/A/B
+ * Wrapped in LoadoutProvider (WebSocket) and GamepadNavProvider (d-pad/A/B
  * navigation). The quick menu slides in from the right (F10 or hardware button).
  */
 export function App() {
@@ -140,7 +140,7 @@ export function App() {
   }, []);
 
   return (
-    <SteamLoaderProvider>
+    <LoadoutProvider>
       <GamepadNavProvider onBack={handleBack}>
         <AppInner />
         <Toaster
@@ -165,7 +165,7 @@ export function App() {
           }}
         />
       </GamepadNavProvider>
-    </SteamLoaderProvider>
+    </LoadoutProvider>
   );
 }
 

@@ -1,7 +1,7 @@
 # bun:test module mocks leak across files — testing conventions
 
 Closes/supersedes audit-2026-05 finding **A-017** and GitHub issue
-[#90](https://github.com/srsholmes/linux-gaming-plugin-manager/issues/90).
+#90.
 
 ## TL;DR
 

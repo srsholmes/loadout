@@ -26,7 +26,7 @@ This guide covers everything you need to build plugins for Loadout — from a si
 
 ```bash
 git clone <repo-url>
-cd linux-gaming-plugin-manager
+cd loadout
 bun install
 ```
 
@@ -123,7 +123,7 @@ The project is a Bun monorepo with workspaces. Your plugin automatically gets Ty
 The monorepo's `tsconfig.json` handles path resolution. In VS Code, open the root folder (not the plugin subfolder) to get full IntelliSense:
 
 ```bash
-code /path/to/linux-gaming-plugin-manager
+code /path/to/loadout
 ```
 
 You'll get autocomplete for:

@@ -42,13 +42,13 @@ export interface GameSessionMonitor {
 function buildCleanupScript(): string {
   return `
 (function() {
-  if (window.__steamLoaderGameSessionMonitor) {
+  if (window.__loadoutGameSessionMonitor) {
     try {
-      window.__steamLoaderGameSessionMonitor.stop();
+      window.__loadoutGameSessionMonitor.stop();
     } catch (e) {
       console.warn("[loadout:game-session] Cleanup error:", e);
     }
-    delete window.__steamLoaderGameSessionMonitor;
+    delete window.__loadoutGameSessionMonitor;
     return "cleaned_up";
   }
   return "nothing_to_clean";
@@ -90,7 +90,7 @@ export async function createGameSessionMonitor(
     log = () => {},
   } = options;
 
-  const BINDING_NAME = "__steamLoaderGameSessionCallback";
+  const BINDING_NAME = "__loadoutGameSessionCallback";
 
   // Step 1: Add a Runtime binding so injected JS can call back to us directly
   // This avoids the RPC round-trip for local callbacks.
@@ -176,9 +176,9 @@ function buildGameSessionSubscriptionScript(
   // callback because Steam's CEF blocks fetch() to localhost.
   return `
 (function() {
-  if (window.__steamLoaderGameSessionMonitor) {
-    try { window.__steamLoaderGameSessionMonitor.stop(); } catch (e) {}
-    delete window.__steamLoaderGameSessionMonitor;
+  if (window.__loadoutGameSessionMonitor) {
+    try { window.__loadoutGameSessionMonitor.stop(); } catch (e) {}
+    delete window.__loadoutGameSessionMonitor;
   }
 
   if (typeof SteamUIStore === "undefined") {
@@ -240,7 +240,7 @@ function buildGameSessionSubscriptionScript(
   tick();
   var intervalId = setInterval(tick, POLL_MS);
 
-  window.__steamLoaderGameSessionMonitor = {
+  window.__loadoutGameSessionMonitor = {
     stop: function() { clearInterval(intervalId); },
     getLast: function() { return { appId: lastAppId, name: lastName }; }
   };

@@ -100,7 +100,7 @@ describe("createGameSessionMonitor", () => {
     // (the same observable Steam uses to render its focused-app UI).
     const scriptExpr = evalCmds[0].params.expression as string;
     expect(scriptExpr).toContain("SteamUIStore.MainRunningApp");
-    expect(scriptExpr).toContain("__steamLoaderGameSessionMonitor");
+    expect(scriptExpr).toContain("__loadoutGameSessionMonitor");
 
     await monitor.cleanup();
   });
@@ -207,7 +207,7 @@ describe("createGameSessionMonitor", () => {
     expect(cleanupEvals.length).toBeGreaterThanOrEqual(1);
 
     const cleanupExpr = cleanupEvals[0].params.expression as string;
-    expect(cleanupExpr).toContain("__steamLoaderGameSessionMonitor");
+    expect(cleanupExpr).toContain("__loadoutGameSessionMonitor");
     expect(cleanupExpr).toContain("stop");
   });
 
@@ -306,7 +306,7 @@ describe("createGameSessionMonitor", () => {
     expect(scriptExpr).not.toContain("super-secret-token");
     expect(scriptExpr).not.toContain("/api/rpc");
     // It MUST include the binding name.
-    expect(scriptExpr).toContain("__steamLoaderGameSessionCallback");
+    expect(scriptExpr).toContain("__loadoutGameSessionCallback");
 
     await monitor.cleanup();
   });
