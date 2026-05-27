@@ -1,0 +1,15 @@
+{
+  "name": "@loadout/plugin-sound-loader",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Browse, install, and toggle community UI sound packs from deckthemes.com",
+  "author": "Loadout",
+  "dependencies": {
+    "@loadout/injector": "workspace:*",
+    "@loadout/steam-cdp": "workspace:*",
+    "@loadout/ui": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  }
+}

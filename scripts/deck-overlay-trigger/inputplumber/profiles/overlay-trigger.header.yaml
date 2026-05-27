@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ShadowBlip/InputPlumber/main/rootfs/usr/share/inputplumber/schema/device_profile_v1.json
+#
+# Profile header. The renderer (render-profile.sh) concatenates one
+# mapping entry per selected button beneath the `mapping:` key.
+#
+# target_devices must include `keyboard` — IP's deck-uhid target drops the
+# keyboard target by default, and without it our `keyboard: KeyF16` event
+# has nowhere to land.
+version: 1
+kind: DeviceProfile
+name: Loadout Overlay Trigger
+target_devices: [ deck-uhid, keyboard, mouse, touchpad ]
+mapping:

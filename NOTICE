@@ -1,0 +1,31 @@
+Linux Gaming Plugin Manager (Steam Loader)
+Copyright (c) 2026 Simon Holmes
+Licensed under BSD-3-Clause (see LICENSE).
+
+This software incorporates third-party components under their respective
+licenses. Per-plugin attribution is recorded in the `NOTICE` file inside
+each plugin directory; verbatim license text for incorporated upstreams
+lives in `THIRD_PARTY_LICENSES.md`.
+
+Quick index of per-plugin attributions:
+
+| Plugin | Upstream | Upstream license | Relationship |
+|---|---|---|---|
+| `plugins/audio-loader` | DeckThemes/SDH-AudioLoader | MIT + BSD-3-Clause | feature parity / interop format |
+| `plugins/browser` | blackboardsh/electrobun (multitab-browser template) | MIT | derivative work |
+| `plugins/theme-loader` | DeckThemes/SDH-CssLoader | GPL-3.0 | theme-format interop only; class-translation map and community registry fetched at runtime, not redistributed |
+| `plugins/deck-dictation` | cjpais/Handy | MIT | runtime wrapper (no redistribution) |
+| `plugins/flatpak-manager` | jurassicplayer/decky-autoflatpaks | BSD-3-Clause | independent reimplementation |
+| `plugins/launch-options` | Wurielle/decky-launch-options | MIT + BSD-3-Clause | independent reimplementation |
+| `plugins/lsfg-vk` | xXJSONDeruloXx/decky-lsfg-vk **and** PancakeTAS/lsfg-vk | BSD-3-Clause **and** GPL-3.0 (runtime, not redistributed) | install/configure flow ported from decky-lsfg-vk; the `lsfg-vk` runtime layer is fetched from PancakeTAS's GitHub Releases at user request and is **not** redistributed by this repo |
+| `plugins/mangohud-tweaks` | Gawah/MangoPeel | BSD-3-Clause | independent reimplementation; renamed to avoid name collision |
+| `plugins/protondb-badges` | OMGDuke/protondb-decky | GPL-3.0 OR BSD-3-Clause (we elect BSD-3-Clause) | independent reimplementation |
+
+Plugins with attribution work still pending (tracked in `LICENSE_AUDIT.md`):
+
+- `plugins/apex-fixes` — planned for extraction to a separate repository;
+  the kernel artifacts (`oxpec.ko` + `hid-oxp` patches) are GPL-2.0 and
+  will get their own `COPYING` + written-source-offer in that repo.
+
+For the canonical audit, methodology, and remediation status, see
+`LICENSE_AUDIT.md` at the repository root.

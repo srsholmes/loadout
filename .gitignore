@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+*.tsbuildinfo
+.build/
+.sdk-build/
+.inject-build/
+.vendor-build/
+.cache/
+loadout
+
+# Test artifacts
+playwright-report/
+test-results/
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Coverage
+coverage/
+*.lcov
+
+# Editor
+.vscode-test
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ESLint / Prettier cache
+.eslintcache
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+.gstack/
+overlay.trace
+freeze-watch.log
+freeze-watch.sh
+qam-watch.sh
+qam-watch.log
+
+# Stale steam-loader marketing screenshots — loadout will add its own
+screenshots/

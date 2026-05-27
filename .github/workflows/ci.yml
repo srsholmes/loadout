@@ -1,0 +1,170 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bun-server:
+    name: Bun Server (typecheck, lint, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: ESLint
+        run: bun run lint
+
+      # Audit Q-011 / Q-012: enforce that every plugin entry point
+      # ≥100 LOC has a sibling spec. Wave-5 closed the four outstanding
+      # misses, so the check is now hard-gated.
+      - name: Plugin spec coverage gate
+        run: bun run check:specs
+
+      # Audit A-015: hard-gate the TDP helper + install.sh validation
+      # tests. The helper runs under pkexec and writes to sysfs power
+      # caps; the install.sh script patches HELPER_DEST into a polkit
+      # policy via sed. Both have strict input contracts (range checks,
+      # path-charset guard) that must not regress silently.
+      - name: TDP helper script tests
+        run: bun run test:tdp-helper
+
+      - name: Run unit tests
+        run: bun run test
+
+      # Audit 2026-05 Q-005 follow-up — coverage ratchet.
+      # Thresholds live in vitest.config.ts (UI) and scripts/coverage-ratchet.sh
+      # (backend, since Bun has no built-in threshold flag). Floors sit ~1pp
+      # below the baseline measured when the ratchet landed, so trivial
+      # fluctuation doesn't fail CI but any real regression does.
+      - name: Coverage ratchet (UI + backend)
+        run: bun run test:coverage
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: warn
+
+  install-smoke:
+    name: Install path smoke test (hoisted plugins + service-file parity)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Catches drift between the canonical loadout-overlay.service
+      # (bundled in the repo + used by install-local.sh) and the heredoc
+      # in scripts/install.sh that end users actually receive via curl|sh.
+      # If these go out of sync, gaming-mode display detection (or any
+      # other unit-level fix) silently regresses for prod users while
+      # working fine for the dev path. Audit 2026-05 H-001.
+      - name: Service file - heredoc vs canonical parity
+        run: |
+          set -eu
+          awk "/cat > \"\\\$OVERLAY_SERVICE_FILE\" <<'OVERLAYEOF'/{flag=1;next} /^OVERLAYEOF\$/{flag=0} flag" \
+            scripts/install.sh > /tmp/heredoc.service
+          if ! diff -u loadout-overlay.service /tmp/heredoc.service; then
+            echo "::error::scripts/install.sh's overlay heredoc has drifted from loadout-overlay.service"
+            echo "Edit both files to match, then re-run."
+            exit 1
+          fi
+          echo "OK — heredoc and canonical service file are byte-identical."
+
+      # Stages plugins + the hoisted node_modules into a tmp dir, then
+      # asserts the layout matches what the daemon expects. This is the
+      # script the release workflow uses to produce the plugins tarball,
+      # so a regression here is a regression in what curl|sh users get.
+      - name: prepare-plugins.sh produces hoisted layout
+        run: |
+          set -eu
+          STAGE="$(mktemp -d)"
+          sh scripts/prepare-plugins.sh "$STAGE"
+
+          # Plugin count matches the source tree.
+          SRC_COUNT=$(find plugins -mindepth 1 -maxdepth 1 -type d | wc -l)
+          STAGED_COUNT=$(find "$STAGE/plugins" -mindepth 1 -maxdepth 1 -type d | wc -l)
+          if [ "$SRC_COUNT" != "$STAGED_COUNT" ]; then
+            echo "::error::Plugin count mismatch — source=$SRC_COUNT, staged=$STAGED_COUNT"
+            exit 1
+          fi
+
+          # Hoisted node_modules has the runtime essentials.
+          for p in react react-dom scheduler react-icons @loadout/types @loadout/ui; do
+            if [ ! -e "$STAGE/node_modules/$p" ]; then
+              echo "::error::Missing $STAGE/node_modules/$p — hoisted layout is broken"
+              exit 1
+            fi
+          done
+
+          # No per-plugin node_modules — the duplication-bug regression guard.
+          # If this fails, someone reverted to copying deps into each plugin
+          # and the tarball will balloon by ~10x (audit 2026-05 H-002 + PR #48).
+          if find "$STAGE/plugins" -mindepth 2 -maxdepth 2 -name node_modules | grep -q .; then
+            echo "::error::Found per-plugin node_modules — should be hoisted to $STAGE/node_modules/"
+            find "$STAGE/plugins" -mindepth 2 -maxdepth 2 -name node_modules
+            exit 1
+          fi
+
+          echo "OK — staged $STAGED_COUNT plugins with hoisted node_modules."
+
+      # End-to-end: build the binary, point it at the staged tree, and
+      # confirm the daemon resolves every plugin's deps via the hoisted
+      # node_modules. If Bun.build's resolver can't walk up to the shared
+      # location, plugins fail to load and this assertion catches it
+      # before the regression hits a user's machine.
+      - name: Daemon loads all plugins from hoisted layout
+        run: |
+          set -eu
+          bun run build
+
+          STAGE="$(mktemp -d)"
+          sh scripts/prepare-plugins.sh "$STAGE"
+          cp dist/loadout "$STAGE/loadout"
+          chmod +x "$STAGE/loadout"
+
+          PLUGIN_COUNT=$(find "$STAGE/plugins" -mindepth 1 -maxdepth 1 -type d | wc -l)
+          LOG="$(mktemp)"
+
+          # Run the daemon in the background, wait for the API to come
+          # up (server only reports /up after all plugins have finished
+          # onLoad), then kill and grep the log.
+          PLUGINS_DIR="$STAGE/plugins" "$STAGE/loadout" >"$LOG" 2>&1 &
+          PID=$!
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:33820/up >/dev/null 2>&1 && break
+            sleep 1
+          done
+          kill "$PID" 2>/dev/null || true
+          wait "$PID" 2>/dev/null || true
+
+          LOADED=$(grep -c 'Loaded plugin:' "$LOG" || true)
+          echo "Plugin count expected: $PLUGIN_COUNT"
+          echo "Plugins loaded:        $LOADED"
+
+          if [ "$LOADED" != "$PLUGIN_COUNT" ]; then
+            echo "::error::Expected $PLUGIN_COUNT plugins to load, got $LOADED"
+            echo "--- daemon log ---"
+            cat "$LOG"
+            exit 1
+          fi
+          echo "OK — daemon loaded all $LOADED plugins from hoisted layout."

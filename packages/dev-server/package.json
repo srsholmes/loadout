@@ -1,0 +1,11 @@
+{
+  "name": "@loadout/dev-server",
+  "version": "0.0.1",
+  "type": "module",
+  "dependencies": {
+    "@loadout/injector": "workspace:*",
+    "@loadout/loader": "workspace:*",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  }
+}

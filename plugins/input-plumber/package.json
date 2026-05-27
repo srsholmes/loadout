@@ -1,0 +1,47 @@
+{
+  "name": "@loadout/plugin-input-plumber",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Install InputPlumber on distros that don't ship it natively (CachyOS, mutable Fedora, atomic Fedora variants without IP in the base image).",
+  "author": "Loadout",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@loadout/ui": "workspace:*"
+  },
+  "plugin": {
+    "id": "input-plumber",
+    "name": "InputPlumber",
+    "description": "Install the InputPlumber input-routing daemon — no-op if a system package or a previous run already installed it",
+    "category": "Device",
+    "subtitle": "Input routing daemon"
+  },
+  "permissions": {
+    "filesystem": [
+      "read:/etc/os-release",
+      "read:/usr/bin",
+      "read:/usr/local/bin",
+      "read:/var/lib/inputplumber",
+      "write:/etc/dbus-1/system.d",
+      "write:/etc/polkit-1/actions",
+      "write:/etc/polkit-1/rules.d",
+      "write:/etc/systemd/system",
+      "write:/etc/udev/rules.d",
+      "write:/var/lib/inputplumber"
+    ],
+    "commands": [
+      "sudo",
+      "systemctl",
+      "udevadm",
+      "pacman",
+      "dnf",
+      "dnf5",
+      "rpm",
+      "curl",
+      "tar",
+      "sha256sum",
+      "ldconfig",
+      "which"
+    ]
+  }
+}

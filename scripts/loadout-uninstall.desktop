@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Uninstall Loadout
+Exec=sh -c 'curl -fsSL https://raw.githubusercontent.com/srsholmes/linux-gaming-plugin-manager/main/scripts/uninstall.sh | sh'
+Type=Application
+Terminal=true
+Icon=application-x-executable

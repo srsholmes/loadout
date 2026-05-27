@@ -1,0 +1,24 @@
+{
+  "name": "@loadout/plugin-display-settings",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Adjust display saturation, brightness, gamma, and color temperature",
+  "author": "Loadout",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@loadout/ui": "workspace:*"
+  },
+  "plugin": {
+    "id": "display-settings",
+    "name": "Display Settings",
+    "description": "Adjust display saturation, brightness, gamma, and color temperature",
+    "permissions": {
+      "system": [
+        "exec"
+      ]
+    },
+    "category": "Device",
+    "subtitle": "Saturation, brightness, color temperature"
+  }
+}

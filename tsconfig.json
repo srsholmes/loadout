@@ -1,0 +1,48 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "composite": false,
+    "noEmit": true,
+    "paths": {
+      "@loadout/types": ["./packages/types/src"],
+      "@loadout/types/*": ["./packages/types/src/*"],
+      "@loadout/ui": ["./packages/ui/src"],
+      "@loadout/ui/*": ["./packages/ui/src/*"],
+      "@loadout/loader": ["./packages/loader/src"],
+      "@loadout/loader/*": ["./packages/loader/src/*"],
+      "@loadout/injector": ["./packages/injector/src"],
+      "@loadout/injector/*": ["./packages/injector/src/*"],
+      "@loadout/overlay-app": ["./packages/overlay-app/src"],
+      "@overlay/*": ["./packages/overlay/src/*"],
+      "@recomp/sdk": ["./plugins/recomp/lib/sdk/index.ts"],
+      "electrobun/bun": ["./types/electrobun-shims.d.ts"],
+      "electrobun/view": ["./types/electrobun-shims.d.ts"]
+    }
+  },
+  "include": [
+    "types/**/*.d.ts",
+    "packages/*/src/**/*.ts",
+    "packages/*/src/**/*.tsx",
+    "plugins/*/backend.ts",
+    "plugins/*/panel.tsx",
+    "plugins/*/app.tsx",
+    "plugins/recomp/lib/**/*.ts",
+    "plugins/recomp/games/*/setup.ts"
+  ]
+}

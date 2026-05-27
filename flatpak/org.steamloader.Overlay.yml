@@ -1,0 +1,23 @@
+# Flatpak manifest — DEFERRED pending Electrobun packaging.
+#
+# Status: kept as a placeholder for future work. See ./README.md for
+# context. The old Tauri WebKitGTK-based manifest pointed at
+# `packages/overlay-tauri/target/release/loadout-overlay` — that
+# binary (and its whole crate) was deleted during the Tauri →
+# Electrobun migration, so this file would fail to build until the
+# Electrobun tree is packaged into a CEF-compatible runtime.
+#
+# If you're picking this up: CEF changes the shape of the manifest
+# significantly (shared libs to bundle, sandbox tweaks, /dev/input
+# access for EVIOCGRAB). Don't port the GNOME-runtime pattern used
+# here 1:1 — start from an Electrobun-oriented manifest.
+
+app-id: org.steamloader.Overlay
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: loadout-overlay
+
+# Intentionally minimal — this manifest is not buildable today and
+# exists only to reserve the app-id and document the deferral.
+modules: []
