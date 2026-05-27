@@ -60,11 +60,11 @@ One plugin per issue, migrated one at a time.
 
 **Network:** declare every domain you fetch in `plugin.permissions.network`. The loader's sandboxed fetch *actively blocks* undeclared hosts (`apps/loadout/src/loader/sandboxed-fetch.ts`); an empty/missing list blocks all network.
 
-**Specs** (enforced by `scripts/check-plugin-specs.sh`, MIN_LOC = 100):
-- `backend.ts` ≥ 100 LOC → `backend.spec.ts` (`bun:test`).
-- `app.tsx` ≥ 100 LOC → `app.spec.tsx` (vitest).
-- any `lib/**/*.ts` ≥ 100 LOC → sibling `.spec.ts`.
-- Carry over the source plugin's existing specs and adapt them; don't drop coverage.
+**Tests** — the repo is **all-`bun:test`** (no vitest, no shell scripts). Filename picks the runner/env:
+- **backend / pure-logic → `*.test.ts`**, run by `bun test test.ts` in bun's native env (no DOM). `backend.ts` ≥ 100 LOC → `backend.test.ts`; any `lib/**/*.ts` ≥ 100 LOC → sibling `.test.ts`. (Enforced by `scripts/check-plugin-specs.sh`, MIN_LOC = 100.)
+- **React / DOM (UI) → `*.spec.tsx`**, run by `bun test spec.tsx --preload ./test/bun-test-setup.ts` (happy-dom). `app.tsx` ≥ 100 LOC → `app.spec.tsx`.
+- Use the **`bun:test` API**, NOT vitest: `import { describe, it, expect, mock } from "bun:test"`. `mock()` replaces `vi.fn`. For module mocks, `mock.module(spec, () => ({ ...real, ...overrides }))` — capture the real module via a static `import * as real` first and `await import()` the SUT **after** the mock (bun's `mock.module` isn't hoisted). Fake timers: `jest.useFakeTimers()` / `jest.advanceTimersByTime()`. Subprocess mocking via `Bun.spawn` stubs is fine in tests.
+- Port the source plugin's tests, converting vitest→`bun:test`; don't drop coverage.
 
 ---
 
@@ -75,7 +75,7 @@ One plugin per issue, migrated one at a time.
 3. **Fold `plugin.json` into `package.json`.** Move the manifest fields into the `plugin` field of `package.json`, set `name` to `@loadout/plugin-{{PLUGIN_ID}}`, add `"type": "module"` and the real `dependencies`. Delete the standalone `plugin.json`.
 4. **Resolve removed-package deps by inlining** (see the decision rule below). The packages `plugin-storage`, `vdf`, `external-cache`, `sgdb-art`, `steam-shortcut`, `file-picker`, and `per-game-profiles` DO NOT exist in the target — replace each import with inlined code in this plugin's `lib/` *by default*.
 5. **Adapt to the current SDK / manifest shape.** Reconcile any `@loadout/ui` / `@loadout/types` API drift against the reference plugin and `packages/types/src/plugin.ts`. If the source used `panel.tsx` but renders in the overlay, keep `panel.tsx` only if it's a real Steam-injection plugin; otherwise it stays `app.tsx`. Ensure the `mount` / `PluginProvider` / `icon` shape matches `plugins/steam-gamescope-ipc/app.tsx`.
-6. **Carry / port the specs.** Adapt `backend.spec.ts` (bun:test) and `app.spec.tsx` (vitest); add specs for any ≥100-LOC `lib/**` module. Spec files may mock `Bun.spawn` / use `mock.module` — that's allowed.
+6. **Port the tests to `bun:test`.** Convert the source's backend `*.spec.ts` → `*.test.ts` and keep UI tests as `*.spec.tsx`; rewrite any vitest API to `bun:test` (see **Tests** above). Add tests for any ≥100-LOC `lib/**` module.
 7. **Wire it into `plugins/`** so the workspace picks it up (it's a workspace via `plugins/*`). Confirm it loads (see Definition of Done).
 
 ---
