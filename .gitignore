@@ -46,5 +46,5 @@ freeze-watch.sh
 qam-watch.sh
 qam-watch.log
 
-# Stale steam-loader marketing screenshots — loadout will add its own
+# Stale loadout marketing screenshots — loadout will add its own
 screenshots/

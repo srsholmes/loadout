@@ -1,7 +1,7 @@
 #!/bin/sh
 # Loadout uninstaller script
 # Reverses everything done by install.sh, idempotent (safe to run multiple times)
-# Usage: curl -fsSL https://raw.githubusercontent.com/srsholmes/linux-gaming-plugin-manager/main/scripts/uninstall.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/uninstall.sh | sh
 
 set -e
 

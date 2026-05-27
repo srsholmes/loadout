@@ -126,7 +126,7 @@ describe("buildPanelMountScript (A-008)", () => {
     authHeader: "Bearer test-token",
     containerId: "loadout-root",
     containerStyle: PANEL_CONTAINER_STYLE,
-    globalSentinel: "steamLoaderHasLoaded",
+    globalSentinel: "loadoutHasLoaded",
     logPrefix: "[loadout]",
     bundleLoader: "import" as const,
     loadStrategy: "loadAll" as const,
@@ -136,16 +136,16 @@ describe("buildPanelMountScript (A-008)", () => {
   it("produces a script with the expected sentinel set + container id", () => {
     const script = buildPanelMountScript({
       ...baseOpts,
-      globalSentinel: "__steamLoaderPanelsMounted",
+      globalSentinel: "__loadoutPanelsMounted",
       containerId: "loadout-root",
     });
 
     // Sentinel read (guard), write (claim), and delete-on-failure (release)
     // must all reference the same global. The bracket-form sidesteps the
     // member-syntax lint quibble around double-underscore names.
-    expect(script).toContain('window["__steamLoaderPanelsMounted"]');
-    expect(script).toContain('window["__steamLoaderPanelsMounted"] = true');
-    expect(script).toContain('delete window["__steamLoaderPanelsMounted"]');
+    expect(script).toContain('window["__loadoutPanelsMounted"]');
+    expect(script).toContain('window["__loadoutPanelsMounted"] = true');
+    expect(script).toContain('delete window["__loadoutPanelsMounted"]');
 
     // Container id is wired into both the lookup and the creation path.
     expect(script).toContain('document.getElementById("loadout-root")');
@@ -223,7 +223,7 @@ describe("buildPanelMountScript (A-008)", () => {
     const sharedJsContext = buildPanelMountScript({
       ...baseOpts,
       loaderUrl: "http://127.0.0.1:33820",
-      globalSentinel: "steamLoaderHasLoaded",
+      globalSentinel: "loadoutHasLoaded",
       logPrefix: "[loadout]",
       bundleLoader: "import",
       loadStrategy: "loadAll",
@@ -232,7 +232,7 @@ describe("buildPanelMountScript (A-008)", () => {
     const bpm = buildPanelMountScript({
       ...baseOpts,
       loaderUrl: "http://localhost:33820",
-      globalSentinel: "__steamLoaderPanelsMounted",
+      globalSentinel: "__loadoutPanelsMounted",
       logPrefix: "[loadout:bpm]",
       bundleLoader: "scriptTag",
       loadStrategy: "loadOnlyPanel",
@@ -246,7 +246,7 @@ describe("buildPanelMountScript (A-008)", () => {
     expect(sharedJsContext).toContain(mountBlock);
     expect(bpm).toContain(mountBlock);
 
-    const providerBlock = "var Provider = sdk.SteamLoaderProvider || React.Fragment;";
+    const providerBlock = "var Provider = sdk.LoadoutProvider || React.Fragment;";
     expect(sharedJsContext).toContain(providerBlock);
     expect(bpm).toContain(providerBlock);
   });

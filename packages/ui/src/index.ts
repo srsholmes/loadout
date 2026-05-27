@@ -1,6 +1,6 @@
 export { colors } from "./colors";
 export {
-  SteamLoaderProvider,
+  LoadoutProvider,
   PluginProvider,
   useBackend,
   useCurrentGame,

@@ -4,7 +4,7 @@
 Spawn plugin backends as child processes instead of in-process imports. Currently `plugin-manager.ts` uses `import(backendPath)` — a crashed plugin kills the server. Requires rewriting: plugin-manager.ts (child process spawn + IPC), rpc-handler.ts (process-level routing), hot-reload (send signals to child processes), and removing AsyncLocalStorage fetch sandboxing (each child has its own fetch).
 **Why:** Community plugins need isolation. A third-party plugin crash shouldn't take down the loader.
 **Effort:** XL (week+) | **Depends on:** A-001 (loader god-fetch decomposition — see #87)
-**Context:** Outside voice correctly identified this as a core infrastructure rewrite, not a parallel task. Deferred from alpha scope after reassessment. **2026-05-12 update**: deferred until community plugins are on the horizon. A-001 unblocks this; both tracked in [#87](https://github.com/srsholmes/linux-gaming-plugin-manager/issues/87) with the 7 design questions that need maintainer decisions before P1 code starts.
+**Context:** Outside voice correctly identified this as a core infrastructure rewrite, not a parallel task. Deferred from alpha scope after reassessment. **2026-05-12 update**: deferred until community plugins are on the horizon. A-001 unblocks this; both tracked in #87 with the 7 design questions that need maintainer decisions before P1 code starts.
 **Added:** 2026-03-31 via /plan-eng-review | **Updated:** 2026-05-12 (#87)
 
 ## P2: First-Run Onboarding Screen
