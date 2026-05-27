@@ -24,7 +24,7 @@ sleep 0.5
 
 # Start Bun backend server
 echo "[dev] Starting Bun server on port ${PORT}..."
-bun run "$PROJECT_DIR/packages/dev-server/src/index.ts" &
+bun run "$PROJECT_DIR/apps/loadout/src/index.ts" &
 SERVER_PID=$!
 
 # Wait for server to be ready
@@ -44,7 +44,7 @@ echo "[dev] Bun server ready"
 
 # Start Electrobun in dev mode (includes vite for the webview side).
 echo "[dev] Starting Electrobun..."
-cd "$PROJECT_DIR/packages/overlay-electrobun"
+cd "$PROJECT_DIR/apps/loadout-overlay"
 
 if pgrep -f "gamescope[- ]" >/dev/null 2>&1; then
   echo "[dev] Gamescope detected"

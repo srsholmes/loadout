@@ -33,46 +33,26 @@
         "vitest": "4.1.6",
       },
     },
-    "packages/dev-server": {
-      "name": "@loadout/dev-server",
+    "apps/loadout": {
+      "name": "@loadout/loadout-server",
       "version": "0.0.1",
       "dependencies": {
-        "@loadout/injector": "workspace:*",
-        "@loadout/loader": "workspace:*",
+        "@loadout/steam-paths": "workspace:*",
+        "@loadout/types": "workspace:*",
         "react": "^18.3.0",
         "react-dom": "^18.3.0",
       },
     },
-    "packages/exec": {
-      "name": "@loadout/exec",
-      "version": "0.0.1",
-    },
-    "packages/injector": {
-      "name": "@loadout/injector",
-      "version": "0.0.1",
-      "dependencies": {
-        "@loadout/steam-cdp": "workspace:*",
-        "@loadout/types": "workspace:*",
-      },
-    },
-    "packages/loader": {
-      "name": "@loadout/loader",
-      "version": "0.0.1",
-      "dependencies": {
-        "@loadout/injector": "workspace:*",
-        "@loadout/steam-paths": "workspace:*",
-        "@loadout/types": "workspace:*",
-      },
-    },
-    "packages/overlay": {
-      "name": "@loadout/overlay",
+    "apps/loadout-overlay": {
+      "name": "@loadout/loadout-overlay",
+      "version": "0.1.0",
       "dependencies": {
         "@loadout/steam-paths": "workspace:*",
         "@loadout/types": "workspace:*",
         "@loadout/ui": "workspace:*",
         "@noriginmedia/norigin-spatial-navigation": "^3.0.0",
-        "@types/react-grid-layout": "^2.1.0",
         "daisyui": "^5.5.19",
+        "electrobun": "^1.0.0",
         "react": "^18.3.0",
         "react-dom": "^18.3.0",
         "react-grid-layout": "^2.2.3",
@@ -83,29 +63,6 @@
         "@tailwindcss/vite": "^4.0.0",
         "@types/react": "^18.3.0",
         "@types/react-dom": "^18.3.0",
-        "@vitejs/plugin-react": "^4.3.0",
-        "tailwindcss": "^4.0.0",
-        "typescript": "^5.7.0",
-        "vite": "^6.0.0",
-      },
-    },
-    "packages/overlay-electrobun": {
-      "name": "@loadout/overlay-electrobun",
-      "version": "0.1.0",
-      "dependencies": {
-        "@loadout/types": "workspace:*",
-        "@loadout/ui": "workspace:*",
-        "@noriginmedia/norigin-spatial-navigation": "^3.0.0",
-        "daisyui": "^5.5.19",
-        "electrobun": "^1.0.0",
-        "react": "^18.3.0",
-        "react-dom": "^18.3.0",
-        "react-grid-layout": "^2.2.3",
-      },
-      "devDependencies": {
-        "@tailwindcss/vite": "^4.0.0",
-        "@types/react": "^18.3.0",
-        "@types/react-dom": "^18.3.0",
         "@types/react-grid-layout": "^2.1.0",
         "@vitejs/plugin-react": "^4.3.0",
         "tailwindcss": "^4.0.0",
@@ -113,8 +70,8 @@
         "vite": "^6.0.0",
       },
     },
-    "packages/steam-cdp": {
-      "name": "@loadout/steam-cdp",
+    "packages/exec": {
+      "name": "@loadout/exec",
       "version": "0.0.1",
     },
     "packages/steam-paths": {
@@ -284,21 +241,13 @@
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
-    "@loadout/dev-server": ["@loadout/dev-server@workspace:packages/dev-server"],
-
     "@loadout/exec": ["@loadout/exec@workspace:packages/exec"],
 
-    "@loadout/injector": ["@loadout/injector@workspace:packages/injector"],
+    "@loadout/loadout-overlay": ["@loadout/loadout-overlay@workspace:apps/loadout-overlay"],
 
-    "@loadout/loader": ["@loadout/loader@workspace:packages/loader"],
-
-    "@loadout/overlay": ["@loadout/overlay@workspace:packages/overlay"],
-
-    "@loadout/overlay-electrobun": ["@loadout/overlay-electrobun@workspace:packages/overlay-electrobun"],
+    "@loadout/loadout-server": ["@loadout/loadout-server@workspace:apps/loadout"],
 
     "@loadout/plugin-steam-gamescope-ipc": ["@loadout/plugin-steam-gamescope-ipc@workspace:plugins/steam-gamescope-ipc"],
-
-    "@loadout/steam-cdp": ["@loadout/steam-cdp@workspace:packages/steam-cdp"],
 
     "@loadout/steam-paths": ["@loadout/steam-paths@workspace:packages/steam-paths"],
 

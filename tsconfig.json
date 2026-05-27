@@ -24,11 +24,7 @@
       "@loadout/types/*": ["./packages/types/src/*"],
       "@loadout/ui": ["./packages/ui/src"],
       "@loadout/ui/*": ["./packages/ui/src/*"],
-      "@loadout/loader": ["./packages/loader/src"],
-      "@loadout/loader/*": ["./packages/loader/src/*"],
-      "@loadout/injector": ["./packages/injector/src"],
-      "@loadout/injector/*": ["./packages/injector/src/*"],
-      "@overlay/*": ["./packages/overlay/src/*"],
+      "@overlay/*": ["./apps/loadout-overlay/src/overlay/*"],
       "electrobun/bun": ["./types/electrobun-shims.d.ts"],
       "electrobun/view": ["./types/electrobun-shims.d.ts"]
     }
@@ -37,6 +33,8 @@
     "types/**/*.d.ts",
     "packages/*/src/**/*.ts",
     "packages/*/src/**/*.tsx",
+    "apps/*/src/**/*.ts",
+    "apps/*/src/**/*.tsx",
     "plugins/*/backend.ts",
     "plugins/*/panel.tsx",
     "plugins/*/app.tsx"

@@ -14,7 +14,7 @@
 #
 # The compiled binary embeds the Bun runtime and all TypeScript/JavaScript code.
 # It does NOT include:
-#   - Electrobun overlay tree (packages/overlay-electrobun/) — built below via
+#   - Electrobun overlay tree (apps/loadout-overlay/) — built below via
 #     vite + electrobun and copied by scripts/install-local.sh.
 #   - CEF runtime — downloaded by Electrobun on first build and bundled into
 #     the overlay install prefix.
@@ -24,7 +24,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-ENTRY_POINT="$PROJECT_ROOT/packages/dev-server/src/index.ts"
+ENTRY_POINT="$PROJECT_ROOT/apps/loadout/src/index.ts"
 DIST_DIR="$PROJECT_ROOT/dist"
 OUTPUT="$DIST_DIR/loadout"
 
@@ -200,9 +200,9 @@ build() {
 
     # Build Electrobun overlay. Vite builds the webview (React, tailwind,
     # alias resolution) then Electrobun bundles it + CEF + Bun main into
-    # packages/overlay-electrobun/build/. scripts/install-local.sh copies
+    # apps/loadout-overlay/build/. scripts/install-local.sh copies
     # that tree into the install prefix.
-    ELECTROBUN_DIR="$PROJECT_ROOT/packages/overlay-electrobun"
+    ELECTROBUN_DIR="$PROJECT_ROOT/apps/loadout-overlay"
     if [ -f "$ELECTROBUN_DIR/electrobun.config.ts" ]; then
         echo ""
         info "Building Electrobun overlay..."

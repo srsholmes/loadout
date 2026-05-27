@@ -4,13 +4,14 @@
   "private": true,
   "type": "module",
   "workspaces": [
+    "apps/*",
     "packages/*",
     "plugins/*"
   ],
   "scripts": {
-    "dev": "bun run packages/dev-server/src/index.ts",
+    "dev": "bun run apps/loadout/src/index.ts",
     "dev:overlay": "bash scripts/dev-overlay.sh",
-    "dev:electrobun": "bun --filter @loadout/overlay-electrobun dev",
+    "dev:electrobun": "bun --filter @loadout/loadout-overlay dev",
     "build": "sh scripts/build.sh",
     "install-local": "sh scripts/install-local.sh",
     "build-and-install": "sh scripts/build.sh && sh scripts/install-local.sh",

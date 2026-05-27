@@ -1,5 +1,5 @@
 {
-  "name": "@loadout/overlay-electrobun",
+  "name": "@loadout/loadout-overlay",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -15,11 +15,14 @@
     "@noriginmedia/norigin-spatial-navigation": "^3.0.0",
     "@loadout/types": "workspace:*",
     "@loadout/ui": "workspace:*",
+    "@loadout/steam-paths": "workspace:*",
     "daisyui": "^5.5.19",
     "electrobun": "^1.0.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
-    "react-grid-layout": "^2.2.3"
+    "react-grid-layout": "^2.2.3",
+    "react-hot-toast": "^2.4.1",
+    "react-simple-keyboard": "^3.8.197"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
