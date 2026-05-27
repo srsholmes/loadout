@@ -273,15 +273,17 @@ async function readFileText(path: string): Promise<string | null> {
   }
 }
 
-async function writeFileSudo(path: string, value: string): Promise<void> {
-  // Try direct write first
+async function writeSysfs(path: string, value: string): Promise<void> {
+  // The backend runs as root (system service), so a direct write to the
+  // sysfs node succeeds — no sudo/pkexec. `tee` is a fallback for the rare
+  // node that rejects a plain write() but accepts a fresh open via tee.
   try {
     await Bun.write(path, value);
     return;
   } catch {
-    // fall through to sudo tee
+    // fall through to tee
   }
-  const { stderr, exitCode } = await runFull(["sudo", "tee", path], { stdin: value });
+  const { stderr, exitCode } = await runFull(["tee", path], { stdin: value });
   if (exitCode !== 0) {
     throw new Error(`Failed to write ${path}: ${stderr}`);
   }
@@ -605,7 +607,7 @@ export default class TdpControlBackend implements PluginBackend {
       } else if (this.method === "platform_profile") {
         // platform_profile is coarse — pick closest profile name
         const profileName = this.wattsToPlatformProfile(watts);
-        await writeFileSudo(PLATFORM_PROFILE_PATH, profileName);
+        await writeSysfs(PLATFORM_PROFILE_PATH, profileName);
         await this.detectPlatformProfile();
       }
 
@@ -855,7 +857,7 @@ export default class TdpControlBackend implements PluginBackend {
       const cpus = await getOnlineCpus();
       for (const cpu of cpus) {
         const path = `/sys/devices/system/cpu/cpu${cpu}/cpufreq/energy_performance_preference`;
-        await writeFileSudo(path, epp);
+        await writeSysfs(path, epp);
       }
       console.log(`[tdp-control] EPP set to ${epp}`);
       return { success: true };
@@ -882,7 +884,7 @@ export default class TdpControlBackend implements PluginBackend {
       const cpus = await getOnlineCpus();
       for (const cpu of cpus) {
         const path = `/sys/devices/system/cpu/cpu${cpu}/cpufreq/scaling_governor`;
-        await writeFileSudo(path, governor);
+        await writeSysfs(path, governor);
       }
       console.log(`[tdp-control] Governor set to ${governor}`);
       return { success: true };
@@ -906,7 +908,7 @@ export default class TdpControlBackend implements PluginBackend {
       };
     }
     try {
-      await writeFileSudo(PLATFORM_PROFILE_PATH, profile);
+      await writeSysfs(PLATFORM_PROFILE_PATH, profile);
       this.platformProfile = profile;
       console.log(`[tdp-control] Platform profile set to ${profile}`);
       return { success: true };
@@ -930,7 +932,7 @@ export default class TdpControlBackend implements PluginBackend {
       };
     }
     try {
-      await writeFileSudo(SMT_PATH, enable ? "on" : "off");
+      await writeSysfs(SMT_PATH, enable ? "on" : "off");
       console.log(`[tdp-control] SMT set to ${enable ? "on" : "off"}`);
       return { success: true };
     } catch (e) {
@@ -955,17 +957,17 @@ export default class TdpControlBackend implements PluginBackend {
     try {
       // Intel no_turbo is inverted: 0 = turbo ON, 1 = turbo OFF
       if (this.cpuBoostPath === INTEL_CPU_BOOST_PATH) {
-        await writeFileSudo(this.cpuBoostPath, enable ? "0" : "1");
+        await writeSysfs(this.cpuBoostPath, enable ? "0" : "1");
       } else if (this.cpuBoostPath.includes("/policy")) {
         // AMD per-CPU boost: write to each online CPU's policy
         const cpus = await getOnlineCpus();
         for (const cpu of cpus) {
           const path = `/sys/devices/system/cpu/cpufreq/policy${cpu}/boost`;
-          await writeFileSudo(path, enable ? "1" : "0");
+          await writeSysfs(path, enable ? "1" : "0");
         }
       } else {
         // AMD legacy path
-        await writeFileSudo(this.cpuBoostPath, enable ? "1" : "0");
+        await writeSysfs(this.cpuBoostPath, enable ? "1" : "0");
       }
       console.log(`[tdp-control] CPU boost set to ${enable ? "enabled" : "disabled"}`);
       return { success: true };
@@ -997,7 +999,7 @@ export default class TdpControlBackend implements PluginBackend {
     }
     try {
       const perfLevelPath = `${this.gpuCardPath}/device/power_dpm_force_performance_level`;
-      await writeFileSudo(perfLevelPath, mode);
+      await writeSysfs(perfLevelPath, mode);
       console.log(`[tdp-control] GPU mode set to ${mode}`);
       return { success: true };
     } catch (e) {
@@ -1018,13 +1020,13 @@ export default class TdpControlBackend implements PluginBackend {
         // Set manual mode first, then write frequency range
         const perfLevelPath = `${this.gpuCardPath}/device/power_dpm_force_performance_level`;
         const odClkPath = `${this.gpuCardPath}/device/pp_od_clk_voltage`;
-        await writeFileSudo(perfLevelPath, "manual");
-        await writeFileSudo(odClkPath, `s 0 ${minMhz}`);
-        await writeFileSudo(odClkPath, `s 1 ${maxMhz}`);
-        await writeFileSudo(odClkPath, "c");
+        await writeSysfs(perfLevelPath, "manual");
+        await writeSysfs(odClkPath, `s 0 ${minMhz}`);
+        await writeSysfs(odClkPath, `s 1 ${maxMhz}`);
+        await writeSysfs(odClkPath, "c");
       } else if (this.gpuVendor === "Intel") {
-        await writeFileSudo(`${this.gpuCardPath}/gt_min_freq_mhz`, String(minMhz));
-        await writeFileSudo(`${this.gpuCardPath}/gt_max_freq_mhz`, String(maxMhz));
+        await writeSysfs(`${this.gpuCardPath}/gt_min_freq_mhz`, String(minMhz));
+        await writeSysfs(`${this.gpuCardPath}/gt_max_freq_mhz`, String(maxMhz));
       } else {
         return { success: false, error: "Unknown GPU vendor" };
       }
@@ -1076,7 +1078,7 @@ export default class TdpControlBackend implements PluginBackend {
       };
     }
     try {
-      await writeFileSudo(CHARGE_LIMIT_PATH, String(percent));
+      await writeSysfs(CHARGE_LIMIT_PATH, String(percent));
       console.log(`[tdp-control] Charge limit set to ${percent}%`);
       return { success: true };
     } catch (e) {
@@ -1093,7 +1095,7 @@ export default class TdpControlBackend implements PluginBackend {
     try {
       // ROG Ally: force-enable SMT before suspend to prevent wake issues
       if (this.dmiProductName.includes("ROG Ally") && this.supportsSmt) {
-        await writeFileSudo(SMT_PATH, "on");
+        await writeSysfs(SMT_PATH, "on");
         console.log("[tdp-control] Forced SMT on before suspend (ROG Ally workaround)");
       }
       // Save current TDP state for restore on resume
@@ -1254,7 +1256,6 @@ export default class TdpControlBackend implements PluginBackend {
   private async testRyzenadjRead(): Promise<boolean> {
     try {
       const { exitCode, stdout } = await runCommand([
-        "sudo",
         "ryzenadj",
         "--info",
       ]);
@@ -1532,7 +1533,6 @@ export default class TdpControlBackend implements PluginBackend {
   private async readTdpViaRyzenadj(): Promise<number | null> {
     try {
       const { exitCode, stdout } = await runCommand([
-        "sudo",
         "ryzenadj",
         "--info",
       ]);
@@ -1569,7 +1569,6 @@ export default class TdpControlBackend implements PluginBackend {
   private async setTdpViaRyzenadj(watts: number): Promise<void> {
     const milliwatts = watts * 1000;
     const { exitCode, stderr } = await runCommand([
-      "sudo",
       "ryzenadj",
       `--stapm-limit=${milliwatts}`,
       `--fast-limit=${milliwatts}`,
@@ -1585,7 +1584,7 @@ export default class TdpControlBackend implements PluginBackend {
       throw new Error("Intel RAPL path not available");
     }
     const microwatts = String(watts * 1_000_000);
-    await writeFileSudo(this.intelRaplPath, microwatts);
+    await writeSysfs(this.intelRaplPath, microwatts);
   }
 
   private async setTdpViaWmi(watts: number): Promise<void> {
@@ -1593,9 +1592,9 @@ export default class TdpControlBackend implements PluginBackend {
       throw new Error("WMI paths not available");
     }
     const milliwatts = String(watts * 1000);
-    await writeFileSudo(this.wmiPaths.fppt, milliwatts);
-    await writeFileSudo(this.wmiPaths.sppt, milliwatts);
-    await writeFileSudo(this.wmiPaths.spl, milliwatts);
+    await writeSysfs(this.wmiPaths.fppt, milliwatts);
+    await writeSysfs(this.wmiPaths.sppt, milliwatts);
+    await writeSysfs(this.wmiPaths.spl, milliwatts);
   }
 
   // -----------------------------------------------------------------------

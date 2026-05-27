@@ -17,7 +17,17 @@
     "name": "TDP Control",
     "description": "Adjust CPU/APU TDP wattage with presets and a slider",
     "permissions": {
-      "system": ["ryzenadj", "intel-rapl", "platform_profile", "sysfs"]
+      "commands": ["ryzenadj", "tee"],
+      "filesystem": [
+        "/sys/devices/system/cpu",
+        "/sys/devices/virtual/powercap",
+        "/sys/class/powercap",
+        "/sys/firmware/acpi",
+        "/sys/class/drm",
+        "/sys/class/power_supply",
+        "/sys/devices/platform",
+        "/sys/class/firmware-attributes"
+      ]
     },
     "category": "Performance",
     "subtitle": "CPU/GPU power limits"
