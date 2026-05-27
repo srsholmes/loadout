@@ -16,7 +16,6 @@ export default tseslint.config(
       ".vendor-build/**",
       "**/.cache/**",
       ".claude/**",
-      "_archive/**",
       // Electrobun build artefact: dev-linux-x64 bundles + webview-dist
       // Vite output. Both are minified bundles of all our deps; linting
       // them produces ~5000 spurious errors against generated code.

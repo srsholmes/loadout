@@ -21,7 +21,6 @@
     "test:ui:coverage": "vitest run --coverage",
     "test:backend:coverage": "sh scripts/test-backend.sh --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/backend",
     "test:coverage": "bash scripts/test-coverage.sh",
-    "test:tdp-helper": "sh packages/tdp-helper/loadout-tdp-helper.test.sh && sh packages/tdp-helper/install.test.sh",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "check:specs": "sh scripts/check-plugin-specs.sh",

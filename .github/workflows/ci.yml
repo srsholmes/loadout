@@ -1,10 +1,10 @@
 name: CI
 
+# CI is temporarily disabled (manual-only) while the test harness is
+# reworked off the bespoke shell scripts onto native tooling. Restore the
+# push/pull_request triggers once the new harness lands.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}

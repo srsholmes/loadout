@@ -87,21 +87,13 @@ is_type_only_module() {
 # Lib modules with an explicit reason to not carry a direct spec.
 # Each entry needs a one-line justification immediately above. Keep
 # the list short — direct unit tests are cheaper than indirect.
-EXEMPT_LIB="
-plugins/recomp/lib/build-env.ts
-plugins/recomp/lib/installer-host.ts
-plugins/recomp/lib/pipeline-archive.ts
-plugins/recomp/lib/rom-suggest.ts
-plugins/recomp/lib/sdk/index.ts
-"
-# Why exempt: these modules pre-date the spec ratchet's coverage of
-# `plugins/recomp/lib`. Adding 5 brand-new spec files in the same PR
-# that extends the ratchet would dwarf the actual feature work. The
-# exemption is a tracked debt — any PR that materially modifies one
-# of these files should land its sibling spec at the same time and
-# remove the entry here.
+# Empty: the plugins that needed exemptions (recomp) are not part of
+# the minimal PoC; re-add entries when those plugins are migrated back.
+EXEMPT_LIB=""
 
-SPEC_SCOPED_LIB_DIRS="plugins/store-bridge/lib plugins/recomp/lib"
+# Empty: store-bridge/recomp are not part of the minimal PoC. Re-scope
+# when those plugins are migrated back.
+SPEC_SCOPED_LIB_DIRS=""
 for dir in $SPEC_SCOPED_LIB_DIRS; do
   [ -d "$dir" ] || continue
   for lib in $(find "$dir" -type f -name '*.ts' 2>/dev/null); do
@@ -130,7 +122,9 @@ done
 
 # Shared workspace packages — same rule, scoped to a list of
 # package src/ trees the ratchet has been applied to.
-SPEC_SCOPED_PACKAGES="packages/sgdb-art/src packages/steam-shortcut/src packages/file-picker/src"
+# Empty: sgdb-art/steam-shortcut/file-picker are removed from the minimal
+# PoC. Re-scope when those packages return with their plugins.
+SPEC_SCOPED_PACKAGES=""
 for dir in $SPEC_SCOPED_PACKAGES; do
   [ -d "$dir" ] || continue
   for src in $(find "$dir" -type f -name '*.ts' 2>/dev/null); do
