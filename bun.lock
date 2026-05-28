@@ -151,6 +151,15 @@
       "name": "@loadout/vdf",
       "version": "0.0.1",
     },
+    "plugins/battery-tracker": {
+      "name": "@loadout/plugin-battery-tracker",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+      },
+    },
     "plugins/bluetooth": {
       "name": "@loadout/plugin-bluetooth",
       "version": "0.0.1",
@@ -367,6 +376,8 @@
     "@loadout/loadout-server": ["@loadout/loadout-server@workspace:apps/loadout"],
 
     "@loadout/per-game-profiles": ["@loadout/per-game-profiles@workspace:packages/per-game-profiles"],
+
+    "@loadout/plugin-battery-tracker": ["@loadout/plugin-battery-tracker@workspace:plugins/battery-tracker"],
 
     "@loadout/plugin-bluetooth": ["@loadout/plugin-bluetooth@workspace:plugins/bluetooth"],
 
