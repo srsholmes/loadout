@@ -85,12 +85,31 @@ find "$PLUGINS_DST" -mindepth 2 -maxdepth 2 -name node_modules -type d -exec rm 
 rm -rf "$NM_DST"
 mkdir -p "$NM_DST/@loadout"
 
+# Why `cp -RL` (dereference) instead of `cp -r` everywhere below:
+# `bun install` puts every node_modules entry as a symlink into the
+# repo-local `.bun/` content store (e.g. `node_modules/react ->
+# .bun/react@18.3.1/node_modules/react`). A bare `cp -r` copies the
+# *symlink*, not the target — so the install root ended up with
+# `node_modules/react-icons -> .bun/react-icons@5.6.0/...` which is
+# dangling because we don't stage `.bun/`. Plugin frontend bundling
+# (`Bun.build` with target:"browser") then failed with
+# "Could not resolve: react-icons/fa6" because the subpath literally
+# didn't exist at the install root. -L follows the link and copies
+# real content. Same trap applies to the workspace packages — they
+# have their own `node_modules/` with `.bun/`-store symlinks (e.g.
+# packages/ui depending on fuzzysort), so we strip those after copy
+# and rely on the shared root instead.
+
 # Workspace packages used by plugins. Add new packages here when a
 # plugin starts importing them (e.g. plugin-storage for tdp-control /
 # fan-control / playtime).
 for pkg in types exec steam-paths ui plugin-storage; do
     if [ -d "$PROJECT_ROOT/packages/$pkg" ]; then
-        cp -r "$PROJECT_ROOT/packages/$pkg" "$NM_DST/@loadout/$pkg"
+        cp -RL "$PROJECT_ROOT/packages/$pkg" "$NM_DST/@loadout/$pkg"
+        # Drop the workspace's own node_modules — its entries are
+        # `.bun/`-store symlinks that resolve in the source repo but
+        # not here. Transitive deps are hoisted to $NM_DST below.
+        rm -rf "$NM_DST/@loadout/$pkg/node_modules"
     fi
 done
 
@@ -99,30 +118,39 @@ done
 # it as a dep themselves.
 for dep in react react-dom scheduler react-icons; do
     if [ -d "$PROJECT_ROOT/node_modules/$dep" ]; then
-        cp -r "$PROJECT_ROOT/node_modules/$dep" "$NM_DST/$dep"
+        cp -RL "$PROJECT_ROOT/node_modules/$dep" "$NM_DST/$dep"
     else
         echo "WARN: $PROJECT_ROOT/node_modules/$dep not found — run 'bun install' first" >&2
     fi
 done
 
-# Catch-all for any per-plugin non-workspace, non-react dep. Today
-# every plugin only declares the four shared react packages and
-# @loadout/*, so this loop is a no-op — but it's here so a new
-# plugin pulling in (say) react-hotkeys-hook just works without a
-# script edit.
-for plugin_dir in "$PLUGINS_DST"/*/; do
-    [ -d "$plugin_dir" ] || continue
-    [ -f "$plugin_dir/package.json" ] || continue
-    bun -e "const p=require('$plugin_dir/package.json').dependencies||{};for(const k of Object.keys(p))if(!k.startsWith('@loadout/')&&!['react','react-dom','scheduler','react-icons'].includes(k))console.log(k)" 2>/dev/null | while IFS= read -r dep; do
+# Catch-all for non-workspace, non-react deps declared by either
+# plugins or workspace packages. Plugins pull in their own deps;
+# workspace packages (e.g. packages/ui -> fuzzysort, @noriginmedia/*)
+# need theirs hoisted too so the stripped per-package node_modules
+# resolve via walk-up from $NM_DST/@loadout/<pkg> to $NM_DST.
+hoist_deps_from() {
+    pj="$1"
+    [ -f "$pj" ] || return 0
+    bun -e "const p=require('$pj').dependencies||{};for(const k of Object.keys(p))if(!k.startsWith('@loadout/')&&!['react','react-dom','scheduler','react-icons'].includes(k))console.log(k)" 2>/dev/null | while IFS= read -r dep; do
         [ -n "$dep" ] || continue
         [ -d "$NM_DST/$dep" ] && continue
-        if [ -d "$PROJECT_ROOT/node_modules/$dep" ]; then
+        if [ -d "$PROJECT_ROOT/node_modules/$dep" ] || [ -L "$PROJECT_ROOT/node_modules/$dep" ]; then
             case "$dep" in
                 @*/*) mkdir -p "$NM_DST/${dep%/*}" ;;
             esac
-            cp -r "$PROJECT_ROOT/node_modules/$dep" "$NM_DST/$dep"
+            cp -RL "$PROJECT_ROOT/node_modules/$dep" "$NM_DST/$dep"
         fi
     done
+}
+
+for plugin_dir in "$PLUGINS_DST"/*/; do
+    [ -d "$plugin_dir" ] || continue
+    hoist_deps_from "$plugin_dir/package.json"
+done
+
+for pkg in types exec steam-paths ui plugin-storage; do
+    hoist_deps_from "$PROJECT_ROOT/packages/$pkg/package.json"
 done
 
 PLUGIN_COUNT=$(find "$PLUGINS_DST" -mindepth 1 -maxdepth 1 -type d | wc -l)
