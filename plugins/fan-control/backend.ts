@@ -42,6 +42,13 @@ interface FanDevice {
   pwmPath: string | null;
   /** Absolute path to pwmN_enable (may not exist) */
   pwmEnablePath: string | null;
+  /**
+   * Absolute path to fanN_target (writable RPM target). Used by drivers
+   * that don't expose a standard pwmN node and instead take a target RPM
+   * — Valve's `steamdeck_hwmon` on the Steam Deck does exactly this.
+   * `null` if the file is missing or not owner-writable.
+   */
+  rpmTargetPath: string | null;
 }
 
 interface HwmonDevice {
@@ -53,6 +60,13 @@ interface HwmonDevice {
   fans: FanDevice[];
   /** Whether direct PWM write is supported (at least one fan has pwm + pwm_enable) */
   hasPwmControl: boolean;
+  /**
+   * Whether the device exposes the RPM-target write path (any fan has a
+   * writable fanN_target) — the alternative when there's no pwmN. Mutually
+   * informative with hasPwmControl: a device usually has one or the other.
+   * On the Steam Deck (steamdeck_hwmon) this is true and hasPwmControl is false.
+   */
+  hasRpmTargetControl: boolean;
 }
 
 interface TempSensor {
@@ -301,6 +315,15 @@ export default class FanControlBackend implements PluginBackend {
     // Safety: restore auto mode on unload
     await this.restoreOriginalModes();
 
+    // RPM-target devices: ensure Valve's jupiter-fan-control daemon is
+    // running again even if the user left us in manual or a curve was
+    // active. systemctl start on an already-running unit is a no-op, so
+    // this is safe to call unconditionally on devices that have the
+    // service; non-Deck devices get a logged warning and no harm done.
+    if (this.activeFanDevice?.hasRpmTargetControl) {
+      await this.setJupiterFanControl(true);
+    }
+
     console.log("[fan-control] Plugin unloaded -- fan modes restored");
   }
 
@@ -316,24 +339,33 @@ export default class FanControlBackend implements PluginBackend {
     this.hwmonDevices = await this.scanHwmonDevices();
     this.tempSensors = await this.scanTempSensors();
 
-    // Pick the best fan device (prefer one with PWM control)
+    // Pick the best fan device. Preference order:
+    //   1. PWM + pwm_enable — the standard hwmon write path.
+    //   2. fanN_target (RPM target) — the Steam Deck (steamdeck_hwmon) path.
+    //   3. Any device with at least one fan (read-only — ectool may still
+    //      provide a write path below).
     this.activeFanDevice =
       this.hwmonDevices.find((d) => d.hasPwmControl && d.fans.length > 0) ??
+      this.hwmonDevices.find((d) => d.hasRpmTargetControl && d.fans.length > 0) ??
       this.hwmonDevices.find((d) => d.fans.length > 0) ??
       null;
 
     if (this.activeFanDevice && !this.fanDeviceLogged) {
       console.log(
         `[fan-control] Fan device: ${this.activeFanDevice.chipName} at ${this.activeFanDevice.dir} ` +
-          `(${this.activeFanDevice.fans.length} fan(s), pwm=${this.activeFanDevice.hasPwmControl})`,
+          `(${this.activeFanDevice.fans.length} fan(s), pwm=${this.activeFanDevice.hasPwmControl}, rpm-target=${this.activeFanDevice.hasRpmTargetControl})`,
       );
       await this.saveOriginalModes();
       this.fanDeviceLogged = true;
     }
 
     // Check for ectool availability as a fallback (only needed when hwmon
-    // has no direct PWM control).
-    if (!this.activeFanDevice?.hasPwmControl && !this.useEctool) {
+    // has neither direct PWM control nor an RPM-target write path).
+    if (
+      !this.activeFanDevice?.hasPwmControl &&
+      !this.activeFanDevice?.hasRpmTargetControl &&
+      !this.useEctool
+    ) {
       this.useEctool = await this.detectEctool();
       if (this.useEctool) {
         console.log("[fan-control] ectool detected -- using EC fan control fallback");
@@ -348,11 +380,16 @@ export default class FanControlBackend implements PluginBackend {
       this.tempSensorsLogged = true;
     }
 
-    // Only "found" when direct hwmon PWM control is available. ectool
-    // alone is not enough to stop retries — see the OXP APEX race where
-    // `which ectool` succeeds but the binary can't acquire the EC lock,
-    // and oxpec's hwmon node registers milliseconds after plugin init.
-    return this.activeFanDevice?.hasPwmControl === true;
+    // "Found" when ANY hwmon write path is available — PWM or RPM-target.
+    // ectool alone is not enough to stop retries — see the OXP APEX race
+    // where `which ectool` succeeds but the binary can't acquire the EC
+    // lock, and oxpec's hwmon node registers milliseconds after plugin
+    // init. RPM-target counts because it's a first-class write path
+    // (steamdeck_hwmon).
+    return (
+      this.activeFanDevice?.hasPwmControl === true ||
+      this.activeFanDevice?.hasRpmTargetControl === true
+    );
   }
 
   // -----------------------------------------------------------------------
@@ -482,6 +519,24 @@ export default class FanControlBackend implements PluginBackend {
     this.manualModeRequested = "manual";
     this.lastUserSpeedPwm = pwmValue;
 
+    // RPM-target path (steamdeck_hwmon): stop Valve's jupiter-fan-control
+    // daemon first so our write isn't overwritten by its PID loop within
+    // ~2s, then write fanN_target. Take this branch before ectool so the
+    // Deck doesn't fall through to a path that doesn't apply.
+    if (
+      !this.activeFanDevice?.hasPwmControl &&
+      this.activeFanDevice?.hasRpmTargetControl
+    ) {
+      await this.setJupiterFanControl(false);
+      const res = await this.setFanSpeedViaRpmTarget(clamped);
+      if (res.success) {
+        console.log(
+          `[fan-control] Set fan target to ${this.percentToRpmTarget(clamped)} RPM (${clamped}%)`,
+        );
+      }
+      return res;
+    }
+
     if (this.useEctool && !this.activeFanDevice?.hasPwmControl) {
       return this.setEctoolFanSpeed(clamped);
     }
@@ -527,6 +582,19 @@ export default class FanControlBackend implements PluginBackend {
       this.activePreset = null;
     }
     this.manualModeRequested = mode;
+
+    // RPM-target path: no pwm_enable to flip — "manual" means we own
+    // fan1_target, "auto" means hand it back to Valve's daemon.
+    if (
+      !this.activeFanDevice?.hasPwmControl &&
+      this.activeFanDevice?.hasRpmTargetControl
+    ) {
+      await this.setJupiterFanControl(mode === "auto");
+      console.log(
+        `[fan-control] Set fan mode to ${mode} (jupiter-fan-control ${mode === "auto" ? "started" : "stopped"})`,
+      );
+      return { success: true };
+    }
 
     if (this.useEctool && !this.activeFanDevice?.hasPwmControl) {
       if (mode === "auto") {
@@ -605,6 +673,7 @@ export default class FanControlBackend implements PluginBackend {
         const chipName = await this.readStringFile(`${dir}/name`);
         const fans: FanDevice[] = [];
         let hasPwmControl = false;
+        let hasRpmTargetControl = false;
 
         // Check for fan1 through fan8
         for (let i = 1; i <= 8; i++) {
@@ -618,11 +687,29 @@ export default class FanControlBackend implements PluginBackend {
             hasPwmControl = true;
           }
 
-          fans.push({ index: i, inputPath, pwmPath, pwmEnablePath });
+          // fanN_target — drivers like steamdeck_hwmon expose this as a
+          // writable target RPM instead of a standard pwmN. Only treat it
+          // as controllable if the owner-write bit is set; some drivers
+          // ship it as read-only.
+          let rpmTargetPath: string | null = null;
+          const rpmCandidate = `${dir}/fan${i}_target`;
+          try {
+            if (fs.existsSync(rpmCandidate)) {
+              const stat = fs.statSync(rpmCandidate);
+              if ((stat.mode & 0o200) !== 0) {
+                rpmTargetPath = rpmCandidate;
+                hasRpmTargetControl = true;
+              }
+            }
+          } catch {
+            // ignore — treat as not-writable
+          }
+
+          fans.push({ index: i, inputPath, pwmPath, pwmEnablePath, rpmTargetPath });
         }
 
         if (fans.length > 0) {
-          devices.push({ dir, chipName, fans, hasPwmControl });
+          devices.push({ dir, chipName, fans, hasPwmControl, hasRpmTargetControl });
         }
       }
     } catch (err) {
@@ -996,6 +1083,18 @@ export default class FanControlBackend implements PluginBackend {
     const clamped = clampPercent(percent);
     const pwmValue = percentToPwm(clamped);
 
+    // RPM-target (steamdeck_hwmon). The public setFanMode("manual") or
+    // applyPreset() should already have stopped jupiter-fan-control, so
+    // this hot path (curve loop / safety watchdog) just writes the target
+    // RPM directly. Don't re-toggle the service from here — that's the
+    // public path's responsibility.
+    if (
+      !this.activeFanDevice?.hasPwmControl &&
+      this.activeFanDevice?.hasRpmTargetControl
+    ) {
+      return this.setFanSpeedViaRpmTarget(clamped);
+    }
+
     if (this.useEctool && !this.activeFanDevice?.hasPwmControl) {
       return this.setEctoolFanSpeed(clamped);
     }
@@ -1040,6 +1139,16 @@ export default class FanControlBackend implements PluginBackend {
   ): Promise<{ success: boolean; error?: string }> {
     this.manualModeRequested = mode;
 
+    // RPM-target (steamdeck_hwmon): manual = stop jupiter-fan-control,
+    // auto = let it resume. Same shape as the public setFanMode branch.
+    if (
+      !this.activeFanDevice?.hasPwmControl &&
+      this.activeFanDevice?.hasRpmTargetControl
+    ) {
+      await this.setJupiterFanControl(mode === "auto");
+      return { success: true };
+    }
+
     if (this.useEctool && !this.activeFanDevice?.hasPwmControl) {
       if (mode === "auto") {
         return this.runEctool(["fanduty", "auto"]);
@@ -1057,6 +1166,69 @@ export default class FanControlBackend implements PluginBackend {
         if (fan.pwmEnablePath) {
           await this.writeHwmon(fan.pwmEnablePath, value);
         }
+      }
+      return { success: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, error: msg };
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // RPM-target fallback (drivers without standard pwmN — Steam Deck)
+  // -----------------------------------------------------------------------
+  //
+  // Aerith/Sephiroth fan range, empirically: 0–7000 RPM. The kernel may
+  // clamp values below a hardware minimum but doesn't reject the write.
+  // If we ever see a device with different limits we'll read them from
+  // fanN_target_max/min, but steamdeck_hwmon doesn't expose those.
+  private static readonly RPM_TARGET_MIN = 0;
+  private static readonly RPM_TARGET_MAX = 7000;
+
+  // Valve's userspace fan controller — runs a PID loop that re-writes
+  // fan1_target every ~2s. To take manual control on the Deck we must
+  // stop it (otherwise our writes get overwritten almost immediately).
+  // Restarted on return to auto and on plugin unload. Best-effort: a
+  // non-Deck device that happens to expose fanN_target won't have this
+  // service, and systemctl will just return non-zero — we log and move on.
+  private static readonly JUPITER_FAN_CONTROL = "jupiter-fan-control.service";
+
+  private percentToRpmTarget(percent: number): number {
+    const p = clampPercent(percent);
+    return Math.round(
+      FanControlBackend.RPM_TARGET_MIN +
+        (p / 100) *
+          (FanControlBackend.RPM_TARGET_MAX - FanControlBackend.RPM_TARGET_MIN),
+    );
+  }
+
+  private async setJupiterFanControl(enabled: boolean): Promise<void> {
+    const action = enabled ? "start" : "stop";
+    try {
+      await runCode([
+        "systemctl",
+        action,
+        FanControlBackend.JUPITER_FAN_CONTROL,
+      ]);
+    } catch (err) {
+      console.warn(
+        `[fan-control] systemctl ${action} ${FanControlBackend.JUPITER_FAN_CONTROL} failed:`,
+        err,
+      );
+    }
+  }
+
+  private async setFanSpeedViaRpmTarget(
+    percent: number,
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!this.activeFanDevice?.hasRpmTargetControl) {
+      return { success: false, error: "No RPM-target control available" };
+    }
+    const targetRpm = this.percentToRpmTarget(percent);
+    try {
+      for (const fan of this.activeFanDevice.fans) {
+        if (!fan.rpmTargetPath) continue;
+        await this.writeHwmon(fan.rpmTargetPath, String(targetRpm));
       }
       return { success: true };
     } catch (err) {
