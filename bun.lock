@@ -151,6 +151,20 @@
       "name": "@loadout/vdf",
       "version": "0.0.1",
     },
+    "plugins/audio-mixer": {
+      "name": "@loadout/plugin-audio-mixer",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/exec": "workspace:*",
+        "@loadout/per-game-profiles": "workspace:*",
+        "@loadout/plugin-storage": "workspace:*",
+        "@loadout/types": "workspace:*",
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+        "react-icons": "^5.6.0",
+      },
+    },
     "plugins/battery-tracker": {
       "name": "@loadout/plugin-battery-tracker",
       "version": "0.0.1",
@@ -487,6 +501,8 @@
     "@loadout/loadout-server": ["@loadout/loadout-server@workspace:apps/loadout"],
 
     "@loadout/per-game-profiles": ["@loadout/per-game-profiles@workspace:packages/per-game-profiles"],
+
+    "@loadout/plugin-audio-mixer": ["@loadout/plugin-audio-mixer@workspace:plugins/audio-mixer"],
 
     "@loadout/plugin-battery-tracker": ["@loadout/plugin-battery-tracker@workspace:plugins/battery-tracker"],
 
