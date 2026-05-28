@@ -3,11 +3,12 @@
 > **Doc currency (2026-05).** This page describes the system as it ships today.
 > Two notes worth reading before you trust everything below:
 >
-> - Most plugins render in the **Electrobun overlay**, not Steam's CEF UI.
->   The overlay entry is `app.tsx` (consumed by `packages/overlay-electrobun`
->   via the `@overlay/*` alias). `panel.tsx` is reserved for plugins that
->   inject UI directly into Steam's CEF — currently only `game-browser/` does
->   that. Both shapes are supported; pick based on where the user sees it.
+> - All plugins render in the **Electrobun overlay**. The overlay entry is
+>   `app.tsx` (consumed by `packages/overlay-electrobun` via the `@overlay/*`
+>   alias). Backends that need to drive Steam's CEF UI talk to it via
+>   `@loadout/steam-cdp` (the loader's CDP client, exposed as a workspace
+>   package) — same pattern protondb-badges, hltb, sgdb-art etc. use to
+>   inject CSS + JS into Steam's BPM / store / SharedJSContext tabs.
 > - Plugin process isolation (child-process spawn) is on the roadmap
 >   (TODOS.md P1) but **not shipped yet** — backends are still loaded with
 >   `import(backendPath)` in `plugin-manager.ts`. Treat the "child procs"
@@ -81,15 +82,13 @@ my-plugin/
 ├── backend.ts       # PluginBackend class with RPC methods
 └── app.tsx          # React component rendered in the Electrobun overlay
 
-# Steam-injection plugin (renders into Steam's own UI instead)
+# Steam-injection plugin (also renders the user-facing UI in the overlay;
+# the backend pushes CSS+JS into Steam's CEF over CDP for the Steam-side bits)
 my-plugin/
 ├── package.json
-├── backend.ts
-└── panel.tsx        # React component injected into Steam's CEF
+├── backend.ts       # imports @loadout/steam-cdp; calls inject*() over CDP
+└── app.tsx          # settings UI in the Electrobun overlay
 ```
-
-Plugins can also ship both `app.tsx` and `panel.tsx` if they need surfaces
-in both places.
 
 ## Plugin Backend Isolation
 
@@ -120,7 +119,7 @@ async function loadPlugin(pluginDir: string) {
 1. **Boot** — Bun server starts via systemd
 2. **Scan** — Reads `plugins/` directory, loads each `plugin.json`
 3. **Import backends** — Spawns each plugin's `backend.ts` as a child process, calls `onLoad()`
-4. **Build frontends** — Runs `Bun.build()` on each `panel.tsx`, outputs browser-compatible bundles to `/tmp/plugin-bundles/`
+4. **Build frontends** — Runs `Bun.build()` on each plugin's `app.tsx`, outputs browser-compatible bundles to `/tmp/plugin-bundles/`
 5. **CEF inject** — Connects to Steam's CEF debug port, injects loader script into `SharedJSContext`
 6. **Plugin load** — Injected script fetches `/plugins` manifest, then fetches and `eval()`s each plugin's compiled bundle
 
@@ -180,9 +179,9 @@ User's Deck
 │   ├── loadout                 (the binary)
 │   └── plugins/
 │       └── protondb-badges/
-│           ├── plugin.json
+│           ├── package.json
 │           ├── backend.ts
-│           └── panel.tsx
+│           └── app.tsx
 └── ~/.config/systemd/user/
     └── loadout.service
 ```
