@@ -1,0 +1,23 @@
+{
+  "name": "@loadout/plugin-bluetooth",
+  "version": "0.0.1",
+  "type": "module",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@loadout/ui": "workspace:*",
+    "@loadout/exec": "workspace:*"
+  },
+  "plugin": {
+    "id": "bluetooth",
+    "name": "Bluetooth",
+    "description": "Quick connect/disconnect paired Bluetooth devices without leaving the game",
+    "category": "Device",
+    "subtitle": "Pair devices without leaving the game",
+    "permissions": {
+      "commands": [
+        "bluetoothctl"
+      ]
+    }
+  }
+}
