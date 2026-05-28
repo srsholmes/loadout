@@ -1,7 +1,7 @@
 /**
  * Per-plugin disk cache for external API responses.
  *
- *   $XDG_CACHE_HOME/steam-loader/<plugin-id>/<sha1(key)>.json
+ *   $XDG_CACHE_HOME/loadout/<plugin-id>/<sha1(key)>.json
  *   (typically ~/.cache/loadout/<plugin-id>/<sha1(key)>.json)
  *
  * Plugins that fetch data from external sources (ProtonDB,
@@ -103,7 +103,7 @@ interface CacheEntry<T> {
 
 /**
  * Resolve the cache root directory:
- *   $XDG_CACHE_HOME/steam-loader/  (when set)
+ *   $XDG_CACHE_HOME/loadout/  (when set)
  *   ~/.cache/loadout/         (fallback)
  *
  * Mirrors plugin-storage's `configDir` but rooted at the cache

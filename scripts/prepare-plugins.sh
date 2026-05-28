@@ -76,7 +76,6 @@ mkdir -p "$NM_DST/@loadout"
 # plugin starts importing them (e.g. plugin-storage for tdp-control /
 # fan-control / playtime).
 for pkg in types exec steam-paths ui plugin-storage vdf external-cache; do
-for pkg in types exec steam-paths ui plugin-storage external-cache; do
     if [ -d "$PROJECT_ROOT/packages/$pkg" ]; then
         cp -r "$PROJECT_ROOT/packages/$pkg" "$NM_DST/@loadout/$pkg"
     fi
