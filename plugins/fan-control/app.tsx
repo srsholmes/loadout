@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { FaFan, FaTemperatureHalf } from "react-icons/fa6";
 import {
+  Alert,
   Button,
   PluginHeader,
   Slider,
@@ -323,16 +324,14 @@ function FanControl() {
             override is biting. Sticky through the WARM_C → 55 °C
             release hysteresis so it doesn't flicker as temp wobbles. */}
         {fanInfo.safetyEngaged && (
-          <div role="alert" className="alert alert-warning mb-4">
-            <FaTemperatureHalf size={18} />
-            <div className="flex-1">
-              <div className="font-semibold">Safety override active</div>
-              <div className="text-xs opacity-90">
-                {fanInfo.warning ??
-                  `Fans pinned by safety floor. Releases when CPU drops below 55°C (currently ${Math.round(fanInfo.cpuTempC)}°C).`}
-              </div>
-            </div>
-          </div>
+          <Alert
+            variant="warning"
+            icon={<FaTemperatureHalf size={18} />}
+            title="Safety override active"
+          >
+            {fanInfo.warning ??
+              `Fans pinned by safety floor. Releases when CPU drops below 55°C (currently ${Math.round(fanInfo.cpuTempC)}°C).`}
+          </Alert>
         )}
 
         {/* FAN SPEED + PRESETS — Auto/Manual toggle and driver chip

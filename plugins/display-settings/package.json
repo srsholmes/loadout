@@ -1,0 +1,22 @@
+{
+  "name": "@loadout/plugin-display-settings",
+  "version": "0.0.1",
+  "type": "module",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@loadout/ui": "workspace:*"
+  },
+  "plugin": {
+    "id": "display-settings",
+    "name": "Display Settings",
+    "description": "Adjust display brightness and saturation",
+    "permissions": {
+      "commands": ["xprop", "busctl", "setpriv"],
+      "filesystem": ["/sys/class/backlight"]
+    },
+    "category": "Device",
+    "subtitle": "Brightness + saturation",
+    "target": { "type": "overlay" }
+  }
+}
