@@ -75,6 +75,13 @@
       "name": "@loadout/external-cache",
       "version": "0.0.1",
     },
+    "packages/per-game-profiles": {
+      "name": "@loadout/per-game-profiles",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/plugin-storage": "workspace:*",
+      },
+    },
     "packages/plugin-storage": {
       "name": "@loadout/plugin-storage",
       "version": "0.0.1",
@@ -304,6 +311,8 @@
     "@loadout/loadout-overlay": ["@loadout/loadout-overlay@workspace:apps/loadout-overlay"],
 
     "@loadout/loadout-server": ["@loadout/loadout-server@workspace:apps/loadout"],
+
+    "@loadout/per-game-profiles": ["@loadout/per-game-profiles@workspace:packages/per-game-profiles"],
 
     "@loadout/plugin-bluetooth": ["@loadout/plugin-bluetooth@workspace:plugins/bluetooth"],
 
