@@ -1,0 +1,28 @@
+{
+  "name": "@loadout/plugin-launch-options",
+  "version": "0.0.1",
+  "type": "module",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@loadout/ui": "workspace:*",
+    "@loadout/types": "workspace:*",
+    "@loadout/vdf": "workspace:*",
+    "@loadout/steam-paths": "workspace:*",
+    "@loadout/steam-cdp": "workspace:*"
+  },
+  "plugin": {
+    "id": "launch-options",
+    "name": "Launch Options",
+    "description": "Manage Steam game launch options and presets",
+    "category": "Steam",
+    "subtitle": "Edit per-game launch options",
+    "permissions": {
+      "filesystem": [
+        "~/.config/loadout/launch-presets.json",
+        "~/.local/share/Steam/userdata"
+      ]
+    },
+    "target": { "type": "overlay" }
+  }
+}
