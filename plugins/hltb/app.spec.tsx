@@ -52,9 +52,9 @@ beforeEach(() => {
       });
     if (method === "getStatus")
       return Promise.resolve({ connected: false, tabs: 0 });
-    // Library now comes from game-browser::getGames (shared with
-    // SGDB / LSFG-VK / ProtonDB). One mock handler covers both
-    // plugin IDs because `useBackend` returns the same call mock here.
+    // Library now comes from __core:game-library::getGames (shared
+    // with SGDB / LSFG-VK / ProtonDB). One mock handler covers both
+    // backend IDs because `useBackend` returns the same call mock here.
     if (method === "getGames")
       return Promise.resolve([
         {

@@ -22,37 +22,17 @@ import {
   useFocusable,
   useIntersectionGate,
 } from "@loadout/ui";
+import type { GameInfo, GameCollection } from "@loadout/types";
 
 // Sentinel values for the library-filter dropdown. Anything that
 // isn't one of these is a literal collection id from
-// `game-browser::getCollections` — same convention as SGDB and
-// LSFG-VK so the shape of the dropdown matches across plugins.
+// `__core:game-library::getCollections` — same convention as SGDB
+// and LSFG-VK so the shape of the dropdown matches across plugins.
 const ALL_GAMES = "__all__";
 const STEAM_ONLY = "__steam__";
 const SHORTCUT_ONLY = "__shortcut__";
 
-interface CollectionEntry {
-  id: string;
-  count: number;
-}
-
 // --- Types ---
-
-/**
- * Mirror of `GameInfo` from the game-browser plugin. HLTB consumes
- * the same library source as SGDB / ProtonDB / LSFG-VK so collection
- * tags and local artwork URLs are available on every tile.
- */
-interface InstalledGame {
-  appId: string;
-  name: string;
-  source: "steam" | "shortcut";
-  headerUrl: string;
-  capsuleUrl: string;
-  localHeaderUrl?: string;
-  localCapsuleUrl?: string;
-  tags: string[];
-}
 
 interface GameTimes {
   gameId: number;
@@ -135,9 +115,10 @@ function formatTime(time: string): string {
 
 function HltbPlugin() {
   const { call, useEvent } = useBackend("hltb");
-  // Library + collection tags come from the game-browser plugin
-  // (single source of truth across SGDB / LSFG-VK / ProtonDB / here).
-  const gameBrowser = useBackend("game-browser");
+  // Library + collection tags come from the __core:game-library
+  // service (single source of truth across SGDB / LSFG-VK / ProtonDB
+  // / here).
+  const gameLibrary = useBackend("__core:game-library");
   const currentGame = useCurrentGame();
 
   const [settings, setSettings] = useState<HltbSettings | null>(null);
@@ -145,7 +126,7 @@ function HltbPlugin() {
     connected: false,
     tabs: 0,
   });
-  const [installed, setInstalled] = useState<InstalledGame[] | null>(null);
+  const [installed, setInstalled] = useState<GameInfo[] | null>(null);
   /** Toggles between the default library grid and the inline config card. */
   const [showConfig, setShowConfig] = useState(false);
   /** Header search query — filters the grid in place. */
@@ -156,14 +137,14 @@ function HltbPlugin() {
    *  open this to check completion times for their Steam library;
    *  Heroic / Lutris / emulator shortcuts rarely have HLTB matches. */
   const [libraryFilter, setLibraryFilter] = useState<string>(STEAM_ONLY);
-  /** Collections list from game-browser, for the filter dropdown. */
-  const [collections, setCollections] = useState<CollectionEntry[]>([]);
+  /** Collections list from __core:game-library, for the filter dropdown. */
+  const [collections, setCollections] = useState<GameCollection[]>([]);
   /** Currently-detailed game (clicked from the grid). When set, the
    *  body switches to the detail view; `null` shows the grid. The
-   *  reference is the InstalledGame row, not just the appId, so the
+   *  reference is the GameInfo row, not just the appId, so the
    *  detail header can render the local Steam name immediately even
    *  before the backend resolves the HLTB payload. */
-  const [detailGame, setDetailGame] = useState<InstalledGame | null>(null);
+  const [detailGame, setDetailGame] = useState<GameInfo | null>(null);
 
   useEffect(() => {
     void call("getSettings").then((s) => setSettings(s as HltbSettings));
@@ -172,20 +153,20 @@ function HltbPlugin() {
     // emulator titles, Heroic / Lutris launchers). HLTB resolves each
     // via name-based search (see `getTimesForGame`) so emulated games
     // like SSX3 surface their time-to-beat alongside Steam games.
-    void gameBrowser
+    void gameLibrary
       .call("getGames")
       .then((games) => {
-        const list = Array.isArray(games) ? (games as InstalledGame[]) : [];
+        const list = Array.isArray(games) ? (games as GameInfo[]) : [];
         setInstalled(list);
       })
       .catch(() => setInstalled([]));
-    void gameBrowser
+    void gameLibrary
       .call("getCollections")
       .then((cols) => {
-        if (Array.isArray(cols)) setCollections(cols as CollectionEntry[]);
+        if (Array.isArray(cols)) setCollections(cols as GameCollection[]);
       })
       .catch(() => setCollections([]));
-  }, [call, gameBrowser]);
+  }, [call, gameLibrary]);
 
   useEvent({
     event: "stateChanged",
@@ -232,7 +213,7 @@ function HltbPlugin() {
   // coerce once here.
   const sortedGames = useMemo(() => {
     if (!installed) return null;
-    let filtered: InstalledGame[] = installed;
+    let filtered: GameInfo[] = installed;
     if (libraryFilter === STEAM_ONLY) {
       filtered = filtered.filter((g) => g.source === "steam");
     } else if (libraryFilter === SHORTCUT_ONLY) {
@@ -449,8 +430,9 @@ function HltbPlugin() {
  * One tile in the library grid. Renders the capsule + name + the
  * configured HLTB time chips. Each card kicks off its own
  * `getTimesForGame(appId, name)` call on mount — name comes from
- * `game-browser` so Steam apps AND non-Steam shortcuts (emulator
- * titles etc.) resolve via the same path. The backend's concurrency
+ * the `__core:game-library` service so Steam apps AND non-Steam
+ * shortcuts (emulator titles etc.) resolve via the same path. The
+ * backend's concurrency
  * limiter (`MAX_CONCURRENT_LOOKUPS = 3`) batches the fan-out so HLTB
  * doesn't 429.
  */
@@ -463,7 +445,7 @@ function HltbGameCard({
   showAllStyles,
   onOpen,
 }: {
-  game: InstalledGame;
+  game: GameInfo;
   isCurrent: boolean;
   showMainStory: boolean;
   showMainPlusExtras: boolean;
@@ -515,7 +497,7 @@ function HltbGameCard({
     };
   }, [call, game.appId, game.name, inView]);
 
-  // game-browser already emits the right URLs: `capsuleUrl` is the
+  // __core:game-library already emits the right URLs: `capsuleUrl` is the
   // portrait library tile (or the loader's local-grid endpoint for
   // shortcuts) and `headerUrl` is the landscape header. Use them as-is
   // so we stay in sync with what SGDB shows.
@@ -640,7 +622,7 @@ const DETAIL_ROWS: Array<{
   },
 ];
 
-function HltbDetailView({ game }: { game: InstalledGame }) {
+function HltbDetailView({ game }: { game: GameInfo }) {
   const { call } = useBackend("hltb");
   const [detail, setDetail] = useState<GameDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -853,7 +835,7 @@ function HltbMetadataPanel({
   game,
 }: {
   detail: GameDetail;
-  game: InstalledGame;
+  game: GameInfo;
 }) {
   const rows: Array<{ label: string; value: string }> = [];
 

@@ -1124,8 +1124,9 @@ describe("HltbBackend", () => {
       mockFetch.mockImplementation((url: string | URL) => {
         const urlStr = typeof url === "string" ? url : url.toString();
         // Steam appdetails must NOT be called for a shortcut — the
-        // name comes straight from `game-browser` and the appId is a
-        // random vdf-generated 32-bit number with no HLTB analogue.
+        // name comes straight from `__core:game-library` and the
+        // appId is a random vdf-generated 32-bit number with no HLTB
+        // analogue.
         if (urlStr.includes("store.steampowered.com/api/appdetails")) {
           appDetailsCalled = true;
           return Promise.resolve(new Response("", { status: 404 }));

@@ -404,9 +404,10 @@ export default class HltbBackend implements PluginBackend {
   /**
    * Read every user's `shortcuts.vdf` and seed `gameNameCache` with
    * each non-Steam entry's `(appId, name)`. Mirrors the small subset
-   * of game-browser's shortcut-reading logic we need here — we keep
-   * the duplication local rather than reaching into game-browser so
-   * the HLTB plugin stays self-contained.
+   * of shortcut-reading logic we need here — the equivalent live scan
+   * lives in `@loadout/game-library` (behind `__core:game-library`)
+   * but it's an async RPC, so for the seed-on-start path we keep the
+   * duplication local rather than blocking startup on the service.
    */
   private async seedShortcutNames(): Promise<void> {
     const userdata = getUserdataDir();
@@ -667,10 +668,10 @@ export default class HltbBackend implements PluginBackend {
    * through the concurrency limiter so a 100+ game library fan-out
    * doesn't get 429'd by HLTB.
    *
-   * The in-overlay library grid already has the name from
-   * `game-browser` — it calls `getTimesForGame(appId, name)` instead
-   * (skips the appdetails roundtrip and works for non-Steam shortcuts
-   * too).
+   * The in-overlay library grid already has the name from the
+   * `__core:game-library` service — it calls
+   * `getTimesForGame(appId, name)` instead (skips the appdetails
+   * roundtrip and works for non-Steam shortcuts too).
    */
   async getTimesForSteamApp(appId: string): Promise<GameTimes | null> {
     const cached = this.steamTimesCache.get(appId);
@@ -709,7 +710,8 @@ export default class HltbBackend implements PluginBackend {
   /**
    * Get HLTB times for any installed game by appId + name. Used by
    * the in-overlay library grid where the name is already known from
-   * `game-browser` (Steam appmanifest *or* non-Steam shortcut entry).
+   * the `__core:game-library` service (Steam appmanifest *or*
+   * non-Steam shortcut entry).
    *
    * For Steam apps the `profile_steam` exact-id match still runs as
    * the strongest signal; for shortcuts the appId is a random
