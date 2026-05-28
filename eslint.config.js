@@ -2,6 +2,39 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
 import prettier from "eslint-config-prettier";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+// Discover server-only packages by reading every `packages/*/package.json`
+// and collecting names where `loadout.serverOnly === true`. The
+// corresponding `no-restricted-imports` block forbids plugins (and any
+// non-loader code) from importing the implementation — they must consume
+// the matching `__core:*` RPC surface instead. New server-only packages
+// opt in by adding `"loadout": { "serverOnly": true }` to their
+// package.json; this loop picks them up automatically.
+const serverOnlyPackages = (() => {
+  try {
+    return readdirSync("packages", { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .flatMap((d) => {
+        try {
+          const pkg = JSON.parse(
+            readFileSync(join("packages", d.name, "package.json"), "utf8"),
+          );
+          return pkg.loadout?.serverOnly ? [pkg.name] : [];
+        } catch {
+          return [];
+        }
+      });
+  } catch {
+    return [];
+  }
+})();
+
+const serverOnlyPathBlocks = serverOnlyPackages.map((name) => ({
+  name,
+  message: `${name} is server-only — it's consumed by the loader's __core:* services. Plugins must call the matching RPC surface (e.g. useBackend("__core:game-library")) instead of importing the implementation.`,
+}));
 
 export default tseslint.config(
   {
@@ -112,12 +145,22 @@ export default tseslint.config(
   // another plugin in its dependencies today, so that vector is moot.
   //
   // Depth 1 (`plugins/<name>/<file>.ts`): any `../<x>` escapes.
+  //
+  // The `paths` entry seals server-only packages (those whose
+  // package.json declares `"loadout": { "serverOnly": true }`).
+  // Importing one of those by name from a plugin is forbidden — the
+  // plugin must call the matching `__core:*` RPC surface instead. The
+  // list is discovered at config-load time; new server-only packages
+  // opt in by flipping the flag. ESLint replaces (not merges) rule
+  // options across configs, so the seal has to live inside the same
+  // `no-restricted-imports` entry as the plugin-seal patterns.
   {
     files: ["plugins/*/*.ts", "plugins/*/*.tsx"],
     rules: {
       "no-restricted-imports": [
         "error",
         {
+          paths: serverOnlyPathBlocks,
           patterns: [
             {
               regex:
@@ -142,6 +185,7 @@ export default tseslint.config(
       "no-restricted-imports": [
         "error",
         {
+          paths: serverOnlyPathBlocks,
           patterns: [
             {
               regex:
@@ -166,6 +210,7 @@ export default tseslint.config(
       "no-restricted-imports": [
         "error",
         {
+          paths: serverOnlyPathBlocks,
           patterns: [
             {
               regex:

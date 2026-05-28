@@ -77,6 +77,22 @@
       "name": "@loadout/external-cache",
       "version": "0.0.1",
     },
+    "packages/file-picker": {
+      "name": "@loadout/file-picker",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/exec": "workspace:*",
+      },
+    },
+    "packages/game-library": {
+      "name": "@loadout/game-library",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/steam-paths": "workspace:*",
+        "@loadout/types": "workspace:*",
+        "@loadout/vdf": "workspace:*",
+      },
+    },
     "packages/per-game-profiles": {
       "name": "@loadout/per-game-profiles",
       "version": "0.0.1",
@@ -88,6 +104,17 @@
       "name": "@loadout/plugin-storage",
       "version": "0.0.1",
     },
+    "packages/sgdb-art": {
+      "name": "@loadout/sgdb-art",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/external-cache": "workspace:*",
+        "@loadout/plugin-storage": "workspace:*",
+        "@loadout/steam-cdp": "workspace:*",
+        "@loadout/steam-paths": "workspace:*",
+        "@loadout/vdf": "workspace:*",
+      },
+    },
     "packages/steam-cdp": {
       "name": "@loadout/steam-cdp",
       "version": "0.0.1",
@@ -95,6 +122,14 @@
     "packages/steam-paths": {
       "name": "@loadout/steam-paths",
       "version": "0.0.1",
+    },
+    "packages/steam-shortcut": {
+      "name": "@loadout/steam-shortcut",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/steam-cdp": "workspace:*",
+        "@loadout/vdf": "workspace:*",
+      },
     },
     "packages/types": {
       "name": "@loadout/types",
@@ -337,6 +372,10 @@
 
     "@loadout/external-cache": ["@loadout/external-cache@workspace:packages/external-cache"],
 
+    "@loadout/file-picker": ["@loadout/file-picker@workspace:packages/file-picker"],
+
+    "@loadout/game-library": ["@loadout/game-library@workspace:packages/game-library"],
+
     "@loadout/loadout-overlay": ["@loadout/loadout-overlay@workspace:apps/loadout-overlay"],
 
     "@loadout/loadout-server": ["@loadout/loadout-server@workspace:apps/loadout"],
@@ -359,9 +398,13 @@
 
     "@loadout/plugin-tdp-control": ["@loadout/plugin-tdp-control@workspace:plugins/tdp-control"],
 
+    "@loadout/sgdb-art": ["@loadout/sgdb-art@workspace:packages/sgdb-art"],
+
     "@loadout/steam-cdp": ["@loadout/steam-cdp@workspace:packages/steam-cdp"],
 
     "@loadout/steam-paths": ["@loadout/steam-paths@workspace:packages/steam-paths"],
+
+    "@loadout/steam-shortcut": ["@loadout/steam-shortcut@workspace:packages/steam-shortcut"],
 
     "@loadout/types": ["@loadout/types@workspace:packages/types"],
 
