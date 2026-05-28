@@ -192,14 +192,21 @@ describe("PlaytimeBackend", () => {
   // ── Crash Recovery ─────────────────────────────────────────────────────────
 
   describe("crash recovery", () => {
-    it("closes orphaned sessions with 1-minute assumed duration", async () => {
-      const now = Date.now();
-      const orphanStart = now - 86_400_000;
+    it("promotes a pendingActive snapshot into sessions on next load", async () => {
+      // Simulate a crash mid-session: the heartbeat wrote pendingActive
+      // with endTime = last-heartbeat (~50 min into a session) before
+      // the process died. Recovery should turn that into a real session.
+      const start = Date.now() - 3_600_000; // 60 min ago
+      const heartbeatEnd = Date.now() - 600_000; // 10 min ago (last heartbeat)
       readFileSpy.mockResolvedValue(
         JSON.stringify({
-          sessions: [
-            { appId: "999", gameName: "Crashed Game", startTime: orphanStart, endTime: null },
-          ],
+          sessions: [],
+          pendingActive: {
+            appId: "999",
+            gameName: "Crashed Game",
+            startTime: start,
+            endTime: heartbeatEnd,
+          },
         }),
       );
 
@@ -211,7 +218,58 @@ describe("PlaytimeBackend", () => {
 
       const sessions = await backend.getGameSessions();
       expect(sessions).toHaveLength(1);
-      expect(sessions[0].endTime).toBe(orphanStart + 60_000);
+      // endTime is the last heartbeat — close enough to truth (≤60 s loss).
+      expect(sessions[0].endTime).toBe(heartbeatEnd);
+      expect(sessions[0].gameName).toBe("Crashed Game");
+    });
+
+    it("drops legacy endTime=null sessions instead of clamping them to 1 minute", async () => {
+      // The previous schema set endTime=null while a session ran, and
+      // _loadData used `startTime + 60_000` as a fake endTime, silently
+      // truncating real hours-long sessions to a single minute. Now we
+      // drop those instead so the historical log doesn't lie.
+      const start = Date.now() - 86_400_000;
+      readFileSpy.mockResolvedValue(
+        JSON.stringify({
+          sessions: [
+            { appId: "999", gameName: "Old Schema", startTime: start, endTime: null },
+          ],
+        }),
+      );
+
+      await backend.onUnload();
+      const r = makeBackend();
+      backend = r.backend;
+      emittedEvents = r.emittedEvents;
+      await backend.onLoad();
+
+      const sessions = await backend.getGameSessions();
+      expect(sessions).toHaveLength(0);
+    });
+
+    it("seeds pendingActive on game launch so first 60 s of a crash isn't lost", async () => {
+      await backend.handleGameLaunch(999, "Test Game");
+      // The save was triggered synchronously inside handleGameLaunch.
+      // Find the most recent writeFile call and inspect the persisted data.
+      const writes = writeFileSpy.mock.calls;
+      expect(writes.length).toBeGreaterThan(0);
+      const lastWrite = writes[writes.length - 1];
+      const persisted = JSON.parse(lastWrite[1] as string);
+      expect(persisted.pendingActive).not.toBeNull();
+      expect(persisted.pendingActive.appId).toBe("999");
+      expect(persisted.pendingActive.endTime).toBeGreaterThan(0);
+    });
+
+    it("clears pendingActive on graceful game exit", async () => {
+      await backend.handleGameLaunch(999, "Test Game");
+      writeFileSpy.mockClear();
+      await backend.handleGameExit(999);
+      const writes = writeFileSpy.mock.calls;
+      expect(writes.length).toBeGreaterThan(0);
+      const lastWrite = writes[writes.length - 1];
+      const persisted = JSON.parse(lastWrite[1] as string);
+      expect(persisted.pendingActive).toBeNull();
+      expect(persisted.sessions).toHaveLength(1);
     });
   });
 

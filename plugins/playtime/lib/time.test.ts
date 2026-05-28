@@ -9,6 +9,7 @@ import {
   formatHoursStr,
   formatElapsed,
   colorFor,
+  daysForRange,
 } from "./time";
 import type { GameSession } from "./time";
 
@@ -263,5 +264,82 @@ describe("colorFor", () => {
 
   it("produces different colors for different keys", () => {
     expect(colorFor("730")).not.toBe(colorFor("570"));
+  });
+});
+
+// ── Cross-midnight active session (regression guard) ─────────────────────────
+
+describe("computeStats — active session crossing midnight", () => {
+  it("includes the today-portion of an active session that started yesterday", () => {
+    const now = new Date("2025-06-15T01:00:00").getTime(); // 1am today
+    const startedYesterday = new Date("2025-06-14T23:00:00").getTime(); // 11pm yesterday
+    const active: GameSession = {
+      appId: "730",
+      gameName: "Live Game",
+      startTime: startedYesterday,
+      endTime: null,
+    };
+
+    const stats = computeStats([], active, now);
+
+    // Today should hold the 1 hour from midnight → 1am.
+    expect(stats.today.totalMs).toBe(3_600_000);
+    expect(stats.today.games).toHaveLength(1);
+    expect(stats.today.games[0].gameName).toBe("Live Game");
+  });
+
+  it("also includes the active session in week when it crosses the boundary", () => {
+    // Derive the week boundary from `now` so the test is tz-agnostic.
+    const now = new Date("2025-06-16T00:30:00").getTime();
+    const weekStart = startOfWeek(now);
+    // Started 30 min before the week boundary; still running. Expected
+    // week.totalMs = now - weekStart (the in-period portion only).
+    const active: GameSession = {
+      appId: "730",
+      gameName: "Late Night",
+      startTime: weekStart - 1_800_000,
+      endTime: null,
+    };
+
+    const stats = computeStats([], active, now);
+    expect(stats.week.totalMs).toBe(now - weekStart);
+  });
+});
+
+// ── daysForRange ─────────────────────────────────────────────────────────────
+
+describe("daysForRange", () => {
+  const now = new Date("2025-06-15T12:00:00").getTime(); // 15th of month
+
+  it("returns 1 for today", () => {
+    expect(daysForRange("today", [], now)).toBe(1);
+  });
+
+  it("returns 7 for week", () => {
+    expect(daysForRange("week", [], now)).toBe(7);
+  });
+
+  it("returns day-of-month for month", () => {
+    expect(daysForRange("month", [], now)).toBe(15);
+  });
+
+  it("returns null for allTime when there are no sessions", () => {
+    expect(daysForRange("allTime", [], now)).toBeNull();
+  });
+
+  it("returns days-since-earliest-session for allTime", () => {
+    const tenDaysAgo = now - 10 * 86_400_000;
+    const sessions: GameSession[] = [
+      {
+        appId: "1",
+        gameName: "X",
+        startTime: tenDaysAgo,
+        endTime: tenDaysAgo + 3_600_000,
+      },
+    ];
+    // 10 calendar days ago to now → 10 or 11 depending on hour, but
+    // startOfDay clamps to midnight so it's exactly 10 full days plus
+    // today's 12 hours → ceil to 11.
+    expect(daysForRange("allTime", sessions, now)).toBe(11);
   });
 });

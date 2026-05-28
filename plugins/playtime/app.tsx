@@ -11,6 +11,7 @@ import {
   type GameStats,
   type Stats,
   type CurrentSession,
+  type RangeKey,
   formatHoursNumber,
   formatHoursStr,
   formatElapsed,
@@ -32,7 +33,6 @@ interface DayBreakdown {
   totalMs: number;
 }
 
-type RangeKey = "today" | "week" | "month" | "allTime";
 const RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
   { key: "today", label: "Day" },
   { key: "week", label: "Week" },
@@ -179,7 +179,17 @@ function PlayTime() {
   const lastBarIdx = bars.length - 1;
 
   const sessionsEstimate = period?.gamesPlayed ?? 0;
-  const avgPerDay = period ? formatHoursStr(period.totalMs / 7, 1) : "0";
+  // Divisor for AVG/DAY varies by range: 1 for today, 7 for week, day-of-
+  // month for month, days-since-first-session for allTime. Backend
+  // computes this so we don't need the raw session list in the UI.
+  const divisor =
+    range === "allTime"
+      ? stats?.daysInRange.allTime ?? null
+      : stats?.daysInRange[range] ?? null;
+  const avgPerDay =
+    period && divisor !== null && divisor > 0
+      ? formatHoursStr(period.totalMs / divisor, 1)
+      : "—";
 
   const headerNode = (
     <PluginHeader>
@@ -420,7 +430,11 @@ function PlayTime() {
               >
                 <InsetStat label="GAMES" value={sessionsEstimate} />
                 <InsetStat label="TOTAL" value={totalHours.toFixed(1)} unit="h" />
-                <InsetStat label="AVG / DAY" value={avgPerDay} unit="h" />
+                <InsetStat
+                  label="AVG / DAY"
+                  value={avgPerDay}
+                  unit={avgPerDay === "—" ? undefined : "h"}
+                />
                 <InsetStat
                   label="TOP GAME"
                   value={topGames[0] ? formatHoursStr(topGames[0].totalMs, 1) : "0"}
@@ -448,13 +462,7 @@ function PlayTimeHomeWidget() {
   const [session, setSession] = useState<CurrentSession | null>(null);
   const [totalMs, setTotalMs] = useState<number | null>(null);
   const [todayMs, setTodayMs] = useState<number | null>(null);
-  const [tick, setTick] = useState(0);
-
-  // Re-render once a second so the live elapsed timer counts up smoothly.
-  useEffect(() => {
-    const t = setInterval(() => setTick((n) => n + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
+  const [liveElapsed, setLiveElapsed] = useState<number | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -473,6 +481,27 @@ function PlayTimeHomeWidget() {
     handler: (data) => setSession((data as CurrentSession | null) ?? null),
   });
 
+  // Drive the live elapsed timer locally. We depend on the primitive
+  // appId + startTime (captured in scope first so the linter is happy
+  // with non-optional-chain deps) — the interval resets cleanly on a
+  // game change but doesn't churn on every emit that creates a new
+  // session object reference for the same underlying boundary state.
+  const sessionAppId = session?.appId ?? null;
+  const sessionStart = session?.startTime ?? null;
+  useEffect(() => {
+    if (sessionAppId === null || sessionAppId !== targetAppId || sessionStart === null) {
+      setLiveElapsed(null);
+      return;
+    }
+    const tick = () => setLiveElapsed(Date.now() - sessionStart);
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [sessionAppId, sessionStart, targetAppId]);
+
+  // Refetch the per-game total only on game boundary transitions — not
+  // every emit. `sessionAppId` flips between null and the running appId
+  // so this reruns on launch/exit but stays stable during play.
   useEffect(() => {
     let alive = true;
     if (!targetAppId) {
@@ -501,16 +530,7 @@ function PlayTimeHomeWidget() {
     return () => {
       alive = false;
     };
-  }, [call, targetAppId, session]);
-
-  // Compute live elapsed for the running session (independent of polling).
-  const liveElapsed =
-    session && targetAppId === session.appId
-      ? Date.now() - session.startTime
-      : null;
-
-  // Reference `tick` so React re-renders the live elapsed every second.
-  void tick;
+  }, [call, targetAppId, sessionAppId]);
 
   if (currentGame) {
     return (
