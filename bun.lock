@@ -130,6 +130,19 @@
         "react-dom": "^18.3.0",
       },
     },
+    "plugins/protondb-badges": {
+      "name": "@loadout/plugin-protondb-badges",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/plugin-storage": "workspace:*",
+        "@loadout/steam-paths": "workspace:*",
+        "@loadout/types": "workspace:*",
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+        "react-icons": "^5.5.0",
+      },
+    },
     "plugins/steam-gamescope-ipc": {
       "name": "@loadout/plugin-steam-gamescope-ipc",
       "version": "0.0.1",
@@ -300,6 +313,8 @@
     "@loadout/plugin-fan-control": ["@loadout/plugin-fan-control@workspace:plugins/fan-control"],
 
     "@loadout/plugin-playtime": ["@loadout/plugin-playtime@workspace:plugins/playtime"],
+
+    "@loadout/plugin-protondb-badges": ["@loadout/plugin-protondb-badges@workspace:plugins/protondb-badges"],
 
     "@loadout/plugin-steam-gamescope-ipc": ["@loadout/plugin-steam-gamescope-ipc@workspace:plugins/steam-gamescope-ipc"],
 
