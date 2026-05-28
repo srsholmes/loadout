@@ -34,6 +34,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@loadout/exec": "workspace:*",
+        "@loadout/steam-cdp": "workspace:*",
         "@loadout/steam-paths": "workspace:*",
         "@loadout/types": "workspace:*",
         "react": "^18.3.0",
@@ -84,6 +85,10 @@
     },
     "packages/plugin-storage": {
       "name": "@loadout/plugin-storage",
+      "version": "0.0.1",
+    },
+    "packages/steam-cdp": {
+      "name": "@loadout/steam-cdp",
       "version": "0.0.1",
     },
     "packages/steam-paths": {
@@ -325,6 +330,8 @@
     "@loadout/plugin-storage": ["@loadout/plugin-storage@workspace:packages/plugin-storage"],
 
     "@loadout/plugin-tdp-control": ["@loadout/plugin-tdp-control@workspace:plugins/tdp-control"],
+
+    "@loadout/steam-cdp": ["@loadout/steam-cdp@workspace:packages/steam-cdp"],
 
     "@loadout/steam-paths": ["@loadout/steam-paths@workspace:packages/steam-paths"],
 
