@@ -91,6 +91,15 @@
         "react": ">=18",
       },
     },
+    "plugins/display-settings": {
+      "name": "@loadout/plugin-display-settings",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+      },
+    },
     "plugins/steam-gamescope-ipc": {
       "name": "@loadout/plugin-steam-gamescope-ipc",
       "version": "0.0.1",
@@ -241,6 +250,8 @@
     "@loadout/loadout-overlay": ["@loadout/loadout-overlay@workspace:apps/loadout-overlay"],
 
     "@loadout/loadout-server": ["@loadout/loadout-server@workspace:apps/loadout"],
+
+    "@loadout/plugin-display-settings": ["@loadout/plugin-display-settings@workspace:plugins/display-settings"],
 
     "@loadout/plugin-steam-gamescope-ipc": ["@loadout/plugin-steam-gamescope-ipc@workspace:plugins/steam-gamescope-ipc"],
 

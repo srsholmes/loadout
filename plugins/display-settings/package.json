@@ -1,0 +1,22 @@
+{
+  "name": "@loadout/plugin-display-settings",
+  "version": "0.0.1",
+  "type": "module",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@loadout/ui": "workspace:*"
+  },
+  "plugin": {
+    "id": "display-settings",
+    "name": "Display Settings",
+    "description": "Adjust display saturation, brightness, gamma, and color temperature",
+    "permissions": {
+      "commands": ["xprop", "busctl", "xrandr", "bash", "tee"],
+      "filesystem": ["/sys/class/backlight"]
+    },
+    "category": "Device",
+    "subtitle": "Saturation, brightness, color temperature",
+    "target": { "type": "overlay" }
+  }
+}
