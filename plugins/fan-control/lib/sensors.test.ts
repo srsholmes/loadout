@@ -27,8 +27,19 @@ describe("classifyTempZone()", () => {
     expect(classifyTempZone("something", "junction")).toBe("gpu");
   });
 
-  it("classifies steamdeck_hwmon as cpu", () => {
-    expect(classifyTempZone("steamdeck_hwmon", "temp1")).toBe("cpu");
+  it("classifies steamdeck_hwmon's 'Battery Temp' as battery, NOT cpu", () => {
+    // Regression: pre-fix this returned "cpu", so the safety watchdog
+    // compared APU thermals against a battery (~40 °C idle) and never
+    // engaged. The Deck crashed under high TDP + low fan.
+    expect(classifyTempZone("steamdeck_hwmon", "Battery Temp")).toBe("battery");
+  });
+
+  it("classifies acpitz (no label) as cpu — the Deck's APU thermal zone", () => {
+    expect(classifyTempZone("acpitz", "")).toBe("cpu");
+  });
+
+  it("classifies an NVMe SSD composite sensor as unknown, not cpu", () => {
+    expect(classifyTempZone("nvme", "Composite")).toBe("unknown");
   });
 
   it("classifies unknown chip/label as unknown", () => {
@@ -49,14 +60,15 @@ describe("classifyTempZone()", () => {
 });
 
 describe("zoneSortWeight()", () => {
-  it("orders cpu < gpu < soc < unknown", () => {
+  it("orders cpu < gpu < soc < battery < unknown", () => {
     expect(zoneSortWeight("cpu")).toBeLessThan(zoneSortWeight("gpu"));
     expect(zoneSortWeight("gpu")).toBeLessThan(zoneSortWeight("soc"));
-    expect(zoneSortWeight("soc")).toBeLessThan(zoneSortWeight("unknown"));
+    expect(zoneSortWeight("soc")).toBeLessThan(zoneSortWeight("battery"));
+    expect(zoneSortWeight("battery")).toBeLessThan(zoneSortWeight("unknown"));
   });
 
-  it("treats an unrecognised zone as the lowest priority (3)", () => {
-    expect(zoneSortWeight("banana")).toBe(3);
+  it("treats an unrecognised zone as the lowest priority (4)", () => {
+    expect(zoneSortWeight("banana")).toBe(4);
   });
 });
 
