@@ -57,6 +57,7 @@ beforeEach(() => {
           { day: "Sat", totalMs: 3_600_000 },
           { day: "Sun", totalMs: 1_800_000 },
         ],
+        daysInRange: { today: 1, week: 7, month: 15, allTime: 30 },
       });
     if (method === "getCurrentSession") return Promise.resolve(null);
     return Promise.resolve(null);
@@ -142,6 +143,7 @@ describe("playtime plugin", () => {
           month: { totalMs: 0, gamesPlayed: 0, games: [] },
           allTime: { totalMs: 0, gamesPlayed: 0, games: [] },
           weeklyBreakdown: [],
+          daysInRange: { today: 1, week: 7, month: 15, allTime: null },
         });
       if (method === "getCurrentSession")
         return Promise.resolve({
