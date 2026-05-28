@@ -10,7 +10,7 @@ import {
   type PerGameEnginePersistence,
   type PerGameState,
 } from "./per-game-profiles";
-import { readPluginStorage, writePluginStorage } from "./plugin-storage";
+import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
 
 interface FakePayload {
   watts: number;

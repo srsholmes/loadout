@@ -7,7 +7,8 @@
     "react-dom": "^18.3.0",
     "@loadout/ui": "workspace:*",
     "@loadout/types": "workspace:*",
-    "@loadout/steam-paths": "workspace:*"
+    "@loadout/steam-paths": "workspace:*",
+    "@loadout/plugin-storage": "workspace:*"
   },
   "plugin": {
     "id": "playtime",

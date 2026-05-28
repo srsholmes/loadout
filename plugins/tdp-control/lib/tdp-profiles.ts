@@ -1,5 +1,5 @@
 import { renameSync } from "node:fs";
-import { readPluginStorage, writePluginStorage } from "./plugin-storage";
+import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
 
 // ---------------------------------------------------------------------------
 // Types

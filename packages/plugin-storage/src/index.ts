@@ -63,7 +63,12 @@ export async function readPluginStorage<T extends object>(
 
 /** Overwrite the plugin's JSON file atomically. Creates the `plugins/`
  *  subdirectory on first write. Throws on I/O failure — callers should
- *  catch and warn. */
+ *  catch and warn.
+ *
+ *  Uses fs.writeFile (not Bun.write) so consumers can spy on this with
+ *  `spyOn(fsPromises, "writeFile")` for testing. The Bun.write fast-path
+ *  the old @steam-loader package had wasn't measurably faster for the
+ *  small JSON writes plugins actually do here, and it broke the spy. */
 export async function writePluginStorage<T extends object>(
   pluginId: string,
   data: T,
@@ -71,17 +76,6 @@ export async function writePluginStorage<T extends object>(
   const path = pluginStoragePath(pluginId);
   await mkdir(dirname(path), { recursive: true });
   const tmp = `${path}.${randomUUID()}.tmp`;
-  const json = JSON.stringify(data, null, 2) + "\n";
-  // Prefer Bun.write when available (plugin backends run in the loader's
-  // Bun process); fall back to fs.writeFile so tests and non-Bun callers
-  // still work.
-  const B = (globalThis as unknown as {
-    Bun?: { write?: (p: string, d: string) => Promise<unknown> };
-  }).Bun;
-  if (B?.write) {
-    await B.write(tmp, json);
-  } else {
-    await writeFile(tmp, json, "utf-8");
-  }
+  await writeFile(tmp, JSON.stringify(data, null, 2) + "\n", "utf-8");
   await rename(tmp, path);
 }
