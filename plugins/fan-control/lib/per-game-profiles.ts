@@ -1,9 +1,8 @@
 /**
- * Per-game profile engine + plugin storage — inlined into fan-control.
+ * Per-game profile engine — inlined into fan-control.
  *
- * In the old Steam Loader repo this lived in two shared workspace
- * packages (`@steam-loader/per-game-profiles` and
- * `@steam-loader/plugin-storage`). Per the Loadout migration rule
+ * In the old Steam Loader repo this lived in a shared workspace package
+ * (`@steam-loader/per-game-profiles`). Per the Loadout migration rule
  * ("better to repeat a little code than to hastily abstract"), the
  * slice fan-control actually uses is inlined here rather than promoted
  * to a shared `packages/*`. tdp-control is migrating in a parallel PR
@@ -14,78 +13,10 @@
  *   - `createPerGameEngine` — the {profiles, perGameEnabled, snapshot,
  *     boundAppId} state machine, with apply/snapshot/restore callbacks.
  *   - `createPluginStoragePersistence` — load/save backed by a single
- *     JSON file under the user's config dir.
- *
- * ---------------------------------------------------------------------------
- * Plugin storage (inlined from @steam-loader/plugin-storage):
- *
- *   $XDG_CONFIG_HOME/loadout/plugins/<plugin-id>.json
- *   (typically ~/.config/loadout/plugins/<plugin-id>.json)
- *
- * Writes are atomic: write to `<path>.tmp` then rename, so a crash
- * mid-write can't leave a torn file. Reads return `{}` when the file is
- * missing or unparseable; the caller treats "no stored data" and
- * "stored data that isn't our shape" the same way (seed defaults, then
- * persist).
+ *     JSON file under the user's config dir (see `./plugin-storage`).
  */
 
-// `fs/promises` (no node: prefix) matches the specifier the plugin
-// tests mock via `mock.module("fs/promises", …)`.
-import { readFile, mkdir, rename, writeFile } from "fs/promises";
-import { join, dirname } from "path";
-import { homedir } from "os";
-
-function configDir(): string {
-  const xdg = process.env.XDG_CONFIG_HOME;
-  const base = xdg && xdg.length > 0 ? xdg : join(homedir(), ".config");
-  return join(base, "loadout");
-}
-
-/** Absolute path of a plugin's JSON storage file. Exposed for tests and
- *  tooling that wants to know where state lives without invoking the
- *  read/write helpers. */
-export function pluginStoragePath(pluginId: string): string {
-  return join(configDir(), "plugins", `${pluginId}.json`);
-}
-
-/** Read + parse the plugin's JSON file. Returns `{}` on any I/O or
- *  parse failure — callers treat missing keys as "needs seeding". */
-export async function readPluginStorage<T extends object>(
-  pluginId: string,
-): Promise<Partial<T>> {
-  try {
-    const raw = await readFile(pluginStoragePath(pluginId), "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Partial<T>;
-    }
-    return {};
-  } catch {
-    return {};
-  }
-}
-
-/** Overwrite the plugin's JSON file atomically. Creates the `plugins/`
- *  subdirectory on first write. */
-export async function writePluginStorage<T extends object>(
-  pluginId: string,
-  data: T,
-): Promise<void> {
-  const path = pluginStoragePath(pluginId);
-  await mkdir(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp`;
-  const json = JSON.stringify(data, null, 2) + "\n";
-  // Prefer Bun.write when available (plugin backends run in the loader's
-  // Bun process); fall back to fs.writeFile so tests and non-Bun callers
-  // still work.
-  const B = (globalThis as unknown as { Bun?: { write?: (p: string, d: string) => Promise<unknown> } }).Bun;
-  if (B?.write) {
-    await B.write(tmp, json);
-  } else {
-    await writeFile(tmp, json, "utf8");
-  }
-  await rename(tmp, path);
-}
+import { readPluginStorage, writePluginStorage } from "./plugin-storage";
 
 // ---------------------------------------------------------------------------
 // Per-game profile engine (inlined from @steam-loader/per-game-profiles)

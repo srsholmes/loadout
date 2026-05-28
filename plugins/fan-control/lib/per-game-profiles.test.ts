@@ -1,18 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { rm, mkdtemp, readFile } from "fs/promises";
+import { rm, mkdtemp } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 
 import {
   createPerGameEngine,
   createPluginStoragePersistence,
-  pluginStoragePath,
-  readPluginStorage,
-  writePluginStorage,
   type GameProfile,
   type PerGameEnginePersistence,
   type PerGameState,
 } from "./per-game-profiles";
+import { readPluginStorage, writePluginStorage } from "./plugin-storage";
 
 interface FakePayload {
   watts: number;
@@ -269,12 +267,13 @@ describe("createPerGameEngine", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Inlined plugin-storage: disk round-trip + the createPluginStoragePersistence
-// factory fan-control wires into the engine. We point XDG_CONFIG_HOME at a
-// temp dir so the JSON file lands somewhere disposable.
+// The createPluginStoragePersistence factory fan-control wires into the
+// engine. We point XDG_CONFIG_HOME at a temp dir so the JSON file lands
+// somewhere disposable. (The raw read/write/path helpers it sits on top
+// of have their own suite in plugin-storage.test.ts.)
 // ---------------------------------------------------------------------------
 
-describe("plugin storage (inlined)", () => {
+describe("createPluginStoragePersistence", () => {
   let tmp: string;
   let prevXdg: string | undefined;
 
@@ -290,31 +289,7 @@ describe("plugin storage (inlined)", () => {
     await rm(tmp, { recursive: true, force: true });
   });
 
-  it("pluginStoragePath lands under <XDG>/loadout/plugins/<id>.json", () => {
-    expect(pluginStoragePath("fan-control")).toBe(
-      join(tmp, "loadout", "plugins", "fan-control.json"),
-    );
-  });
-
-  it("returns {} when the file is missing", async () => {
-    expect(await readPluginStorage("fan-control")).toEqual({});
-  });
-
-  it("write then read round-trips an object", async () => {
-    await writePluginStorage("fan-control", { perGameEnabled: true, foo: 1 });
-    expect(await readPluginStorage("fan-control")).toEqual({
-      perGameEnabled: true,
-      foo: 1,
-    });
-    // Atomic write leaves no .tmp behind.
-    const raw = await readFile(
-      join(tmp, "loadout", "plugins", "fan-control.json"),
-      "utf8",
-    );
-    expect(JSON.parse(raw)).toEqual({ perGameEnabled: true, foo: 1 });
-  });
-
-  it("createPluginStoragePersistence honours the custom profilesKey", async () => {
+  it("honours the custom profilesKey", async () => {
     // fan-control passes profilesKey: "profiles" to preserve the legacy
     // on-disk field name; the enabled flag defaults to perGameEnabled.
     const persistence = createPluginStoragePersistence<FakePayload>(
@@ -339,7 +314,7 @@ describe("plugin storage (inlined)", () => {
     ]);
   });
 
-  it("createPluginStoragePersistence merges back unrelated top-level keys", async () => {
+  it("merges back unrelated top-level keys", async () => {
     await writePluginStorage("fan-control", { somethingElse: "keep-me" });
     const persistence = createPluginStoragePersistence<FakePayload>(
       "fan-control",
