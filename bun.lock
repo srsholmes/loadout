@@ -71,6 +71,10 @@
       "name": "@loadout/exec",
       "version": "0.0.1",
     },
+    "packages/plugin-storage": {
+      "name": "@loadout/plugin-storage",
+      "version": "0.0.1",
+    },
     "packages/steam-paths": {
       "name": "@loadout/steam-paths",
       "version": "0.0.1",
@@ -295,6 +299,8 @@
     "@loadout/plugin-playtime": ["@loadout/plugin-playtime@workspace:plugins/playtime"],
 
     "@loadout/plugin-steam-gamescope-ipc": ["@loadout/plugin-steam-gamescope-ipc@workspace:plugins/steam-gamescope-ipc"],
+
+    "@loadout/plugin-storage": ["@loadout/plugin-storage@workspace:packages/plugin-storage"],
 
     "@loadout/plugin-tdp-control": ["@loadout/plugin-tdp-control@workspace:plugins/tdp-control"],
 
