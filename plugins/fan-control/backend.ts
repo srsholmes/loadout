@@ -19,7 +19,6 @@ import {
   interpolateCurve,
   percentToPwm,
   pwmToPercent,
-  validateCurve,
   type FanCurvePoint,
   type PresetName,
 } from "./lib/fan-curves";
@@ -165,7 +164,7 @@ const HWMON_BASE = "/sys/class/hwmon";
  *  - Multiple temperature zones (CPU, GPU, SoC, ...)
  *  - Direct hwmon PWM control
  *  - ectool fallback for EC-controlled fans
- *  - Fan curve presets (silent / balanced / performance / custom)
+ *  - Fan curve presets (silent / balanced / performance)
  *  - Hardware-safety override (non-disablable, fail-safe-to-MAX)
  *
  * Current fan loop, end-to-end:
@@ -195,7 +194,6 @@ export default class FanControlBackend implements PluginBackend {
   private interval?: Timer;
   private curveInterval?: Timer;
   private activePreset: PresetName | null = null;
-  private customCurve: FanCurvePoint[] = [];
   private useEctool = false;
   private originalModes: Map<string, string> = new Map();
   private hardwareScanner?: RetryScanner;
@@ -637,17 +635,8 @@ export default class FanControlBackend implements PluginBackend {
   /** Applies a fan curve preset. Starts a loop that adjusts speed based on temperature. */
   async applyPreset(
     name: PresetName,
-    customCurve?: FanCurvePoint[],
   ): Promise<{ success: boolean; error?: string }> {
-    if (name === "custom") {
-      const invalid = validateCurve(customCurve);
-      if (invalid) return { success: false, error: invalid };
-      // Non-null after validateCurve passes; copy before sorting so we
-      // don't mutate the caller's array in place.
-      this.customCurve = [...customCurve!].sort((a, b) => a.tempC - b.tempC);
-    }
-
-    const curve = name === "custom" ? this.customCurve : FAN_CURVES[name];
+    const curve = FAN_CURVES[name];
     if (!curve) {
       return { success: false, error: `Unknown preset: ${name}` };
     }

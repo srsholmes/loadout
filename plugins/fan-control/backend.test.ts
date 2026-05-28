@@ -268,20 +268,6 @@ describe("FanControlBackend", () => {
       expect(result.error).toContain("Unknown preset");
     });
 
-    it("requires at least 2 curve points for custom preset", async () => {
-      const result = await backend.applyPreset("custom", [
-        { tempC: 40, percent: 20 },
-      ]);
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("at least 2 curve points");
-    });
-
-    it("requires curve points for custom preset", async () => {
-      const result = await backend.applyPreset("custom");
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("at least 2 curve points");
-    });
-
     it("returns error when no fan device for balanced preset", async () => {
       // No active fan device, no ectool
       const result = await backend.applyPreset("balanced");

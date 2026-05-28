@@ -5,7 +5,6 @@ import {
   interpolateCurve,
   percentToPwm,
   pwmToPercent,
-  validateCurve,
 } from "./fan-curves";
 
 // ---------------------------------------------------------------------------
@@ -95,41 +94,3 @@ describe("percentToPwm() / pwmToPercent()", () => {
   });
 });
 
-describe("validateCurve()", () => {
-  it("rejects undefined", () => {
-    expect(validateCurve(undefined)).toContain("at least 2 curve points");
-  });
-
-  it("rejects a single-point curve", () => {
-    expect(validateCurve([{ tempC: 40, percent: 20 }])).toContain(
-      "at least 2 curve points",
-    );
-  });
-
-  it("rejects a curve with a NaN tempC", () => {
-    expect(
-      validateCurve([
-        { tempC: Number.NaN, percent: 20 },
-        { tempC: 60, percent: 80 },
-      ]),
-    ).toContain("finite");
-  });
-
-  it("rejects a curve with an Infinity percent", () => {
-    expect(
-      validateCurve([
-        { tempC: 40, percent: 20 },
-        { tempC: 60, percent: Number.POSITIVE_INFINITY },
-      ]),
-    ).toContain("finite");
-  });
-
-  it("accepts a valid 2-point curve", () => {
-    expect(
-      validateCurve([
-        { tempC: 40, percent: 20 },
-        { tempC: 60, percent: 80 },
-      ]),
-    ).toBeNull();
-  });
-});

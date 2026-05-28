@@ -13,11 +13,10 @@ export interface FanCurvePoint {
   percent: number;
 }
 
-export type PresetName = "silent" | "balanced" | "performance" | "custom";
+export type PresetName = "silent" | "balanced" | "performance";
 
-/** Built-in fan-curve presets, keyed by name. `custom` is user-supplied
- *  and lives on the backend, so it's excluded here. */
-export const FAN_CURVES: Record<Exclude<PresetName, "custom">, FanCurvePoint[]> = {
+/** Built-in fan-curve presets, keyed by name. */
+export const FAN_CURVES: Record<PresetName, FanCurvePoint[]> = {
   silent: [
     { tempC: 40, percent: 0 },
     { tempC: 50, percent: 20 },
@@ -85,27 +84,3 @@ export function pwmToPercent(pwm: number): number {
   return Math.round((pwm / 255) * 100);
 }
 
-/**
- * Validate a user-supplied custom fan curve before it can drive
- * hardware. Returns an error string, or `null` when the curve is usable.
- * Pure.
- *
- * Requirements: at least 2 points, and every point's `tempC` / `percent`
- * must be a finite number (so a bad RPC payload can't sneak a NaN into
- * interpolateCurve, which would otherwise propagate to the PWM write).
- */
-export function validateCurve(curve: FanCurvePoint[] | undefined): string | null {
-  if (!curve || curve.length < 2) {
-    return "Custom preset requires at least 2 curve points";
-  }
-  for (const point of curve) {
-    if (
-      !point ||
-      !Number.isFinite(point.tempC) ||
-      !Number.isFinite(point.percent)
-    ) {
-      return "Custom curve points must have finite tempC and percent values";
-    }
-  }
-  return null;
-}
