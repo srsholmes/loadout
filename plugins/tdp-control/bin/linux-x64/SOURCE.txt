@@ -1,0 +1,7 @@
+ryzenadj
+upstream: https://github.com/FlyGoat/RyzenAdj
+tag:      v0.19.0
+commit:   5775fc3
+built in: archlinux:base-20250727.0.390543 (glibc 2.41)
+
+Rebuild with: plugins/tdp-control/build-ryzenadj.sh
