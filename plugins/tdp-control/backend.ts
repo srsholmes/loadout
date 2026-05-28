@@ -1,5 +1,7 @@
 import type { PluginBackend, EmitPayload } from "@loadout/types";
 import { readdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { runFull, commandExists } from "@loadout/exec";
 import {
   createTdpProfileEngine,
@@ -80,10 +82,13 @@ type GpuMode = "auto" | "high" | "low" | "manual";
 // ---------------------------------------------------------------------------
 
 async function readFileText(path: string): Promise<string | null> {
+  // No explicit `file.exists()` gate — /proc pseudo-files report stat size 0
+  // and Bun's `.exists()` short-circuits to false on them, which is why
+  // `/proc/cpuinfo` reads as null and `cpuVendor` ends up "Unknown" on
+  // every device. Letting `.text()` throw on a genuinely missing file is
+  // both simpler and one fewer syscall.
   try {
-    const file = Bun.file(path);
-    if (!(await file.exists())) return null;
-    return (await file.text()).trim();
+    return (await Bun.file(path).text()).trim();
   } catch {
     return null;
   }
@@ -106,6 +111,53 @@ async function writeSysfs(path: string, value: string): Promise<void> {
 }
 
 const runCommand = runFull;
+
+/**
+ * Quick CPU-vendor probe — duplicates the work `detectCpu()` does later, but
+ * we need to know the vendor inside `detectMethod()` (which runs first) so we
+ * don't try `ryzenadj` on an Intel CPU. The full `detectCpu()` also fills in
+ * model + writes to `this.cpuVendor`; this helper is just a local read.
+ */
+async function isAmdCpu(): Promise<boolean> {
+  try {
+    const t = await Bun.file(CPUINFO_PATH).text();
+    return /\bAuthenticAMD\b/.test(t);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the bundled `ryzenadj` binary shipped with this plugin, if one is
+ * present for the current architecture. Returns the absolute path or `null`.
+ *
+ * Convention (see docs/plugin-development.md / `bundled_bins` in plugin.json):
+ *   plugins/<id>/bin/<linux-x64|linux-arm64>/<binary>
+ *
+ * We try multiple candidates because the plugin's backend.ts is bundled at
+ * runtime by the loadout server (Bun.build → `.cache/backend.bundle.js`),
+ * so `import.meta.dir` doesn't reliably point at the plugin root:
+ *   1. PLUGINS_DIR/tdp-control/bin/<arch>/ryzenadj — production install
+ *      (the unit sets PLUGINS_DIR=~/.local/share/loadout/plugins).
+ *   2. <import.meta.dir>/../bin/<arch>/ryzenadj — bundled output in
+ *      .cache/backend.bundle.js (parent is the plugin root).
+ *   3. <import.meta.dir>/bin/<arch>/ryzenadj — source tree, no bundling.
+ */
+function resolveBundledRyzenadj(): string | null {
+  const arch = process.arch === "arm64" ? "linux-arm64" : "linux-x64";
+  const pluginsDir = process.env.PLUGINS_DIR;
+  const candidates = [
+    pluginsDir
+      ? join(pluginsDir, "tdp-control", "bin", arch, "ryzenadj")
+      : null,
+    join(import.meta.dir, "..", "bin", arch, "ryzenadj"),
+    join(import.meta.dir, "bin", arch, "ryzenadj"),
+  ].filter((p): p is string => p !== null);
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
 
 /**
  * Parse /sys/devices/system/cpu/online into a list of CPU numbers.
@@ -210,6 +262,13 @@ export default class TdpControlBackend implements PluginBackend {
   // Capabilities
   private ryzenadjAvailable = false;
   private ryzenadjCanRead = false;
+  /**
+   * Path used to exec ryzenadj. Either the bundled binary
+   * (plugins/tdp-control/bin/<arch>/ryzenadj) or "ryzenadj" if it's on
+   * $PATH from a system install (Bazzite, Arch with AUR, etc.). Set by
+   * detectMethod(); used by setTdpViaRyzenadj() + testRyzenadjRead().
+   */
+  private ryzenadjPath = "ryzenadj";
   private intelRaplPath: string | null = null;
   private scalingDriver = "";
   private platformProfile: string | null = null;
@@ -1005,16 +1064,38 @@ export default class TdpControlBackend implements PluginBackend {
       }
     }
 
-    // 1. Try ryzenadj (AMD)
-    if (await commandExists("ryzenadj")) {
-      this.ryzenadjAvailable = true;
-      // Test if ryzenadj can read (some platforms like Strix Halo cannot)
-      this.ryzenadjCanRead = await this.testRyzenadjRead();
-      this.method = "ryzenadj";
+    // 1. Try ryzenadj (AMD only — it writes to the AMD SMU mailbox over
+    //    MMIO; running it on an Intel CPU is a no-op-then-error). Prefer the
+    //    bundled binary that ships with the plugin (built reproducibly from
+    //    https://github.com/FlyGoat/RyzenAdj v0.19.0 via this plugin's build-ryzenadj.sh)
+    //    so we work out-of-box on stock SteamOS where ryzenadj isn't packaged.
+    //    Fall back to a system install on $PATH (Bazzite/Arch with AUR).
+    const amd = await isAmdCpu();
+    if (amd) {
+      const bundled = resolveBundledRyzenadj();
+      const onPath = await commandExists("ryzenadj");
       console.log(
-        `[tdp-control] ryzenadj available, read=${this.ryzenadjCanRead}`,
+        `[tdp-control] detect: AMD bundled=${bundled ?? "none"} PATH-ryzenadj=${onPath} PLUGINS_DIR=${process.env.PLUGINS_DIR ?? "unset"} import.meta.dir=${import.meta.dir}`,
       );
-      return;
+      if (bundled) {
+        this.ryzenadjPath = bundled;
+      } else if (onPath) {
+        this.ryzenadjPath = "ryzenadj";
+      } else {
+        this.ryzenadjPath = "";
+      }
+      if (this.ryzenadjPath) {
+        this.ryzenadjAvailable = true;
+        // Test if ryzenadj can read (some platforms like Strix Halo cannot —
+        // and Vangogh/Aerith on the Deck can't read STAPM via /dev/mem
+        // either; writes still go through in both cases).
+        this.ryzenadjCanRead = await this.testRyzenadjRead();
+        this.method = "ryzenadj";
+        console.log(
+          `[tdp-control] ryzenadj available at ${this.ryzenadjPath} (read=${this.ryzenadjCanRead})`,
+        );
+        return;
+      }
     }
 
     // 2. Try Intel RAPL sysfs. Probe all candidate paths in parallel
@@ -1053,7 +1134,7 @@ export default class TdpControlBackend implements PluginBackend {
   private async testRyzenadjRead(): Promise<boolean> {
     try {
       const { exitCode, stdout } = await runCommand([
-        "ryzenadj",
+        this.ryzenadjPath || "ryzenadj",
         "--info",
       ]);
       if (exitCode !== 0) return false;
@@ -1372,7 +1453,7 @@ export default class TdpControlBackend implements PluginBackend {
   private async setTdpViaRyzenadj(watts: number): Promise<void> {
     const milliwatts = watts * 1000;
     const { exitCode, stderr } = await runCommand([
-      "ryzenadj",
+      this.ryzenadjPath || "ryzenadj",
       `--stapm-limit=${milliwatts}`,
       `--fast-limit=${milliwatts}`,
       `--slow-limit=${milliwatts}`,

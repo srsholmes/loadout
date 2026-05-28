@@ -29,6 +29,19 @@
         "/sys/class/firmware-attributes"
       ]
     },
+    "bundled_bins": [
+      {
+        "name": "ryzenadj",
+        "path": "bin/linux-x64/ryzenadj",
+        "version": "v0.19.0",
+        "source": "https://github.com/FlyGoat/RyzenAdj",
+        "license": "LGPL-3.0",
+        "license_file": "bin/linux-x64/LICENSE-ryzenadj",
+        "platforms": ["linux-x64"],
+        "rebuild_with": "build-ryzenadj.sh",
+        "rationale": "AMD-only SMU write tool; required on stock SteamOS where ryzenadj isn't packaged (/usr is read-only). ~104 KB, dynamic-links libpci/libudev/libcap which are present on every supported distro."
+      }
+    ],
     "category": "Performance",
     "subtitle": "CPU/GPU power limits"
   }
