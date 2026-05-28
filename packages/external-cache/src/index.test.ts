@@ -42,18 +42,18 @@ afterEach(() => {
 
 describe("cacheDir / pluginCacheDir", () => {
   it("honors XDG_CACHE_HOME when set", () => {
-    expect(cacheDir()).toBe(join(tempDir, "steam-loader"));
+    expect(cacheDir()).toBe(join(tempDir, "loadout"));
     expect(pluginCacheDir("my-plugin")).toBe(
-      join(tempDir, "steam-loader", "my-plugin"),
+      join(tempDir, "loadout", "my-plugin"),
     );
   });
 
   it("falls back to ~/.cache when XDG_CACHE_HOME is unset or empty", () => {
     delete process.env.XDG_CACHE_HOME;
-    expect(cacheDir()).toBe(join(homedir(), ".cache", "steam-loader"));
+    expect(cacheDir()).toBe(join(homedir(), ".cache", "loadout"));
 
     process.env.XDG_CACHE_HOME = "";
-    expect(cacheDir()).toBe(join(homedir(), ".cache", "steam-loader"));
+    expect(cacheDir()).toBe(join(homedir(), ".cache", "loadout"));
   });
 });
 

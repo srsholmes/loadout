@@ -2,7 +2,7 @@
  * Per-plugin disk cache for external API responses.
  *
  *   $XDG_CACHE_HOME/steam-loader/<plugin-id>/<sha1(key)>.json
- *   (typically ~/.cache/steam-loader/<plugin-id>/<sha1(key)>.json)
+ *   (typically ~/.cache/loadout/<plugin-id>/<sha1(key)>.json)
  *
  * Plugins that fetch data from external sources (ProtonDB,
  * HowLongToBeat, SteamGridDB, …) wrap their fetch sites in
@@ -104,7 +104,7 @@ interface CacheEntry<T> {
 /**
  * Resolve the cache root directory:
  *   $XDG_CACHE_HOME/steam-loader/  (when set)
- *   ~/.cache/steam-loader/         (fallback)
+ *   ~/.cache/loadout/         (fallback)
  *
  * Mirrors plugin-storage's `configDir` but rooted at the cache
  * variant of the XDG base-dir spec.
@@ -112,7 +112,7 @@ interface CacheEntry<T> {
 export function cacheDir(): string {
   const xdg = process.env.XDG_CACHE_HOME;
   const base = xdg && xdg.length > 0 ? xdg : join(homedir(), ".cache");
-  return join(base, "steam-loader");
+  return join(base, "loadout");
 }
 
 /** Absolute path of a plugin's cache subdirectory. Exposed for tests
