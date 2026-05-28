@@ -418,14 +418,18 @@ export default class FanControlBackend implements PluginBackend {
 
     // Surface safety override state to the UI. Mirrors the thresholds
     // in safety-floor.ts so the warning chip lines up with what the
-    // override is actually doing.
+    // override is actually doing. Always include the release temp +
+    // the "you can manually set higher" hint — the floor only RAISES,
+    // never caps, so the user can crank fans above it.
+    const releaseC =
+      SAFETY_THRESHOLDS.WARM_C - SAFETY_THRESHOLDS.RELEASE_HYSTERESIS_C;
     let warning: string | null = null;
     if (cpuTempC >= SAFETY_THRESHOLDS.CRITICAL_C) {
-      warning = `CRITICAL: ${cpuTempC} C >= ${SAFETY_THRESHOLDS.CRITICAL_C} C -- fans forced to MAX to prevent thermal shutdown`;
+      warning = `CRITICAL: ${Math.round(cpuTempC)}°C ≥ ${SAFETY_THRESHOLDS.CRITICAL_C}°C — fans forced to MAX to prevent thermal shutdown. Releases when CPU drops below ${releaseC}°C.`;
     } else if (cpuTempC >= SAFETY_THRESHOLDS.FORCE_MAX_C) {
-      warning = `HOT: ${cpuTempC} C >= ${SAFETY_THRESHOLDS.FORCE_MAX_C} C -- safety override forcing fans to MAX`;
+      warning = `HOT: ${Math.round(cpuTempC)}°C ≥ ${SAFETY_THRESHOLDS.FORCE_MAX_C}°C — safety floor at 100%. Releases when CPU drops below ${releaseC}°C.`;
     } else if (cpuTempC >= SAFETY_THRESHOLDS.WARM_C) {
-      warning = `WARM: ${cpuTempC} C >= ${SAFETY_THRESHOLDS.WARM_C} C -- safety floor raised`;
+      warning = `WARM: ${Math.round(cpuTempC)}°C ≥ ${SAFETY_THRESHOLDS.WARM_C}°C — safety floor at ${SAFETY_THRESHOLDS.HOT_FLOOR_PCT}% (you can manually set higher). Releases when CPU drops below ${releaseC}°C.`;
     }
 
     if (this.useEctool && !this.activeFanDevice?.hasPwmControl) {
@@ -952,17 +956,29 @@ export default class FanControlBackend implements PluginBackend {
       return;
     }
 
-    // Compute the required floor from the same pure function the rest
-    // of the safety pipeline uses. We pass userPercent=0 so the floor
-    // is the only thing driving the result — we want the *minimum* the
-    // safety policy demands at this temperature, not whatever the user
-    // last asked for.
-    const result = computeSafetyFloor(0, tempC);
+    this.safetyEngaged = true;
+
+    // Curve loop is the authority on the fan write when a preset is
+    // active — it already calls applySafetyFloor on every tick, and
+    // having the watchdog write in parallel races (curve writes the
+    // curve target, watchdog writes the bare floor, fans flap). Just
+    // flag engaged and let the curve loop do the write.
+    if (this.activePreset !== null) return;
+
+    // Manual mode (or pure-auto with no user intent): the watchdog is
+    // the only periodic writer, so it owns the write here. Pass the
+    // user's last-requested percent as userPercent so the floor RAISES
+    // it (the contract of computeSafetyFloor) instead of capping it —
+    // the user can still set fans ABOVE the floor.
+    const userPct =
+      this.lastUserSpeedPwm !== null
+        ? pwmToPercent(this.lastUserSpeedPwm)
+        : 0;
+    const result = computeSafetyFloor(userPct, tempC);
     console.warn(
       `[fan-control] Safety watchdog engaging: temp=${tempC}°C — ` +
         `forcing fan to ${result.percent}% (${result.reason})`,
     );
-    this.safetyEngaged = true;
     await this.setFanSpeedInternal(result.percent).catch((err) => {
       console.error("[fan-control] Watchdog safety write failed:", err);
     });

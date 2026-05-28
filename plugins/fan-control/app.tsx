@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createRoot } from "react-dom/client";
-import { FaFan, FaTemperatureHalf, FaXmark } from "react-icons/fa6";
+import { FaFan, FaTemperatureHalf } from "react-icons/fa6";
 import {
   Button,
-  IconButton,
   PluginHeader,
   PluginProvider,
   Slider,
@@ -150,12 +149,6 @@ function FanControl() {
     setGameProfiles,
     persistGameProfile,
   } = usePerGameProfiles(call, useEvent, currentGame);
-  // Banner dismissal is per-engagement: dismissing during one thermal
-  // event must not silence the next one. Reset when safetyEngaged goes
-  // false → true (handled in the effect below).
-  const [safetyDismissed, setSafetyDismissed] = useState(false);
-  const wasSafetyEngagedRef = useRef(false);
-
   // Subscribe to real-time fan updates from the backend
   useEvent({
     event: "fan-update",
@@ -180,16 +173,6 @@ function FanControl() {
       setLoading(false);
     });
   }, [call]);
-
-  // Reset banner dismissal on each fresh engagement (false → true edge),
-  // so the alert returns next time the user gets too hot.
-  useEffect(() => {
-    const engaged = fanInfo?.safetyEngaged ?? false;
-    if (engaged && !wasSafetyEngagedRef.current) {
-      setSafetyDismissed(false);
-    }
-    wasSafetyEngagedRef.current = engaged;
-  }, [fanInfo?.safetyEngaged]);
 
   const handleSetMode = useCallback(
     async (mode: "auto" | "manual") => {
@@ -334,12 +317,12 @@ function FanControl() {
       {headerNode}
       <div className="p-7 h-full overflow-y-auto">
       <div className="page-content">
-        {/* Safety override banner — daisyUI alert. Shown while the
-            watchdog is engaged (sticky through the WARM_C → 55 °C
-            release band so it doesn't flicker as temp wobbles).
-            Dismissable per-engagement: closing it silences this
-            thermal event but the next one re-shows. */}
-        {fanInfo.safetyEngaged && !safetyDismissed && (
+        {/* Safety override banner. Non-dismissable: this is the
+            thermal-trip safeguard message and the user needs to know
+            the floor is engaged + the release temp the whole time the
+            override is biting. Sticky through the WARM_C → 55 °C
+            release hysteresis so it doesn't flicker as temp wobbles. */}
+        {fanInfo.safetyEngaged && (
           <div role="alert" className="alert alert-warning mb-4">
             <FaTemperatureHalf size={18} />
             <div className="flex-1">
@@ -349,17 +332,6 @@ function FanControl() {
                   `Fans pinned by safety floor. Releases when CPU drops below 55°C (currently ${Math.round(fanInfo.cpuTempC)}°C).`}
               </div>
             </div>
-            {/* IconButton wraps useFocusable so the dpad reaches the
-                dismiss control — the previous warning card had no
-                interactive element at all. */}
-            <IconButton
-              onClick={() => setSafetyDismissed(true)}
-              ariaLabel="Dismiss safety banner"
-              title="Dismiss"
-              size={26}
-            >
-              <FaXmark size={12} />
-            </IconButton>
           </div>
         )}
 
