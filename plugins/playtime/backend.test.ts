@@ -1,34 +1,12 @@
-import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, spyOn, beforeEach, afterEach } from "bun:test";
 import type { EmitPayload } from "@loadout/types";
 
-// ── Module mocks (must precede the SUT import) ────────────────────────────────
-//
-// We use mock.module ONLY for modules that cannot be spied on otherwise
-// (no single exported object to spy on: node:fs/promises exports named fns).
-// Per the playbook, spyOn is preferred for shared modules to avoid leakage,
-// but for node:fs/promises we mock the whole module once and reset state in
-// beforeEach.
-
-const mockReaddir = mock(() => Promise.resolve([] as string[]));
-const mockReadFile = mock(() => Promise.resolve(""));
-const mockMkdir = mock(() => Promise.resolve(undefined as unknown as string));
-const mockWriteFile = mock(() => Promise.resolve());
-const mockRename = mock(() => Promise.resolve());
-
-mock.module("node:fs/promises", () => ({
-  readdir: mockReaddir,
-  readFile: mockReadFile,
-  mkdir: mockMkdir,
-  writeFile: mockWriteFile,
-  rename: mockRename,
-}));
-
-mock.module("@loadout/steam-paths", () => ({
-  getSteamAppsDir: () => "/fake/steamapps",
-}));
-
-// Import the SUT AFTER mock.module() calls.
-const { default: PlaytimeBackend } = await import("./backend");
+// Audit: use spyOn instead of mock.module to avoid module-mock leakage
+// across backend specs in the single bun test process.
+// See network-info/backend.test.ts for the same pattern.
+import * as fsPromises from "node:fs/promises";
+import * as steamPaths from "@loadout/steam-paths";
+import PlaytimeBackend from "./backend";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -47,17 +25,28 @@ describe("PlaytimeBackend", () => {
   let backend: InstanceType<typeof PlaytimeBackend>;
   let emittedEvents: EmitPayload[];
 
+  // Per-test spy handles — created fresh each beforeEach, restored each afterEach.
+  let readdirSpy: ReturnType<typeof spyOn>;
+  let readFileSpy: ReturnType<typeof spyOn>;
+  let mkdirSpy: ReturnType<typeof spyOn>;
+  let writeFileSpy: ReturnType<typeof spyOn>;
+  let renameSpy: ReturnType<typeof spyOn>;
+  let getSteamAppsDirSpy: ReturnType<typeof spyOn>;
+
   beforeEach(async () => {
-    mockReaddir.mockReset();
-    mockReadFile.mockReset();
-    mockMkdir.mockReset();
-    mockWriteFile.mockReset();
-    mockRename.mockReset();
+    // Spy on fs/promises methods to avoid mock.module leakage.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- readdir overloads require any
+    readdirSpy = spyOn(fsPromises, "readdir").mockResolvedValue([] as any);
+    readFileSpy = spyOn(fsPromises, "readFile").mockRejectedValue(new Error("ENOENT"));
+    mkdirSpy = spyOn(fsPromises, "mkdir").mockResolvedValue(undefined as unknown as string);
+    writeFileSpy = spyOn(fsPromises, "writeFile").mockResolvedValue(undefined);
+    renameSpy = spyOn(fsPromises, "rename").mockResolvedValue(undefined);
+
+    // Spy on getSteamAppsDir to avoid touching the real filesystem.
+    getSteamAppsDirSpy = spyOn(steamPaths, "getSteamAppsDir").mockReturnValue("/fake/steamapps");
 
     // Default: no persisted data, no manifests.
-    // readPluginData calls readFile; return non-JSON to trigger "use default".
-    mockReadFile.mockRejectedValue(new Error("ENOENT"));
-    mockReaddir.mockResolvedValue([]);
+    // readPluginData calls readFile; ENOENT triggers "use default".
 
     const r = makeBackend();
     backend = r.backend;
@@ -68,6 +57,14 @@ describe("PlaytimeBackend", () => {
 
   afterEach(async () => {
     await backend.onUnload();
+
+    // Restore all spies so the next beforeEach can re-spy cleanly.
+    readdirSpy.mockRestore();
+    readFileSpy.mockRestore();
+    mkdirSpy.mockRestore();
+    writeFileSpy.mockRestore();
+    renameSpy.mockRestore();
+    getSteamAppsDirSpy.mockRestore();
   });
 
   // ── Initial State ──────────────────────────────────────────────────────────
@@ -131,7 +128,7 @@ describe("PlaytimeBackend", () => {
           endTime: now - 600_000, // 10 min session
         },
       ];
-      mockReadFile.mockResolvedValue(JSON.stringify({ sessions }));
+      readFileSpy.mockResolvedValue(JSON.stringify({ sessions }));
 
       await backend.onUnload();
       const r = makeBackend();
@@ -156,7 +153,7 @@ describe("PlaytimeBackend", () => {
         { appId: "222", gameName: "Game B", startTime: now - 3_600_000, endTime: now - 1_800_000 },
         { appId: "111", gameName: "Game A", startTime: now - 1_800_000, endTime: now },
       ];
-      mockReadFile.mockResolvedValue(JSON.stringify({ sessions }));
+      readFileSpy.mockResolvedValue(JSON.stringify({ sessions }));
 
       await backend.onUnload();
       const r = makeBackend();
@@ -178,7 +175,7 @@ describe("PlaytimeBackend", () => {
         { appId: "111", gameName: "Early", startTime: now - 7_200_000, endTime: now - 3_600_000 },
         { appId: "222", gameName: "Late", startTime: now - 1_000, endTime: now },
       ];
-      mockReadFile.mockResolvedValue(JSON.stringify({ sessions }));
+      readFileSpy.mockResolvedValue(JSON.stringify({ sessions }));
 
       await backend.onUnload();
       const r = makeBackend();
@@ -198,7 +195,7 @@ describe("PlaytimeBackend", () => {
     it("closes orphaned sessions with 1-minute assumed duration", async () => {
       const now = Date.now();
       const orphanStart = now - 86_400_000;
-      mockReadFile.mockResolvedValue(
+      readFileSpy.mockResolvedValue(
         JSON.stringify({
           sessions: [
             { appId: "999", gameName: "Crashed Game", startTime: orphanStart, endTime: null },
@@ -222,7 +219,7 @@ describe("PlaytimeBackend", () => {
 
   describe("manifest loading", () => {
     it("parses appmanifest files for game names", async () => {
-      mockReaddir.mockImplementation(async (path: unknown) => {
+      readdirSpy.mockImplementation(async (path: unknown) => {
         if (String(path).includes("steamapps")) {
           return ["appmanifest_12345.acf", "appmanifest_67890.acf", "somefile.txt"];
         }
@@ -231,7 +228,7 @@ describe("PlaytimeBackend", () => {
 
       // readFile is called for both the data file and manifest files.
       // The data file path contains "loadout/plugins"; manifests contain "steamapps".
-      mockReadFile.mockImplementation(async (path: unknown) => {
+      readFileSpy.mockImplementation(async (path: unknown) => {
         const p = String(path);
         if (p.includes("12345") && p.includes("steamapps")) {
           return '"AppState"\n{\n\t"appid"\t\t"12345"\n\t"name"\t\t"Portal 2"\n}';
@@ -254,12 +251,12 @@ describe("PlaytimeBackend", () => {
     });
 
     it("handles unreadable manifest files gracefully", async () => {
-      mockReaddir.mockImplementation(async (path: unknown) => {
+      readdirSpy.mockImplementation(async (path: unknown) => {
         if (String(path).includes("steamapps")) return ["appmanifest_broken.acf"];
         return [];
       });
       // All readFile calls throw
-      mockReadFile.mockRejectedValue(new Error("Permission denied"));
+      readFileSpy.mockRejectedValue(new Error("Permission denied"));
 
       await backend.onUnload();
       const r = makeBackend();
@@ -290,14 +287,14 @@ describe("PlaytimeBackend", () => {
 
     it("ends the session and persists it on exit broadcast", async () => {
       await backend.handleGameLaunch(730, "CS2");
-      mockWriteFile.mockClear();
+      writeFileSpy.mockClear();
       await backend.handleGameExit(730);
 
       const session = await backend.getCurrentSession();
       expect(session).toBeNull();
 
       // writePluginData → writeFile + rename; at minimum writeFile was called.
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(writeFileSpy).toHaveBeenCalled();
 
       const updateEvents = emittedEvents.filter((e) => e.event === "sessionUpdate");
       expect(updateEvents[updateEvents.length - 1].data).toBeNull();
@@ -335,12 +332,12 @@ describe("PlaytimeBackend", () => {
 
     it("ignores exit broadcasts for an inactive appId", async () => {
       await backend.handleGameLaunch(730, "CS2");
-      mockWriteFile.mockClear();
+      writeFileSpy.mockClear();
       await backend.handleGameExit(440); // never launched
 
       const session = await backend.getCurrentSession();
       expect(session?.appId).toBe("730");
-      expect(mockWriteFile).not.toHaveBeenCalled();
+      expect(writeFileSpy).not.toHaveBeenCalled();
     });
 
     it("ignores non-finite appIds on launch and exit", async () => {
@@ -354,10 +351,10 @@ describe("PlaytimeBackend", () => {
     });
 
     it("falls back to the manifest name when the broadcast omits one", async () => {
-      mockReaddir.mockImplementation(async (path: unknown) =>
+      readdirSpy.mockImplementation(async (path: unknown) =>
         String(path).includes("steamapps") ? ["appmanifest_12345.acf"] : [],
       );
-      mockReadFile.mockImplementation(async (path: unknown) => {
+      readFileSpy.mockImplementation(async (path: unknown) => {
         if (String(path).includes("steamapps")) {
           return '"AppState"\n{\n\t"appid"\t\t"12345"\n\t"name"\t\t"Portal 2"\n}';
         }
@@ -391,9 +388,9 @@ describe("PlaytimeBackend", () => {
 
     it("persists an active session on unload", async () => {
       await backend.handleGameLaunch(730, "CS2");
-      mockWriteFile.mockClear();
+      writeFileSpy.mockClear();
       await backend.onUnload();
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(writeFileSpy).toHaveBeenCalled();
     });
   });
 });
