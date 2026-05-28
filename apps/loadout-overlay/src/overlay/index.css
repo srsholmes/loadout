@@ -657,9 +657,17 @@ html[data-theme="terminal"] {
   --font-sans: "JetBrains Mono", ui-monospace, monospace;
 }
 
+/* Tailwind/daisyUI content sources. Paths are relative to THIS file
+   (apps/loadout-overlay/src/overlay/index.css), so the repo root is four
+   levels up. The shared component classes (e.g. Slider's `range
+   range-primary range-xs`) live in packages/ui, and plugins are scanned so
+   their classes get compiled into this global stylesheet. Keep these
+   anchored — a stale `../../ui/src` (the old packages/overlay layout)
+   silently resolves to a non-existent dir and daisyUI tree-shakes those
+   components away (this is what broke the range slider). */
 @source "./";
-@source "../../ui/src";
-@source "../../../plugins";
+@source "../../../../packages/ui/src";
+@source "../../../../plugins";
 
 /* Desktop app — pull every daisyUI utility into the bundle so plugin code
    that uses semantic colors renders correctly even if no scanned source
