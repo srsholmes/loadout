@@ -17,7 +17,7 @@
 import { mkdir, readdir, readFile, writeFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { createExternalCache } from "@loadout/external-cache";
 import { readPluginStorage } from "@loadout/plugin-storage";
 import { withSteamClient } from "@loadout/steam-cdp";
@@ -27,7 +27,7 @@ import { shortcutGameId64 } from "@loadout/vdf";
 export type ArtType = "grid_p" | "grid_l" | "hero" | "logo" | "icon";
 export type SgdbGameSource = "steam" | "shortcut";
 
-export interface SgdbImage {
+interface SgdbImage {
   id: number;
   score: number;
   url: string;
@@ -119,14 +119,13 @@ export async function applyAllArtwork(
     const picked = await pickAsset(type, apiKey, sgdbId, fallbacks[type]);
     if (!picked) continue;
 
-    let bytes: ArrayBuffer;
+    let buf: Buffer;
     try {
-      bytes = await downloadImage(picked.url);
+      buf = await downloadImage(picked.url);
     } catch {
       continue;
     }
-    const ext = extFor(picked.url);
-    const buf = Buffer.from(bytes);
+    const { ext, steamFmt } = normaliseFormat(picked.url);
 
     // 1) Write files into every Steam user's `config/grid/`. Two
     //    stems per shortcut (uint32 appid + 64-bit gameid64) so both
@@ -151,15 +150,12 @@ export async function applyAllArtwork(
     // 2) Push bytes into Steam's running state so the shortcut tile
     //    refreshes immediately. setCustomArtwork only accepts png/jpg.
     let instant = false;
-    const fmt = ext.replace(/^\./, "").toLowerCase();
-    if (fmt === "png" || fmt === "jpg" || fmt === "jpeg") {
-      const base64 = buf.toString("base64");
-      const steamFmt: "png" | "jpg" = fmt === "jpeg" ? "jpg" : (fmt as "png" | "jpg");
+    if (steamFmt) {
       try {
         await withSteamClient((sc) =>
           sc.apps.setCustomArtwork(
             input.appId,
-            base64,
+            buf.toString("base64"),
             steamFmt,
             STEAM_ASSET_TYPE[type],
           ),
@@ -187,31 +183,38 @@ export async function applyAllArtwork(
 
 const catalogCache = createExternalCache("sgdb-art-catalog");
 
-/**
- * Resolve a portrait-capsule URL for a title — used by catalog grids
- * to render cover art for not-yet-installed games. Cached aggressively
- * (24h) since SGDB image URLs are effectively immutable.
- *
- * Returns null when no API key, no match, or any network failure.
- */
-export async function getCatalogCoverUrl(opts: {
-  title: string;
-  sgdbId?: number;
-  /** Stable cache key — usually the consumer's own per-game id. */
-  cacheKey: string;
-}): Promise<string | null> {
+type CatalogType = "cover" | "hero";
+
+/** Per-catalog-type: [cache-prefix, endpoint(id), sgdbFetch cache key(id)]. */
+const CATALOG_SPEC: Record<
+  CatalogType,
+  [string, (id: number) => string, (id: number) => string]
+> = {
+  cover: [
+    "catalog-cover",
+    (id) => `/grids/game/${id}?dimensions=600x900,460x215`,
+    (id) => `sgdb-grids-portrait:${id}`,
+  ],
+  hero: ["catalog-hero", (id) => `/heroes/game/${id}`, (id) => `sgdb-heroes:${id}`],
+};
+
+async function getCatalogUrlFor(
+  type: CatalogType,
+  opts: { title: string; sgdbId?: number; cacheKey: string },
+): Promise<string | null> {
   const apiKey = await readSgdbApiKey();
   if (!apiKey) return null;
+  const [prefix, endpoint, fetchKey] = CATALOG_SPEC[type];
   try {
     return await catalogCache.getOrFetch<string | null>(
-      `catalog-cover:${opts.cacheKey}`,
+      `${prefix}:${opts.cacheKey}`,
       async () => {
         const sgdbId = opts.sgdbId ?? (await searchSgdbGameId(opts.title, apiKey));
         if (sgdbId == null) return null;
         const images = await sgdbFetch<SgdbImage[]>(
-          `/grids/game/${sgdbId}?dimensions=600x900,460x215`,
+          endpoint(sgdbId),
           apiKey,
-          `sgdb-grids-portrait:${sgdbId}`,
+          fetchKey(sgdbId),
         );
         return pickBestImage(images)?.url ?? null;
       },
@@ -223,6 +226,22 @@ export async function getCatalogCoverUrl(opts: {
 }
 
 /**
+ * Resolve a portrait-capsule URL for a title — used by catalog grids
+ * to render cover art for not-yet-installed games. Cached aggressively
+ * (24h) since SGDB image URLs are effectively immutable.
+ *
+ * Returns null when no API key, no match, or any network failure.
+ */
+export function getCatalogCoverUrl(opts: {
+  title: string;
+  sgdbId?: number;
+  /** Stable cache key — usually the consumer's own per-game id. */
+  cacheKey: string;
+}): Promise<string | null> {
+  return getCatalogUrlFor("cover", opts);
+}
+
+/**
  * Resolve a landscape hero URL for a title — used by detail pages
  * to render the wide banner artwork above the action buttons.
  * Mirrors `getCatalogCoverUrl` but hits `/heroes/game/<id>`.
@@ -230,31 +249,12 @@ export async function getCatalogCoverUrl(opts: {
  *
  * Returns null when no API key, no match, or any network failure.
  */
-export async function getCatalogHeroUrl(opts: {
+export function getCatalogHeroUrl(opts: {
   title: string;
   sgdbId?: number;
   cacheKey: string;
 }): Promise<string | null> {
-  const apiKey = await readSgdbApiKey();
-  if (!apiKey) return null;
-  try {
-    return await catalogCache.getOrFetch<string | null>(
-      `catalog-hero:${opts.cacheKey}`,
-      async () => {
-        const sgdbId = opts.sgdbId ?? (await searchSgdbGameId(opts.title, apiKey));
-        if (sgdbId == null) return null;
-        const images = await sgdbFetch<SgdbImage[]>(
-          `/heroes/game/${sgdbId}`,
-          apiKey,
-          `sgdb-heroes:${sgdbId}`,
-        );
-        return pickBestImage(images)?.url ?? null;
-      },
-      { ttlSec: 24 * 60 * 60 },
-    );
-  } catch {
-    return null;
-  }
+  return getCatalogUrlFor("hero", opts);
 }
 
 // ─── SGDB plumbing ─────────────────────────────────────────────────────────
@@ -340,6 +340,10 @@ async function readSgdbApiKey(): Promise<string | null> {
   return env && env.length > 0 ? env : null;
 }
 
+/** Bound network calls so stock SteamOS Deck's systemd-resolved warmup
+ *  (10-60s after sleep/resume) doesn't silently hang the pipeline. */
+const NETWORK_TIMEOUT_MS = 15_000;
+
 async function sgdbFetch<T>(
   endpoint: string,
   apiKey: string,
@@ -350,6 +354,7 @@ async function sgdbFetch<T>(
     async () => {
       const res = await fetch(`${SGDB_API_BASE}${endpoint}`, {
         headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
       });
       if (!res.ok) {
         throw new Error(
@@ -372,7 +377,7 @@ interface SgdbSearchHit {
   verified?: boolean;
 }
 
-export async function searchSgdbGameId(
+async function searchSgdbGameId(
   title: string,
   apiKey: string,
 ): Promise<number | null> {
@@ -408,14 +413,16 @@ function stemsFor(appId: number, source: SgdbGameSource): string[] {
   return [String(appId)];
 }
 
+const STEM_SUFFIX: Record<ArtType, string> = {
+  grid_p: "p",
+  grid_l: "",
+  hero: "_hero",
+  logo: "_logo",
+  icon: "_icon",
+};
+
 function filenameFor(stem: string, type: ArtType, ext: string): string {
-  switch (type) {
-    case "grid_p": return `${stem}p${ext}`;
-    case "grid_l": return `${stem}${ext}`;
-    case "hero":   return `${stem}_hero${ext}`;
-    case "logo":   return `${stem}_logo${ext}`;
-    case "icon":   return `${stem}_icon${ext}`;
-  }
+  return `${stem}${STEM_SUFFIX[type]}${ext}`;
 }
 
 function extFor(url: string): string {
@@ -431,6 +438,22 @@ function extFor(url: string): string {
        both PNG and JPG transparently. */
   }
   return ".jpg";
+}
+
+/** File-write extension + Steam-side format derived from the picked
+ *  URL. `steamFmt` is null when the format isn't one
+ *  `SteamClient.setCustomArtwork` accepts (it only takes png/jpg) —
+ *  the file gets written regardless, but the instant Steam push is
+ *  skipped. */
+function normaliseFormat(url: string): {
+  ext: string;
+  steamFmt: "png" | "jpg" | null;
+} {
+  const ext = extFor(url);
+  const fmt = ext.slice(1).toLowerCase();
+  const steamFmt =
+    fmt === "png" ? "png" : fmt === "jpg" || fmt === "jpeg" ? "jpg" : null;
+  return { ext, steamFmt };
 }
 
 /**
@@ -460,7 +483,7 @@ function blobPathFor(url: string): string {
   return join(blobCacheRoot(), `${hash}${ext}`);
 }
 
-async function downloadImage(url: string): Promise<ArrayBuffer> {
+async function downloadImage(url: string): Promise<Buffer> {
   const cachePath = blobPathFor(url);
   // Cache hit: fresh-enough file on disk → reuse without touching
   // the network. We `stat` to honour TTL because writes don't
@@ -468,31 +491,24 @@ async function downloadImage(url: string): Promise<ArrayBuffer> {
   try {
     const s = await stat(cachePath);
     if (Date.now() - s.mtimeMs < BLOB_TTL_MS) {
-      const buf = await readFile(cachePath);
-      console.log(
-        `[sgdb-art] cache HIT ${cachePath.split("/").pop()} (${buf.byteLength}B) ← ${url}`,
-      );
-      return buf.buffer.slice(
-        buf.byteOffset,
-        buf.byteOffset + buf.byteLength,
-      ) as ArrayBuffer;
+      return await readFile(cachePath);
     }
   } catch {
     /* cache miss — fall through to network */
   }
-  console.log(`[sgdb-art] cache MISS, fetching ${url}`);
-  const res = await fetch(url, { redirect: "follow" });
+  const res = await fetch(url, {
+    redirect: "follow",
+    signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
+  });
   if (!res.ok) throw new Error(`Image download failed: HTTP ${res.status}`);
-  const buf = await res.arrayBuffer();
+  const buf = Buffer.from(await res.arrayBuffer());
+  console.log(`[sgdb-art] downloaded ${basename(cachePath)} (${buf.byteLength}B)`);
   // Best-effort persist. mkdir is recursive; a write failure here
   // means a subsequent install pays the network cost again, but
   // the current install still succeeds with the in-memory buffer.
   try {
     await mkdir(blobCacheRoot(), { recursive: true });
-    await writeFile(cachePath, Buffer.from(buf));
-    console.log(
-      `[sgdb-art] cached ${cachePath.split("/").pop()} (${buf.byteLength}B)`,
-    );
+    await writeFile(cachePath, buf);
   } catch (err) {
     console.warn(
       `[sgdb-art] cache write failed for ${url}:`,

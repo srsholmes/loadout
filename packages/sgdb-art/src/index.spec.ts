@@ -94,16 +94,15 @@ describe("applyAllArtwork", () => {
   });
 });
 
-describe("searchSgdbGameId", () => {
-  it("returns null for an empty title", async () => {
-    const { searchSgdbGameId } = await import("./index");
-    expect(await searchSgdbGameId("   ", "key")).toBeNull();
-  });
-
-  it("returns the verified hit when present", async () => {
-    stubFetch(
-      () =>
-        new Response(
+// The internal SGDB autocomplete-search step is exercised through the
+// public catalog-URL helpers — calling them without an `sgdbId` forces
+// the search path. Drives full coverage without exporting the helper.
+describe("internal sgdb autocomplete search (via catalog URL)", () => {
+  it("uses the verified hit when present", async () => {
+    storedApiKey = "test-key";
+    stubFetch((url) => {
+      if (url.includes("/search/autocomplete/")) {
+        return new Response(
           JSON.stringify({
             success: true,
             data: [
@@ -112,16 +111,31 @@ describe("searchSgdbGameId", () => {
             ],
           }),
           { status: 200 },
-        ),
-    );
-    const { searchSgdbGameId } = await import("./index");
-    expect(await searchSgdbGameId("Match", "key")).toBe(42);
+        );
+      }
+      // Verifies the resolved id was used to build the grids URL.
+      expect(url).toContain("/grids/game/42");
+      return new Response(
+        JSON.stringify({
+          success: true,
+          data: [{ id: 9, score: 10, url: "https://cdn/match.png" }],
+        }),
+        { status: 200 },
+      );
+    });
+    const { getCatalogCoverUrl } = await import("./index");
+    const url = await getCatalogCoverUrl({
+      title: "Match",
+      cacheKey: "search-verified",
+    });
+    expect(url).toBe("https://cdn/match.png");
   });
 
   it("falls back to the first hit when none are verified", async () => {
-    stubFetch(
-      () =>
-        new Response(
+    storedApiKey = "test-key";
+    stubFetch((url) => {
+      if (url.includes("/search/autocomplete/")) {
+        return new Response(
           JSON.stringify({
             success: true,
             data: [
@@ -130,43 +144,70 @@ describe("searchSgdbGameId", () => {
             ],
           }),
           { status: 200 },
-        ),
-    );
-    const { searchSgdbGameId } = await import("./index");
-    expect(await searchSgdbGameId("First", "key")).toBe(7);
+        );
+      }
+      expect(url).toContain("/grids/game/7");
+      return new Response(
+        JSON.stringify({
+          success: true,
+          data: [{ id: 1, score: 5, url: "https://cdn/first.png" }],
+        }),
+        { status: 200 },
+      );
+    });
+    const { getCatalogCoverUrl } = await import("./index");
+    const url = await getCatalogCoverUrl({
+      title: "First",
+      cacheKey: "search-firsthit",
+    });
+    expect(url).toBe("https://cdn/first.png");
   });
 
-  it("returns null on fetch failure", async () => {
+  it("returns null when the search fetch fails", async () => {
+    storedApiKey = "test-key";
     stubFetch(() => new Response("nope", { status: 500 }));
-    const { searchSgdbGameId } = await import("./index");
-    expect(await searchSgdbGameId("X", "key")).toBeNull();
+    const { getCatalogCoverUrl } = await import("./index");
+    expect(
+      await getCatalogCoverUrl({ title: "X", cacheKey: "search-fail" }),
+    ).toBeNull();
   });
 
-  it("returns null when the endpoint says success=false", async () => {
+  it("returns null when the search endpoint reports success=false", async () => {
+    storedApiKey = "test-key";
     stubFetch(
       () =>
         new Response(JSON.stringify({ success: false, data: [] }), {
           status: 200,
         }),
     );
-    const { searchSgdbGameId } = await import("./index");
-    expect(await searchSgdbGameId("X", "key")).toBeNull();
+    const { getCatalogCoverUrl } = await import("./index");
+    expect(
+      await getCatalogCoverUrl({ title: "X", cacheKey: "search-success-false" }),
+    ).toBeNull();
   });
 });
 
-describe("getCatalogCoverUrl", () => {
+type GetCatalogUrl = (opts: {
+  title: string;
+  sgdbId?: number;
+  cacheKey: string;
+}) => Promise<string | null>;
+
+describe.each<[string, "getCatalogCoverUrl" | "getCatalogHeroUrl", string]>([
+  ["cover", "getCatalogCoverUrl", "/grids/game/"],
+  ["hero", "getCatalogHeroUrl", "/heroes/game/"],
+])("%s catalog url", (_label, exportName, expectedEndpointFragment) => {
   it("returns null without an API key (without hitting the network)", async () => {
     stubFetch(() => {
       throw new Error("fetch should NOT be called");
     });
-    const { getCatalogCoverUrl } = await import("./index");
-    expect(
-      await getCatalogCoverUrl({ title: "X", cacheKey: "key:X" }),
-    ).toBeNull();
+    const mod = await import("./index");
+    const getUrl = mod[exportName] as GetCatalogUrl;
+    expect(await getUrl({ title: "X", cacheKey: `key:X` })).toBeNull();
     expect(fetchCalls.length).toBe(0);
   });
 
-  it("resolves a grid URL when API key + sgdbId are available", async () => {
+  it("resolves the URL when API key + sgdbId are available, hitting the right endpoint", async () => {
     storedApiKey = "test-key";
     stubFetch(
       () =>
@@ -178,13 +219,17 @@ describe("getCatalogCoverUrl", () => {
           { status: 200 },
         ),
     );
-    const { getCatalogCoverUrl } = await import("./index");
-    const url = await getCatalogCoverUrl({
+    const mod = await import("./index");
+    const getUrl = mod[exportName] as GetCatalogUrl;
+    const url = await getUrl({
       title: "Alba",
       sgdbId: 999,
-      cacheKey: "catalog:Alba",
+      cacheKey: `catalog:Alba`,
     });
     expect(url).toBe("https://cdn/x.png");
+    expect(
+      fetchCalls.some((u) => u.includes(expectedEndpointFragment)),
+    ).toBe(true);
   });
 
   it("uses the catalog cache so repeat lookups don't refetch", async () => {
@@ -200,49 +245,16 @@ describe("getCatalogCoverUrl", () => {
         { status: 200 },
       );
     });
-    const { getCatalogCoverUrl } = await import("./index");
-    await getCatalogCoverUrl({ title: "Cached", sgdbId: 1, cacheKey: "k1" });
-    await getCatalogCoverUrl({ title: "Cached", sgdbId: 1, cacheKey: "k1" });
+    const mod = await import("./index");
+    const getUrl = mod[exportName] as GetCatalogUrl;
+    await getUrl({ title: "Cached", sgdbId: 1, cacheKey: "k1" });
+    await getUrl({ title: "Cached", sgdbId: 1, cacheKey: "k1" });
     expect(calls).toBe(1);
   });
 });
 
-describe("getCatalogHeroUrl", () => {
-  it("returns null without an API key (without hitting the network)", async () => {
-    stubFetch(() => {
-      throw new Error("fetch should NOT be called");
-    });
-    const { getCatalogHeroUrl } = await import("./index");
-    expect(
-      await getCatalogHeroUrl({ title: "X", cacheKey: "hero:X" }),
-    ).toBeNull();
-    expect(fetchCalls.length).toBe(0);
-  });
-
-  it("resolves a hero URL by hitting /heroes/game/<id>", async () => {
-    storedApiKey = "test-key";
-    stubFetch(
-      () =>
-        new Response(
-          JSON.stringify({
-            success: true,
-            data: [{ id: 7, score: 5, url: "https://cdn/h.png" }],
-          }),
-          { status: 200 },
-        ),
-    );
-    const { getCatalogHeroUrl } = await import("./index");
-    const url = await getCatalogHeroUrl({
-      title: "Alba",
-      sgdbId: 999,
-      cacheKey: "hero:Alba",
-    });
-    expect(url).toBe("https://cdn/h.png");
-    // The hero endpoint must be heroes/game/<id>, not grids/game/<id>.
-    expect(fetchCalls.some((u) => u.includes("/heroes/game/"))).toBe(true);
-  });
-
-  it("caches separately from the cover-url namespace (catalog-hero: prefix)", async () => {
+describe("cover + hero share a cacheKey but stay isolated", () => {
+  it("uses distinct cache prefixes so the same cacheKey doesn't collide", async () => {
     storedApiKey = "test-key";
     let calls = 0;
     stubFetch(() => {
@@ -250,7 +262,7 @@ describe("getCatalogHeroUrl", () => {
       return new Response(
         JSON.stringify({
           success: true,
-          data: [{ id: 1, score: 10, url: "https://cdn/cached-hero.png" }],
+          data: [{ id: 1, score: 10, url: "https://cdn/cached.png" }],
         }),
         { status: 200 },
       );
@@ -263,5 +275,36 @@ describe("getCatalogHeroUrl", () => {
     await getCatalogCoverUrl({ title: "Same", sgdbId: 1, cacheKey: "k" });
     await getCatalogHeroUrl({ title: "Same", sgdbId: 1, cacheKey: "k" });
     expect(calls).toBe(2);
+  });
+});
+
+describe("fetch timeout plumbing", () => {
+  it("passes an AbortSignal with a timeout to sgdbFetch", async () => {
+    storedApiKey = "test-key";
+    let capturedSignal: AbortSignal | undefined;
+    (globalThis as { fetch: typeof fetch }).fetch = ((
+      url: string,
+      init?: RequestInit,
+    ) => {
+      fetchCalls.push(url);
+      capturedSignal = init?.signal ?? undefined;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: [{ id: 1, score: 10, url: "https://cdn/x.png" }],
+          }),
+          { status: 200 },
+        ),
+      );
+    }) as unknown as typeof fetch;
+
+    const { getCatalogCoverUrl } = await import("./index");
+    await getCatalogCoverUrl({
+      title: "Timeout test",
+      sgdbId: 1,
+      cacheKey: "timeout-test",
+    });
+    expect(capturedSignal).toBeInstanceOf(AbortSignal);
   });
 });
