@@ -60,6 +60,20 @@ One plugin per issue, migrated one at a time.
 
 **Commands (capability gate):** the backend runs as **root** (a system service), so plugins can write hardware sysfs and call privileged tools **directly** — do NOT shell out to `sudo` / `pkexec`; drop those wrappers from the ported code (e.g. `sudo tee /sys/...` becomes `tee /sys/...`, or just an `fs` write). In exchange, declare every external binary you run in `plugin.permissions.commands` (binary names, e.g. `["ryzenadj", "systemctl", "tee"]`). The loader scopes a per-plugin policy around `onLoad` + every RPC call and `@loadout/exec` *actively denies* any undeclared binary — deny-by-default, so an empty/missing list blocks all commands (`packages/exec/src/index.ts` → `withCommandPolicy`, mirrors the network sandbox). Matching is on `basename(cmd[0])` only (not arguments). Every command a plugin runs is logged to `~/.config/loadout/logs`. **Known gap:** writing `/sys` or `/dev/hidraw*` *directly via `fs`* (not a subprocess) is not command-gated — declare those paths in `permissions.filesystem` for visibility.
 
+**Bundled binaries (`plugin.bundled_bins`):** if the plugin ships its own binary (e.g. tdp-control bundles `ryzenadj`), each entry MUST have ALL of:
+- `name` — basename of the binary as it appears in `permissions.commands`.
+- `path` — relative to plugin dir; ELF for every listed platform.
+- `version` — matching the upstream tag.
+- `source` — upstream repo URL.
+- `license` — SPDX identifier (e.g. `LGPL-3.0`).
+- `license_file` — relative path that **resolves on disk**.
+- `platforms` — e.g. `["linux-x64"]`; must match `file <path>` arch.
+- `rebuild_with` — relative path to an **executable** build script that reproduces `path` from `source`.
+- `sha256` — checksum of the binary at `path`. Used to verify reproducibility (`sha256sum <path>` must match at review and CI time).
+- `rationale` — one-sentence justification ("why bundle, not require install").
+
+A missing field is a merge blocker. tdp-control's `bundled_bins[0]` is the reference shape.
+
 **Network:** declare every domain you fetch in `plugin.permissions.network`. The loader's sandboxed fetch *actively blocks* undeclared hosts (`apps/loadout/src/loader/sandboxed-fetch.ts`); an empty/missing list blocks all network.
 
 **Tests** — the repo is **all-`bun:test`** (no vitest, no shell scripts). Filename picks the runner/env:
@@ -68,6 +82,56 @@ One plugin per issue, migrated one at a time.
 - Use the **`bun:test` API**, NOT vitest: `import { describe, it, expect, mock } from "bun:test"`. `mock()` replaces `vi.fn`. For module mocks, `mock.module(spec, () => ({ ...real, ...overrides }))` — capture the real module via a static `import * as real` first and `await import()` the SUT **after** the mock (bun's `mock.module` isn't hoisted). Fake timers: `jest.useFakeTimers()` / `jest.advanceTimersByTime()`. Subprocess mocking via `Bun.spawn` stubs is fine in tests.
 - **Isolation:** `test:backend` and `test:ui` pass `--isolate` (Bun 1.3.14+), so each spec file gets a fresh global and `mock.module` no longer leaks across files. Still **prefer `spyOn(obj, "method")`** for built-in/shared modules (`fs`, `node:fs/promises`, `@loadout/*`) — it patches the live binding cleanly and is more explicit about what's being faked. See `docs/test-mock-contamination.md`.
 - Port the source plugin's tests, converting vitest→`bun:test`; don't drop coverage.
+- **Pure-logic extraction:** if `backend.ts` contains pure helpers (no `this`, no I/O — `parse*`, `compute*`, `clamp*`, etc.), promote them to `lib/<name>.ts` with a co-located `<name>.test.ts`. The `check:specs` script enforces "≥100 LOC → sibling test exists"; this rule goes further — pure logic SHOULD live in `lib/` regardless of LOC, because that's where it's testable without mocks.
+
+**Lint baseline:** the codebase carries a standing pool of `@typescript-eslint/no-explicit-any` warnings (currently ~35). The PR must NOT regress that count vs `main`, AND must add zero new errors:
+
+```bash
+git checkout main && BASE=$(bun run lint 2>&1 | grep -oE '[0-9]+ problems' | head -1 | grep -oE '[0-9]+')
+git checkout - && CUR=$(bun run lint 2>&1 | grep -oE '[0-9]+ problems' | head -1 | grep -oE '[0-9]+')
+echo "Baseline: $BASE — PR: $CUR — Delta: $((CUR - BASE))"
+```
+
+If the delta is positive, the new warnings must be justified in the PR description (usually a few `as any` casts in tests, capped at +2 per plugin).
+
+---
+
+## Cross-distro compatibility (review-time check)
+
+Loadout targets Linux gaming handhelds + gaming desktops. The reviewer classifies every entry in `plugin.permissions.commands`, every path in `permissions.filesystem`, and the runtime behaviour against this matrix:
+
+| Distro | Notes |
+|---|---|
+| **SteamOS** (stock Deck) | Arch-based, `/usr` immutable, AMD only, gamescope compositor default. Most utility binaries present; no AUR — bundle anything not in stock. |
+| **CachyOS** | Arch desktop, AUR available, KDE/Hyprland/GNOME variants, any hardware vendor. |
+| **Bazzite** | Fedora atomic, `rpm-ostree`, SELinux strict, KDE Plasma default. Bazzite-Deck variant ships ectool. |
+| **Nobara** | Fedora-based gaming distro, mutable, gaming tooling preinstalled, no SELinux strict by default. |
+| **ChimeraOS** | Arch-based handheld console image. ryzenadj/ectool/handheld utilities preinstalled. |
+
+**Binary classification:**
+- ✅ **Universal** (all five): `systemctl`, `busctl`, `bluetoothctl`, `ip`, `nmcli`, `upower`, `udevadm`, `xinput`, `tee`, `cat`.
+- ⚠️ **Session-conditional** (works on some sessions, silently no-ops on others):
+  - `xrandr` — X11/XWayland only; **no-ops under native Wayland** (default on Bazzite/Nobara KDE, CachyOS Hyprland/GNOME Wayland).
+  - `pactl` / `pw-cli` — PipeWire (default everywhere now).
+  - `busctl --user org.kde.KWin.*` — KDE only.
+  - `hyprctl` — Hyprland only.
+  - `xprop GAMESCOPE_*` — gamescope only (SteamOS Gaming Mode, ChimeraOS, Bazzite-Deck Gaming Mode).
+- ❌ **Hardware / distro-specific** (absent without bundling):
+  - `ryzenadj` — AMD only. **NOT on SteamOS/Bazzite/Nobara stock**; available on ChimeraOS, CachyOS via AUR. Bundle for SteamOS coverage.
+  - `ectool` — Steam Deck firmware. SteamOS ✅, Bazzite-Deck ✅, ChimeraOS ✅; vanilla Arch/Fedora/Nobara ❌.
+  - `intel_gpu_top`, `intel_pstate_*` — Intel only.
+  - `nvidia-smi`, `nvml`, `nvidia-settings` — NVIDIA only.
+
+**Filesystem-path classification:**
+- `/sys/class/backlight/*` — needs backlight driver; common on handhelds/laptops, **absent on most desktops**.
+- `/sys/class/hwmon/*` — needs hwmon modules; universal, but each device's labels differ — never hardcode.
+- `/sys/devices/system/cpu/*`, `/sys/class/drm/*`, `/sys/class/power_supply/*` — universal.
+- `/sys/devices/platform/oxp-*`, `asus-nb-wmi`, `acpi/*` — vendor-handheld specific; the plugin MUST detect-and-degrade if absent.
+
+**Implications for migrators:**
+- If you use a ⚠️ binary, the plugin MUST detect-and-degrade — don't crash if the user is on Wayland-without-XWayland, GNOME-not-KDE, etc.
+- If you use a ❌ binary, bundle a fallback via `bundled_bins` (per the schema above) OR document in the PR which distros the plugin won't work on (and why that's OK).
+- The reviewer's `/review-migration N` skill renders a per-distro verdict (✅ likely / ⚠️ partial / ❌ broken) for the PR.
 
 ---
 
@@ -128,13 +192,18 @@ If a simplification carries *any* regression risk, leave the code as-is and note
 
 All green from the TARGET repo root (`/var/home/srsholmes/Work/loadout`):
 - [ ] `bun run typecheck`
-- [ ] `bun run lint`
-- [ ] `bun run check:specs`
-- [ ] `bun run test`
-- [ ] `bun run build`
+- [ ] `bun run lint` — **0 errors AND** warning-count not regressed vs `main` baseline (see Lint baseline above).
+- [ ] `bun run check:specs` (MIN_LOC=100 enforces backend/lib have sibling tests).
+- [ ] `bun run test:backend` AND `bun run test:ui` (or `bun run test`) — all green, ported coverage preserved.
+- [ ] `bun run build`.
 - [ ] **Behavior parity**: walked through every RPC method, emitted event, and UI surface against the SOURCE plugin — no regressions, same names/signatures/payloads.
 - [ ] **Plugin loads**: the loader logs `Loaded plugin: {{PLUGIN_NAME}} ({{PLUGIN_ID}}) …` (from `apps/loadout/src/loader/plugin-manager.ts`).
-- [ ] Only `@loadout/{ui,types,exec,steam-paths}` + react/react-dom/react-icons remain as external imports (everything else is declared in `package.json` or inlined). No cross-plugin imports. No direct `Bun.spawn`.
+- [ ] Only `@loadout/{ui,types,exec,steam-paths,plugin-storage}` + react/react-dom/react-icons remain as external imports (everything else is declared in `package.json` or inlined). No cross-plugin imports. No direct `Bun.spawn`.
+- [ ] **Pure logic in `lib/`**: every pure helper that lived inline in `backend.ts` has been promoted to `lib/<name>.ts` with a co-located `<name>.test.ts`. Backend = I/O + RPC plumbing only; pure stuff = `lib/`.
+- [ ] **Storage** (if persisted): uses `@loadout/plugin-storage` (`readPluginStorage` / `writePluginStorage`). No inlined fs helpers.
+- [ ] **Mount** (UI): `mountComponent(Component)` + `mountHeaderStub` (or `mountComponent(Header)` for separate-tree pattern) from `@loadout/ui`. No inlined `createRoot + PluginProvider` boilerplate.
+- [ ] **Bundled binaries** (if any): every `bundled_bins[i]` has `name`, `path`, `version`, `source`, `license`, `license_file` (resolves), `platforms` (matches ELF arch), `rebuild_with` (executable), `sha256` (matches `sha256sum <path>`), `rationale`.
+- [ ] **Cross-distro check**: for each `permissions.commands` and `permissions.filesystem` entry, classified per the matrix above. PR description lists the per-distro verdict (SteamOS / CachyOS / Bazzite / Nobara / ChimeraOS): ✅ likely / ⚠️ partial / ❌ broken, with the reason for any non-✅.
 - [ ] Any new shared `packages/<name>` (if created at all) is justified by 2+ already-migrated consumers.
 
 ---
