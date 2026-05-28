@@ -103,6 +103,14 @@
       "name": "@loadout/steam-paths",
       "version": "0.0.1",
     },
+    "packages/steam-shortcut": {
+      "name": "@loadout/steam-shortcut",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/steam-cdp": "workspace:*",
+        "@loadout/vdf": "workspace:*",
+      },
+    },
     "packages/types": {
       "name": "@loadout/types",
       "version": "0.0.1",
@@ -355,6 +363,8 @@
     "@loadout/steam-cdp": ["@loadout/steam-cdp@workspace:packages/steam-cdp"],
 
     "@loadout/steam-paths": ["@loadout/steam-paths@workspace:packages/steam-paths"],
+
+    "@loadout/steam-shortcut": ["@loadout/steam-shortcut@workspace:packages/steam-shortcut"],
 
     "@loadout/types": ["@loadout/types@workspace:packages/types"],
 
