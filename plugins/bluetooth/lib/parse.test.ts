@@ -4,6 +4,7 @@ import {
   parseDeviceList,
   parseDeviceInfo,
   parseAdapterInfo,
+  assertBluetoothctlOk,
 } from "./parse";
 
 // ---------------------------------------------------------------------------
@@ -162,5 +163,40 @@ describe("parseAdapterInfo()", () => {
     const info = parseAdapterInfo(output);
     expect(info.powered).toBe(false);
     expect(info.discovering).toBe(false);
+  });
+
+  it("strips trailing CR from name on CRLF input", () => {
+    const output = "Controller AA:BB:CC:DD:EE:FF BlueZ\r\n\tName: deck-bluetooth\r\n\tPowered: yes\r\n";
+    const info = parseAdapterInfo(output);
+    expect(info.name).toBe("deck-bluetooth");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// assertBluetoothctlOk
+// ---------------------------------------------------------------------------
+
+describe("assertBluetoothctlOk()", () => {
+  it("returns silently on success output", () => {
+    expect(() => assertBluetoothctlOk("Connection successful", "connect")).not.toThrow();
+    expect(() => assertBluetoothctlOk("Changing power on succeeded", "power on")).not.toThrow();
+  });
+
+  it("throws when stdout contains a `Failed` marker", () => {
+    expect(() =>
+      assertBluetoothctlOk(
+        "Attempting to connect to AA:BB:CC:DD:EE:FF\nFailed to connect: org.bluez.Error.Failed",
+        "connect",
+      ),
+    ).toThrow(/connect failed/i);
+  });
+
+  it("includes the action name in the error message", () => {
+    try {
+      assertBluetoothctlOk("Failed to set property Powered", "power on");
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect((err as Error).message).toMatch(/power on failed/i);
+    }
   });
 });

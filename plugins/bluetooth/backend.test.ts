@@ -169,6 +169,28 @@ describe("BluetoothBackend", () => {
         type: "unknown",
       });
     });
+
+    it("preserves previously-cached connection state on transient info failure", async () => {
+      // Seed the cache with connected=true (simulates a healthy prior tick).
+      (backend as any).lastDeviceState.set("AA:BB:CC:DD:EE:FF", true);
+      mockRun.mockImplementation((cmd: string[]) => {
+        if (cmd.includes("devices")) {
+          return Promise.resolve({
+            stdout: "Device AA:BB:CC:DD:EE:FF Test Device\n",
+          });
+        }
+        if (cmd.includes("info")) {
+          return Promise.reject(new Error("DBus hiccup"));
+        }
+        return Promise.resolve({ stdout: "" });
+      });
+
+      const devices = await backend.getDevices();
+      // Connected stays true so the poll loop's prev-vs-current
+      // compare is a no-op and no phantom deviceChanged is emitted.
+      expect(devices[0].connected).toBe(true);
+      expect(devices[0].type).toBe("unknown");
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -241,6 +263,21 @@ describe("BluetoothBackend", () => {
       expect(result).toBe("Connection successful");
       expect((backend as any).lastDeviceState.get("AA:BB:CC:DD:EE:FF")).toBe(true);
     });
+
+    it("throws and does NOT cache when bluetoothctl reports a failure", async () => {
+      // bluetoothctl exits 0 even on bluez-side failures; we have to
+      // grep stdout to surface a real error and avoid a lying cache.
+      mockRun.mockImplementation(() =>
+        Promise.resolve({
+          stdout: "Attempting to connect to AA:BB:CC:DD:EE:FF\nFailed to connect: org.bluez.Error.Failed",
+        }),
+      );
+
+      await expect(backend.connectDevice("AA:BB:CC:DD:EE:FF")).rejects.toThrow(
+        /connect failed/i,
+      );
+      expect((backend as any).lastDeviceState.has("AA:BB:CC:DD:EE:FF")).toBe(false);
+    });
   });
 
   describe("disconnectDevice()", () => {
@@ -252,6 +289,19 @@ describe("BluetoothBackend", () => {
       const result = await backend.disconnectDevice("AA:BB:CC:DD:EE:FF");
       expect(result).toBe("Successful disconnected");
       expect((backend as any).lastDeviceState.get("AA:BB:CC:DD:EE:FF")).toBe(false);
+    });
+
+    it("throws and does NOT cache when bluetoothctl reports a failure", async () => {
+      (backend as any).lastDeviceState.set("AA:BB:CC:DD:EE:FF", true);
+      mockRun.mockImplementation(() =>
+        Promise.resolve({ stdout: "Failed to disconnect: Not connected" }),
+      );
+
+      await expect(
+        backend.disconnectDevice("AA:BB:CC:DD:EE:FF"),
+      ).rejects.toThrow(/disconnect failed/i);
+      // Cache untouched — still true from before the failed call.
+      expect((backend as any).lastDeviceState.get("AA:BB:CC:DD:EE:FF")).toBe(true);
     });
   });
 
@@ -281,6 +331,16 @@ describe("BluetoothBackend", () => {
       const callArgs = mockRun.mock.calls[0][0] as string[];
       expect(callArgs).toContain("power");
       expect(callArgs).toContain("off");
+    });
+
+    it("throws when bluetoothctl reports a failure", async () => {
+      mockRun.mockImplementation(() =>
+        Promise.resolve({
+          stdout: "Failed to set property Powered: Blocked through rfkill",
+        }),
+      );
+
+      await expect(backend.togglePower(true)).rejects.toThrow(/power on failed/i);
     });
   });
 

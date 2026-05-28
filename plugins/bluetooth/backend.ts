@@ -6,6 +6,7 @@ import {
   parseDeviceList,
   parseDeviceInfo,
   parseAdapterInfo,
+  assertBluetoothctlOk,
 } from "./lib/parse";
 
 /**
@@ -70,6 +71,12 @@ export default class BluetoothBackend implements PluginBackend {
     clearInterval(this.pollInterval);
     this.scanProcess?.kill();
     this.scanProcess = undefined;
+    // Best-effort: tell bluez to drop the discovery session in case our
+    // SIGKILL of bluetoothctl didn't propagate. Ignore errors — adapter
+    // may be off, busy, or already not discovering.
+    try {
+      await run(["bluetoothctl", "scan", "off"]);
+    } catch {}
     console.log("[bluetooth] Plugin unloaded");
   }
 
@@ -84,7 +91,19 @@ export default class BluetoothBackend implements PluginBackend {
         const { stdout: info } = await run(["bluetoothctl", "info", mac]);
         devices.push(parseDeviceInfo(mac, name, info));
       } catch {
-        devices.push({ mac, name, connected: false, paired: false, type: "unknown" });
+        // Transient bluetoothctl error (DBus hiccup, adapter blip). Use
+        // the previously-cached connection state so the poll loop's
+        // emit comparison is a no-op — without this, we'd flap a fake
+        // `deviceChanged` event the moment info recovers on a later
+        // tick. Type defaults to "unknown" until info comes back.
+        const prevConnected = this.lastDeviceState.get(mac) ?? false;
+        devices.push({
+          mac,
+          name,
+          connected: prevConnected,
+          paired: false,
+          type: "unknown",
+        });
       }
     }
 
@@ -94,7 +113,10 @@ export default class BluetoothBackend implements PluginBackend {
   /** Connect to a device by MAC address. */
   async connectDevice(mac: string): Promise<string> {
     const { stdout } = await run(["bluetoothctl", "connect", mac]);
-    // Update cache immediately
+    // bluetoothctl exits 0 even when bluez reports a failure — parse the
+    // output before optimistically caching, otherwise a doomed connect
+    // makes the cache disagree with reality until the next poll tick.
+    assertBluetoothctlOk(stdout, "connect");
     this.lastDeviceState.set(mac, true);
     return stdout;
   }
@@ -102,7 +124,7 @@ export default class BluetoothBackend implements PluginBackend {
   /** Disconnect a device by MAC address. */
   async disconnectDevice(mac: string): Promise<string> {
     const { stdout } = await run(["bluetoothctl", "disconnect", mac]);
-    // Update cache immediately
+    assertBluetoothctlOk(stdout, "disconnect");
     this.lastDeviceState.set(mac, false);
     return stdout;
   }
@@ -116,6 +138,7 @@ export default class BluetoothBackend implements PluginBackend {
   /** Toggle Bluetooth adapter power on or off. */
   async togglePower(on: boolean): Promise<string> {
     const { stdout } = await run(["bluetoothctl", "power", on ? "on" : "off"]);
+    assertBluetoothctlOk(stdout, on ? "power on" : "power off");
     return stdout;
   }
 

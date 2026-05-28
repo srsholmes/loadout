@@ -77,7 +77,21 @@ export function parseAdapterInfo(output: string): AdapterInfo {
   return {
     powered: /Powered:\s*yes/i.test(output),
     discovering: /Discovering:\s*yes/i.test(output),
-    name: output.match(/Name:\s*(.+)/)?.[1] ?? "Unknown",
+    // `[^\r\n]+` so CRLF systems don't end up with a trailing \r in the name.
+    name: output.match(/Name:\s*([^\r\n]+)/)?.[1] ?? "Unknown",
     address: output.match(/Controller\s+([\dA-Fa-f:]{17})/)?.[1] ?? "Unknown",
   };
+}
+
+/**
+ * Throw if a bluetoothctl `connect` / `disconnect` / `power` invocation
+ * indicates failure in stdout. bluetoothctl exits 0 on bluez-side errors
+ * so we have to grep the output to surface a meaningful RPC error to the
+ * UI — otherwise the optimistic cache lies and the poll loop emits a
+ * phantom deviceChanged on the next tick.
+ */
+export function assertBluetoothctlOk(stdout: string, action: string): void {
+  if (/^Failed/m.test(stdout)) {
+    throw new Error(`bluetoothctl ${action} failed: ${stdout.trim()}`);
+  }
 }

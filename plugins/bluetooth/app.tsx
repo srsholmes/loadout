@@ -59,26 +59,36 @@ function BluetoothManager() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Tracked timers — we have three short-deferred refresh()/stopScan
-  // calls that mustn't fire after unmount, otherwise setState lands
-  // on a torn-down component and React warns. All scheduled work is
-  // stored here and cleared on unmount.
-  const timersRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+  // Tracked timers — short-deferred refresh()/stopScan calls that
+  // mustn't fire after unmount, otherwise setState lands on a torn-
+  // down component and React warns. Stored as a Set so add/remove
+  // are O(1) and the style stays consistent (no mix of .push +
+  // = .filter()).
+  const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const schedule = useCallback(
     (fn: () => void, ms: number): ReturnType<typeof setTimeout> => {
       const id = setTimeout(() => {
-        timersRef.current = timersRef.current.filter((t) => t !== id);
+        timersRef.current.delete(id);
         fn();
       }, ms);
-      timersRef.current.push(id);
+      timersRef.current.add(id);
       return id;
     },
     [],
   );
+  // Dedicated slot for the 15 s scan-stop deferred call — needs to be
+  // cancelable independently of the generic timers above so that a
+  // user-initiated stop or restart within the 15 s window doesn't let
+  // a stale timer fire and kill the new scan.
+  const scanStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(
     () => () => {
       for (const id of timersRef.current) clearTimeout(id);
-      timersRef.current = [];
+      timersRef.current.clear();
+      if (scanStopTimerRef.current !== null) {
+        clearTimeout(scanStopTimerRef.current);
+        scanStopTimerRef.current = null;
+      }
     },
     [],
   );
@@ -91,16 +101,21 @@ function BluetoothManager() {
     schedule(refresh, 500);
   }, [adapter, call, refresh, schedule]);
 
-  const withBusy = async (mac: string, fn: () => Promise<void>) => {
-    setBusyDevices((prev) => new Set(prev).add(mac));
-    try { await fn(); } finally {
-      setBusyDevices((prev) => {
-        const next = new Set(prev);
-        next.delete(mac);
-        return next;
-      });
-    }
-  };
+  const withBusy = useCallback(
+    async (mac: string, fn: () => Promise<void>) => {
+      setBusyDevices((prev) => new Set(prev).add(mac));
+      try {
+        await fn();
+      } finally {
+        setBusyDevices((prev) => {
+          const next = new Set(prev);
+          next.delete(mac);
+          return next;
+        });
+      }
+    },
+    [],
+  );
 
   const handleConnect = useCallback(
     (mac: string) => withBusy(mac, async () => {
@@ -109,7 +124,7 @@ function BluetoothManager() {
         setDevices((prev) => prev.map((d) => (d.mac === mac ? { ...d, connected: true } : d)));
       } catch (err) { console.error("[bluetooth] Connect failed:", err); }
     }),
-    [call],
+    [call, withBusy],
   );
 
   const handleDisconnect = useCallback(
@@ -119,21 +134,31 @@ function BluetoothManager() {
         setDevices((prev) => prev.map((d) => (d.mac === mac ? { ...d, connected: false } : d)));
       } catch (err) { console.error("[bluetooth] Disconnect failed:", err); }
     }),
-    [call],
+    [call, withBusy],
   );
 
   const handleScan = useCallback(async () => {
+    // A prior 15 s auto-stop timer may still be pending. Always cancel
+    // it before deciding what to do — otherwise a manual stop + restart
+    // within 15 s lets the old timer fire mid-second-scan and silently
+    // kill the new discovery.
+    if (scanStopTimerRef.current !== null) {
+      clearTimeout(scanStopTimerRef.current);
+      scanStopTimerRef.current = null;
+    }
     if (scanning) {
       await call("stopScan");
       setScanning(false);
     } else {
       setScanning(true);
       await call("startScan");
-      schedule(async () => {
+      const id = setTimeout(async () => {
+        scanStopTimerRef.current = null;
         await call("stopScan");
         setScanning(false);
         refresh();
       }, 15000);
+      scanStopTimerRef.current = id;
     }
     schedule(refresh, 3000);
   }, [scanning, call, refresh, schedule]);
