@@ -16,7 +16,7 @@
  *     JSON file under the user's config dir (see `./plugin-storage`).
  */
 
-import { readPluginStorage, writePluginStorage } from "./plugin-storage";
+import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
 
 // ---------------------------------------------------------------------------
 // Per-game profile engine (inlined from @steam-loader/per-game-profiles)

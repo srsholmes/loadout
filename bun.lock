@@ -110,6 +110,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@loadout/exec": "workspace:*",
+        "@loadout/plugin-storage": "workspace:*",
         "@loadout/types": "workspace:*",
         "@loadout/ui": "workspace:*",
         "react": "^18.3.0",
@@ -121,6 +122,7 @@
       "name": "@loadout/plugin-playtime",
       "version": "0.0.1",
       "dependencies": {
+        "@loadout/plugin-storage": "workspace:*",
         "@loadout/steam-paths": "workspace:*",
         "@loadout/types": "workspace:*",
         "@loadout/ui": "workspace:*",
@@ -142,6 +144,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@loadout/exec": "workspace:*",
+        "@loadout/plugin-storage": "workspace:*",
         "@loadout/steam-paths": "workspace:*",
         "@loadout/types": "workspace:*",
         "@loadout/ui": "workspace:*",
