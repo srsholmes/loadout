@@ -12,7 +12,7 @@
     "name": "Display Settings",
     "description": "Adjust display saturation, brightness, gamma, and color temperature",
     "permissions": {
-      "commands": ["xprop", "busctl", "xrandr"],
+      "commands": ["xprop", "busctl", "xrandr", "setpriv"],
       "filesystem": ["/sys/class/backlight"]
     },
     "category": "Device",

@@ -66,13 +66,81 @@ async function exec(
   }
 }
 
-/** Run xprop against gamescope display (:1 if DISPLAY not set). */
-function xpropArgs(extra: string[]): string[] {
-  const args = ["xprop", ...extra];
-  if (!process.env.DISPLAY) {
-    args.splice(1, 0, "-display", ":1");
+/**
+ * Resolve the target user's uid/gid for X11 calls.
+ *
+ * The loadout backend runs as a root systemd service but the X server
+ * (gamescope or normal Xorg) only authorises the *user* it was started
+ * for — root isn't on xhost's allow-list. So we drop to the user for
+ * any X11 read/write via `setpriv --reuid --regid --clear-groups`.
+ *
+ * Derive uid/gid from `$HOME` (set in the unit file) so we don't have
+ * to plumb `--user srsholmes` into every plugin. `null` means we're
+ * running unprivileged already (dev), so don't wrap.
+ */
+async function getUserCreds(): Promise<{ uid: number; gid: number } | null> {
+  if (process.getuid?.() !== 0) return null; // not running as root → no need
+  try {
+    const home = process.env.HOME;
+    if (!home) return null;
+    const { stat } = await import("node:fs/promises");
+    const s = await stat(home);
+    return { uid: s.uid, gid: s.gid };
+  } catch {
+    return null;
   }
-  return args;
+}
+
+/**
+ * Discover the X11 display sockets the user's session is offering. Returns
+ * e.g. `[":0", ":1"]`. Some sessions only have one; gamescope on the Apex
+ * publishes its atoms on `:0` and exposes a nested `:1` (gamescope's own
+ * inner Xwayland) — we try both.
+ */
+async function discoverDisplays(): Promise<string[]> {
+  try {
+    const { readdir } = await import("node:fs/promises");
+    const entries = await readdir("/tmp/.X11-unix");
+    return entries
+      .filter((e) => /^X\d+$/.test(e))
+      .map((e) => `:${e.slice(1)}`)
+      .sort();
+  } catch {
+    return [":0"]; // sensible default
+  }
+}
+
+/**
+ * Wrap an X11 command (`xprop`, `xrandr`, …) with `setpriv` so it runs
+ * as the user gamescope authorised — and inject `DISPLAY` since the
+ * service unit doesn't carry it. No-op (just returns the command + env)
+ * when running unprivileged.
+ */
+function wrapForUser(
+  cmd: string[],
+  display: string,
+  creds: { uid: number; gid: number } | null,
+): { cmd: string[]; env: Record<string, string> } {
+  const env = {
+    DISPLAY: display,
+    // Some xhost-only sessions need the user's HOME for cookie discovery,
+    // and `setpriv --clear-groups` strips it — set it explicitly.
+    HOME: process.env.HOME ?? "/",
+  };
+  if (creds === null) return { cmd, env };
+  return {
+    cmd: [
+      "setpriv",
+      "--reuid",
+      String(creds.uid),
+      "--regid",
+      String(creds.gid),
+      "--clear-groups",
+      "--",
+      ...cmd,
+    ],
+    env,
+  };
 }
 
 export default class DisplaySettingsBackend implements PluginBackend {
@@ -91,6 +159,12 @@ export default class DisplaySettingsBackend implements PluginBackend {
   private backlightName: string | null = null;
   private maxBrightness: number = 0;
   private hasNightLight: boolean = false;
+  /** X11 display where we found the gamescope atom (or the X server we
+   *  drive via xrandr). Populated by _detectMethod. */
+  private activeDisplay: string | null = null;
+  /** Cached uid/gid of the user we drop to for X11 calls. Null when the
+   *  backend is running unprivileged already (dev). */
+  private userCreds: { uid: number; gid: number } | null = null;
 
   async onLoad(): Promise<void> {
     console.log("[display-settings] Plugin loaded");
@@ -113,12 +187,33 @@ export default class DisplaySettingsBackend implements PluginBackend {
   // ---------- detection ----------
 
   private async _detectMethod(): Promise<void> {
-    // 1. Try gamescope (gaming mode) — always check first
-    const gRes = await exec(xpropArgs(["-root", SDR_GAMUT_PROP]));
-    if (gRes.ok && gRes.stdout.includes("=")) {
-      this.method = "gamescope";
-      console.log("[display-settings] Using gamescope atoms");
-    } else if (process.env.WAYLAND_DISPLAY) {
+    // Resolve the user we'll drop to for X11 calls. The root systemd
+    // service is NOT on the X server's xhost allow-list — only the
+    // user gamescope was started for is. setpriv --reuid lets root
+    // exec child commands as that user without losing the sysfs
+    // permissions root has elsewhere in the plugin.
+    this.userCreds = await getUserCreds();
+    const displays = await discoverDisplays();
+
+    // 1. Try gamescope on every display socket the session offers.
+    //    Gamescope on the OXP Apex publishes the GAMUT atom on :0 and
+    //    spawns a nested :1, so we can't hardcode either — enumerate.
+    for (const display of displays) {
+      const { cmd, env } = wrapForUser(
+        ["xprop", "-root", SDR_GAMUT_PROP],
+        display,
+        this.userCreds,
+      );
+      const gRes = await exec(cmd, env);
+      if (gRes.ok && gRes.stdout.includes("=")) {
+        this.method = "gamescope";
+        this.activeDisplay = display;
+        console.log(`[display-settings] Using gamescope atoms on ${display}`);
+        break;
+      }
+    }
+
+    if (this.method === "none" && process.env.WAYLAND_DISPLAY) {
       // 2. Wayland session — use D-Bus APIs, NOT xrandr (which only affects XWayland)
       this.method = "wayland";
       console.log("[display-settings] Using Wayland D-Bus APIs");
@@ -133,15 +228,20 @@ export default class DisplaySettingsBackend implements PluginBackend {
         this.hasNightLight = true;
         console.log("[display-settings] KDE NightLight available for color temperature");
       }
-    } else {
-      // 3. X11 session — xrandr actually works here
-      const xRes = await exec(["xrandr", "--current"]);
-      if (xRes.ok) {
+    } else if (this.method === "none") {
+      // 3. X11 session — xrandr (also user-wrapped). Try every discovered
+      //    display, the first one that returns a connected output wins.
+      for (const display of displays) {
+        const { cmd, env } = wrapForUser(["xrandr", "--current"], display, this.userCreds);
+        const xRes = await exec(cmd, env);
+        if (!xRes.ok) continue;
         const match = xRes.stdout.match(/^(\S+)\s+connected/m);
         if (match) {
           this.xrandrOutput = match[1];
+          this.activeDisplay = display;
           this.method = "xrandr";
-          console.log(`[display-settings] Using xrandr output: ${this.xrandrOutput}`);
+          console.log(`[display-settings] Using xrandr output: ${this.xrandrOutput} on ${display}`);
+          break;
         }
       }
     }
@@ -165,8 +265,13 @@ export default class DisplaySettingsBackend implements PluginBackend {
 
   private async _readCurrentState(): Promise<void> {
     // Read gamescope saturation
-    if (this.method === "gamescope") {
-      const res = await exec(xpropArgs(["-root", SDR_GAMUT_PROP]));
+    if (this.method === "gamescope" && this.activeDisplay) {
+      const { cmd, env } = wrapForUser(
+        ["xprop", "-root", SDR_GAMUT_PROP],
+        this.activeDisplay,
+        this.userCreds,
+      );
+      const res = await exec(cmd, env);
       if (res.ok && res.stdout.includes("=")) {
         const rawVal = parseInt(res.stdout.split("=")[1].trim(), 10);
         const floatVal = longToFloat(rawVal);
@@ -225,14 +330,17 @@ export default class DisplaySettingsBackend implements PluginBackend {
     value = Math.max(0, Math.min(200, Math.round(value)));
     this.state.saturation = value;
 
-    if (this.method === "gamescope") {
+    if (this.method === "gamescope" && this.activeDisplay) {
       const floatVal = value / 200;
-      const res = await exec(
-        xpropArgs([
-          "-root", "-f", SDR_GAMUT_PROP, "32c",
+      const { cmd, env } = wrapForUser(
+        [
+          "xprop", "-root", "-f", SDR_GAMUT_PROP, "32c",
           "-set", SDR_GAMUT_PROP, String(floatToLong(floatVal)),
-        ]),
+        ],
+        this.activeDisplay,
+        this.userCreds,
       );
+      const res = await exec(cmd, env);
       this._emitState();
       return res.ok;
     }
@@ -276,12 +384,17 @@ export default class DisplaySettingsBackend implements PluginBackend {
     }
 
     // Last resort: xrandr software brightness (X11 only)
-    if (this.method === "xrandr" && this.xrandrOutput) {
+    if (this.method === "xrandr" && this.xrandrOutput && this.activeDisplay) {
       const brightnessFloat = value / 100;
-      const res = await exec([
-        "xrandr", "--output", this.xrandrOutput,
-        "--brightness", String(brightnessFloat),
-      ]);
+      const { cmd, env } = wrapForUser(
+        [
+          "xrandr", "--output", this.xrandrOutput,
+          "--brightness", String(brightnessFloat),
+        ],
+        this.activeDisplay,
+        this.userCreds,
+      );
+      const res = await exec(cmd, env);
       this._emitState();
       return res.ok;
     }
@@ -310,11 +423,16 @@ export default class DisplaySettingsBackend implements PluginBackend {
       return res.ok;
     }
 
-    if (this.method === "xrandr" && this.xrandrOutput) {
-      const res = await exec([
-        "xrandr", "--output", this.xrandrOutput,
-        "--gamma", `${gamma.r}:${gamma.g}:${gamma.b}`,
-      ]);
+    if (this.method === "xrandr" && this.xrandrOutput && this.activeDisplay) {
+      const { cmd, env } = wrapForUser(
+        [
+          "xrandr", "--output", this.xrandrOutput,
+          "--gamma", `${gamma.r}:${gamma.g}:${gamma.b}`,
+        ],
+        this.activeDisplay,
+        this.userCreds,
+      );
+      const res = await exec(cmd, env);
       if (res.ok) {
         this.state.gamma = gamma;
       }
@@ -338,11 +456,16 @@ export default class DisplaySettingsBackend implements PluginBackend {
       b: +b.toFixed(3),
     };
 
-    if (this.method === "xrandr" && this.xrandrOutput) {
-      const res = await exec([
-        "xrandr", "--output", this.xrandrOutput,
-        "--gamma", `${r.toFixed(3)}:${g.toFixed(3)}:${b.toFixed(3)}`,
-      ]);
+    if (this.method === "xrandr" && this.xrandrOutput && this.activeDisplay) {
+      const { cmd, env } = wrapForUser(
+        [
+          "xrandr", "--output", this.xrandrOutput,
+          "--gamma", `${r.toFixed(3)}:${g.toFixed(3)}:${b.toFixed(3)}`,
+        ],
+        this.activeDisplay,
+        this.userCreds,
+      );
+      const res = await exec(cmd, env);
       this._emitState();
       return res.ok;
     }
