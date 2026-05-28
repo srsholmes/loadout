@@ -165,6 +165,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@loadout/plugin-storage": "workspace:*",
+        "@loadout/steam-cdp": "workspace:*",
         "@loadout/steam-paths": "workspace:*",
         "@loadout/types": "workspace:*",
         "@loadout/ui": "workspace:*",

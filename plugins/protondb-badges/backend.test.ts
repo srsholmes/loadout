@@ -497,24 +497,70 @@ describe("ProtonDBBadgesBackend", () => {
     });
   });
 
-  // ── CEF status stubs ─────────────────────────────────────────
+  // ── CEF / CDP surface ────────────────────────────────────────
+  // The plugin reaches Steam's CEF via @loadout/steam-cdp's CDPClient,
+  // which talks WebSocket to localhost:8080. Under the test mockFetch
+  // the /json probe returns 500 → `_tryConnect` resolves false → no
+  // connections, but the RPC surface still works (it's the steady-state
+  // "Steam not running" view from app.tsx).
 
-  describe("CEF status stubs", () => {
-    it("getStatus reports disconnected (CEF injection not yet ported)", async () => {
+  describe("CEF status", () => {
+    it("getStatus reports disconnected when Steam isn't reachable", async () => {
+      // Default mockFetch returns 500 for everything → listCefTabs
+      // throws → _tryConnect resolves false → connected stays false.
       const status = await backend.getStatus();
       expect(status.connected).toBe(false);
       expect(status.tabs).toBe(0);
     });
 
-    it("reconnect returns an error explaining CEF is unsupported", async () => {
+    it("reconnect returns failure when Steam isn't reachable", async () => {
       const result = await backend.reconnect();
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
     });
+  });
 
-    it("getCurrentRouteAppId returns null", async () => {
-      const appId = await backend.getCurrentRouteAppId();
-      expect(appId).toBeNull();
+  // ── Game detection broadcast hooks ───────────────────────────
+  // The loader broadcasts handleGameLaunch / handleGameExit on every
+  // game state change. The plugin uses them to (a) track the current
+  // appId for `getCurrentRouteAppId` and (b) push a badge to the BPM
+  // tab. Without a CDP connection the push is a no-op; we test the
+  // bookkeeping surface here.
+
+  describe("game-detection hooks", () => {
+    it("getCurrentRouteAppId starts null", async () => {
+      expect(await backend.getCurrentRouteAppId()).toBeNull();
+    });
+
+    it("handleGameLaunch sets the current appId", async () => {
+      await backend.handleGameLaunch(12345, "Portal 2");
+      expect(await backend.getCurrentRouteAppId()).toBe("12345");
+    });
+
+    it("handleGameExit clears the current appId", async () => {
+      await backend.handleGameLaunch(12345, "Portal 2");
+      await backend.handleGameExit(12345);
+      expect(await backend.getCurrentRouteAppId()).toBeNull();
+    });
+
+    it("handleGameExit for a non-current appId is a no-op", async () => {
+      await backend.handleGameLaunch(12345, "Portal 2");
+      await backend.handleGameExit(99999);
+      // 99999 isn't the current game → no clear.
+      expect(await backend.getCurrentRouteAppId()).toBe("12345");
+    });
+
+    it("handleGameLaunch ignores non-numeric / non-finite appIds", async () => {
+      await backend.handleGameLaunch(
+        Number.NaN as unknown as number,
+        "bogus",
+      );
+      expect(await backend.getCurrentRouteAppId()).toBeNull();
+      await backend.handleGameLaunch(
+        "not-a-number" as unknown as number,
+        "bogus",
+      );
+      expect(await backend.getCurrentRouteAppId()).toBeNull();
     });
   });
 });
