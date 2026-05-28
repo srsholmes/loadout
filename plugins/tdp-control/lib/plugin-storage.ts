@@ -4,11 +4,9 @@
  *   $XDG_CONFIG_HOME/loadout/plugins/<plugin-id>.json
  *   (typically ~/.config/loadout/plugins/<plugin-id>.json)
  *
- * Inlined into this plugin per the migration spec — the old repo shipped
- * this as a shared `@steam-loader/plugin-storage` package, but Loadout
- * keeps plugin code inside the plugin capsule unless 2+ migrated plugins
- * genuinely share it. Each plugin owns ONE JSON file keyed by its plugin
- * ID.
+ * Each plugin owns ONE JSON file keyed by its plugin ID. Inlined per the
+ * plugin-capsule rule — shared helpers only graduate to a package when 2+
+ * plugins genuinely need them.
  *
  * Writes are atomic: the helper writes to `<path>.tmp` and renames, so a
  * crash mid-write can't leave a torn file. Reads return an empty object

@@ -286,10 +286,9 @@ export default class TdpControlBackend implements PluginBackend {
     // to detect platform_profile changes)
     this.pollInterval = setInterval(() => this.pollTdp(), 5000);
 
-    // Initialize per-game TDP profile engine. Storage now lives at
+    // Initialize per-game TDP profile engine. Storage lives at
     // ~/.config/loadout/plugins/tdp-control.json via the inlined
-    // plugin-storage helper. The engine handles a one-shot migration from
-    // the legacy ~/.config/loadout/tdp-profiles.json on first load.
+    // plugin-storage helper.
     this.profileEngine = createTdpProfileEngine({
       pluginId: "tdp-control",
       onApplyTdp: async (watts: number) => {
