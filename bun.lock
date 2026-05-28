@@ -91,6 +91,16 @@
         "react": ">=18",
       },
     },
+    "plugins/bluetooth": {
+      "name": "@loadout/plugin-bluetooth",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/exec": "workspace:*",
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+      },
+    },
     "plugins/fan-control": {
       "name": "@loadout/plugin-fan-control",
       "version": "0.0.1",
@@ -266,6 +276,8 @@
     "@loadout/loadout-overlay": ["@loadout/loadout-overlay@workspace:apps/loadout-overlay"],
 
     "@loadout/loadout-server": ["@loadout/loadout-server@workspace:apps/loadout"],
+
+    "@loadout/plugin-bluetooth": ["@loadout/plugin-bluetooth@workspace:plugins/bluetooth"],
 
     "@loadout/plugin-fan-control": ["@loadout/plugin-fan-control@workspace:plugins/fan-control"],
 
