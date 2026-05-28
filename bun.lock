@@ -77,6 +77,13 @@
       "name": "@loadout/external-cache",
       "version": "0.0.1",
     },
+    "packages/file-picker": {
+      "name": "@loadout/file-picker",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/exec": "workspace:*",
+      },
+    },
     "packages/per-game-profiles": {
       "name": "@loadout/per-game-profiles",
       "version": "0.0.1",
@@ -322,6 +329,8 @@
     "@loadout/exec": ["@loadout/exec@workspace:packages/exec"],
 
     "@loadout/external-cache": ["@loadout/external-cache@workspace:packages/external-cache"],
+
+    "@loadout/file-picker": ["@loadout/file-picker@workspace:packages/file-picker"],
 
     "@loadout/loadout-overlay": ["@loadout/loadout-overlay@workspace:apps/loadout-overlay"],
 
