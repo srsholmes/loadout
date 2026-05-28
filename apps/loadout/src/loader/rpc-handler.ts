@@ -1,10 +1,29 @@
 import type { RpcRequest, RpcResponse, PluginBackend } from "@loadout/types";
 import { resolveMethod } from "@loadout/types";
+import { withCommandPolicy, type CommandPolicy } from "@loadout/exec";
 import { withSandboxedFetch } from "./plugin-manager";
 
 export interface RpcPluginEntry {
   instance: PluginBackend;
   sandboxedFetch: typeof globalThis.fetch;
+  /**
+   * Command capability gate for this plugin. Absent for trusted core
+   * services (they run unrestricted). When present, every method call is
+   * scoped through it so the plugin can only spawn its declared commands.
+   */
+  commandPolicy?: CommandPolicy;
+}
+
+/**
+ * Invoke a plugin method inside its capability scopes: command policy
+ * (subprocess) outside, sandboxed fetch (network) inside. A core service
+ * with no `commandPolicy` skips the command gate entirely.
+ */
+function invokeScoped<T>(entry: RpcPluginEntry, fn: () => T | Promise<T>): Promise<T> {
+  const withFetch = () => withSandboxedFetch(entry.sandboxedFetch, fn);
+  return entry.commandPolicy
+    ? withCommandPolicy(entry.commandPolicy, withFetch)
+    : withFetch();
 }
 
 /**
@@ -46,9 +65,7 @@ export function createRpcHandler(plugins: Map<string, RpcPluginEntry>) {
         if (!method) continue;
         called++;
         try {
-          await withSandboxedFetch(entry.sandboxedFetch, () =>
-            method(...req.args),
-          );
+          await invokeScoped(entry, () => method(...req.args));
         } catch (err) {
           errors.push({
             plugin: id,
@@ -82,9 +99,7 @@ export function createRpcHandler(plugins: Map<string, RpcPluginEntry>) {
     }
 
     try {
-      const result = await withSandboxedFetch(entry.sandboxedFetch, () =>
-        method(...req.args),
-      );
+      const result = await invokeScoped(entry, () => method(...req.args));
       const res: RpcResponse = { id: req.id, result };
       return JSON.stringify(res);
     } catch (err) {

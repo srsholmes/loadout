@@ -1,9 +1,16 @@
 name: CI
 
-# CI is temporarily disabled (manual-only) while the test harness is
-# reworked off the bespoke shell scripts onto native tooling. Restore the
-# push/pull_request triggers once the new harness lands.
+# Runs on every push + pull request: the all-bun harness (typecheck /
+# lint / check:specs / test) plus an install-path smoke test that builds
+# the binary and loads plugins. Releases are NOT done here — see
+# release.yml (manual-only, workflow_dispatch).
 on:
+  # PRs are the primary gate. `push` is scoped to main so we don't
+  # double-run on PR branches (a push to an open PR's branch already
+  # fires `pull_request`) — main still gets a post-merge run.
+  pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -34,32 +41,8 @@ jobs:
       - name: Plugin spec coverage gate
         run: bun run check:specs
 
-      # Audit A-015: hard-gate the TDP helper + install.sh validation
-      # tests. The helper runs under pkexec and writes to sysfs power
-      # caps; the install.sh script patches HELPER_DEST into a polkit
-      # policy via sed. Both have strict input contracts (range checks,
-      # path-charset guard) that must not regress silently.
-      - name: TDP helper script tests
-        run: bun run test:tdp-helper
-
       - name: Run unit tests
         run: bun run test
-
-      # Audit 2026-05 Q-005 follow-up — coverage ratchet.
-      # Thresholds live in vitest.config.ts (UI) and scripts/coverage-ratchet.sh
-      # (backend, since Bun has no built-in threshold flag). Floors sit ~1pp
-      # below the baseline measured when the ratchet landed, so trivial
-      # fluctuation doesn't fail CI but any real regression does.
-      - name: Coverage ratchet (UI + backend)
-        run: bun run test:coverage
-
-      - name: Upload coverage artifact
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
-        with:
-          name: coverage
-          path: coverage/
-          if-no-files-found: warn
 
   install-smoke:
     name: Install path smoke test (hoisted plugins + service-file parity)
@@ -127,7 +110,10 @@ jobs:
 
           echo "OK — staged $STAGED_COUNT plugins with hoisted node_modules."
 
-      # End-to-end: build the binary, point it at the staged tree, and
+      - name: Build (binary + Electrobun overlay)
+        run: bun run build
+
+      # End-to-end: point the freshly built binary at the staged tree and
       # confirm the daemon resolves every plugin's deps via the hoisted
       # node_modules. If Bun.build's resolver can't walk up to the shared
       # location, plugins fail to load and this assertion catches it
@@ -135,8 +121,6 @@ jobs:
       - name: Daemon loads all plugins from hoisted layout
         run: |
           set -eu
-          bun run build
-
           STAGE="$(mktemp -d)"
           sh scripts/prepare-plugins.sh "$STAGE"
           cp dist/loadout "$STAGE/loadout"

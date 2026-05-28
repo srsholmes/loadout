@@ -9,10 +9,13 @@ dist/
 .inject-build/
 .vendor-build/
 .cache/
-loadout
+# Root-level compiled binary only. MUST stay anchored (`/loadout`): a bare
+# `loadout` matches the `apps/loadout/` directory component and silently
+# ignores every *untracked* file under it (e.g. new loader modules) —
+# which is exactly how loader/target-user.ts went missing from a commit.
+/loadout
 
 # Test artifacts
-playwright-report/
 test-results/
 
 # Logs
@@ -48,3 +51,6 @@ qam-watch.log
 
 # Stale loadout marketing screenshots — loadout will add its own
 screenshots/
+
+# background-agent git worktrees — never track
+.worktrees/

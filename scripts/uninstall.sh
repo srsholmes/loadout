@@ -8,16 +8,17 @@ set -e
 # Configuration
 INSTALL_DIR="$HOME/.local/share/loadout"
 OVERLAY_INSTALL_DIR="$HOME/.local/share/loadout-overlay"
-BINARY_PATH="$INSTALL_DIR/loadout"
+# Binary lives in a system path now (root service execs it; SELinux).
+BINARY_PATH="/usr/local/bin/loadout"
 BIN_LINK="$HOME/.local/bin/loadout"
 SERVICE_DIR="$HOME/.config/systemd/user"
+# Obsolete per-user backend unit (the backend is now a root system unit).
 SERVICE_FILE="$SERVICE_DIR/loadout.service"
+SYSTEM_SERVICE_FILE="/etc/systemd/system/loadout.service"
 OVERLAY_SERVICE_FILE="$SERVICE_DIR/loadout-overlay.service"
 DESKTOP_DIR="$HOME/.local/share/applications"
 DESKTOP_FILE="$DESKTOP_DIR/loadout.desktop"
 CONFIG_DIR="$HOME/.config/loadout"
-POLKIT_POLICY="com.loadout.tdp-helper.policy"
-POLKIT_DIR="/usr/share/polkit-1/actions"
 
 # Colors (only if terminal supports them)
 if [ -t 1 ]; then
@@ -71,41 +72,28 @@ main() {
     info "========================================="
     echo ""
 
-    # --- Stop services (overlay first, then backend it depends on) ---
-    for unit in loadout-overlay loadout; do
-        if systemctl --user is-active "$unit" >/dev/null 2>&1; then
-            info "Stopping $unit service..."
-            systemctl --user stop "$unit"
-            success "$unit stopped."
-        else
-            info "$unit is not running."
-        fi
-    done
-
-    # --- Disable services ---
-    for unit in loadout-overlay loadout; do
-        if systemctl --user is-enabled "$unit" >/dev/null 2>&1; then
-            info "Disabling $unit service..."
-            systemctl --user disable "$unit"
-            success "$unit disabled."
-        else
-            info "$unit is not enabled."
-        fi
-    done
-
-    # --- Remove the service files ---
-    for unit_file in "$SERVICE_FILE" "$OVERLAY_SERVICE_FILE"; do
-        if [ -f "$unit_file" ]; then
-            info "Removing $(basename "$unit_file")..."
-            rm -f "$unit_file"
-            success "$(basename "$unit_file") removed."
-        fi
-    done
-
-    # --- Reload systemd ---
-    info "Reloading systemd user daemon..."
+    # --- Overlay (user service): stop, disable, remove ---
+    if systemctl --user is-active loadout-overlay >/dev/null 2>&1; then
+        info "Stopping loadout-overlay..."
+        systemctl --user stop loadout-overlay || true
+    fi
+    systemctl --user disable loadout-overlay 2>/dev/null || true
+    rm -f "$OVERLAY_SERVICE_FILE"
+    # Drop the obsolete per-user backend unit if a prior install left one.
+    rm -f "$SERVICE_FILE"
     systemctl --user daemon-reload
-    success "Systemd reloaded."
+    success "Overlay user service removed."
+
+    # --- Backend (root system service): stop, disable, remove (needs sudo) ---
+    if systemctl is-active loadout >/dev/null 2>&1 || [ -f "$SYSTEM_SERVICE_FILE" ]; then
+        info "Removing the loadout system service (needs sudo)..."
+        sudo systemctl disable --now loadout 2>/dev/null || true
+        sudo rm -f "$SYSTEM_SERVICE_FILE"
+        sudo systemctl daemon-reload
+        success "Backend system service removed."
+    else
+        info "Backend system service not installed."
+    fi
 
     # --- Remove .desktop file ---
     if [ -f "$DESKTOP_FILE" ]; then
@@ -135,24 +123,26 @@ main() {
 
     echo ""
 
+    # --- Remove the system binary (root-owned, needs sudo) ---
+    if [ -f "$BINARY_PATH" ]; then
+        info "Removing $BINARY_PATH (needs sudo)..."
+        sudo rm -f "$BINARY_PATH"
+        success "Binary removed."
+    else
+        info "Binary not found at $BINARY_PATH (already removed)."
+    fi
+
     # --- Ask about plugin data ---
     if [ -d "$INSTALL_DIR" ]; then
-        if prompt_yn "Remove all Loadout data (binary, plugins, helpers)? (y/N)"; then
-            info "Removing all Loadout data..."
+        if prompt_yn "Remove plugin data at $INSTALL_DIR? (y/N)"; then
+            info "Removing plugin data..."
             rm -rf "$INSTALL_DIR"
             success "Removed $INSTALL_DIR"
         else
-            info "Keeping data. Removing only the binary..."
-            if [ -f "$BINARY_PATH" ]; then
-                rm -f "$BINARY_PATH"
-                success "Binary removed."
-            else
-                info "Binary not found (already removed)."
-            fi
             info "Plugin data preserved at: $INSTALL_DIR"
         fi
     else
-        info "Install directory not found (already removed)."
+        info "Plugin data directory not found (already removed)."
     fi
 
     # --- Remove overlay install directory ---
@@ -175,22 +165,6 @@ main() {
         fi
     else
         info "Configuration directory not found (nothing to remove)."
-    fi
-
-    # --- Ask about polkit policy ---
-    if [ -f "$POLKIT_DIR/$POLKIT_POLICY" ]; then
-        echo ""
-        if prompt_yn "Remove polkit policy for TDP helper? (requires sudo) (y/N)"; then
-            info "Removing polkit policy..."
-            if sudo rm -f "$POLKIT_DIR/$POLKIT_POLICY"; then
-                success "Polkit policy removed."
-            else
-                warn "Failed to remove polkit policy. Remove manually:"
-                info "  sudo rm $POLKIT_DIR/$POLKIT_POLICY"
-            fi
-        else
-            info "Polkit policy preserved."
-        fi
     fi
 
     echo ""
