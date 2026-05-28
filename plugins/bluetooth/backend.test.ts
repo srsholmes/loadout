@@ -24,9 +24,8 @@ describe("BluetoothBackend", () => {
       emittedEvents.push(payload);
     };
     mockRun.mockClear();
-
-    // Stop poll interval to prevent timer leaks in the test process
-    clearInterval((backend as any).pollInterval);
+    // Tests never call onLoad(), so pollInterval is never armed — no
+    // need to clearInterval here.
   });
 
   // ---------------------------------------------------------------------------

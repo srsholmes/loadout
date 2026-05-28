@@ -61,10 +61,6 @@ describe("parseDeviceList()", () => {
     expect(parseDeviceList("")).toEqual([]);
   });
 
-  it("returns empty array for null-ish output", () => {
-    expect(parseDeviceList("")).toEqual([]);
-  });
-
   it("parses a single Device line", () => {
     const result = parseDeviceList("Device AA:BB:CC:DD:EE:FF Sony WH-1000XM5\n");
     expect(result).toHaveLength(1);

@@ -8,8 +8,6 @@ import {
   parseAdapterInfo,
 } from "./lib/parse";
 
-export type { BluetoothDevice, AdapterInfo };
-
 /**
  * Bluetooth manager plugin backend.
  *

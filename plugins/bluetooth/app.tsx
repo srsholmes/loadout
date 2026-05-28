@@ -282,32 +282,24 @@ function BluetoothManager() {
 }
 
 /**
- * Collapse mount boilerplate into a factory per PLAYBOOK.md.
- * Each exported mount fn is one line.
+ * Mount this plugin into a container element.
+ * Called by the overlay shell when this plugin is selected.
  */
-function mountComponent(
-  Component: React.ComponentType,
-  extraProps?: Record<string, unknown>,
-) {
-  return (
-    container: HTMLElement,
-    opts?: { parentFocusKey?: string; headerSlot?: HTMLElement | null },
-  ): (() => void) => {
-    const root = createRoot(container);
-    root.render(
-      <PluginProvider
-        parentFocusKey={opts?.parentFocusKey}
-        headerSlot={opts?.headerSlot ?? null}
-        {...(extraProps ?? {})}
-      >
-        <Component />
-      </PluginProvider>,
-    );
-    return () => root.unmount();
-  };
+export function mount(
+  container: HTMLElement,
+  opts?: { parentFocusKey?: string; headerSlot?: HTMLElement | null },
+): () => void {
+  const root = createRoot(container);
+  root.render(
+    <PluginProvider
+      parentFocusKey={opts?.parentFocusKey}
+      headerSlot={opts?.headerSlot ?? null}
+    >
+      <BluetoothManager />
+    </PluginProvider>,
+  );
+  return () => root.unmount();
 }
-
-export const mount = mountComponent(BluetoothManager);
 
 /**
  * Stub `mountHeader` export. Its mere presence is what tells the

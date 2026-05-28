@@ -45,7 +45,6 @@ export function parseDeviceType(infoOutput: string): DeviceType {
  * Returns `{ mac, name }` for each valid `Device XX:XX:…:XX Some Name` line.
  */
 export function parseDeviceList(output: string): Array<{ mac: string; name: string }> {
-  if (!output) return [];
   const results: Array<{ mac: string; name: string }> = [];
   for (const line of output.split("\n")) {
     if (!line.startsWith("Device ")) continue;
