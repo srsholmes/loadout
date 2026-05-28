@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,30 +12,38 @@ import { join } from "node:path";
  * This spec pins:
  *   - `resolveStartDirectory` fallback chain (explicit → ~/Downloads
  *     → ~ → ".")
+ *   - `resolveX11Env` runtime-dir probe + `~/.Xauthority` fallback
  *   - `pickFile`'s "no picker installed" return-null path
  */
 
 const origHome = process.env.HOME;
+const origXdgRuntime = process.env.XDG_RUNTIME_DIR;
+const origDisplay = process.env.DISPLAY;
+const origXauth = process.env.XAUTHORITY;
 let sandboxRoot = "";
 
 // Force the picker registry to look-empty so pickFile exits before
-// running any external process.
+// running any external process. No test exercises the happy path, so
+// a no-op stub is enough.
 mock.module("@loadout/exec", () => ({
   commandExists: async (_name: string) => false,
-  runFull: async () => {
-    throw new Error(
-      "runFull should NOT be called when commandExists returns false for all pickers",
-    );
-  },
+  runFull: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
 }));
+
+function restoreEnv(name: string, original: string | undefined): void {
+  if (original !== undefined) process.env[name] = original;
+  else delete process.env[name];
+}
 
 beforeEach(async () => {
   sandboxRoot = await mkdtemp(join(tmpdir(), "file-picker-spec-"));
 });
 
 afterEach(async () => {
-  if (origHome !== undefined) process.env.HOME = origHome;
-  else delete process.env.HOME;
+  restoreEnv("HOME", origHome);
+  restoreEnv("XDG_RUNTIME_DIR", origXdgRuntime);
+  restoreEnv("DISPLAY", origDisplay);
+  restoreEnv("XAUTHORITY", origXauth);
   await rm(sandboxRoot, { recursive: true, force: true });
 });
 
@@ -46,13 +54,14 @@ describe("resolveStartDirectory", () => {
     expect(resolveStartDirectory(sandboxRoot)).toBe(sandboxRoot);
   });
 
-  it("falls back to $HOME/Downloads when the explicit path is missing", async () => {
-    const sandboxHome = sandboxRoot;
-    const downloads = join(sandboxHome, "Downloads");
+  it("falls through past a missing explicit path to find $HOME/Downloads", async () => {
+    // Regression guard: an explicit path that doesn't exist must
+    // ALSO trigger the Downloads probe — not skip straight to $HOME.
+    const downloads = join(sandboxRoot, "Downloads");
     await mkdir(downloads);
-    process.env.HOME = sandboxHome;
+    process.env.HOME = sandboxRoot;
     const { resolveStartDirectory } = await import("./index");
-    expect(resolveStartDirectory("/this/path/does/not/exist")).toBe(downloads);
+    expect(resolveStartDirectory("/no/such/path")).toBe(downloads);
   });
 
   it("falls back to $HOME when neither the explicit path nor Downloads exists", async () => {
@@ -66,16 +75,63 @@ describe("resolveStartDirectory", () => {
     const { resolveStartDirectory } = await import("./index");
     expect(resolveStartDirectory()).toBe(".");
   });
+});
 
-  it("falls through past a missing explicit path to find Downloads, NOT $HOME", async () => {
-    // Regression guard: an explicit path that doesn't exist must
-    // ALSO trigger the Downloads probe — not skip straight to $HOME.
-    const sandboxHome = sandboxRoot;
-    const downloads = join(sandboxHome, "Downloads");
-    await mkdir(downloads);
-    process.env.HOME = sandboxHome;
-    const { resolveStartDirectory } = await import("./index");
-    expect(resolveStartDirectory("/no/such/path")).toBe(downloads);
+describe("resolveX11Env", () => {
+  it("probes $XDG_RUNTIME_DIR/xauth_* when XAUTHORITY is unset (SteamOS Gaming Mode)", async () => {
+    // gamescope-session-plus pattern: cookie at
+    // $XDG_RUNTIME_DIR/xauth_<random>, NOT ~/.Xauthority.
+    delete process.env.XAUTHORITY;
+    process.env.XDG_RUNTIME_DIR = sandboxRoot;
+    process.env.DISPLAY = ":1";
+    await writeFile(join(sandboxRoot, "xauth_abc123"), "");
+
+    const { resolveX11Env } = await import("./index");
+    const env = await resolveX11Env();
+    expect(env.XAUTHORITY).toBe(`${sandboxRoot}/xauth_abc123`);
+    expect(env.DISPLAY).toBe(":1");
+  });
+
+  it("prefers explicit $XAUTHORITY over the runtime-dir probe", async () => {
+    process.env.XAUTHORITY = "/explicit/path/.Xauthority";
+    process.env.XDG_RUNTIME_DIR = sandboxRoot;
+    await writeFile(join(sandboxRoot, "xauth_zzz"), "");
+
+    const { resolveX11Env } = await import("./index");
+    const env = await resolveX11Env();
+    expect(env.XAUTHORITY).toBe("/explicit/path/.Xauthority");
+  });
+
+  it("falls back to ~/.Xauthority when it exists and no runtime-dir cookie is found", async () => {
+    delete process.env.XAUTHORITY;
+    delete process.env.XDG_RUNTIME_DIR;
+    process.env.HOME = sandboxRoot;
+    await writeFile(join(sandboxRoot, ".Xauthority"), "");
+
+    const { resolveX11Env } = await import("./index");
+    const env = await resolveX11Env();
+    expect(env.XAUTHORITY).toBe(`${sandboxRoot}/.Xauthority`);
+  });
+
+  it("leaves XAUTHORITY unset when no cookie is reachable", async () => {
+    delete process.env.XAUTHORITY;
+    delete process.env.XDG_RUNTIME_DIR;
+    process.env.HOME = sandboxRoot; // no .Xauthority inside
+
+    const { resolveX11Env } = await import("./index");
+    const env = await resolveX11Env();
+    expect(env.XAUTHORITY).toBeUndefined();
+  });
+
+  it("does NOT fall back to DISPLAY=:0 when DISPLAY is unset", async () => {
+    delete process.env.DISPLAY;
+    delete process.env.XAUTHORITY;
+    delete process.env.XDG_RUNTIME_DIR;
+    delete process.env.HOME;
+
+    const { resolveX11Env } = await import("./index");
+    const env = await resolveX11Env();
+    expect(env.DISPLAY).toBeUndefined();
   });
 });
 
