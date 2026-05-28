@@ -66,21 +66,19 @@ interface FanGameProfile {
   speed?: number;
 }
 
-function FanControl() {
-  const { call, useEvent } = useBackend("fan-control");
-  const currentGame = useCurrentGame();
-
-  const [fanInfo, setFanInfo] = useState<FanInfo | null>(null);
-  const [sliderValue, setSliderValue] = useState(50);
-  const [activePreset, setActivePreset] = useState<Preset | null>(null);
-  const [loading, setLoading] = useState(true);
+/**
+ * Shared per-game-profile plumbing for the settings page and the home
+ * widget. Both surfaces load the same state, subscribe to the same two
+ * backend events, and persist to the running game identically — this hook
+ * is the single copy of that wiring so the two components can't drift.
+ */
+function usePerGameProfiles(
+  call: ReturnType<typeof useBackend>["call"],
+  useEvent: ReturnType<typeof useBackend>["useEvent"],
+  currentGame: ReturnType<typeof useCurrentGame>,
+) {
   const [perGameEnabled, setPerGameEnabled] = useState(false);
   const [gameProfiles, setGameProfiles] = useState<FanGameProfile[]>([]);
-  // Banner dismissal is per-engagement: dismissing during one thermal
-  // event must not silence the next one. Reset when safetyEngaged goes
-  // false → true (handled in the effect below).
-  const [safetyDismissed, setSafetyDismissed] = useState(false);
-  const wasSafetyEngagedRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -112,6 +110,51 @@ function FanControl() {
         .catch(() => {});
     },
   });
+
+  const boundToGame = perGameEnabled && currentGame !== null;
+  const persistGameProfile = useCallback(
+    (mode: "auto" | "manual", speed?: number) => {
+      if (!boundToGame) return;
+      call(
+        "setGameProfile",
+        currentGame!.appId,
+        currentGame!.gameName,
+        { mode, speed },
+      ).catch(() => {});
+    },
+    [boundToGame, call, currentGame],
+  );
+
+  return {
+    perGameEnabled,
+    setPerGameEnabled,
+    gameProfiles,
+    setGameProfiles,
+    boundToGame,
+    persistGameProfile,
+  };
+}
+
+function FanControl() {
+  const { call, useEvent } = useBackend("fan-control");
+  const currentGame = useCurrentGame();
+
+  const [fanInfo, setFanInfo] = useState<FanInfo | null>(null);
+  const [sliderValue, setSliderValue] = useState(50);
+  const [activePreset, setActivePreset] = useState<Preset | null>(null);
+  const [loading, setLoading] = useState(true);
+  const {
+    perGameEnabled,
+    setPerGameEnabled,
+    gameProfiles,
+    setGameProfiles,
+    persistGameProfile,
+  } = usePerGameProfiles(call, useEvent, currentGame);
+  // Banner dismissal is per-engagement: dismissing during one thermal
+  // event must not silence the next one. Reset when safetyEngaged goes
+  // false → true (handled in the effect below).
+  const [safetyDismissed, setSafetyDismissed] = useState(false);
+  const wasSafetyEngagedRef = useRef(false);
 
   // Subscribe to real-time fan updates from the backend
   useEvent({
@@ -147,20 +190,6 @@ function FanControl() {
     }
     wasSafetyEngagedRef.current = engaged;
   }, [fanInfo?.safetyEngaged]);
-
-  const boundToGame = perGameEnabled && currentGame !== null;
-  const persistGameProfile = useCallback(
-    (mode: "auto" | "manual", speed?: number) => {
-      if (!boundToGame) return;
-      call(
-        "setGameProfile",
-        currentGame!.appId,
-        currentGame!.gameName,
-        { mode, speed },
-      ).catch(() => {});
-    },
-    [boundToGame, call, currentGame],
-  );
 
   const handleSetMode = useCallback(
     async (mode: "auto" | "manual") => {
@@ -199,7 +228,7 @@ function FanControl() {
       setPerGameEnabled(next);
       await call("setPerGameEnabled", next).catch(() => setPerGameEnabled(!next));
     },
-    [call],
+    [call, setPerGameEnabled],
   );
 
   const handleRemoveProfile = useCallback(
@@ -208,7 +237,7 @@ function FanControl() {
       const list = (await call("getGameProfiles").catch(() => [])) as FanGameProfile[];
       setGameProfiles(list);
     },
-    [call],
+    [call, setGameProfiles],
   );
 
   // Subtitle text + chip-style hint summarising hardware path —
@@ -544,8 +573,11 @@ function FanHomeWidget() {
   const [autoDuty, setAutoDuty] = useState(0);
   const [, setActivePreset] = useState<string | null>(null);
   const [error, setError] = useState(false);
-  const [perGameEnabled, setPerGameEnabled] = useState(false);
-  const [gameProfiles, setGameProfiles] = useState<FanGameProfile[]>([]);
+  const { gameProfiles, boundToGame, persistGameProfile } = usePerGameProfiles(
+    call,
+    useEvent,
+    currentGame,
+  );
   const slidingRef = useRef(false);
   // Note on auto-mode duty: the backend can only report a live duty %
   // when it has direct hwmon PWM-register access. On ectool-only paths
@@ -559,51 +591,6 @@ function FanHomeWidget() {
   // indicator; the slider thumb only moves when the kernel can give
   // us a real duty %. In manual mode the slider reflects the user's
   // setting either way.
-
-  useEffect(() => {
-    let alive = true;
-    Promise.all([call("getPerGameEnabled"), call("getGameProfiles")])
-      .then(([enabled, list]) => {
-        if (!alive) return;
-        setPerGameEnabled(Boolean(enabled));
-        setGameProfiles((list as FanGameProfile[]) ?? []);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [call]);
-
-  useEvent({
-    event: "perGameEnabledChanged",
-    handler: (data: unknown) => {
-      const { enabled } = data as { enabled: boolean };
-      setPerGameEnabled(enabled);
-    },
-  });
-
-  useEvent({
-    event: "gameProfileChanged",
-    handler: () => {
-      call("getGameProfiles")
-        .then((list) => setGameProfiles((list as FanGameProfile[]) ?? []))
-        .catch(() => {});
-    },
-  });
-
-  const boundToGame = perGameEnabled && currentGame !== null;
-  const persistGameProfile = useCallback(
-    (nextMode: "auto" | "manual", nextSpeed?: number) => {
-      if (!boundToGame) return;
-      call(
-        "setGameProfile",
-        currentGame!.appId,
-        currentGame!.gameName,
-        { mode: nextMode, speed: nextSpeed },
-      ).catch(() => {});
-    },
-    [boundToGame, call, currentGame],
-  );
 
   // Compute the live auto-duty estimate from a fresh FanInfo payload.
   // Returns the backend's PWM-derived `percent` directly. Will be 0 on
