@@ -13,6 +13,21 @@ import {
   SAFETY_THRESHOLDS,
   type SafetyFloorResult,
 } from "./safety-floor";
+import {
+  FAN_CURVES,
+  clampPercent,
+  interpolateCurve,
+  percentToPwm,
+  pwmToPercent,
+  validateCurve,
+  type FanCurvePoint,
+  type PresetName,
+} from "./lib/fan-curves";
+import {
+  classifyTempZone,
+  parsePwmMode,
+  zoneSortWeight,
+} from "./lib/sensors";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,13 +65,6 @@ interface TempSensor {
   /** Chip name of the hwmon device that owns this sensor */
   chipName: string;
 }
-
-interface FanCurvePoint {
-  tempC: number;
-  percent: number;
-}
-
-type PresetName = "silent" | "balanced" | "performance" | "custom";
 
 const PLUGIN_ID = "fan-control";
 
@@ -125,47 +133,7 @@ interface TempResult {
   chipName: string;
 }
 
-// ---------------------------------------------------------------------------
-// Fan curve presets
-// ---------------------------------------------------------------------------
-
-const FAN_CURVES: Record<Exclude<PresetName, "custom">, FanCurvePoint[]> = {
-  silent: [
-    { tempC: 40, percent: 0 },
-    { tempC: 50, percent: 20 },
-    { tempC: 60, percent: 40 },
-    { tempC: 70, percent: 60 },
-    { tempC: 80, percent: 80 },
-    { tempC: 90, percent: 100 },
-  ],
-  balanced: [
-    { tempC: 30, percent: 15 },
-    { tempC: 45, percent: 30 },
-    { tempC: 55, percent: 50 },
-    { tempC: 65, percent: 70 },
-    { tempC: 75, percent: 85 },
-    { tempC: 85, percent: 100 },
-  ],
-  performance: [
-    { tempC: 30, percent: 30 },
-    { tempC: 40, percent: 50 },
-    { tempC: 50, percent: 60 },
-    { tempC: 60, percent: 75 },
-    { tempC: 70, percent: 90 },
-    { tempC: 80, percent: 100 },
-  ],
-};
-
 const HWMON_BASE = "/sys/class/hwmon";
-
-/** Chip names known to host CPU temperature sensors */
-const CPU_TEMP_CHIPS = ["k10temp", "coretemp", "zenpower"];
-
-/** Chip names known to host GPU temperature sensors */
-const GPU_TEMP_CHIPS = ["amdgpu", "nvidia", "nouveau", "radeon"];
-
-/** Keywords that hint at a CPU-related temp label */
-const CPU_LABEL_KEYWORDS = ["tctl", "tdie", "cpu", "soc", "package"];
 
 // ---------------------------------------------------------------------------
 // Plugin backend
@@ -455,12 +423,12 @@ export default class FanControlBackend implements PluginBackend {
 
       if (fan.pwmPath) {
         pwm = await this.readIntFile(fan.pwmPath).catch(() => 0);
-        percent = Math.round((pwm / 255) * 100);
+        percent = pwmToPercent(pwm);
       }
 
       if (fan.pwmEnablePath && mode === "unknown") {
         const modeRaw = await this.readIntFile(fan.pwmEnablePath).catch(() => -1);
-        mode = this.parsePwmMode(modeRaw);
+        mode = parsePwmMode(modeRaw);
       }
 
       fanReadings.push({ index: fan.index, rpm, pwm, percent });
@@ -504,8 +472,8 @@ export default class FanControlBackend implements PluginBackend {
     // Safety override (issue #97): user's value first, then the floor
     // can only RAISE it. Fails safe to 100% on any temp-read error.
     const safePercent = await this.applySafetyFloor(percent);
-    const clamped = Math.max(0, Math.min(100, safePercent));
-    const pwmValue = Math.round((clamped / 100) * 255);
+    const clamped = clampPercent(safePercent);
+    const pwmValue = percentToPwm(clamped);
 
     // Stop any active curve loop
     this.stopCurveLoop();
@@ -595,10 +563,11 @@ export default class FanControlBackend implements PluginBackend {
     customCurve?: FanCurvePoint[],
   ): Promise<{ success: boolean; error?: string }> {
     if (name === "custom") {
-      if (!customCurve || customCurve.length < 2) {
-        return { success: false, error: "Custom preset requires at least 2 curve points" };
-      }
-      this.customCurve = customCurve.sort((a, b) => a.tempC - b.tempC);
+      const invalid = validateCurve(customCurve);
+      if (invalid) return { success: false, error: invalid };
+      // Non-null after validateCurve passes; copy before sorting so we
+      // don't mutate the caller's array in place.
+      this.customCurve = [...customCurve!].sort((a, b) => a.tempC - b.tempC);
     }
 
     const curve = name === "custom" ? this.customCurve : FAN_CURVES[name];
@@ -686,7 +655,7 @@ export default class FanControlBackend implements PluginBackend {
             label = chipName ? `${chipName}/temp${i}` : `hwmon/${entry}/temp${i}`;
           }
 
-          const zone = this.classifyTempZone(chipName, label);
+          const zone = classifyTempZone(chipName, label);
           sensors.push({ inputPath, label, zone, chipName: chipName || entry });
         }
       }
@@ -695,54 +664,20 @@ export default class FanControlBackend implements PluginBackend {
     }
 
     // Sort so CPU sensors come first, then GPU, then others
-    const zoneOrder: Record<string, number> = { cpu: 0, gpu: 1, soc: 2, unknown: 3 };
-    sensors.sort((a, b) => (zoneOrder[a.zone] ?? 3) - (zoneOrder[b.zone] ?? 3));
+    sensors.sort((a, b) => zoneSortWeight(a.zone) - zoneSortWeight(b.zone));
 
     return sensors;
-  }
-
-  /** Classifies a temperature sensor into a zone based on chip name and label. */
-  private classifyTempZone(chipName: string, label: string): string {
-    const lower = (chipName + " " + label).toLowerCase();
-
-    if (CPU_TEMP_CHIPS.some((c) => lower.includes(c))) return "cpu";
-    if (CPU_LABEL_KEYWORDS.some((kw) => lower.includes(kw))) return "cpu";
-    if (GPU_TEMP_CHIPS.some((c) => lower.includes(c))) return "gpu";
-    if (lower.includes("gpu") || lower.includes("junction") || lower.includes("edge")) return "gpu";
-    if (lower.includes("soc")) return "soc";
-
-    // steamdeck_hwmon has CPU temp
-    if (lower.includes("steamdeck")) return "cpu";
-
-    return "unknown";
   }
 
   // -----------------------------------------------------------------------
   // Fan curve logic
   // -----------------------------------------------------------------------
 
-  /** Interpolates the target fan percent for a given temperature using a curve. */
-  private interpolateCurve(curve: FanCurvePoint[], tempC: number): number {
-    if (tempC <= curve[0].tempC) return curve[0].percent;
-    if (tempC >= curve[curve.length - 1].tempC) return curve[curve.length - 1].percent;
-
-    for (let i = 0; i < curve.length - 1; i++) {
-      const lo = curve[i];
-      const hi = curve[i + 1];
-      if (tempC >= lo.tempC && tempC <= hi.tempC) {
-        const ratio = (tempC - lo.tempC) / (hi.tempC - lo.tempC);
-        return Math.round(lo.percent + ratio * (hi.percent - lo.percent));
-      }
-    }
-
-    return curve[curve.length - 1].percent;
-  }
-
   /** Applies a fan curve once based on current temperature. */
   private async applyCurve(curve: FanCurvePoint[]): Promise<void> {
     const temps = await this.getTemperatures();
     const cpuTemp = temps.find((t) => t.zone === "cpu")?.tempC ?? temps[0]?.tempC ?? 0;
-    let targetPercent = this.interpolateCurve(curve, cpuTemp);
+    let targetPercent = interpolateCurve(curve, cpuTemp);
 
     // Safety override (issue #97). Runs AFTER the user's curve so the
     // curve's intent is preserved on normal temps, then clamped upward
@@ -762,7 +697,7 @@ export default class FanControlBackend implements PluginBackend {
       );
     }
 
-    await this.setFanSpeedInternal(Math.max(0, Math.min(100, targetPercent)));
+    await this.setFanSpeedInternal(clampPercent(targetPercent));
   }
 
   /** Starts the curve evaluation loop (every 2 seconds). */
@@ -1058,8 +993,8 @@ export default class FanControlBackend implements PluginBackend {
    * mode or running a preset curve.
    */
   private async setFanSpeedInternal(percent: number): Promise<{ success: boolean; error?: string }> {
-    const clamped = Math.max(0, Math.min(100, percent));
-    const pwmValue = Math.round((clamped / 100) * 255);
+    const clamped = clampPercent(percent);
+    const pwmValue = percentToPwm(clamped);
 
     if (this.useEctool && !this.activeFanDevice?.hasPwmControl) {
       return this.setEctoolFanSpeed(clamped);
@@ -1216,20 +1151,6 @@ export default class FanControlBackend implements PluginBackend {
     }
   }
 
-  /** Parses a pwm_enable integer into a human-readable mode string. */
-  private parsePwmMode(value: number): "auto" | "manual" | "full" | "unknown" {
-    switch (value) {
-      case 0:
-        return "full";
-      case 1:
-        return "manual";
-      case 2:
-        return "auto";
-      default:
-        return "unknown";
-    }
-  }
-
   // -----------------------------------------------------------------------
   // Per-game profiles
   // -----------------------------------------------------------------------
@@ -1270,7 +1191,7 @@ export default class FanControlBackend implements PluginBackend {
       mode: profile.mode === "manual" ? "manual" : "auto",
       speed:
         typeof profile.speed === "number"
-          ? Math.max(0, Math.min(100, Math.round(profile.speed)))
+          ? clampPercent(profile.speed)
           : undefined,
     };
     const next = await this.profileEngine.setProfile(appId, gameName ?? "", payload);

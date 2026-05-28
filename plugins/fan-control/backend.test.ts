@@ -65,12 +65,6 @@ type FanBackendInternals = {
   setFanSpeedInternal(percent: number): Promise<{ success: boolean; error?: string }>;
   safetyWatchdogTick(): Promise<void>;
   getCpuTempCOrNull(): Promise<number | null>;
-  interpolateCurve(
-    curve: { tempC: number; percent: number }[],
-    tempC: number,
-  ): number;
-  parsePwmMode(n: number): string;
-  classifyTempZone(chipName: string, label: string): string;
 };
 const internals = (b: FanControlBackend): FanBackendInternals =>
   b as unknown as FanBackendInternals;
@@ -296,101 +290,10 @@ describe("FanControlBackend", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // interpolateCurve — fan curve interpolation
+  // NOTE: interpolateCurve / parsePwmMode / classifyTempZone are now pure
+  // helpers in ./lib/fan-curves and ./lib/sensors; their unit tests live in
+  // lib/fan-curves.test.ts and lib/sensors.test.ts.
   // ---------------------------------------------------------------------------
-
-  describe("interpolateCurve()", () => {
-    const curve = [
-      { tempC: 30, percent: 10 },
-      { tempC: 50, percent: 50 },
-      { tempC: 70, percent: 100 },
-    ];
-
-    it("returns first point percent below the curve range", () => {
-      const result = internals(backend).interpolateCurve(curve, 20);
-      expect(result).toBe(10);
-    });
-
-    it("returns last point percent above the curve range", () => {
-      const result = internals(backend).interpolateCurve(curve, 90);
-      expect(result).toBe(100);
-    });
-
-    it("returns exact percent at a curve point", () => {
-      const result = internals(backend).interpolateCurve(curve, 50);
-      expect(result).toBe(50);
-    });
-
-    it("interpolates between two curve points", () => {
-      // Between 30C (10%) and 50C (50%), at 40C should be midpoint: 30%
-      const result = internals(backend).interpolateCurve(curve, 40);
-      expect(result).toBe(30);
-    });
-
-    it("interpolates in the upper range", () => {
-      // Between 50C (50%) and 70C (100%), at 60C should be 75%
-      const result = internals(backend).interpolateCurve(curve, 60);
-      expect(result).toBe(75);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // parsePwmMode
-  // ---------------------------------------------------------------------------
-
-  describe("parsePwmMode()", () => {
-    it("maps 0 to full", () => {
-      expect(internals(backend).parsePwmMode(0)).toBe("full");
-    });
-
-    it("maps 1 to manual", () => {
-      expect(internals(backend).parsePwmMode(1)).toBe("manual");
-    });
-
-    it("maps 2 to auto", () => {
-      expect(internals(backend).parsePwmMode(2)).toBe("auto");
-    });
-
-    it("maps unknown values to unknown", () => {
-      expect(internals(backend).parsePwmMode(5)).toBe("unknown");
-      expect(internals(backend).parsePwmMode(-1)).toBe("unknown");
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // classifyTempZone
-  // ---------------------------------------------------------------------------
-
-  describe("classifyTempZone()", () => {
-    it("classifies k10temp as cpu", () => {
-      expect(internals(backend).classifyTempZone("k10temp", "Tctl")).toBe("cpu");
-    });
-
-    it("classifies coretemp as cpu", () => {
-      expect(internals(backend).classifyTempZone("coretemp", "Package id 0")).toBe("cpu");
-    });
-
-    it("classifies amdgpu as gpu", () => {
-      expect(internals(backend).classifyTempZone("amdgpu", "edge")).toBe("gpu");
-    });
-
-    it("classifies junction label as gpu", () => {
-      expect(internals(backend).classifyTempZone("something", "junction")).toBe("gpu");
-    });
-
-    it("classifies steamdeck_hwmon as cpu", () => {
-      expect(internals(backend).classifyTempZone("steamdeck_hwmon", "temp1")).toBe("cpu");
-    });
-
-    it("classifies unknown chip/label as unknown", () => {
-      expect(internals(backend).classifyTempZone("random_chip", "some_label")).toBe("unknown");
-    });
-
-    it("classifies soc label as cpu (soc is treated as CPU zone)", () => {
-      // "soc" is in CPU_LABEL_KEYWORDS, so it maps to "cpu" not "soc"
-      expect(internals(backend).classifyTempZone("some_chip", "SoC temp")).toBe("cpu");
-    });
-  });
 
   // ---------------------------------------------------------------------------
   // Hardware-safety override (issue #97) — applySafetyFloor + watchdog path
