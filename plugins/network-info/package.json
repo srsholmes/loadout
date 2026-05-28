@@ -20,7 +20,9 @@
         "/proc/net/wireless"
       ],
       "commands": [
-        "sh"
+        "ip",
+        "nmcli",
+        "iwconfig"
       ]
     },
     "category": "Device",

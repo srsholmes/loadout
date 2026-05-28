@@ -11,29 +11,6 @@ import {
 } from "./lib/network";
 
 /**
- * Run a shell command via /bin/sh -c and return its stdout.
- * Returns empty string on failure. A non-zero exit (other than 127
- * "command not found", which is the steady-state for the
- * nmcli/iwconfig fallback chain) is logged so a misconfigured
- * sysprobe shows up in journalctl instead of failing silently.
- */
-async function sh(cmd: string): Promise<string> {
-  try {
-    const { stdout, stderr, exitCode } = await runFull(["/bin/sh", "-c", cmd]);
-    if (exitCode !== 0 && exitCode !== 127) {
-      console.warn(
-        `[network-info] sh exit=${exitCode} for "${cmd}": ${stderr.trim() || "(no stderr)"}`,
-      );
-    }
-    return stdout;
-  } catch (err) {
-    // runFull only throws on spawn failure (binary missing entirely).
-    console.warn(`[network-info] sh spawn failed for "${cmd}":`, err);
-    return "";
-  }
-}
-
-/**
  * Read a /sys file and trim trailing newline. Returns "" on any
  * filesystem error (missing file, permission denied, race against
  * an interface going down mid-read).
@@ -68,7 +45,7 @@ export default class NetworkInfoBackend implements PluginBackend {
 
   /** Gather network interface information. */
   async getNetworkInfo(): Promise<NetworkInterface[]> {
-    const ipOutput = await sh("ip -o addr show");
+    const { stdout: ipOutput } = await runFull(["ip", "-o", "addr", "show"]).catch(() => ({ stdout: "" }));
     const parsed = parseIpAddrOutput(ipOutput);
 
     const interfaces: NetworkInterface[] = [];
@@ -98,9 +75,7 @@ export default class NetworkInfoBackend implements PluginBackend {
     };
 
     // Try nmcli first (more reliable)
-    const nmcliOutput = await sh(
-      "nmcli -t -f active,ssid,signal,freq dev wifi 2>/dev/null",
-    );
+    const { stdout: nmcliOutput } = await runFull(["nmcli", "-t", "-f", "active,ssid,signal,freq", "dev", "wifi"]).catch(() => ({ stdout: "" }));
     if (nmcliOutput) {
       const nmcli = parseNmcliOutput(nmcliOutput);
       if (nmcli) {
@@ -111,7 +86,7 @@ export default class NetworkInfoBackend implements PluginBackend {
     }
 
     // Also try iwconfig for bit rate (and fallback fields)
-    const iwOutput = await sh("iwconfig 2>/dev/null");
+    const { stdout: iwOutput } = await runFull(["iwconfig"]).catch(() => ({ stdout: "" }));
     if (iwOutput) {
       const iw = parseIwconfigOutput(iwOutput);
       if (iw.ssid && !result.ssid) result.ssid = iw.ssid;
