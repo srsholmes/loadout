@@ -8,8 +8,21 @@ set -e
 # Configuration
 INSTALL_DIR="$HOME/.local/share/loadout"
 OVERLAY_INSTALL_DIR="$HOME/.local/share/loadout-overlay"
-# Binary lives in a system path now (root service execs it; SELinux).
-BINARY_PATH="/usr/local/bin/loadout"
+# Binary path is distro-dependent — must mirror install.sh's branching
+# so we remove from the path it was actually written to. See
+# docs/install-locations.md. SteamOS: ~/.local/share/loadout/loadout
+# (user-writable, no /usr); everywhere else: /usr/local/bin/loadout
+# (system path, removal needs sudo).
+case "$(. /etc/os-release 2>/dev/null && printf '%s' "${ID:-}")" in
+    steamos)
+        BINARY_PATH="$INSTALL_DIR/loadout"
+        BIN_NEEDS_SUDO=0
+        ;;
+    *)
+        BINARY_PATH="/usr/local/bin/loadout"
+        BIN_NEEDS_SUDO=1
+        ;;
+esac
 BIN_LINK="$HOME/.local/bin/loadout"
 SERVICE_DIR="$HOME/.config/systemd/user"
 # Obsolete per-user backend unit (the backend is now a root system unit).
@@ -123,10 +136,15 @@ main() {
 
     echo ""
 
-    # --- Remove the system binary (root-owned, needs sudo) ---
+    # --- Remove the binary (sudo only when system-owned, per install.sh) ---
     if [ -f "$BINARY_PATH" ]; then
-        info "Removing $BINARY_PATH (needs sudo)..."
-        sudo rm -f "$BINARY_PATH"
+        if [ "$BIN_NEEDS_SUDO" = "1" ]; then
+            info "Removing $BINARY_PATH (needs sudo)..."
+            sudo rm -f "$BINARY_PATH"
+        else
+            info "Removing $BINARY_PATH..."
+            rm -f "$BINARY_PATH"
+        fi
         success "Binary removed."
     else
         info "Binary not found at $BINARY_PATH (already removed)."
