@@ -6,8 +6,10 @@ import {
   useState,
   useCallback,
   useMemo,
+  type ComponentType,
   type ReactNode,
 } from "react";
+import { createRoot } from "react-dom/client";
 import { FocusContext } from "./spatial-nav";
 import { ensureConnected, call as wsCall, subscribe } from "./ws-client";
 import { PluginHeaderSlotProvider } from "./components/PluginHeader";
@@ -68,6 +70,64 @@ export function PluginProvider({
       </FocusContext.Provider>
     </LoadoutProvider>
   );
+}
+
+/**
+ * Options passed by the overlay shell to a plugin's `mount` / `mountHeader`
+ * / `mountHomeWidget` entry point. Mirrored from `PluginProvider`'s props so
+ * the factory can pass them straight through.
+ */
+export interface PluginMountOpts {
+  parentFocusKey?: string;
+  headerSlot?: HTMLElement | null;
+}
+
+/**
+ * Build a `mount(container, opts)` function for a plugin's React component.
+ *
+ * Every plugin used to inline the same 11-line createRoot + PluginProvider +
+ * unmount boilerplate; this factory consolidates it. Returns a function the
+ * plugin exports as `mount` (or `mountHomeWidget`, or `mountHeader`):
+ *
+ *   export const mount = mountComponent(FanControl);
+ *
+ * The factory passes `opts.parentFocusKey` and `opts.headerSlot` through to
+ * `PluginProvider`, so plugins that portal their topbar content via
+ * `<PluginHeader>` keep working unchanged.
+ */
+export function mountComponent(
+  Component: ComponentType,
+): (container: HTMLElement, opts?: PluginMountOpts) => () => void {
+  return (container, opts) => {
+    const root = createRoot(container);
+    root.render(
+      <PluginProvider
+        parentFocusKey={opts?.parentFocusKey}
+        headerSlot={opts?.headerSlot ?? null}
+      >
+        <Component />
+      </PluginProvider>,
+    );
+    return () => root.unmount();
+  };
+}
+
+/**
+ * No-op `mountHeader` for plugins that portal their header content into the
+ * shell's topbar via `<PluginHeader>` from inside their main `mount()` tree.
+ *
+ * The mere presence of a `mountHeader` export is the signal the overlay shell
+ * uses to reserve the 60 px topbar slot for the plugin. The shell still calls
+ * this — it just returns a no-op unmount because the actual header DOM is
+ * managed by the portal's parent tree.
+ *
+ *   export const mountHeader = mountHeaderStub;
+ *
+ * Plugins that want a *separate* React tree for the header (no closure sharing
+ * with the body) use `mountComponent(Header)` instead.
+ */
+export function mountHeaderStub(): () => void {
+  return () => {};
 }
 
 export function useBackend(pluginId: string) {

@@ -71,6 +71,10 @@
       "name": "@loadout/exec",
       "version": "0.0.1",
     },
+    "packages/plugin-storage": {
+      "name": "@loadout/plugin-storage",
+      "version": "0.0.1",
+    },
     "packages/steam-paths": {
       "name": "@loadout/steam-paths",
       "version": "0.0.1",
@@ -115,6 +119,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@loadout/exec": "workspace:*",
+        "@loadout/plugin-storage": "workspace:*",
         "@loadout/types": "workspace:*",
         "@loadout/ui": "workspace:*",
         "react": "^18.3.0",
@@ -126,6 +131,7 @@
       "name": "@loadout/plugin-playtime",
       "version": "0.0.1",
       "dependencies": {
+        "@loadout/plugin-storage": "workspace:*",
         "@loadout/steam-paths": "workspace:*",
         "@loadout/types": "workspace:*",
         "@loadout/ui": "workspace:*",
@@ -147,6 +153,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@loadout/exec": "workspace:*",
+        "@loadout/plugin-storage": "workspace:*",
         "@loadout/steam-paths": "workspace:*",
         "@loadout/types": "workspace:*",
         "@loadout/ui": "workspace:*",
@@ -306,6 +313,8 @@
     "@loadout/plugin-playtime": ["@loadout/plugin-playtime@workspace:plugins/playtime"],
 
     "@loadout/plugin-steam-gamescope-ipc": ["@loadout/plugin-steam-gamescope-ipc@workspace:plugins/steam-gamescope-ipc"],
+
+    "@loadout/plugin-storage": ["@loadout/plugin-storage@workspace:packages/plugin-storage"],
 
     "@loadout/plugin-tdp-control": ["@loadout/plugin-tdp-control@workspace:plugins/tdp-control"],
 

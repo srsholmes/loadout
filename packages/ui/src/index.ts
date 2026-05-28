@@ -2,11 +2,13 @@ export { colors } from "./colors";
 export {
   LoadoutProvider,
   PluginProvider,
+  mountComponent,
+  mountHeaderStub,
   useBackend,
   useCurrentGame,
   GAME_DETECTION_SERVICE_ID,
 } from "./sdk";
-export type { CurrentGame, GameSessionRecord } from "./sdk";
+export type { CurrentGame, GameSessionRecord, PluginMountOpts } from "./sdk";
 export { Panel } from "./components/Panel";
 export { Text } from "./components/Text";
 export { Button } from "./components/Button";

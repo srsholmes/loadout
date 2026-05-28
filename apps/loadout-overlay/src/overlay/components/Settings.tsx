@@ -55,13 +55,9 @@ export const LOADOUT_THEMES = [
 
 const THEME_IDS = LOADOUT_THEMES.map((t) => t.id) as readonly string[];
 
-/** Map legacy theme names (pre-Loadout) to their closest Loadout theme. */
+/** Return the theme if it's a registered Loadout theme, else the default. */
 function normalizeTheme(theme: string | undefined): string {
-  if (theme && THEME_IDS.includes(theme)) return theme;
-  if (theme === "light" || theme === "cupcake" || theme === "silk") return "paper";
-  if (theme === "synthwave" || theme === "cyberpunk" || theme === "valentine") return "synth";
-  if (theme === "retro" || theme === "forest") return "terminal";
-  return "midnight";
+  return theme && THEME_IDS.includes(theme) ? theme : "midnight";
 }
 
 const TABS = [
@@ -74,9 +70,8 @@ type TabId = (typeof TABS)[number]["id"];
 
 /** Reads the persisted theme (synchronous — backed by the userConfig
  *  in-memory cache, which is seeded from its localStorage mirror at
- *  module load so boot-time reads are instant). Legacy DaisyUI theme
- *  names (dark/light/synthwave/…) get mapped to the closest Loadout
- *  theme so users upgrading don't land on an unregistered value. */
+ *  module load so boot-time reads are instant). Unknown/unset values
+ *  fall back to the default theme. */
 function loadTheme(): string {
   return normalizeTheme(getConfigValue<string>("theme", "midnight"));
 }
