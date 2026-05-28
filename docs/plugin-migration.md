@@ -167,7 +167,8 @@ Loadout targets Linux gaming handhelds + gaming desktops. The reviewer classifie
 | `sgdb-art` | 2 — recomp, store-bridge | Extract when those two migrate together. |
 | `steam-shortcut` | 2 — recomp, store-bridge | Extract when those two migrate together. |
 | `file-picker` | 1 — recomp | Inline into `lib/file-picker.ts` (~50 LOC). |
-| `steam-cdp` / `injector` | 9 / 1 — used by every Steam-CEF-injection plugin in the source | **N/A in Loadout.** The source repo used external CDP control (the loader spawned a separate process and drove Steam's CEF over the DevTools Protocol); Loadout uses `target: { type: "panel" }` + webpack patches instead. CEF-touching plugins must be re-architected as panel-targets — there's no `@loadout/steam-cdp` equivalent. See `apps/loadout/src/injector/` for how the loader handles CDP internally. |
+| `steam-cdp` | 9 — used by every Steam-CEF-driving plugin in the source | **EXTRACT** as `@loadout/steam-cdp`. Loadout's loader already has a CDP client at `apps/loadout/src/steam-cdp/` (~1500 LOC); promote it to a workspace package so plugin backends can drive Steam's CEF UI the same way the source repo's plugins did (overlay `app.tsx` for settings + backend CDP injection for Steam-side widgets — see protondb-badges / hltb in the source for the pattern). |
+| `injector` | 1 — sound-loader only | Inline into the plugin's `lib/`. |
 
 If this plugin is (say) the 2nd migrated plugin to need an *identical* `plugin-storage` helper, you MAY extract a `packages/plugin-storage` — but only then, only with the duplicate already in tree, and call it out explicitly in the PR.
 
