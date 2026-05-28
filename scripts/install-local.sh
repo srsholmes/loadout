@@ -31,16 +31,48 @@ fi
 systemctl --user stop loadout-overlay 2>/dev/null || true
 systemctl --user stop loadout 2>/dev/null || true
 
-# The plugin tree lives in the user's home; the binary does NOT — SELinux
-# (enforcing on Bazzite) denies a root system service `execute` on a binary
-# labelled data_home_t under ~/.local/share. It must exec from a system
-# path (bin_t), exactly like HHD's /usr/bin/hhd. So the binary goes to
-# /usr/local/bin (writable on ostree → /var/usrlocal, labels bin_t).
+# Pick the binary install path based on host distro — there is no single
+# path that works everywhere. See docs/install-locations.md for the full
+# rationale.
+#
+#   SteamOS — $INSTALL_DIR/loadout (under ~/.local/share):
+#     /usr is read-only by default and `steamos-readonly disable` is the
+#     wrong fix — the next SteamOS A/B image swap would wipe it. SteamOS
+#     does NOT enforce SELinux, so the data_home_t / init_t exec restriction
+#     that bites on Bazzite doesn't apply here, and a binary in the home
+#     dir execs fine from a root unit. /home is persistent across SteamOS
+#     image updates.
+#
+#   Bazzite / Fedora-ostree / generic (Arch, CachyOS, Ubuntu, ...) —
+#   /usr/local/bin/loadout:
+#     Writable on ostree systems (→ /var/usrlocal), labelled bin_t. Bazzite
+#     runs SELinux in enforcing mode, where a root systemd unit (init_t) is
+#     denied `execute` on a binary labelled data_home_t (everything under
+#     ~/.local/share / ~/.config). The binary must live at a bin_t-labelled
+#     system path — exactly like HHD's RPM-installed /usr/bin/hhd. On non-
+#     SELinux distros it just works; same path keeps things consistent.
+DISTRO_ID=""
+[ -r /etc/os-release ] && DISTRO_ID="$(. /etc/os-release && printf '%s' "${ID:-}")"
+case "$DISTRO_ID" in
+    steamos)
+        BIN_PATH="$INSTALL_DIR/loadout"
+        BIN_NEEDS_SUDO=0
+        ;;
+    *)
+        BIN_PATH="/usr/local/bin/loadout"
+        BIN_NEEDS_SUDO=1
+        ;;
+esac
+
 mkdir -p "$INSTALL_DIR/plugins"
-# The binary used to live here; it's a system-path binary now. Drop the
-# stale copy so the install dir only holds the plugin tree.
-rm -f "$INSTALL_DIR/loadout"
-SYSTEM_BIN="/usr/local/bin/loadout"
+# Remove any stale binary at the *other* possible location — handles
+# users moving between distros (e.g. dual-booting SteamOS desktop mode
+# into a Bazzite-installed copy) and the older "binary in $INSTALL_DIR"
+# layout. Idempotent — the install step below puts a fresh one at the
+# chosen $BIN_PATH for this distro.
+if [ "$BIN_PATH" = "/usr/local/bin/loadout" ]; then
+    rm -f "$INSTALL_DIR/loadout"
+fi
 
 # Smoke-check the freshly built binary BEFORE installing it system-wide.
 # A truncated / corrupted build still copies fine, then the service
@@ -66,12 +98,19 @@ if ! printf '%s' "$SMOKE_OUT" | grep -q '^loadout '; then
 fi
 echo "Smoke check OK: $SMOKE_OUT"
 
-# Install the binary system-wide (needs sudo). restorecon forces the
-# bin_t label so init_t can exec it even if the default context drifts.
-echo "Installing the backend binary to $SYSTEM_BIN (needs sudo)..."
-sudo install -m 0755 "$DIST_DIR/loadout" "$SYSTEM_BIN"
-command -v restorecon >/dev/null 2>&1 && sudo restorecon -F "$SYSTEM_BIN" 2>/dev/null || true
-echo "Installed $SYSTEM_BIN"
+# Install the binary at the chosen path. On a system path (/usr/local/bin)
+# this needs sudo + restorecon to force the bin_t label so init_t can exec
+# it even if the default context drifts. On SteamOS the binary lives in
+# the user's home and is plain user-owned — no sudo, no SELinux concern.
+if [ "$BIN_NEEDS_SUDO" = "1" ]; then
+    echo "Installing the backend binary to $BIN_PATH (needs sudo)..."
+    sudo install -m 0755 "$DIST_DIR/loadout" "$BIN_PATH"
+    command -v restorecon >/dev/null 2>&1 && sudo restorecon -F "$BIN_PATH" 2>/dev/null || true
+else
+    echo "Installing the backend binary to $BIN_PATH (user-writable on this distro)..."
+    install -m 0755 "$DIST_DIR/loadout" "$BIN_PATH"
+fi
+echo "Installed $BIN_PATH"
 
 # The root service writes plugin build caches (.cache/) into this tree as
 # root. Reclaim ownership before staging so the user-run prepare-plugins
@@ -121,7 +160,7 @@ systemctl --user disable loadout 2>/dev/null || true
 rm -f "$SERVICE_DIR/loadout.service"
 
 GENERATED_UNIT="$(mktemp)"
-sed -e "s#__HOME__#${HOME}#g" -e "s#__USER__#${TARGET_USER}#g" \
+sed -e "s#__HOME__#${HOME}#g" -e "s#__USER__#${TARGET_USER}#g" -e "s#__BIN__#${BIN_PATH}#g" \
     "$PROJECT_ROOT/loadout.service" > "$GENERATED_UNIT"
 sudo cp "$GENERATED_UNIT" "$SYSTEM_UNIT"
 rm -f "$GENERATED_UNIT"

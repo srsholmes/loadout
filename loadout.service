@@ -13,24 +13,30 @@ Type=simple
 # (per-plugin command capability policy) to bound what running-as-root
 # means for them.
 #
-# The binary lives in /usr/local/bin (a system path, SELinux `bin_t`) —
-# NOT the user's home. A system-domain service (init_t) is denied `execute`
-# on a binary labelled `data_home_t` under ~/.local/share (SELinux is
-# enforcing on Bazzite), so it must exec from a system path. This mirrors
-# HHD, whose root service execs /usr/bin/hhd (its RPM-installed, bin_t
-# binary). The plugins, config, and logs still live under the user's home
-# — a system service CAN read/write there, only `execute` is blocked.
+# The binary path is distro-dependent (see docs/install-locations.md):
+#   - Bazzite / Fedora-ostree / generic: /usr/local/bin/loadout (writable
+#     on ostree → /var/usrlocal; SELinux `bin_t` — required because a
+#     system-domain init_t service is denied `execute` on a binary under
+#     ~/.local/share which is labelled `data_home_t`). Mirrors HHD's
+#     /usr/bin/hhd (RPM-installed, bin_t).
+#   - SteamOS: ~/.local/share/loadout/loadout. /usr is read-only and would
+#     be wiped on the next A/B image update, and SteamOS doesn't run
+#     SELinux in enforcing mode so a binary under data_home_t execs fine
+#     from a root unit. Persists across SteamOS updates (on /home).
+# In every case plugins/config/logs live under the user's home (a system
+# service CAN read/write there; only `execute` is the SELinux concern).
 #
 # This file is a TEMPLATE: install-local.sh / install.sh substitute
-# __HOME__ and __USER__ (a system unit can't expand %h — that would be
-# root's home) and install the result to /etc/systemd/system/loadout.service.
+# __BIN__, __HOME__, and __USER__ (a system unit can't expand %h — that
+# would be root's home) and install the result to
+# /etc/systemd/system/loadout.service.
 #
 # $HOME is set so os.homedir() / @loadout/steam-paths resolve ~/.config
 # and the user's Steam as the user, even though the process is root.
 # --user chowns files written under that home back to the user.
 Environment=HOME=__HOME__
 Environment=PLUGINS_DIR=__HOME__/.local/share/loadout/plugins
-ExecStart=/usr/local/bin/loadout --user __USER__
+ExecStart=__BIN__ --user __USER__
 WorkingDirectory=__HOME__/.local/share/loadout
 Restart=on-failure
 RestartSec=5
