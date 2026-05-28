@@ -13,7 +13,7 @@ import { kelvinToGamma, floatToLong, longToFloat, percentToRaw, rawToPercent } f
  *   3. xrandr (X11 sessions only — NOT XWayland, which silently no-ops)
  *
  * Brightness chain (independent of method):
- *   logind SetBrightness D-Bus → sysfs direct write → sysfs via tee
+ *   logind SetBrightness D-Bus → sysfs direct write (root, authoritative)
  *
  * The backend runs as root (systemd system service) — no sudo needed.
  * Direct /sys writes via fs are NOT command-gated; declared in
@@ -269,13 +269,9 @@ export default class DisplaySettingsBackend implements PluginBackend {
         this._emitState();
         return true;
       } catch {
-        // 3. Try via tee (fallback for unusual setups)
-        const res = await exec([
-          "bash", "-c",
-          `echo ${rawValue} | tee ${this.backlightPath}/brightness`,
-        ]);
+        // Direct sysfs write failed as root — no further fallback needed
         this._emitState();
-        return res.ok;
+        return false;
       }
     }
 
