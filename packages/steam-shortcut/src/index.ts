@@ -14,11 +14,8 @@
  * provided exe path) — that stays in the calling plugin, since
  * the rules vary per source.
  */
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { withSteamClient } from "@loadout/steam-cdp";
-import { getUserdataDir, getUserIds } from "@loadout/steam-paths";
-import { parseBinaryVdf, shortcutGameId64 } from "@loadout/vdf";
+import { shortcutGameId64 } from "@loadout/vdf";
 
 export interface SteamShortcutSpec {
   /** Display name shown in Steam (e.g. `"Alba (Epic Games)"`). */
@@ -58,6 +55,24 @@ export interface SteamShortcutResult {
 }
 
 /**
+ * Wrap a best-effort follow-up write so a failure warns rather than
+ * rolls back a successful shortcut add.
+ */
+async function bestEffort(
+  label: string,
+  fn: () => Promise<void>,
+): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    console.warn(
+      `[steam-shortcut] ${label} failed:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
  * Register a non-Steam shortcut and persist it to disk + Steam's
  * running state.
  *
@@ -73,13 +88,15 @@ export interface SteamShortcutResult {
  *      shortcut disappears on Steam restart / reboot.
  *
  * Then optional best-effort writes (compat tool, user tag,
- * collection). Each is wrapped in try/catch — a failure on the
- * collection write doesn't roll back a successful shortcut add.
+ * collection). Each is wrapped in `bestEffort()` — a failure on
+ * the collection write doesn't roll back a successful shortcut
+ * add.
  *
- * If `AddShortcut` returns `undefined` (newer Steam builds drop
- * the appid in the return value), we read it back out of
- * `shortcuts.vdf` by display name with a short retry loop. The
- * on-disk flush is async on Steam's side.
+ * If `AddShortcut` returns `undefined` / `null`, throw an
+ * actionable error rather than letting `undefined` flow through
+ * every subsequent SetX call. Every Steam build the source repo
+ * has shipped against returns the appid reliably; if a future
+ * build regresses, restarting Steam is the right next step.
  */
 export async function addNonSteamShortcut(
   spec: SteamShortcutSpec,
@@ -92,70 +109,51 @@ export async function addNonSteamShortcut(
   }
 
   return withSteamClient(async (sc) => {
-    let appId = await sc.apps.addShortcut(
+    const appId = await sc.apps.addShortcut(
       spec.displayName,
       spec.exe,
       spec.args,
       spec.cwd ?? "",
     );
     if (appId == null) {
-      appId = await findShortcutAppIdByName(spec.displayName);
-    }
-    if (appId == null) {
       throw new Error(
-        `Failed to register Steam shortcut for "${spec.displayName}". Steam may not be running or the shortcut creation did not complete in time. Try restarting Steam.`,
+        "SteamClient.Apps.AddShortcut returned no appid — restart Steam and retry",
       );
     }
-    const finalAppId = appId;
 
     // Persistence-critical follow-ups.
-    await sc.apps.setShortcutName(finalAppId, spec.displayName);
-    await sc.apps.setShortcutLaunchOptions(finalAppId, spec.args);
+    await sc.apps.setShortcutName(appId, spec.displayName);
+    await sc.apps.setShortcutLaunchOptions(appId, spec.args);
 
     // Windows binary on a Linux host → register Proton as the
     // compat tool so Steam runs the .exe through Wine. Without
     // this Steam tries to native-exec the .exe and silently
     // fails — the "click Launch, nothing happens" symptom.
     if (spec.platform === "windows" && process.platform === "linux") {
-      try {
-        await sc.apps.specifyCompatTool(
-          finalAppId,
+      await bestEffort("specifyCompatTool", () =>
+        sc.apps.specifyCompatTool(
+          appId,
           "proton_experimental",
           "Proton Experimental",
-        );
-      } catch (err) {
-        console.warn(
-          `[steam-shortcut] specifyCompatTool failed for "${spec.displayName}" (best-effort):`,
-          err instanceof Error ? err.message : err,
-        );
-      }
+        ),
+      );
     }
 
     // User-tag dynamic grouping (sidebar).
-    if (spec.userTag) {
-      try {
-        await sc.apps.addUserTag(finalAppId, spec.userTag);
-      } catch (err) {
-        console.warn(
-          `[steam-shortcut] addUserTag failed for "${spec.displayName}" (best-effort):`,
-          err instanceof Error ? err.message : err,
-        );
-      }
+    const userTag = spec.userTag;
+    if (userTag) {
+      await bestEffort("addUserTag", () => sc.apps.addUserTag(appId, userTag));
     }
 
     // User-created Steam Library Collection (Collections tab).
-    if (spec.collectionName) {
-      try {
-        await sc.apps.addAppToCollection(finalAppId, spec.collectionName);
-      } catch (err) {
-        console.warn(
-          `[steam-shortcut] addAppToCollection failed for "${spec.displayName}" (best-effort):`,
-          err instanceof Error ? err.message : err,
-        );
-      }
+    const collectionName = spec.collectionName;
+    if (collectionName) {
+      await bestEffort("addAppToCollection", () =>
+        sc.apps.addAppToCollection(appId, collectionName),
+      );
     }
 
-    return { appId: finalAppId, gameId64: shortcutGameId64(finalAppId) };
+    return { appId, gameId64: shortcutGameId64(appId) };
   });
 }
 
@@ -171,46 +169,4 @@ export async function removeNonSteamShortcut(appId: number): Promise<void> {
       err instanceof Error ? err.message : err,
     );
   }
-}
-
-/**
- * Read shortcut appid out of `shortcuts.vdf` by display name —
- * fallback for Steam builds where `AddShortcut` returns
- * `undefined`. Polls a few times because Steam's flush to disk is
- * async.
- */
-async function findShortcutAppIdByName(name: string): Promise<number | null> {
-  const userIds = await getUserIds();
-  const delays = [0, 100, 250, 500, 1000];
-  for (const delay of delays) {
-    if (delay > 0) await new Promise((r) => setTimeout(r, delay));
-    for (const userId of userIds) {
-      const path = join(getUserdataDir(), userId, "config", "shortcuts.vdf");
-      let buf: Buffer;
-      try {
-        buf = await readFile(path);
-      } catch {
-        continue;
-      }
-      let parsed: Record<string, unknown>;
-      try {
-        parsed = parseBinaryVdf(buf) as Record<string, unknown>;
-      } catch {
-        continue;
-      }
-      const shortcuts = (parsed.shortcuts ?? {}) as Record<string, unknown>;
-      for (const entry of Object.values(shortcuts)) {
-        if (typeof entry !== "object" || entry === null) continue;
-        const sc = entry as Record<string, unknown>;
-        const appName =
-          (typeof sc.appname === "string" && sc.appname) ||
-          (typeof sc.AppName === "string" && sc.AppName) ||
-          "";
-        if (appName !== name) continue;
-        if (typeof sc.appid !== "number") continue;
-        return sc.appid >>> 0; // signed → unsigned coercion
-      }
-    }
-  }
-  return null;
 }

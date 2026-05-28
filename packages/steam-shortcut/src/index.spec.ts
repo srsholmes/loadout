@@ -6,7 +6,6 @@ import { describe, it, expect, mock, beforeEach } from "bun:test";
 let calls: string[] = [];
 let addShortcutReturn: number | undefined = 4242;
 let addUserTagThrows = false;
-let specifyCompatToolThrows = false;
 
 mock.module("@loadout/steam-cdp", () => ({
   withSteamClient: async <T>(
@@ -25,7 +24,6 @@ mock.module("@loadout/steam-cdp", () => ({
           calls.push(`launch:${id}|${args}`);
         },
         specifyCompatTool: async (id: number, tool: string, label: string) => {
-          if (specifyCompatToolThrows) throw new Error("not supported");
           calls.push(`compat:${id}|${tool}|${label}`);
         },
         addUserTag: async (id: number, tag: string) => {
@@ -45,14 +43,7 @@ mock.module("@loadout/steam-cdp", () => ({
   SteamClientUnreachableError: class extends Error {},
 }));
 
-mock.module("@loadout/steam-paths", () => ({
-  getUserdataDir: () => "/tmp/userdata-test",
-  getUserIds: async () => [],
-  getSteamDir: () => "/tmp/userdata-test/..",
-}));
-
 mock.module("@loadout/vdf", () => ({
-  parseBinaryVdf: () => ({}),
   shortcutGameId64: (n: number) => String((BigInt(n) << 32n) | (1n << 25n)),
 }));
 
@@ -60,7 +51,6 @@ beforeEach(() => {
   calls = [];
   addShortcutReturn = 4242;
   addUserTagThrows = false;
-  specifyCompatToolThrows = false;
 });
 
 describe("addNonSteamShortcut", () => {
@@ -163,13 +153,11 @@ describe("addNonSteamShortcut", () => {
     expect(r.gameId64).toBe(expected);
   });
 
-  it("throws an actionable error when AddShortcut returns undefined and the vdf fallback can't find the appid", async () => {
-    // Newer Steam builds drop the appid from the return value, so
-    // the helper falls back to reading shortcuts.vdf by display
-    // name. With no userdata dirs (the default test mock), that
-    // fallback also fails — the user should get a single readable
-    // error rather than `appId = undefined` flowing through every
-    // subsequent SetX call.
+  it("throws an actionable 'restart Steam' error when AddShortcut returns undefined", async () => {
+    // If Steam's `AddShortcut` returns `undefined`, propagate a
+    // single readable error rather than letting `undefined` flow
+    // through every subsequent SetX call. Restarting Steam is the
+    // right next step.
     addShortcutReturn = undefined;
     const { addNonSteamShortcut } = await import("./index");
     await expect(
@@ -178,7 +166,7 @@ describe("addNonSteamShortcut", () => {
         exe: "/games/ghosted",
         args: "",
       }),
-    ).rejects.toThrow(/Failed to register Steam shortcut for "Ghosted"/i);
+    ).rejects.toThrow(/restart Steam and retry/i);
   });
 });
 

@@ -7,7 +7,6 @@
   "license": "MIT",
   "dependencies": {
     "@loadout/steam-cdp": "workspace:*",
-    "@loadout/steam-paths": "workspace:*",
     "@loadout/vdf": "workspace:*"
   }
 }
