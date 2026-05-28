@@ -95,6 +95,17 @@
       "name": "@loadout/plugin-storage",
       "version": "0.0.1",
     },
+    "packages/sgdb-art": {
+      "name": "@loadout/sgdb-art",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/external-cache": "workspace:*",
+        "@loadout/plugin-storage": "workspace:*",
+        "@loadout/steam-cdp": "workspace:*",
+        "@loadout/steam-paths": "workspace:*",
+        "@loadout/vdf": "workspace:*",
+      },
+    },
     "packages/steam-cdp": {
       "name": "@loadout/steam-cdp",
       "version": "0.0.1",
@@ -359,6 +370,8 @@
     "@loadout/plugin-storage": ["@loadout/plugin-storage@workspace:packages/plugin-storage"],
 
     "@loadout/plugin-tdp-control": ["@loadout/plugin-tdp-control@workspace:plugins/tdp-control"],
+
+    "@loadout/sgdb-art": ["@loadout/sgdb-art@workspace:packages/sgdb-art"],
 
     "@loadout/steam-cdp": ["@loadout/steam-cdp@workspace:packages/steam-cdp"],
 
