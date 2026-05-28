@@ -68,6 +68,19 @@ cp -r "$PROJECT_ROOT/plugins/"* "$PLUGINS_DST/" 2>/dev/null || true
 # cache the same mtime as the source). The server rebuilds on first run.
 find "$PLUGINS_DST" -path '*/.cache/backend.bundle.js' -delete 2>/dev/null || true
 
+# Strip per-plugin node_modules. Bun creates one for every workspace
+# package on `bun install` and the symlinks inside point at
+# ../../../node_modules/.bun/<pkg>@<ver>/... (the source repo's .bun
+# store) or at ../../../../packages/<pkg> (the workspace packages).
+# Neither path resolves in the install layout — the .bun store and the
+# packages/ dir aren't staged, so every symlink is a dangling pointer.
+# Bun's runtime resolver hits these broken symlinks first and fails
+# inconsistently (sometimes walks past, sometimes errors with "File not
+# found" before reaching the hoisted node_modules at $NM_DST). Removing
+# them lets resolution walk straight up from plugins/<id>/<file> to
+# $TARGET/node_modules/, which is populated correctly below.
+find "$PLUGINS_DST" -mindepth 2 -maxdepth 2 -name node_modules -type d -exec rm -rf {} +
+
 # Shared node_modules. Wipe and re-stage so deleted deps don't linger.
 rm -rf "$NM_DST"
 mkdir -p "$NM_DST/@loadout"
