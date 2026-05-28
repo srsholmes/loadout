@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
-import { createRoot } from "react-dom/client";
 import { FaTv, FaPlay } from "react-icons/fa6";
 import {
-  PluginProvider,
+  mountComponent,
   useBackend,
   useCurrentGame,
   GAME_DETECTION_SERVICE_ID,
@@ -307,18 +306,7 @@ function formatDuration(ms: number): string {
   return `${hours}h ${mins}m`;
 }
 
-export function mount(
-  container: HTMLElement,
-  opts?: { parentFocusKey?: string },
-): () => void {
-  const root = createRoot(container);
-  root.render(
-    <PluginProvider parentFocusKey={opts?.parentFocusKey}>
-      <SteamGamescopeIpcPanel />
-    </PluginProvider>,
-  );
-  return () => root.unmount();
-}
+export const mount = mountComponent(SteamGamescopeIpcPanel);
 
 function Header() {
   return (
@@ -333,15 +321,4 @@ function Header() {
   );
 }
 
-export function mountHeader(
-  container: HTMLElement,
-  opts?: { parentFocusKey?: string },
-): () => void {
-  const root = createRoot(container);
-  root.render(
-    <PluginProvider parentFocusKey={opts?.parentFocusKey}>
-      <Header />
-    </PluginProvider>,
-  );
-  return () => root.unmount();
-}
+export const mountHeader = mountComponent(Header);
