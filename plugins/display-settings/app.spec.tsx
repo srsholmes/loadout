@@ -1,9 +1,9 @@
 /**
  * display-settings app spec.
  *
- * Tests the overlay UI: header rendering, initial data fetch, preset
- * display, control method chip, stateChanged event registration, and
- * gamma value rendering.
+ * Tests the slim overlay UI: header, initial data fetch, brightness +
+ * saturation sliders, method chip, stateChanged event registration, and
+ * the gamescope-not-detected warning.
  */
 
 import { describe, it, expect, mock, beforeEach } from "bun:test";
@@ -30,53 +30,28 @@ mock.module("@loadout/ui", () => ({
   }),
 }));
 
-const mockDisplayInfo = {
+const mockGamescopeInfo = {
   saturation: 100,
   brightness: 80,
-  colorTemp: 6500,
-  gamma: { r: 1.0, g: 1.0, b: 1.0 },
   method: "gamescope",
-  xrandrOutput: null,
   backlightPath: "/sys/class/backlight/intel_backlight",
-  ranges: {
-    saturation: [0, 200],
-    brightness: [0, 100],
-    colorTemp: [3000, 6500],
-    gamma: [0, 2],
-  },
+  ranges: { saturation: [0, 200], brightness: [0, 100] },
 };
 
-const mockPresets = [
-  {
-    name: "default",
-    label: "Default",
-    saturation: 100,
-    colorTemp: 6500,
-    gamma: { r: 1, g: 1, b: 1 },
-  },
-  {
-    name: "vivid",
-    label: "Vivid",
-    saturation: 150,
-    colorTemp: 6500,
-    gamma: { r: 1, g: 1, b: 1 },
-  },
-  {
-    name: "warm",
-    label: "Warm",
-    saturation: 100,
-    colorTemp: 4500,
-    gamma: { r: 1, g: 1, b: 1 },
-  },
-];
+const mockNoneInfo = {
+  saturation: 100,
+  brightness: 80,
+  method: "none",
+  backlightPath: null,
+  ranges: { saturation: [0, 200], brightness: [0, 100] },
+};
 
 describe("display-settings plugin", () => {
   beforeEach(() => {
     callMock.mockReset();
     eventHandlers.clear();
     callMock.mockImplementation((method: string) => {
-      if (method === "getDisplayInfo") return Promise.resolve(mockDisplayInfo);
-      if (method === "getPresets") return Promise.resolve(mockPresets);
+      if (method === "getDisplayInfo") return Promise.resolve(mockGamescopeInfo);
       return Promise.resolve(null);
     });
   });
@@ -86,7 +61,7 @@ describe("display-settings plugin", () => {
     const { mountHeader } = await import("./app");
     mountHeader(container);
     await waitFor(() => {
-      expect(container.querySelector("h1")?.textContent).toBe("Display");
+      expect(container.querySelector("h1")?.textContent).toBe("Display Settings");
     });
   });
 
@@ -99,27 +74,7 @@ describe("display-settings plugin", () => {
     });
   });
 
-  it("calls getPresets on mount", async () => {
-    const container = document.createElement("div");
-    const { mount } = await import("./app");
-    mount(container);
-    await waitFor(() => {
-      expect(callMock).toHaveBeenCalledWith("getPresets");
-    });
-  });
-
-  it("displays preset buttons", async () => {
-    const container = document.createElement("div");
-    const { mount } = await import("./app");
-    mount(container);
-    await waitFor(() => {
-      expect(container.textContent).toContain("Default");
-      expect(container.textContent).toContain("Vivid");
-      expect(container.textContent).toContain("Warm");
-    });
-  });
-
-  it("displays control method", async () => {
+  it("displays the Gamescope control method chip when detected", async () => {
     const container = document.createElement("div");
     const { mount } = await import("./app");
     mount(container);
@@ -128,7 +83,7 @@ describe("display-settings plugin", () => {
     });
   });
 
-  it("shows Reset to Defaults button", async () => {
+  it("shows Reset to defaults button", async () => {
     const container = document.createElement("div");
     const { mount } = await import("./app");
     mount(container);
@@ -146,12 +101,27 @@ describe("display-settings plugin", () => {
     });
   });
 
-  it("displays gamma values", async () => {
+  it("does NOT show the gamescope warning when method=gamescope", async () => {
     const container = document.createElement("div");
     const { mount } = await import("./app");
     mount(container);
     await waitFor(() => {
-      expect(container.textContent).toContain("1.00");
+      // wait for the brightness slider to render
+      expect(container.textContent).toContain("Brightness");
+    });
+    expect(container.textContent).not.toContain("Saturation requires gamescope");
+  });
+
+  it("shows the gamescope warning when method=none", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getDisplayInfo") return Promise.resolve(mockNoneInfo);
+      return Promise.resolve(null);
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Saturation requires gamescope");
     });
   });
 });

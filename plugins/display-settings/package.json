@@ -10,13 +10,13 @@
   "plugin": {
     "id": "display-settings",
     "name": "Display Settings",
-    "description": "Adjust display saturation, brightness, gamma, and color temperature",
+    "description": "Adjust display brightness and saturation",
     "permissions": {
-      "commands": ["xprop", "busctl", "xrandr", "setpriv"],
+      "commands": ["xprop", "busctl", "setpriv"],
       "filesystem": ["/sys/class/backlight"]
     },
     "category": "Device",
-    "subtitle": "Saturation, brightness, color temperature",
+    "subtitle": "Brightness + saturation",
     "target": { "type": "overlay" }
   }
 }

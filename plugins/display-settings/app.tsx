@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Alert,
   Button,
-  SegmentedItem,
   Slider,
   mountComponent,
   useBackend,
@@ -16,28 +15,15 @@ export { MdDisplaySettings as icon } from "react-icons/md";
 interface DisplayState {
   saturation: number;
   brightness: number;
-  colorTemp: number;
-  gamma: { r: number; g: number; b: number };
 }
 
 interface DisplayInfo extends DisplayState {
-  method: "gamescope" | "wayland" | "xrandr" | "none";
-  xrandrOutput: string | null;
+  method: "gamescope" | "none";
   backlightPath: string | null;
   ranges: {
     saturation: [number, number];
     brightness: [number, number];
-    colorTemp: [number, number];
-    gamma: [number, number];
   };
-}
-
-interface Preset {
-  name: string;
-  label: string;
-  saturation: number;
-  colorTemp: number;
-  gamma: { r: number; g: number; b: number };
 }
 
 // ---------- Main Component ----------
@@ -46,12 +32,8 @@ function DisplaySettings() {
   const { call, useEvent } = useBackend("display-settings");
 
   const [info, setInfo] = useState<DisplayInfo | null>(null);
-  const [presets, setPresets] = useState<Preset[]>([]);
   const [saturation, setSaturation] = useState(100);
   const [brightness, setBrightness] = useState(100);
-  const [colorTemp, setColorTemp] = useState(6500);
-  const [gamma, setGamma] = useState({ r: 1.0, g: 1.0, b: 1.0 });
-  const [activePreset, setActivePreset] = useState<string | null>("default");
 
   useEvent({
     event: "stateChanged",
@@ -59,105 +41,71 @@ function DisplaySettings() {
       const state = data as DisplayState;
       setSaturation(state.saturation);
       setBrightness(state.brightness);
-      setColorTemp(state.colorTemp);
-      setGamma(state.gamma);
     },
   });
 
   useEffect(() => {
-    call("getDisplayInfo").then((result) => {
-      const data = result as DisplayInfo;
-      setInfo(data);
-      setSaturation(data.saturation);
-      setBrightness(data.brightness);
-      setColorTemp(data.colorTemp);
-      setGamma(data.gamma);
-    });
-    call("getPresets").then((result) => setPresets(result as Preset[]));
+    call("getDisplayInfo")
+      .then((result) => {
+        const data = result as DisplayInfo;
+        setInfo(data);
+        setSaturation(data.saturation);
+        setBrightness(data.brightness);
+      })
+      .catch(() => {});
   }, [call]);
 
+  // Debounce slider writes so we don't fire one RPC per drag-tick.
+  const debounce = useRef<{ saturation?: ReturnType<typeof setTimeout>; brightness?: ReturnType<typeof setTimeout> }>({});
+
   const handleSaturation = useCallback(
-    (v: number) => {
-      setSaturation(v);
-      setActivePreset(null);
-      call("setSaturation", v);
+    (value: number) => {
+      setSaturation(value);
+      if (debounce.current.saturation) clearTimeout(debounce.current.saturation);
+      debounce.current.saturation = setTimeout(() => {
+        call("setSaturation", value).catch(() => {});
+      }, 50);
     },
     [call],
   );
+
   const handleBrightness = useCallback(
-    (v: number) => {
-      setBrightness(v);
-      setActivePreset(null);
-      call("setBrightness", v);
+    (value: number) => {
+      setBrightness(value);
+      if (debounce.current.brightness) clearTimeout(debounce.current.brightness);
+      debounce.current.brightness = setTimeout(() => {
+        call("setBrightness", value).catch(() => {});
+      }, 50);
     },
     [call],
   );
-  const handleColorTemp = useCallback(
-    (v: number) => {
-      setColorTemp(v);
-      setActivePreset(null);
-      call("setColorTemp", v);
-    },
-    [call],
-  );
-  const handlePreset = useCallback(
-    (name: string) => {
-      setActivePreset(name);
-      call("applyPreset", name);
-    },
-    [call],
-  );
+
   const handleReset = useCallback(() => {
-    setActivePreset("default");
     call("resetDefaults");
   }, [call]);
 
-  const methodLabel =
-    info?.method === "gamescope"
-      ? "Gamescope"
-      : info?.method === "xrandr"
-        ? `xrandr (${info.xrandrOutput})`
-        : info?.method === "wayland"
-          ? "Wayland D-Bus"
-          : "No display control detected";
+  useEffect(
+    () => () => {
+      if (debounce.current.saturation) clearTimeout(debounce.current.saturation);
+      if (debounce.current.brightness) clearTimeout(debounce.current.brightness);
+    },
+    [],
+  );
 
-  // Per-control capability flags — feed each slider's "this won't take
-  // effect in your session" banner. The backend's detection ladder is:
-  // gamescope atoms → Wayland D-Bus (KDE NightLight + logind backlight)
-  // → xrandr. Each tier supports a different subset.
+  const methodLabel =
+    info?.method === "gamescope" ? "Gamescope" : "No display control detected";
   const m = info?.method;
   const saturationSupported = m === "gamescope";
-  // Brightness goes via logind D-Bus or sysfs (root) on every method.
-  // Surface a warning only when we couldn't detect a backlight at all.
-  const brightnessUnsupported = !info?.backlightPath && m !== "xrandr";
-  // Color temperature: gamescope handles via compositor; Wayland needs
-  // KDE NightLight (the backend sets `method === "wayland"` only when it
-  // also found NightLight available); xrandr applies via --gamma.
-  const colorTempSupported = m === "gamescope" || m === "wayland" || m === "xrandr";
-  // Gamma sliders are X11-only (xrandr --gamma).
-  const gammaSupported = m === "xrandr";
+  const brightnessUnsupported = info !== null && !info.backlightPath;
 
   return (
     <div className="p-7 h-full overflow-y-auto">
       <div className="page-content">
         <div className="card">
-          {/* Presets */}
           <div className="subsection">
             <div className="flex items-center justify-between mb-3.5">
-              <div className="subsection-label mb-0">Color Profile</div>
+              <div className="subsection-label mb-0">Display</div>
               <span className="chip">{methodLabel}</span>
-            </div>
-            <div className="segmented w-full">
-              {presets.map((p) => (
-                <SegmentedItem
-                  key={p.name}
-                  active={activePreset === p.name}
-                  onSelect={() => handlePreset(p.name)}
-                  style={{ flex: 1 }}
-                >
-                  {p.label}
-                </SegmentedItem>
-              ))}
             </div>
           </div>
 
@@ -169,9 +117,9 @@ function DisplaySettings() {
                 icon={<FaTriangleExclamation size={16} />}
                 title="No backlight detected"
               >
-                Couldn't find a `/sys/class/backlight/*` device. Brightness
-                slider has no hardware to drive — common on external monitors
-                or VMs.
+                Couldn't find a /sys/class/backlight/* device. Brightness
+                slider has no hardware to drive — common on external
+                monitors or VMs.
               </Alert>
             )}
             <div className="flex items-center justify-between mb-3.5">
@@ -203,17 +151,12 @@ function DisplaySettings() {
               <Alert
                 variant="warning"
                 icon={<FaTriangleExclamation size={16} />}
-                title="Saturation unavailable in this session"
+                title="Saturation requires gamescope"
               >
-                Saturation control requires gamescope (Steam Deck Gaming
-                Mode / Bazzite-Deck Gaming Mode / ChimeraOS console mode).
-                The slider value is stored but won't apply on{" "}
-                {m === "wayland"
-                  ? "this Wayland desktop"
-                  : m === "xrandr"
-                    ? "this X11 desktop"
-                    : "this session"}
-                .
+                Saturation only applies under gamescope (Steam Deck
+                Gaming Mode, Bazzite-Deck Gaming Mode, ChimeraOS console
+                mode). The slider value is stored but won't affect your
+                display on this session.
               </Alert>
             )}
             <div className="flex items-center justify-between mb-3.5">
@@ -234,103 +177,13 @@ function DisplaySettings() {
             />
             <div className="flex justify-between mono text-[11px] text-base-content/50 mt-1.5">
               <span>Grayscale</span>
-              <span>Normal</span>
+              <span>sRGB</span>
               <span>Vivid</span>
-            </div>
-          </div>
-
-          {/* Color Temperature */}
-          <div className="subsection">
-            {!colorTempSupported && (
-              <Alert
-                variant="warning"
-                icon={<FaTriangleExclamation size={16} />}
-                title="Color temperature unavailable in this session"
-              >
-                Needs gamescope, KDE Plasma's NightLight (Wayland), or an
-                X11 session via xrandr. None detected — slider value is
-                stored but won't apply.
-              </Alert>
-            )}
-            <div className="flex items-center justify-between mb-3.5">
-              <div className="subsection-label mb-0">Color Temperature</div>
-              <span
-                className="mono text-[13px] font-semibold"
-                style={{ color: "var(--accent)" }}
-              >
-                {Math.round(colorTemp)}K
-              </span>
-            </div>
-            <Slider
-              value={colorTemp}
-              min={3000}
-              max={6500}
-              step={100}
-              onChange={handleColorTemp}
-            />
-            <div className="flex justify-between mono text-[11px] text-base-content/50 mt-1.5">
-              <span>Warm · 3000K</span>
-              <span>Neutral</span>
-              <span>Cool · 6500K</span>
-            </div>
-            {/* Warm quick-picks */}
-            <div className="flex gap-1.5 mt-3">
-              {[3400, 4000, 5000, 6500].map((k) => (
-                <Button
-                  key={k}
-                  size="sm"
-                  variant={colorTemp === k ? "primary" : "default"}
-                  onClick={() => handleColorTemp(k)}
-                  style={{ flex: 1 }}
-                >
-                  {k}K
-                </Button>
-              ))}
-            </div>
-          </div>
-
-          {/* Gamma */}
-          <div className="subsection">
-            {!gammaSupported && (
-              <Alert
-                variant="warning"
-                icon={<FaTriangleExclamation size={16} />}
-                title="Gamma write requires X11"
-              >
-                Per-channel gamma multipliers are applied via `xrandr
-                --gamma`, which only works in an X11 / XWayland session.
-                Values shown below are the stored target; the actual
-                rendering on{" "}
-                {m === "wayland"
-                  ? "Wayland"
-                  : m === "gamescope"
-                    ? "gamescope (uses its own colour pipeline)"
-                    : "this session"}{" "}
-                won't reflect them.
-              </Alert>
-            )}
-            <div className="subsection-label">Gamma</div>
-            <div className="row">
-              <span className="row-label">Red</span>
-              <span className="row-value">{gamma.r.toFixed(2)}</span>
-            </div>
-            <div className="row">
-              <span className="row-label">Green</span>
-              <span className="row-value">{gamma.g.toFixed(2)}</span>
-            </div>
-            <div className="row">
-              <span className="row-label">Blue</span>
-              <span className="row-value">{gamma.b.toFixed(2)}</span>
             </div>
           </div>
 
           {/* Info + Reset */}
           <div className="subsection">
-            <div className="subsection-label">Display</div>
-            <div className="row">
-              <span className="row-label">Control method</span>
-              <span className="row-value">{methodLabel}</span>
-            </div>
             {info?.backlightPath && (
               <div className="row">
                 <span className="row-label">Backlight</span>
@@ -339,8 +192,8 @@ function DisplaySettings() {
             )}
             <div className="flex justify-between items-center pt-3.5 mt-3.5 border-t border-base-300">
               <div className="subsection-desc m-0">
-                Changes apply live. Adjustments vary with display hardware +
-                compositor.
+                Changes apply live. Brightness works on any backlight
+                device; saturation requires gamescope.
               </div>
               <Button onClick={handleReset}>Reset to defaults</Button>
             </div>
@@ -351,13 +204,11 @@ function DisplaySettings() {
   );
 }
 
-// ---------- Homepage widget — brightness slider + presets ----------
+// ---------- Homepage widget — brightness slider only ----------
 
 function DisplayHomeWidget() {
   const { call } = useBackend("display-settings");
   const [brightness, setBrightness] = useState<number>(100);
-  const [presets, setPresets] = useState<Preset[]>([]);
-  const [activePreset, setActivePreset] = useState<string | null>("default");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -366,9 +217,6 @@ function DisplayHomeWidget() {
         const state = result as DisplayState;
         setBrightness(state.brightness);
       })
-      .catch(() => {});
-    call("getPresets")
-      .then((result) => setPresets(result as Preset[]))
       .catch(() => {});
   }, [call]);
 
@@ -382,11 +230,8 @@ function DisplayHomeWidget() {
   return (
     <div className="p-4">
       <div className="flex items-baseline gap-2 mb-3">
-        <span className="metric-value mono" style={{ fontSize: 36 }}>
-          {brightness}
-        </span>
-        <span className="metric-unit">%</span>
-        <span className="ml-auto metric-label">BRIGHTNESS</span>
+        <div className="metric-value mono">{Math.round(brightness)}</div>
+        <div className="metric-unit">% brightness</div>
       </div>
       <Slider
         value={brightness}
@@ -395,30 +240,12 @@ function DisplayHomeWidget() {
         step={1}
         onChange={(val) => {
           setBrightness(val);
-          setActivePreset(null);
           if (debounceRef.current) clearTimeout(debounceRef.current);
           debounceRef.current = setTimeout(() => {
             call("setBrightness", val).catch(() => {});
           }, 500);
         }}
       />
-      {presets.length > 0 && (
-        <div className="segmented w-full mt-3">
-          {presets.slice(0, 4).map((p) => (
-            <SegmentedItem
-              key={p.name}
-              active={activePreset === p.name}
-              onSelect={() => {
-                setActivePreset(p.name);
-                call("applyPreset", p.name).catch(() => {});
-              }}
-              style={{ flex: 1 }}
-            >
-              {p.label}
-            </SegmentedItem>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -429,16 +256,16 @@ function Header() {
   return (
     <div className="flex flex-col gap-0.5 min-w-0">
       <h1 className="text-xl font-semibold tracking-[-0.015em] m-0 leading-tight">
-        Display
+        Display Settings
       </h1>
       <span className="text-[11.5px] text-base-content/55 tracking-[0.02em] truncate leading-tight">
-        Saturation, brightness, color temperature
+        Brightness + saturation
       </span>
     </div>
   );
 }
 
-// ---------- Exports ----------
+// ---------- Mount entry points ----------
 
 export const mount = mountComponent(DisplaySettings);
 export const mountHomeWidget = mountComponent(DisplayHomeWidget);

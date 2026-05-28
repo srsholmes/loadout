@@ -2,7 +2,6 @@ import { describe, it, expect } from "bun:test";
 import {
   floatToLong,
   longToFloat,
-  kelvinToGamma,
   percentToRaw,
   rawToPercent,
 } from "./color";
@@ -26,61 +25,6 @@ describe("floatToLong / longToFloat", () => {
   });
 });
 
-describe("kelvinToGamma", () => {
-  it("returns values close to 1.0 for 6500K (D65 white)", () => {
-    const { r, g, b } = kelvinToGamma(6500);
-    expect(r).toBeCloseTo(1.0, 1);
-    expect(g).toBeCloseTo(1.0, 1);
-    expect(b).toBeCloseTo(1.0, 1);
-  });
-
-  it("warm temperature (3000K) has higher red than blue", () => {
-    const { r, b } = kelvinToGamma(3000);
-    expect(r).toBeGreaterThan(b);
-  });
-
-  it("all channels are in [0, 1] range for 3000K", () => {
-    const { r, g, b } = kelvinToGamma(3000);
-    expect(r).toBeGreaterThanOrEqual(0);
-    expect(r).toBeLessThanOrEqual(1);
-    expect(g).toBeGreaterThanOrEqual(0);
-    expect(g).toBeLessThanOrEqual(1);
-    expect(b).toBeGreaterThanOrEqual(0);
-    expect(b).toBeLessThanOrEqual(1);
-  });
-
-  it("all channels are in [0, 1] range for 6500K", () => {
-    const { r, g, b } = kelvinToGamma(6500);
-    expect(r).toBeGreaterThanOrEqual(0);
-    expect(r).toBeLessThanOrEqual(1);
-    expect(g).toBeGreaterThanOrEqual(0);
-    expect(g).toBeLessThanOrEqual(1);
-    expect(b).toBeGreaterThanOrEqual(0);
-    expect(b).toBeLessThanOrEqual(1);
-  });
-
-  it("produces values rounded to 3 decimal places", () => {
-    const { r, g, b } = kelvinToGamma(4500);
-    // toFixed(3) produces 3 decimal places max
-    expect(String(r).split(".")[1]?.length ?? 0).toBeLessThanOrEqual(3);
-    expect(String(g).split(".")[1]?.length ?? 0).toBeLessThanOrEqual(3);
-    expect(String(b).split(".")[1]?.length ?? 0).toBeLessThanOrEqual(3);
-  });
-
-  it("very low temperature (1900K) clamps blue to 0", () => {
-    // temp/100 = 19 is the threshold below which b = 0
-    const { b } = kelvinToGamma(1900);
-    expect(b).toBe(0);
-  });
-
-  it("very high temperature (9900K) keeps all channels at 1.0", () => {
-    // At 9900K temp=99>66: all channels in the high-temp formulas
-    const { r, g, b } = kelvinToGamma(9900);
-    expect(r).toBeGreaterThan(0);
-    expect(g).toBeGreaterThan(0);
-    expect(b).toBeCloseTo(1.0, 3);
-  });
-});
 
 describe("percentToRaw", () => {
   it("converts 0% to 0", () => {
