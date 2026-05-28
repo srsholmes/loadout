@@ -12,11 +12,29 @@ set -e
 REPO="srsholmes/loadout"
 INSTALL_DIR="$HOME/.local/share/loadout"
 BINARY_NAME="loadout"
-# System path (SELinux bin_t) so the root service can exec it — exec from
-# ~/.local/share (data_home_t) is denied for a system-domain service.
-# /usr/local/bin is writable on ostree (→ /var/usrlocal) and persists
-# across updates. Mirrors HHD's /usr/bin/hhd.
-BINARY_PATH="/usr/local/bin/$BINARY_NAME"
+# Distro-dependent binary path — there is no single path that works on
+# every supported distro. See docs/install-locations.md for the full
+# rationale.
+#   SteamOS: $INSTALL_DIR/$BINARY_NAME (under ~/.local/share). /usr is
+#            read-only and would be wiped on the next A/B image update;
+#            SteamOS doesn't enforce SELinux so a binary under
+#            data_home_t execs fine from a root unit.
+#   Otherwise (Bazzite / Fedora-ostree / Arch / CachyOS / Ubuntu / ...):
+#            /usr/local/bin/$BINARY_NAME. Writable on ostree (→
+#            /var/usrlocal), labelled bin_t — Bazzite's enforcing SELinux
+#            denies init_t `execute` on data_home_t, so the binary MUST
+#            be at a bin_t-labelled system path. Mirrors HHD's
+#            /usr/bin/hhd. Non-SELinux distros: same path, just works.
+case "$(. /etc/os-release 2>/dev/null && printf '%s' "${ID:-}")" in
+    steamos)
+        BINARY_PATH="$INSTALL_DIR/$BINARY_NAME"
+        BIN_NEEDS_SUDO=0
+        ;;
+    *)
+        BINARY_PATH="/usr/local/bin/$BINARY_NAME"
+        BIN_NEEDS_SUDO=1
+        ;;
+esac
 BIN_LINK="$HOME/.local/bin/loadout"
 SERVICE_DIR="$HOME/.config/systemd/user"
 # Legacy per-user backend unit — removed on install now the backend is a
@@ -386,12 +404,22 @@ phase1() {
         exit 1
     fi
 
-    # Install binary into the system path (needs sudo). restorecon forces
-    # the bin_t label so the root service (init_t) can exec it.
-    info "Installing the binary to $BINARY_PATH (needs sudo)..."
-    sudo install -m 0755 "$TEMP_FILE" "$BINARY_PATH"
-    rm -f "$TEMP_FILE"
-    command -v restorecon >/dev/null 2>&1 && sudo restorecon -F "$BINARY_PATH" 2>/dev/null || true
+    # Install the binary at the chosen path. On a system path
+    # (/usr/local/bin) this needs sudo + restorecon to force bin_t so the
+    # root service (init_t) can exec it under enforcing SELinux. On SteamOS
+    # the binary lives in the user's home (BIN_NEEDS_SUDO=0) — plain user-
+    # owned, no SELinux concern, no /usr write (the rootfs is read-only).
+    if [ "$BIN_NEEDS_SUDO" = "1" ]; then
+        info "Installing the binary to $BINARY_PATH (needs sudo)..."
+        sudo install -m 0755 "$TEMP_FILE" "$BINARY_PATH"
+        rm -f "$TEMP_FILE"
+        command -v restorecon >/dev/null 2>&1 && sudo restorecon -F "$BINARY_PATH" 2>/dev/null || true
+    else
+        info "Installing the binary to $BINARY_PATH (user-writable on this distro)..."
+        mkdir -p "$(dirname "$BINARY_PATH")"
+        install -m 0755 "$TEMP_FILE" "$BINARY_PATH"
+        rm -f "$TEMP_FILE"
+    fi
     success "Binary installed to $BINARY_PATH"
 
     # Download the overlay binary
