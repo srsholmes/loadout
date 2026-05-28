@@ -9,6 +9,8 @@ export {
   GAME_DETECTION_SERVICE_ID,
 } from "./sdk";
 export type { CurrentGame, GameSessionRecord, PluginMountOpts } from "./sdk";
+export { Alert } from "./components/Alert";
+export type { AlertVariant } from "./components/Alert";
 export { Panel } from "./components/Panel";
 export { Text } from "./components/Text";
 export { Button } from "./components/Button";

@@ -73,9 +73,8 @@ rm -rf "$NM_DST"
 mkdir -p "$NM_DST/@loadout"
 
 # Workspace packages used by plugins. Add new packages here when a
-# plugin starts importing them (e.g. plugin-storage for tdp-control /
-# fan-control / playtime).
-for pkg in types exec steam-paths ui plugin-storage; do
+# plugin starts importing them.
+for pkg in types exec steam-paths ui plugin-storage vdf external-cache per-game-profiles steam-cdp file-picker steam-shortcut sgdb-art; do
     if [ -d "$PROJECT_ROOT/packages/$pkg" ]; then
         cp -r "$PROJECT_ROOT/packages/$pkg" "$NM_DST/@loadout/$pkg"
     fi

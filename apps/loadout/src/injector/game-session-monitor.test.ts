@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { createGameSessionMonitor, type GameSessionEvent } from "./game-session-monitor";
-import type { CDPClient, CDPResponse } from "../steam-cdp";
+import type { CDPClient, CDPResponse } from "@loadout/steam-cdp";
 
 // ---------------------------------------------------------------------------
 // Mock CDP Client

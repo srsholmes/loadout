@@ -1,18 +1,14 @@
 # Plugin Development Guide
 
-> **Doc currency (2026-05).** This guide was originally written for the
-> Steam-CEF injection model. Most plugins today render in the **Electrobun
-> overlay** instead — the only structural difference is the UI file:
->
-> | Surface | UI entry | When to use |
-> |---|---|---|
-> | Electrobun overlay (default) | `app.tsx` | The user opens the overlay (QAM tile, F16, Ctrl+Shift+O); your plugin renders inside it. **This is the default for most plugins.** |
-> | Steam CEF injection | `panel.tsx` | Your plugin needs to render directly inside Steam's UI (e.g. a game-library overlay). |
->
-> Plugin metadata also moved from a separate `plugin.json` to a `plugin`
-> field on the workspace `package.json` — see any of the live plugins for
-> the current shape. The hello-world examples below pre-date that change
-> and may show the old `plugin.json` shape.
+> **Doc currency (2026-05).** This guide predates the Electrobun-overlay-
+> only decision. Treat any `panel.tsx` references below as historical —
+> **all plugins now use `app.tsx`** and render in the Electrobun overlay.
+> Backends that need to drive Steam's CEF UI talk to it via
+> `@loadout/steam-cdp` (the loader's CDP client, exposed as a workspace
+> package). Plugin metadata also moved from a separate `plugin.json` to
+> a `plugin` field on the workspace `package.json` — see any of the live
+> plugins for the current shape. The hello-world examples below show the
+> old shape but the structural points still apply.
 
 This guide covers everything you need to build plugins for Loadout — from a simple hello world to advanced patterns like using Steam's native UI components, hooking into Steam events, and communicating between frontend and backend.
 

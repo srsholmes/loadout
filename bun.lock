@@ -34,6 +34,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@loadout/exec": "workspace:*",
+        "@loadout/steam-cdp": "workspace:*",
         "@loadout/steam-paths": "workspace:*",
         "@loadout/types": "workspace:*",
         "react": "^18.3.0",
@@ -54,6 +55,7 @@
         "react-dom": "^18.3.0",
         "react-grid-layout": "^2.2.3",
         "react-hot-toast": "^2.4.1",
+        "react-resizable": "^3.0.5",
         "react-simple-keyboard": "^3.8.197",
       },
       "devDependencies": {
@@ -71,13 +73,63 @@
       "name": "@loadout/exec",
       "version": "0.0.1",
     },
+    "packages/external-cache": {
+      "name": "@loadout/external-cache",
+      "version": "0.0.1",
+    },
+    "packages/file-picker": {
+      "name": "@loadout/file-picker",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/exec": "workspace:*",
+      },
+    },
+    "packages/game-library": {
+      "name": "@loadout/game-library",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/steam-paths": "workspace:*",
+        "@loadout/types": "workspace:*",
+        "@loadout/vdf": "workspace:*",
+      },
+    },
+    "packages/per-game-profiles": {
+      "name": "@loadout/per-game-profiles",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/plugin-storage": "workspace:*",
+      },
+    },
     "packages/plugin-storage": {
       "name": "@loadout/plugin-storage",
+      "version": "0.0.1",
+    },
+    "packages/sgdb-art": {
+      "name": "@loadout/sgdb-art",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/external-cache": "workspace:*",
+        "@loadout/plugin-storage": "workspace:*",
+        "@loadout/steam-cdp": "workspace:*",
+        "@loadout/steam-paths": "workspace:*",
+        "@loadout/vdf": "workspace:*",
+      },
+    },
+    "packages/steam-cdp": {
+      "name": "@loadout/steam-cdp",
       "version": "0.0.1",
     },
     "packages/steam-paths": {
       "name": "@loadout/steam-paths",
       "version": "0.0.1",
+    },
+    "packages/steam-shortcut": {
+      "name": "@loadout/steam-shortcut",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/steam-cdp": "workspace:*",
+        "@loadout/vdf": "workspace:*",
+      },
     },
     "packages/types": {
       "name": "@loadout/types",
@@ -95,11 +147,24 @@
         "react": ">=18",
       },
     },
+    "packages/vdf": {
+      "name": "@loadout/vdf",
+      "version": "0.0.1",
+    },
     "plugins/bluetooth": {
       "name": "@loadout/plugin-bluetooth",
       "version": "0.0.1",
       "dependencies": {
         "@loadout/exec": "workspace:*",
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+      },
+    },
+    "plugins/display-settings": {
+      "name": "@loadout/plugin-display-settings",
+      "version": "0.0.1",
+      "dependencies": {
         "@loadout/ui": "workspace:*",
         "react": "^18.3.0",
         "react-dom": "^18.3.0",
@@ -301,11 +366,21 @@
 
     "@loadout/exec": ["@loadout/exec@workspace:packages/exec"],
 
+    "@loadout/external-cache": ["@loadout/external-cache@workspace:packages/external-cache"],
+
+    "@loadout/file-picker": ["@loadout/file-picker@workspace:packages/file-picker"],
+
+    "@loadout/game-library": ["@loadout/game-library@workspace:packages/game-library"],
+
     "@loadout/loadout-overlay": ["@loadout/loadout-overlay@workspace:apps/loadout-overlay"],
 
     "@loadout/loadout-server": ["@loadout/loadout-server@workspace:apps/loadout"],
 
+    "@loadout/per-game-profiles": ["@loadout/per-game-profiles@workspace:packages/per-game-profiles"],
+
     "@loadout/plugin-bluetooth": ["@loadout/plugin-bluetooth@workspace:plugins/bluetooth"],
+
+    "@loadout/plugin-display-settings": ["@loadout/plugin-display-settings@workspace:plugins/display-settings"],
 
     "@loadout/plugin-fan-control": ["@loadout/plugin-fan-control@workspace:plugins/fan-control"],
 
@@ -319,11 +394,19 @@
 
     "@loadout/plugin-tdp-control": ["@loadout/plugin-tdp-control@workspace:plugins/tdp-control"],
 
+    "@loadout/sgdb-art": ["@loadout/sgdb-art@workspace:packages/sgdb-art"],
+
+    "@loadout/steam-cdp": ["@loadout/steam-cdp@workspace:packages/steam-cdp"],
+
     "@loadout/steam-paths": ["@loadout/steam-paths@workspace:packages/steam-paths"],
+
+    "@loadout/steam-shortcut": ["@loadout/steam-shortcut@workspace:packages/steam-shortcut"],
 
     "@loadout/types": ["@loadout/types@workspace:packages/types"],
 
     "@loadout/ui": ["@loadout/ui@workspace:packages/ui"],
+
+    "@loadout/vdf": ["@loadout/vdf@workspace:packages/vdf"],
 
     "@malept/cross-spawn-promise": ["@malept/cross-spawn-promise@1.1.1", "", { "dependencies": { "cross-spawn": "^7.0.1" } }, "sha512-RTBGWL5FWQcg9orDOCcp4LvItNzUPcyEU9bwaeJX0rJ1IQxzucC48Y0/sQLp/g6t99IQgAlGIaesJS+gTn7tVQ=="],
 
