@@ -1,0 +1,25 @@
+{
+  "name": "@loadout/plugin-playtime",
+  "version": "0.0.1",
+  "type": "module",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@loadout/ui": "workspace:*",
+    "@loadout/types": "workspace:*",
+    "@loadout/steam-paths": "workspace:*"
+  },
+  "plugin": {
+    "id": "playtime",
+    "name": "PlayTime",
+    "description": "Track time spent playing games, including non-Steam games",
+    "permissions": {
+      "filesystem": [
+        "read:~/.local/share/Steam",
+        "write:~/.config/loadout/plugins"
+      ]
+    },
+    "category": "Steam",
+    "subtitle": "Track gaming time"
+  }
+}
