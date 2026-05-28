@@ -55,6 +55,7 @@
         "react-dom": "^18.3.0",
         "react-grid-layout": "^2.2.3",
         "react-hot-toast": "^2.4.1",
+        "react-resizable": "^3.0.5",
         "react-simple-keyboard": "^3.8.197",
       },
       "devDependencies": {
@@ -120,6 +121,15 @@
       "version": "0.0.1",
       "dependencies": {
         "@loadout/exec": "workspace:*",
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+      },
+    },
+    "plugins/display-settings": {
+      "name": "@loadout/plugin-display-settings",
+      "version": "0.0.1",
+      "dependencies": {
         "@loadout/ui": "workspace:*",
         "react": "^18.3.0",
         "react-dom": "^18.3.0",
@@ -320,6 +330,8 @@
     "@loadout/per-game-profiles": ["@loadout/per-game-profiles@workspace:packages/per-game-profiles"],
 
     "@loadout/plugin-bluetooth": ["@loadout/plugin-bluetooth@workspace:plugins/bluetooth"],
+
+    "@loadout/plugin-display-settings": ["@loadout/plugin-display-settings@workspace:plugins/display-settings"],
 
     "@loadout/plugin-fan-control": ["@loadout/plugin-fan-control@workspace:plugins/fan-control"],
 
