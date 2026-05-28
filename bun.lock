@@ -84,6 +84,15 @@
         "@loadout/exec": "workspace:*",
       },
     },
+    "packages/game-library": {
+      "name": "@loadout/game-library",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/steam-paths": "workspace:*",
+        "@loadout/types": "workspace:*",
+        "@loadout/vdf": "workspace:*",
+      },
+    },
     "packages/per-game-profiles": {
       "name": "@loadout/per-game-profiles",
       "version": "0.0.1",
@@ -350,6 +359,8 @@
     "@loadout/external-cache": ["@loadout/external-cache@workspace:packages/external-cache"],
 
     "@loadout/file-picker": ["@loadout/file-picker@workspace:packages/file-picker"],
+
+    "@loadout/game-library": ["@loadout/game-library@workspace:packages/game-library"],
 
     "@loadout/loadout-overlay": ["@loadout/loadout-overlay@workspace:apps/loadout-overlay"],
 
