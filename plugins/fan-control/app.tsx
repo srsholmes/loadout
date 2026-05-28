@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { createRoot } from "react-dom/client";
 import { FaFan, FaTemperatureHalf } from "react-icons/fa6";
 import {
   Button,
   PluginHeader,
-  PluginProvider,
   Slider,
   Spinner,
   Toggle,
+  mountComponent,
+  mountHeaderStub,
   useBackend,
   useCurrentGame,
   SegmentedItem,
@@ -509,23 +509,8 @@ function getTempColor(tempC: number): string {
 /**
  * Mount this plugin into a container element.
  * Called by the overlay shell when this plugin is selected.
- * Returns an unmount function.
  */
-export function mount(
-  container: HTMLElement,
-  opts?: { parentFocusKey?: string; headerSlot?: HTMLElement | null },
-): () => void {
-  const root = createRoot(container);
-  root.render(
-    <PluginProvider
-      parentFocusKey={opts?.parentFocusKey}
-      headerSlot={opts?.headerSlot ?? null}
-    >
-      <FanControl />
-    </PluginProvider>,
-  );
-  return () => root.unmount();
-}
+export const mount = mountComponent(FanControl);
 
 /** Homepage widget — Loadout-styled: RPM metric, mode segmented, heat bar. */
 function FanHomeWidget() {
@@ -710,18 +695,7 @@ function FanHomeWidget() {
  * Mount the homepage widget.
  * Shows fan mode, speed slider, temperature, and preset buttons.
  */
-export function mountHomeWidget(
-  container: HTMLElement,
-  opts?: { parentFocusKey?: string },
-): () => void {
-  const root = createRoot(container);
-  root.render(
-    <PluginProvider parentFocusKey={opts?.parentFocusKey}>
-      <FanHomeWidget />
-    </PluginProvider>,
-  );
-  return () => root.unmount();
-}
+export const mountHomeWidget = mountComponent(FanHomeWidget);
 
 /**
  * Stub `mountHeader` export. Its mere presence is what tells the
@@ -730,6 +704,4 @@ export function mountHomeWidget(
  * the Auto/Manual segmented and the live driver subtitle share the
  * body's React tree without any cross-root pub/sub.
  */
-export function mountHeader(): () => void {
-  return () => {};
-}
+export const mountHeader = mountHeaderStub;

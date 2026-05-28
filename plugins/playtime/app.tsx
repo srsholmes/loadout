@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo } from "react";
-import { createRoot } from "react-dom/client";
 import {
   PluginHeader,
-  PluginProvider,
   SegmentedItem,
+  mountComponent,
+  mountHeaderStub,
   useBackend,
   useCurrentGame,
 } from "@loadout/ui";
@@ -575,45 +575,14 @@ function PlayTimeHomeWidget() {
 
 // --- Mount functions ---
 
-/**
- * Mount this plugin into a container element.
- * Called by the overlay shell when this plugin is selected.
- * Returns an unmount function.
- */
-export function mount(
-  container: HTMLElement,
-  opts?: { parentFocusKey?: string; headerSlot?: HTMLElement | null },
-): () => void {
-  const root = createRoot(container);
-  root.render(
-    <PluginProvider
-      parentFocusKey={opts?.parentFocusKey}
-      headerSlot={opts?.headerSlot ?? null}
-    >
-      <PlayTime />
-    </PluginProvider>,
-  );
-  return () => root.unmount();
-}
+/** Mount this plugin into a container element. */
+export const mount = mountComponent(PlayTime);
 
-export function mountHomeWidget(
-  container: HTMLElement,
-  opts?: { parentFocusKey?: string },
-): () => void {
-  const root = createRoot(container);
-  root.render(
-    <PluginProvider parentFocusKey={opts?.parentFocusKey}>
-      <PlayTimeHomeWidget />
-    </PluginProvider>,
-  );
-  return () => root.unmount();
-}
+export const mountHomeWidget = mountComponent(PlayTimeHomeWidget);
 
 /**
  * Stub `mountHeader` export. Its mere presence is what tells the
  * overlay shell to reserve the 60px topbar slot — the actual header
  * content is portaled from inside `mount()` via `<PluginHeader>`.
  */
-export function mountHeader(): () => void {
-  return () => {};
-}
+export const mountHeader = mountHeaderStub;

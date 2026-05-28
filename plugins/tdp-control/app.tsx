@@ -1,8 +1,7 @@
-import { useState, useEffect, useCallback, useRef, type ComponentType } from "react";
-import { createRoot } from "react-dom/client";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { FaBolt, FaMicrochip } from "react-icons/fa6";
 import {
-  PluginProvider,
+  mountComponent,
   useBackend,
   useCurrentGame,
   Button,
@@ -837,25 +836,6 @@ function TdpHomeWidget() {
       )}
     </div>
   );
-}
-
-/**
- * Mount factory — every plugin UI surface (settings page, home widget,
- * header) shares the same createRoot + PluginProvider + unmount boilerplate.
- * Returns a `(container, opts) => unmount` mounter for a given component.
- */
-function mountComponent(
-  Component: ComponentType,
-): (container: HTMLElement, opts?: { parentFocusKey?: string }) => () => void {
-  return (container, opts) => {
-    const root = createRoot(container);
-    root.render(
-      <PluginProvider parentFocusKey={opts?.parentFocusKey}>
-        <Component />
-      </PluginProvider>,
-    );
-    return () => root.unmount();
-  };
 }
 
 /** Full settings page — mounted by the overlay shell when the plugin opens. */
