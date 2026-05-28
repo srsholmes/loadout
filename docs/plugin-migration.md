@@ -44,7 +44,7 @@ One plugin per issue, migrated one at a time.
   ```
   `id` / `name` / `description` are required; `permissions` / `category` / `target` / `routes` are optional. See `PluginMeta` in `packages/types/src/plugin.ts`.
 - `backend.ts` (optional) — default-export a class `implements PluginBackend` (from `@loadout/types`). Lifecycle: `onLoad?` / `onUnload?` / `emit?` / `log?`. **Every public, non-underscore method becomes an RPC endpoint.** Prefix private helpers with `_` to keep them off the wire.
-- UI entry — `app.tsx` for the **overlay** (the default for almost every plugin) OR `panel.tsx` for **Steam CEF injection**. Use whichever the source plugin used.
+- UI entry — `app.tsx`. The plugin renders in the Electrobun overlay. Backends that need to drive Steam's CEF UI talk to it via `@loadout/steam-cdp` (extracted from `apps/loadout/src/steam-cdp/`).
 - `lib/**` (optional) — inlined helper modules.
 - Carry over `assets/`, `README.md`, `LICENSE` if present.
 
@@ -141,7 +141,7 @@ Loadout targets Linux gaming handhelds + gaming desktops. The reviewer classifie
 2. **Rename the scope** on every ported file: `sed -i 's#@steam-loader/#@loadout/#g'` (review the diff — only the four allowed packages should remain after step 4).
 3. **Fold `plugin.json` into `package.json`.** Move the manifest fields into the `plugin` field of `package.json`, set `name` to `@loadout/plugin-{{PLUGIN_ID}}`, add `"type": "module"` and the real `dependencies`. Delete the standalone `plugin.json`.
 4. **Resolve removed-package deps by inlining** (see the decision rule below). The packages `plugin-storage`, `vdf`, `external-cache`, `sgdb-art`, `steam-shortcut`, `file-picker`, and `per-game-profiles` DO NOT exist in the target — replace each import with inlined code in this plugin's `lib/` *by default*.
-5. **Adapt to the current SDK / manifest shape.** Reconcile any `@loadout/ui` / `@loadout/types` API drift against the reference plugin and `packages/types/src/plugin.ts`. If the source used `panel.tsx` but renders in the overlay, keep `panel.tsx` only if it's a real Steam-injection plugin; otherwise it stays `app.tsx`. Ensure the `mount` / `PluginProvider` / `icon` shape matches `plugins/steam-gamescope-ipc/app.tsx`.
+5. **Adapt to the current SDK / manifest shape.** Reconcile any `@loadout/ui` / `@loadout/types` API drift against the reference plugin and `packages/types/src/plugin.ts`. The source repo's `panel.tsx` plugins (Steam-CEF injection) port to `app.tsx` — the Electrobun overlay is the surface; backends drive Steam's CEF via `@loadout/steam-cdp` when needed. Ensure the `mount` / `PluginProvider` / `icon` shape matches `plugins/steam-gamescope-ipc/app.tsx`.
 6. **Port the tests to `bun:test`.** Convert the source's backend `*.spec.ts` → `*.test.ts` and keep UI tests as `*.spec.tsx`; rewrite any vitest API to `bun:test` (see **Tests** above). Add tests for any ≥100-LOC `lib/**` module.
 7. **Wire it into `plugins/`** so the workspace picks it up (it's a workspace via `plugins/*`). Confirm it loads (see Definition of Done).
 
@@ -212,7 +212,7 @@ All green from the TARGET repo root (`/var/home/srsholmes/Work/loadout`):
 - **Plugin id:** `{{PLUGIN_ID}}`
 - **Plugin name:** `{{PLUGIN_NAME}}`
 - **Source path:** `linux-gaming-plugin-manager/plugins/{{PLUGIN_ID}}/`
-- **UI surface:** overlay (`app.tsx`) | Steam injection (`panel.tsx`)
+- **UI surface:** overlay (`app.tsx`) — only surface. Steam-CEF UI driven from the backend via `@loadout/steam-cdp`.
 - **Removed-package deps used:** (e.g. plugin-storage, vdf) → inline target(s)
 - **Network domains to declare:** …
 - **Subprocess usage:** y/n (must route through `@loadout/exec`)
