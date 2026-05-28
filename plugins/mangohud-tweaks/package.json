@@ -1,0 +1,23 @@
+{
+  "name": "@loadout/plugin-mangohud-tweaks",
+  "version": "0.0.1",
+  "type": "module",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@loadout/ui": "workspace:*",
+    "@loadout/exec": "workspace:*"
+  },
+  "plugin": {
+    "id": "mangohud-tweaks",
+    "name": "MangoHud Tweaks",
+    "description": "Configure MangoHud overlay settings and presets",
+    "category": "Performance",
+    "subtitle": "MangoHud HUD profiles",
+    "target": { "type": "overlay" },
+    "permissions": {
+      "commands": ["which"],
+      "filesystem": ["~/.config/MangoHud"]
+    }
+  }
+}
