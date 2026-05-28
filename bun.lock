@@ -95,6 +95,10 @@
         "react": ">=18",
       },
     },
+    "packages/vdf": {
+      "name": "@loadout/vdf",
+      "version": "0.0.1",
+    },
     "plugins/bluetooth": {
       "name": "@loadout/plugin-bluetooth",
       "version": "0.0.1",
@@ -312,6 +316,8 @@
     "@loadout/types": ["@loadout/types@workspace:packages/types"],
 
     "@loadout/ui": ["@loadout/ui@workspace:packages/ui"],
+
+    "@loadout/vdf": ["@loadout/vdf@workspace:packages/vdf"],
 
     "@malept/cross-spawn-promise": ["@malept/cross-spawn-promise@1.1.1", "", { "dependencies": { "cross-spawn": "^7.0.1" } }, "sha512-RTBGWL5FWQcg9orDOCcp4LvItNzUPcyEU9bwaeJX0rJ1IQxzucC48Y0/sQLp/g6t99IQgAlGIaesJS+gTn7tVQ=="],
 
