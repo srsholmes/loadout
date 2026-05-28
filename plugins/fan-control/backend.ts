@@ -471,6 +471,15 @@ export default class FanControlBackend implements PluginBackend {
       fanReadings.push({ index: fan.index, rpm, pwm, percent });
     }
 
+    // RPM-target devices (e.g. steamdeck_hwmon) have no pwm_enable to
+    // read the mode from — fall back to the user's last requested mode,
+    // mirroring the ectool branch above. Without this the UI's
+    // `sliderDisabled = mode !== "manual"` gate would stay permanently
+    // disabled on the Deck even after the user clicked Manual.
+    if (mode === "unknown" && device.hasRpmTargetControl) {
+      mode = this.manualModeRequested ?? "auto";
+    }
+
     return {
       fans: fanReadings,
       mode,
