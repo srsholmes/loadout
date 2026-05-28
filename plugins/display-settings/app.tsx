@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { createRoot } from "react-dom/client";
 import {
-  PluginProvider,
-  useBackend,
+  Alert,
   Button,
-  Slider,
   SegmentedItem,
+  Slider,
+  mountComponent,
+  useBackend,
 } from "@loadout/ui";
+import { FaTriangleExclamation } from "react-icons/fa6";
 
 export { MdDisplaySettings as icon } from "react-icons/md";
 
@@ -37,24 +38,6 @@ interface Preset {
   saturation: number;
   colorTemp: number;
   gamma: { r: number; g: number; b: number };
-}
-
-// ---------- mountComponent factory ----------
-
-/** Collapse the identical createRoot + PluginProvider + unmount boilerplate. */
-function mountComponent(Component: React.ComponentType) {
-  return function mount(
-    container: HTMLElement,
-    opts?: { parentFocusKey?: string },
-  ): () => void {
-    const root = createRoot(container);
-    root.render(
-      <PluginProvider parentFocusKey={opts?.parentFocusKey}>
-        <Component />
-      </PluginProvider>,
-    );
-    return () => root.unmount();
-  };
 }
 
 // ---------- Main Component ----------
@@ -134,7 +117,25 @@ function DisplaySettings() {
       ? "Gamescope"
       : info?.method === "xrandr"
         ? `xrandr (${info.xrandrOutput})`
-        : "No display control detected";
+        : info?.method === "wayland"
+          ? "Wayland D-Bus"
+          : "No display control detected";
+
+  // Per-control capability flags — feed each slider's "this won't take
+  // effect in your session" banner. The backend's detection ladder is:
+  // gamescope atoms → Wayland D-Bus (KDE NightLight + logind backlight)
+  // → xrandr. Each tier supports a different subset.
+  const m = info?.method;
+  const saturationSupported = m === "gamescope";
+  // Brightness goes via logind D-Bus or sysfs (root) on every method.
+  // Surface a warning only when we couldn't detect a backlight at all.
+  const brightnessUnsupported = !info?.backlightPath && m !== "xrandr";
+  // Color temperature: gamescope handles via compositor; Wayland needs
+  // KDE NightLight (the backend sets `method === "wayland"` only when it
+  // also found NightLight available); xrandr applies via --gamma.
+  const colorTempSupported = m === "gamescope" || m === "wayland" || m === "xrandr";
+  // Gamma sliders are X11-only (xrandr --gamma).
+  const gammaSupported = m === "xrandr";
 
   return (
     <div className="p-7 h-full overflow-y-auto">
@@ -162,6 +163,17 @@ function DisplaySettings() {
 
           {/* Brightness */}
           <div className="subsection">
+            {brightnessUnsupported && (
+              <Alert
+                variant="warning"
+                icon={<FaTriangleExclamation size={16} />}
+                title="No backlight detected"
+              >
+                Couldn't find a `/sys/class/backlight/*` device. Brightness
+                slider has no hardware to drive — common on external monitors
+                or VMs.
+              </Alert>
+            )}
             <div className="flex items-center justify-between mb-3.5">
               <div className="subsection-label mb-0">Brightness</div>
               <span
@@ -187,6 +199,23 @@ function DisplaySettings() {
 
           {/* Saturation */}
           <div className="subsection">
+            {!saturationSupported && (
+              <Alert
+                variant="warning"
+                icon={<FaTriangleExclamation size={16} />}
+                title="Saturation unavailable in this session"
+              >
+                Saturation control requires gamescope (Steam Deck Gaming
+                Mode / Bazzite-Deck Gaming Mode / ChimeraOS console mode).
+                The slider value is stored but won't apply on{" "}
+                {m === "wayland"
+                  ? "this Wayland desktop"
+                  : m === "xrandr"
+                    ? "this X11 desktop"
+                    : "this session"}
+                .
+              </Alert>
+            )}
             <div className="flex items-center justify-between mb-3.5">
               <div className="subsection-label mb-0">Saturation</div>
               <span
@@ -212,6 +241,17 @@ function DisplaySettings() {
 
           {/* Color Temperature */}
           <div className="subsection">
+            {!colorTempSupported && (
+              <Alert
+                variant="warning"
+                icon={<FaTriangleExclamation size={16} />}
+                title="Color temperature unavailable in this session"
+              >
+                Needs gamescope, KDE Plasma's NightLight (Wayland), or an
+                X11 session via xrandr. None detected — slider value is
+                stored but won't apply.
+              </Alert>
+            )}
             <div className="flex items-center justify-between mb-3.5">
               <div className="subsection-label mb-0">Color Temperature</div>
               <span
@@ -251,6 +291,24 @@ function DisplaySettings() {
 
           {/* Gamma */}
           <div className="subsection">
+            {!gammaSupported && (
+              <Alert
+                variant="warning"
+                icon={<FaTriangleExclamation size={16} />}
+                title="Gamma write requires X11"
+              >
+                Per-channel gamma multipliers are applied via `xrandr
+                --gamma`, which only works in an X11 / XWayland session.
+                Values shown below are the stored target; the actual
+                rendering on{" "}
+                {m === "wayland"
+                  ? "Wayland"
+                  : m === "gamescope"
+                    ? "gamescope (uses its own colour pipeline)"
+                    : "this session"}{" "}
+                won't reflect them.
+              </Alert>
+            )}
             <div className="subsection-label">Gamma</div>
             <div className="row">
               <span className="row-label">Red</span>
