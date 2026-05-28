@@ -212,6 +212,21 @@
         "react-dom": "^18.3.0",
       },
     },
+    "plugins/hltb": {
+      "name": "@loadout/plugin-hltb",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/external-cache": "workspace:*",
+        "@loadout/steam-cdp": "workspace:*",
+        "@loadout/steam-paths": "workspace:*",
+        "@loadout/types": "workspace:*",
+        "@loadout/ui": "workspace:*",
+        "@loadout/vdf": "workspace:*",
+        "fuzzysort": "^3.1.0",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+      },
+    },
     "plugins/launch-options": {
       "name": "@loadout/plugin-launch-options",
       "version": "0.0.1",
@@ -467,6 +482,8 @@
     "@loadout/plugin-fan-control": ["@loadout/plugin-fan-control@workspace:plugins/fan-control"],
 
     "@loadout/plugin-flatpak-manager": ["@loadout/plugin-flatpak-manager@workspace:plugins/flatpak-manager"],
+
+    "@loadout/plugin-hltb": ["@loadout/plugin-hltb@workspace:plugins/hltb"],
 
     "@loadout/plugin-launch-options": ["@loadout/plugin-launch-options@workspace:plugins/launch-options"],
 
