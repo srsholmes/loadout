@@ -1,12 +1,5 @@
 import { renameSync } from "node:fs";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import {
-  readPluginStorage,
-  writePluginStorage,
-  pluginStoragePath,
-} from "./plugin-storage";
+import { readPluginStorage, writePluginStorage } from "./plugin-storage";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -59,14 +52,6 @@ export interface TdpProfileEngineOptions {
 const MIN_TDP_WATTS = 3;
 const MAX_TDP_WATTS = 80;
 const DEFAULT_TDP_WATTS = 15;
-
-/** Path of the pre-migration storage file. */
-const LEGACY_CONFIG_PATH = join(
-  homedir(),
-  ".config",
-  "loadout",
-  "tdp-profiles.json",
-);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -228,31 +213,7 @@ export function createTdpProfileEngine(options: TdpProfileEngineOptions) {
     renameSync(tmpPath, configPath!);
   }
 
-  /** One-shot migration from `~/.config/loadout/tdp-profiles.json`
-   *  to the per-plugin storage location. Only runs in pluginId mode. */
-  async function migrateLegacyIfNeeded(): Promise<void> {
-    if (!pluginId) return;
-    const newPath = pluginStoragePath(pluginId);
-    if (existsSync(newPath)) return;
-    if (!existsSync(LEGACY_CONFIG_PATH)) return;
-    try {
-      const text = readFileSync(LEGACY_CONFIG_PATH, "utf8");
-      const parsed = normalizeStore(JSON.parse(text));
-      if (!parsed) return;
-      store = parsed;
-      await writePluginStorage(pluginId, store);
-      try {
-        renameSync(LEGACY_CONFIG_PATH, LEGACY_CONFIG_PATH + ".migrated");
-      } catch {
-        // Best-effort — leave the legacy file in place if rename fails.
-      }
-    } catch {
-      // Migration is best-effort; on parse failure, fall through to defaults.
-    }
-  }
-
   async function loadProfiles(): Promise<void> {
-    await migrateLegacyIfNeeded();
     const loaded = await readRaw();
     store = loaded ?? createDefaultStore();
     currentTdp = store.defaultTdp;

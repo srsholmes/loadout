@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type ComponentType } from "react";
 import { createRoot } from "react-dom/client";
 import { FaBolt, FaMicrochip } from "react-icons/fa6";
 import {
@@ -840,62 +840,60 @@ function TdpHomeWidget() {
 }
 
 /**
- * Mount this plugin into a container element.
- * Called by the overlay shell when this plugin is selected.
- * Returns an unmount function.
+ * Mount factory — every plugin UI surface (settings page, home widget,
+ * header) shares the same createRoot + PluginProvider + unmount boilerplate.
+ * Returns a `(container, opts) => unmount` mounter for a given component.
  */
-export function mount(
-  container: HTMLElement,
-  opts?: { parentFocusKey?: string },
-): () => void {
-  const root = createRoot(container);
-  root.render(
-    <PluginProvider parentFocusKey={opts?.parentFocusKey}>
-      <TdpControl />
-    </PluginProvider>,
-  );
-  return () => root.unmount();
+function mountComponent(
+  Component: ComponentType,
+): (container: HTMLElement, opts?: { parentFocusKey?: string }) => () => void {
+  return (container, opts) => {
+    const root = createRoot(container);
+    root.render(
+      <PluginProvider parentFocusKey={opts?.parentFocusKey}>
+        <Component />
+      </PluginProvider>,
+    );
+    return () => root.unmount();
+  };
 }
 
-/**
- * Mount the homepage widget.
- * Shows TDP slider with current wattage and preset buttons.
- */
-export function mountHomeWidget(
-  container: HTMLElement,
-  opts?: { parentFocusKey?: string },
-): () => void {
-  const root = createRoot(container);
-  root.render(
-    <PluginProvider parentFocusKey={opts?.parentFocusKey}>
-      <TdpHomeWidget />
-    </PluginProvider>,
-  );
-  return () => root.unmount();
-}
+/** Full settings page — mounted by the overlay shell when the plugin opens. */
+export const mount = mountComponent(TdpControl);
 
 function Header() {
+  const { call } = useBackend("tdp-control");
+  const [deviceName, setDeviceName] = useState<string>("");
+
+  // Pull the detected device name from the backend rather than hardcoding
+  // it — the subtitle must reflect whatever handheld this is running on.
+  useEffect(() => {
+    let cancelled = false;
+    call("getSystemInfo")
+      .then((info: unknown) => {
+        const name = (info as { deviceName?: string } | null)?.deviceName;
+        if (!cancelled && name) setDeviceName(name);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [call]);
+
   return (
     <div className="flex flex-col gap-0.5 min-w-0">
       <h1 className="text-xl font-semibold tracking-[-0.015em] m-0 leading-tight">
         TDP Control
       </h1>
       <span className="text-[11.5px] text-base-content/55 tracking-[0.02em] truncate leading-tight">
-        OneXPlayer APEX · CPU/GPU power limits
+        {deviceName ? `${deviceName} · ` : ""}CPU/GPU power limits
       </span>
     </div>
   );
 }
 
-export function mountHeader(
-  container: HTMLElement,
-  opts?: { parentFocusKey?: string },
-): () => void {
-  const root = createRoot(container);
-  root.render(
-    <PluginProvider parentFocusKey={opts?.parentFocusKey}>
-      <Header />
-    </PluginProvider>,
-  );
-  return () => root.unmount();
-}
+/** Homepage widget — TDP slider + preset buttons. */
+export const mountHomeWidget = mountComponent(TdpHomeWidget);
+
+/** Compact header strip (device name + title). */
+export const mountHeader = mountComponent(Header);

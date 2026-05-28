@@ -17,10 +17,7 @@
  * way (seed defaults, then persist).
  */
 
-// `fs/promises` (no node: prefix) matches the specifier plugin tests mock
-// via `mock.module("fs/promises", …)`. Keep this here so the tests don't
-// need to know about the internal module path.
-import { readFile, mkdir, rename, writeFile } from "fs/promises";
+import { readFile, mkdir, rename, writeFile } from "node:fs/promises";
 import { join, dirname } from "path";
 import { homedir } from "os";
 
@@ -64,14 +61,6 @@ export async function writePluginStorage<T extends object>(
   await mkdir(dirname(path), { recursive: true });
   const tmp = `${path}.tmp`;
   const json = JSON.stringify(data, null, 2) + "\n";
-  // Prefer Bun.write when available (plugin backends run in the loader's
-  // Bun process); fall back to fs.writeFile so tests and non-Bun callers
-  // still work.
-  const B = (globalThis as unknown as { Bun?: { write?: (p: string, d: string) => Promise<unknown> } }).Bun;
-  if (B?.write) {
-    await B.write(tmp, json);
-  } else {
-    await writeFile(tmp, json, "utf8");
-  }
+  await writeFile(tmp, json, "utf8");
   await rename(tmp, path);
 }

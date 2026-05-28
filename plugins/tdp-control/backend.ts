@@ -7,6 +7,12 @@ import {
   type TdpProfile,
   type TdpProfileEngineState,
 } from "./lib/tdp-profiles";
+import {
+  matchDevice,
+  matchProfileName,
+  PLATFORM_PROFILE_TDP_MAP,
+  type CpuVendor,
+} from "./lib/devices";
 
 // ---------------------------------------------------------------------------
 // Constants: sysfs paths
@@ -51,26 +57,13 @@ const CHARGE_LIMIT_PATH =
   "/sys/class/power_supply/BAT0/charge_control_end_threshold";
 
 // ---------------------------------------------------------------------------
-// Enums & device database
+// Enums (the device database + matching live in ./lib/devices)
 // ---------------------------------------------------------------------------
-
-type CpuVendor = "AMD" | "Intel" | "Unknown";
 
 type TdpMethod = "ryzenadj" | "intel-rapl" | "platform_profile" | "wmi" | "none";
 
 /** How we obtained the current TDP reading. */
 type TdpReadSource = "read" | "tracked" | "estimated";
-
-interface DeviceInfo {
-  /** Match substring against DMI product_name */
-  match: string;
-  /** Friendly display name */
-  name: string;
-  minTdp: number;
-  maxTdp: number;
-  /** Per-profile watt defaults */
-  profiles: { Silent: number; Balanced: number; Performance: number };
-}
 
 interface GpuInfo {
   vendor: "AMD" | "Intel" | "Unknown";
@@ -81,184 +74,6 @@ interface GpuInfo {
 }
 
 type GpuMode = "auto" | "high" | "low" | "manual";
-
-/**
- * Known device database.
- * Order matters: first match wins, so put more specific strings first.
- */
-const KNOWN_DEVICES: DeviceInfo[] = [
-  // Steam Deck
-  {
-    match: "Galileo",
-    name: "Steam Deck OLED",
-    minTdp: 3,
-    maxTdp: 15,
-    profiles: { Silent: 5, Balanced: 10, Performance: 15 },
-  },
-  {
-    match: "Jupiter",
-    name: "Steam Deck LCD",
-    minTdp: 3,
-    maxTdp: 15,
-    profiles: { Silent: 5, Balanced: 10, Performance: 15 },
-  },
-  // ASUS ROG Ally
-  {
-    match: "ROG Ally X RC72",
-    name: "ROG Ally X",
-    minTdp: 5,
-    maxTdp: 30,
-    profiles: { Silent: 10, Balanced: 17, Performance: 30 },
-  },
-  {
-    match: "ROG Ally RC71",
-    name: "ROG Ally",
-    minTdp: 5,
-    maxTdp: 25,
-    profiles: { Silent: 10, Balanced: 15, Performance: 25 },
-  },
-  // Lenovo Legion Go
-  {
-    match: "83L3",
-    name: "Legion Go S (Z2 Go)",
-    minTdp: 5,
-    maxTdp: 25,
-    profiles: { Silent: 8, Balanced: 15, Performance: 25 },
-  },
-  {
-    match: "83N6",
-    name: "Legion Go S (Z1 Extreme)",
-    minTdp: 5,
-    maxTdp: 30,
-    profiles: { Silent: 8, Balanced: 15, Performance: 30 },
-  },
-  {
-    match: "83E1",
-    name: "Legion Go",
-    minTdp: 5,
-    maxTdp: 30,
-    profiles: { Silent: 8, Balanced: 15, Performance: 30 },
-  },
-  // OneXPlayer
-  {
-    match: "ONEXPLAYER APEX",
-    name: "OneXPlayer APEX",
-    minTdp: 5,
-    maxTdp: 80,
-    profiles: { Silent: 15, Balanced: 30, Performance: 50 },
-  },
-  {
-    match: "ONEXPLAYER Mini Pro",
-    name: "OneXPlayer Mini Pro",
-    minTdp: 5,
-    maxTdp: 30,
-    profiles: { Silent: 8, Balanced: 15, Performance: 30 },
-  },
-  {
-    match: "ONEXPLAYER",
-    name: "OneXPlayer",
-    minTdp: 5,
-    maxTdp: 35,
-    profiles: { Silent: 10, Balanced: 18, Performance: 35 },
-  },
-  // GPD
-  {
-    match: "G1619-04",
-    name: "GPD Win Max 2",
-    minTdp: 5,
-    maxTdp: 28,
-    profiles: { Silent: 8, Balanced: 15, Performance: 28 },
-  },
-  {
-    match: "G1618-04",
-    name: "GPD Win 4",
-    minTdp: 5,
-    maxTdp: 28,
-    profiles: { Silent: 8, Balanced: 15, Performance: 28 },
-  },
-  {
-    match: "GPD",
-    name: "GPD Device",
-    minTdp: 5,
-    maxTdp: 28,
-    profiles: { Silent: 8, Balanced: 15, Performance: 28 },
-  },
-  // AYANEO
-  {
-    match: "AYANEO",
-    name: "AYANEO",
-    minTdp: 5,
-    maxTdp: 33,
-    profiles: { Silent: 8, Balanced: 15, Performance: 33 },
-  },
-  // AOKZOE
-  {
-    match: "AOKZOE",
-    name: "AOKZOE",
-    minTdp: 5,
-    maxTdp: 33,
-    profiles: { Silent: 8, Balanced: 18, Performance: 33 },
-  },
-  // Minisforum
-  {
-    match: "V3",
-    name: "Minisforum V3",
-    minTdp: 5,
-    maxTdp: 30,
-    profiles: { Silent: 10, Balanced: 18, Performance: 30 },
-  },
-  {
-    match: "Minisforum",
-    name: "Minisforum",
-    minTdp: 5,
-    maxTdp: 35,
-    profiles: { Silent: 10, Balanced: 18, Performance: 35 },
-  },
-  // MSI Claw
-  {
-    match: "Claw 8 AI",
-    name: "MSI Claw 8 AI+",
-    minTdp: 5,
-    maxTdp: 40,
-    profiles: { Silent: 10, Balanced: 20, Performance: 40 },
-  },
-  {
-    match: "Claw",
-    name: "MSI Claw",
-    minTdp: 5,
-    maxTdp: 30,
-    profiles: { Silent: 8, Balanced: 17, Performance: 30 },
-  },
-];
-
-/** Default ranges when device is unknown. */
-const DEFAULT_AMD: Omit<DeviceInfo, "match"> = {
-  name: "Generic AMD",
-  minTdp: 5,
-  maxTdp: 35,
-  profiles: { Silent: 10, Balanced: 18, Performance: 35 },
-};
-
-const DEFAULT_INTEL: Omit<DeviceInfo, "match"> = {
-  name: "Generic Intel",
-  minTdp: 3,
-  maxTdp: 40,
-  profiles: { Silent: 8, Balanced: 15, Performance: 30 },
-};
-
-const DEFAULT_UNKNOWN: Omit<DeviceInfo, "match"> = {
-  name: "Unknown",
-  minTdp: 5,
-  maxTdp: 35,
-  profiles: { Silent: 10, Balanced: 18, Performance: 35 },
-};
-
-/** Approximate TDP for platform_profile values (used only as fallback estimate). */
-const PLATFORM_PROFILE_TDP_MAP: Record<string, number> = {
-  "low-power": 15,
-  balanced: 25,
-  performance: 35,
-};
 
 // ---------------------------------------------------------------------------
 // Utility helpers
@@ -1156,29 +971,11 @@ export default class TdpControlBackend implements PluginBackend {
   }
 
   private applyDeviceDefaults(): void {
-    // Try to match a known device
-    for (const device of KNOWN_DEVICES) {
-      if (this.dmiProductName.includes(device.match)) {
-        this.deviceName = device.name;
-        this.minWatts = device.minTdp;
-        this.maxWatts = device.maxTdp;
-        this.profiles = { ...device.profiles };
-        return;
-      }
-    }
-
-    // Fallback by CPU vendor
-    const fallback =
-      this.cpuVendor === "AMD"
-        ? DEFAULT_AMD
-        : this.cpuVendor === "Intel"
-          ? DEFAULT_INTEL
-          : DEFAULT_UNKNOWN;
-
-    this.deviceName = fallback.name;
-    this.minWatts = fallback.minTdp;
-    this.maxWatts = fallback.maxTdp;
-    this.profiles = { ...fallback.profiles };
+    const device = matchDevice(this.dmiProductName, this.cpuVendor);
+    this.deviceName = device.name;
+    this.minWatts = device.minTdp;
+    this.maxWatts = device.maxTdp;
+    this.profiles = { ...device.profiles };
   }
 
   private async detectTdpMethod(): Promise<void> {
@@ -1274,14 +1071,20 @@ export default class TdpControlBackend implements PluginBackend {
   }
 
   private async detectPlatformProfile(): Promise<void> {
+    // The current profile is volatile (re-read every call); the available
+    // choices are fixed by firmware, so read them once and cache. This
+    // keeps getTdpInfo — which the UI polls — from re-reading the choices
+    // file on every refresh.
     this.platformProfile =
       (await readFileText(PLATFORM_PROFILE_PATH)) ?? null;
 
-    const choicesText =
-      (await readFileText(PLATFORM_PROFILE_CHOICES_PATH)) ?? null;
-    this.platformProfileChoices = choicesText
-      ? choicesText.split(/\s+/).filter(Boolean)
-      : [];
+    if (this.platformProfileChoices.length === 0) {
+      const choicesText =
+        (await readFileText(PLATFORM_PROFILE_CHOICES_PATH)) ?? null;
+      this.platformProfileChoices = choicesText
+        ? choicesText.split(/\s+/).filter(Boolean)
+        : [];
+    }
   }
 
   private async detectSmtSupport(): Promise<void> {
@@ -1604,11 +1407,7 @@ export default class TdpControlBackend implements PluginBackend {
 
   /** Match a TDP value to a named profile (within 1W tolerance). */
   private matchProfile(tdp: number | null): string | null {
-    if (tdp === null) return null;
-    for (const [name, watts] of Object.entries(this.profiles)) {
-      if (Math.abs(tdp - watts) <= 1) return name;
-    }
-    return "Custom";
+    return matchProfileName(tdp, this.profiles);
   }
 
   /** Convert a platform_profile name to an approximate wattage using device profiles. */
