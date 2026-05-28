@@ -67,8 +67,8 @@ export interface PluginPatch {
 
 export interface PluginTarget {
   /** Where the plugin renders */
-  type: "qam" | "panel" | "overlay" | "css" | "menu";
-  /** Which named export from panel.tsx to render. Defaults to "default" || "Panel" */
+  type: "qam" | "overlay" | "css" | "menu";
+  /** Which named export from the plugin's app to render. Defaults to "default". */
   export?: string;
   /** Display name in the QAM tab bar (required for type: "qam") */
   title?: string;
@@ -97,9 +97,9 @@ export interface PluginMeta {
   description: string;
   author: string;
   permissions?: PluginPermissions;
-  /** Rendering target(s). If omitted, defaults to overlay panel behavior. Array for multi-target plugins. */
+  /** Rendering target(s). If omitted, defaults to overlay. Array for multi-target plugins. */
   target?: PluginTarget | PluginTarget[];
-  /** Map of route path → named export from panel.tsx. Paths must be prefixed with /loadout/{pluginId}/ */
+  /** Map of route path → named export from the plugin's UI. Paths must be prefixed with /loadout/{pluginId}/ */
   routes?: Record<string, string>;
   /** Webpack module patches — modify Steam's components before they render (Vencord-style) */
   patches?: PluginPatch[];

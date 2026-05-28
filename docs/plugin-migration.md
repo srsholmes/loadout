@@ -44,7 +44,7 @@ One plugin per issue, migrated one at a time.
   ```
   `id` / `name` / `description` are required; `permissions` / `category` / `target` / `routes` are optional. See `PluginMeta` in `packages/types/src/plugin.ts`.
 - `backend.ts` (optional) — default-export a class `implements PluginBackend` (from `@loadout/types`). Lifecycle: `onLoad?` / `onUnload?` / `emit?` / `log?`. **Every public, non-underscore method becomes an RPC endpoint.** Prefix private helpers with `_` to keep them off the wire.
-- UI entry — `app.tsx` for the **overlay** (the default for almost every plugin) OR `panel.tsx` for **Steam CEF injection**. Use whichever the source plugin used.
+- UI entry — `app.tsx`. The plugin renders in the Electrobun overlay. Backends that need to drive Steam's CEF UI talk to it via `@loadout/steam-cdp` (extracted from `apps/loadout/src/steam-cdp/`).
 - `lib/**` (optional) — inlined helper modules.
 - Carry over `assets/`, `README.md`, `LICENSE` if present.
 
@@ -141,7 +141,7 @@ Loadout targets Linux gaming handhelds + gaming desktops. The reviewer classifie
 2. **Rename the scope** on every ported file: `sed -i 's#@steam-loader/#@loadout/#g'` (review the diff — only the four allowed packages should remain after step 4).
 3. **Fold `plugin.json` into `package.json`.** Move the manifest fields into the `plugin` field of `package.json`, set `name` to `@loadout/plugin-{{PLUGIN_ID}}`, add `"type": "module"` and the real `dependencies`. Delete the standalone `plugin.json`.
 4. **Resolve removed-package deps by inlining** (see the decision rule below). The packages `plugin-storage`, `vdf`, `external-cache`, `sgdb-art`, `steam-shortcut`, `file-picker`, and `per-game-profiles` DO NOT exist in the target — replace each import with inlined code in this plugin's `lib/` *by default*.
-5. **Adapt to the current SDK / manifest shape.** Reconcile any `@loadout/ui` / `@loadout/types` API drift against the reference plugin and `packages/types/src/plugin.ts`. If the source used `panel.tsx` but renders in the overlay, keep `panel.tsx` only if it's a real Steam-injection plugin; otherwise it stays `app.tsx`. Ensure the `mount` / `PluginProvider` / `icon` shape matches `plugins/steam-gamescope-ipc/app.tsx`.
+5. **Adapt to the current SDK / manifest shape.** Reconcile any `@loadout/ui` / `@loadout/types` API drift against the reference plugin and `packages/types/src/plugin.ts`. The source repo's `panel.tsx` plugins (Steam-CEF injection) port to `app.tsx` — the Electrobun overlay is the surface; backends drive Steam's CEF via `@loadout/steam-cdp` when needed. Ensure the `mount` / `PluginProvider` / `icon` shape matches `plugins/steam-gamescope-ipc/app.tsx`.
 6. **Port the tests to `bun:test`.** Convert the source's backend `*.spec.ts` → `*.test.ts` and keep UI tests as `*.spec.tsx`; rewrite any vitest API to `bun:test` (see **Tests** above). Add tests for any ≥100-LOC `lib/**` module.
 7. **Wire it into `plugins/`** so the workspace picks it up (it's a workspace via `plugins/*`). Confirm it loads (see Definition of Done).
 
@@ -149,23 +149,26 @@ Loadout targets Linux gaming handhelds + gaming desktops. The reviewer classifie
 
 ## Isolate vs. extract — READ THIS
 
-> **Simplicity is always preferred. It is better to repeat a little code than to hastily abstract.**
+> **Share when reuse is real. Inline when it's a one-off.**
 
-- **Default = INLINE.** Plugin code stays inside the plugin (`lib/`). Do NOT create a `packages/<name>` shared package speculatively.
-- **Only promote to `packages/<name>` when the bar is met: 2+ *already-migrated* plugins in this repo genuinely need the same thing.** "A future plugin might want this" does not count. "The old repo had it as a package" does not count.
-- When in doubt, repeat. Extraction is a cheap follow-up once real reuse appears; a premature abstraction is expensive to unwind and couples independent plugin capsules.
+- **Extract to `packages/<name>` when ≥2 consumers genuinely share the same helper.** Consumers can be already-merged plugins, in-flight migration PRs, or plugins clearly pending migration with the same dep (a `@steam-loader/<name>` import in ≥2 source plugins is strong evidence).
+- **Inline into `lib/<name>.ts`** when the helper is only used by one plugin OR it's tightly coupled to the plugin's domain. One-off `parse* / clamp* / format*` helpers stay local.
+- The old steam-loader repo's package list is a strong hint about future-consumer counts. Cross-reference: `git grep '@steam-loader/<name>' /var/home/srsholmes/Work/linux-gaming-plugin-manager/plugins/` to count real consumers.
+- **When in doubt, flag it in your PR description** ("`external-cache` inlined here; same helper appears in source plugin X — extract when X migrates"). The reviewer extracts in a follow-up sweep.
 
-**Removed helper packages — inline guidance** (old usage counts are hints only; they do NOT justify pre-emptive extraction):
+**Removed helper packages — current strategy** (consumer counts are from the source-repo audit, sorted by usage):
 
-| Old package | Old usage | What to do |
+| Old package | Source-plugin consumers | What to do |
 |---|---|---|
-| `plugin-storage` | ×8 | Inline: read/write JSON at `~/.config/loadout/plugins/{{PLUGIN_ID}}.json` (~30–50 LOC). |
-| `vdf` | ×7 | Inline the parse/stringify subset this plugin actually uses. |
-| `external-cache` | ×5 | Inline: tiny TTL disk cache (~40 LOC). |
-| `steam-shortcut` | ×2 | Inline. |
-| `sgdb-art` | ×2 | Inline. |
-| `file-picker` | ×1 | Inline. |
-| `per-game-profiles` | — | Inline. |
+| `plugin-storage` | 8 — audio-mixer, disable-controller-input, fan-control, quick-links, recomp, steamgriddb, store-bridge, tdp-control | **EXTRACTED ✓** as `@loadout/plugin-storage`. Always use it; never inline. |
+| `vdf` | 7 — game-browser, hltb, launch-options, quick-links, recomp, steamgriddb, store-bridge | **EXTRACT** as `@loadout/vdf` before any of those migrate. 7 inline copies is wrong. |
+| `external-cache` | 5 — hltb, protondb-badges, recomp, steamgriddb, store-bridge | **EXTRACT** as `@loadout/external-cache`. protondb-badges already has an inlined copy on its in-flight PR; migrate that to the package post-extraction. |
+| `per-game-profiles` | 2 — audio-mixer, fan-control (plus tdp-control on main already duplicating the logic) | **EXTRACT** as `@loadout/per-game-profiles` + retro-migrate fan-control + tdp-control. |
+| `sgdb-art` | 2 — recomp, store-bridge | Extract when those two migrate together. |
+| `steam-shortcut` | 2 — recomp, store-bridge | Extract when those two migrate together. |
+| `file-picker` | 1 — recomp | Inline into `lib/file-picker.ts` (~50 LOC). |
+| `steam-cdp` | 9 — used by every Steam-CEF-driving plugin in the source | **EXTRACT** as `@loadout/steam-cdp`. Loadout's loader already has a CDP client at `apps/loadout/src/steam-cdp/` (~1500 LOC); promote it to a workspace package so plugin backends can drive Steam's CEF UI the same way the source repo's plugins did (overlay `app.tsx` for settings + backend CDP injection for Steam-side widgets — see protondb-badges / hltb in the source for the pattern). |
+| `injector` | 1 — sound-loader only | Inline into the plugin's `lib/`. |
 
 If this plugin is (say) the 2nd migrated plugin to need an *identical* `plugin-storage` helper, you MAY extract a `packages/plugin-storage` — but only then, only with the duplicate already in tree, and call it out explicitly in the PR.
 
@@ -212,7 +215,7 @@ All green from the TARGET repo root (`/var/home/srsholmes/Work/loadout`):
 - **Plugin id:** `{{PLUGIN_ID}}`
 - **Plugin name:** `{{PLUGIN_NAME}}`
 - **Source path:** `linux-gaming-plugin-manager/plugins/{{PLUGIN_ID}}/`
-- **UI surface:** overlay (`app.tsx`) | Steam injection (`panel.tsx`)
+- **UI surface:** overlay (`app.tsx`) — only surface. Steam-CEF UI driven from the backend via `@loadout/steam-cdp`.
 - **Removed-package deps used:** (e.g. plugin-storage, vdf) → inline target(s)
 - **Network domains to declare:** …
 - **Subprocess usage:** y/n (must route through `@loadout/exec`)

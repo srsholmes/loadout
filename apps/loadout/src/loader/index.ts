@@ -21,6 +21,10 @@ import {
   GAME_DETECTION_SERVICE_ID,
 } from "./services/game-detection";
 import {
+  GameLibraryService,
+  GAME_LIBRARY_SERVICE_ID,
+} from "./services/game-library";
+import {
   buildInjectBundles,
   sdkGlobalPlugin,
   vendorGlobalsPlugin,
@@ -247,6 +251,25 @@ export async function startServer(options: ServerOptions = {}) {
     hasApp: false,
   });
   log.info(`Registered core service: ${GAME_DETECTION_SERVICE_ID}`);
+
+  const gameLibrary = new GameLibraryService();
+  gameLibrary.emit = ({ event, data }) => {
+    broadcast({ type: "event", plugin: GAME_LIBRARY_SERVICE_ID, event, data });
+  };
+  plugins.set(GAME_LIBRARY_SERVICE_ID, {
+    meta: {
+      id: GAME_LIBRARY_SERVICE_ID,
+      name: "Game Library",
+      version: "0.0.0",
+      description:
+        "Core service: enumerates installed Steam apps and non-Steam shortcuts.",
+      author: "core",
+    },
+    instance: gameLibrary,
+    sandboxedFetch: globalThis.fetch,
+    hasApp: false,
+  });
+  log.info(`Registered core service: ${GAME_LIBRARY_SERVICE_ID}`);
 
   const rpcHandler = createRpcHandler(
     new Map(
