@@ -1,5 +1,6 @@
 import type { PluginBackend, EmitPayload } from "@loadout/types";
 import { getSteamAppsDir } from "@loadout/steam-paths";
+import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -9,12 +10,8 @@ import {
   type CurrentSession,
   computeStats,
 } from "./lib/time";
-import {
-  pluginDataPath,
-  ensurePluginDataDir,
-  readPluginData,
-  writePluginData,
-} from "./lib/storage";
+
+const PLUGIN_ID = "playtime";
 
 /**
  * PlayTime plugin backend.
@@ -33,7 +30,6 @@ import {
 export default class PlaytimeBackend implements PluginBackend {
   emit?: (payload: EmitPayload) => void;
 
-  private readonly dataPath: string;
   private readonly steamAppsPath: string;
   private data: PlaytimeData = { sessions: [] };
   private appManifests = new Map<string, string>(); // appId -> game name
@@ -48,14 +44,12 @@ export default class PlaytimeBackend implements PluginBackend {
   private activeSession: GameSession | null = null;
 
   constructor() {
-    this.dataPath = pluginDataPath("playtime");
     this.steamAppsPath = getSteamAppsDir();
   }
 
   async onLoad(): Promise<void> {
     console.log("[playtime] Plugin loading");
 
-    await ensurePluginDataDir();
     await this._loadData();
     await this._loadManifests();
 
@@ -237,10 +231,12 @@ export default class PlaytimeBackend implements PluginBackend {
 
   /** Load persisted playtime data from disk. */
   private async _loadData(): Promise<void> {
-    const loaded = await readPluginData<PlaytimeData>(this.dataPath, {
-      sessions: [],
-    });
-    this.data = loaded;
+    // @loadout/plugin-storage returns Partial<T>; destructure with
+    // defaults so missing keys (first run, mid-write file truncated to
+    // {}) seed cleanly.
+    const { sessions = [], pendingActive = null } =
+      await readPluginStorage<PlaytimeData>(PLUGIN_ID);
+    this.data = { sessions, pendingActive };
 
     // Crash recovery: a `pendingActive` snapshot is an orphan from a
     // backend crash mid-session. Its endTime is from the last heartbeat
@@ -273,7 +269,7 @@ export default class PlaytimeBackend implements PluginBackend {
   /** Persist playtime data to disk. */
   private async _saveData(): Promise<void> {
     try {
-      await writePluginData(this.dataPath, this.data);
+      await writePluginStorage(PLUGIN_ID, this.data);
     } catch (err) {
       console.warn("[playtime] Failed to save playtime data:", err);
     }

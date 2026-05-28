@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { createRoot } from "react-dom/client";
 import {
   FaArrowsRotate,
   FaBluetoothB,
@@ -10,8 +9,9 @@ import {
   Button,
   IconButton,
   PluginHeader,
-  PluginProvider,
   Spinner,
+  mountComponent,
+  mountHeaderStub,
   useBackend,
 } from "@loadout/ui";
 import type { BluetoothDevice, AdapterInfo } from "./lib/parse";
@@ -306,25 +306,8 @@ function BluetoothManager() {
   );
 }
 
-/**
- * Mount this plugin into a container element.
- * Called by the overlay shell when this plugin is selected.
- */
-export function mount(
-  container: HTMLElement,
-  opts?: { parentFocusKey?: string; headerSlot?: HTMLElement | null },
-): () => void {
-  const root = createRoot(container);
-  root.render(
-    <PluginProvider
-      parentFocusKey={opts?.parentFocusKey}
-      headerSlot={opts?.headerSlot ?? null}
-    >
-      <BluetoothManager />
-    </PluginProvider>,
-  );
-  return () => root.unmount();
-}
+/** Mount this plugin into a container element. */
+export const mount = mountComponent(BluetoothManager);
 
 /**
  * Stub `mountHeader` export. Its mere presence is what tells the
@@ -333,6 +316,4 @@ export function mount(
  * power state, scan state, and the toggle callbacks share the body's
  * React tree without any cross-root pub/sub.
  */
-export function mountHeader(): () => void {
-  return () => {};
-}
+export const mountHeader = mountHeaderStub;
