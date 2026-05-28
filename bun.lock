@@ -195,6 +195,18 @@
         "react-dom": "^18.3.0",
       },
     },
+    "plugins/storage-cleaner": {
+      "name": "@loadout/plugin-storage-cleaner",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/exec": "workspace:*",
+        "@loadout/steam-paths": "workspace:*",
+        "@loadout/types": "workspace:*",
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+      },
+    },
     "plugins/tdp-control": {
       "name": "@loadout/plugin-tdp-control",
       "version": "0.0.1",
@@ -368,6 +380,8 @@
     "@loadout/plugin-steam-gamescope-ipc": ["@loadout/plugin-steam-gamescope-ipc@workspace:plugins/steam-gamescope-ipc"],
 
     "@loadout/plugin-storage": ["@loadout/plugin-storage@workspace:packages/plugin-storage"],
+
+    "@loadout/plugin-storage-cleaner": ["@loadout/plugin-storage-cleaner@workspace:plugins/storage-cleaner"],
 
     "@loadout/plugin-tdp-control": ["@loadout/plugin-tdp-control@workspace:plugins/tdp-control"],
 
