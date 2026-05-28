@@ -149,23 +149,26 @@ Loadout targets Linux gaming handhelds + gaming desktops. The reviewer classifie
 
 ## Isolate vs. extract — READ THIS
 
-> **Simplicity is always preferred. It is better to repeat a little code than to hastily abstract.**
+> **Share when reuse is real. Inline when it's a one-off.**
 
-- **Default = INLINE.** Plugin code stays inside the plugin (`lib/`). Do NOT create a `packages/<name>` shared package speculatively.
-- **Only promote to `packages/<name>` when the bar is met: 2+ *already-migrated* plugins in this repo genuinely need the same thing.** "A future plugin might want this" does not count. "The old repo had it as a package" does not count.
-- When in doubt, repeat. Extraction is a cheap follow-up once real reuse appears; a premature abstraction is expensive to unwind and couples independent plugin capsules.
+- **Extract to `packages/<name>` when ≥2 consumers genuinely share the same helper.** Consumers can be already-merged plugins, in-flight migration PRs, or plugins clearly pending migration with the same dep (a `@steam-loader/<name>` import in ≥2 source plugins is strong evidence).
+- **Inline into `lib/<name>.ts`** when the helper is only used by one plugin OR it's tightly coupled to the plugin's domain. One-off `parse* / clamp* / format*` helpers stay local.
+- The old steam-loader repo's package list is a strong hint about future-consumer counts. Cross-reference: `git grep '@steam-loader/<name>' /var/home/srsholmes/Work/linux-gaming-plugin-manager/plugins/` to count real consumers.
+- **When in doubt, flag it in your PR description** ("`external-cache` inlined here; same helper appears in source plugin X — extract when X migrates"). The reviewer extracts in a follow-up sweep.
 
-**Removed helper packages — inline guidance** (old usage counts are hints only; they do NOT justify pre-emptive extraction):
+**Removed helper packages — current strategy** (consumer counts are from the source-repo audit, sorted by usage):
 
-| Old package | Old usage | What to do |
+| Old package | Source-plugin consumers | What to do |
 |---|---|---|
-| `plugin-storage` | ×8 | Inline: read/write JSON at `~/.config/loadout/plugins/{{PLUGIN_ID}}.json` (~30–50 LOC). |
-| `vdf` | ×7 | Inline the parse/stringify subset this plugin actually uses. |
-| `external-cache` | ×5 | Inline: tiny TTL disk cache (~40 LOC). |
-| `steam-shortcut` | ×2 | Inline. |
-| `sgdb-art` | ×2 | Inline. |
-| `file-picker` | ×1 | Inline. |
-| `per-game-profiles` | — | Inline. |
+| `plugin-storage` | 8 — audio-mixer, disable-controller-input, fan-control, quick-links, recomp, steamgriddb, store-bridge, tdp-control | **EXTRACTED ✓** as `@loadout/plugin-storage`. Always use it; never inline. |
+| `vdf` | 7 — game-browser, hltb, launch-options, quick-links, recomp, steamgriddb, store-bridge | **EXTRACT** as `@loadout/vdf` before any of those migrate. 7 inline copies is wrong. |
+| `external-cache` | 5 — hltb, protondb-badges, recomp, steamgriddb, store-bridge | **EXTRACT** as `@loadout/external-cache`. protondb-badges already has an inlined copy on its in-flight PR; migrate that to the package post-extraction. |
+| `per-game-profiles` | 2 — audio-mixer, fan-control (plus tdp-control on main already duplicating the logic) | **EXTRACT** as `@loadout/per-game-profiles` + retro-migrate fan-control + tdp-control. |
+| `sgdb-art` | 2 — recomp, store-bridge | Extract when those two migrate together. |
+| `steam-shortcut` | 2 — recomp, store-bridge | Extract when those two migrate together. |
+| `file-picker` | 1 — recomp | Inline into `lib/file-picker.ts` (~50 LOC). |
+| `steam-cdp` | 9 — used by every Steam-CEF-driving plugin in the source | **EXTRACT** as `@loadout/steam-cdp`. Loadout's loader already has a CDP client at `apps/loadout/src/steam-cdp/` (~1500 LOC); promote it to a workspace package so plugin backends can drive Steam's CEF UI the same way the source repo's plugins did (overlay `app.tsx` for settings + backend CDP injection for Steam-side widgets — see protondb-badges / hltb in the source for the pattern). |
+| `injector` | 1 — sound-loader only | Inline into the plugin's `lib/`. |
 
 If this plugin is (say) the 2nd migrated plugin to need an *identical* `plugin-storage` helper, you MAY extract a `packages/plugin-storage` — but only then, only with the duplicate already in tree, and call it out explicitly in the PR.
 
