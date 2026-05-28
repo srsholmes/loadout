@@ -29,6 +29,7 @@ import {
   useBackend,
   useCurrentGame,
 } from "@loadout/ui";
+import type { GameInfo, GameCollection } from "@loadout/types";
 
 // ───── Types ─────
 
@@ -40,23 +41,6 @@ interface GameLaunchOptions {
 interface Preset {
   name: string;
   options: string;
-}
-
-/** Mirror of game-browser's GameInfo shape so we don't need a runtime
- *  cross-plugin type import (each plugin bundles its own copy). */
-interface GameInfo {
-  appId: string;
-  name: string;
-  sizeOnDisk: number;
-  headerUrl: string;
-  capsuleUrl: string;
-  source?: "steam" | "shortcut";
-  tags?: string[];
-}
-
-interface CollectionEntry {
-  id: string;
-  count: number;
 }
 
 const ALL_COLLECTIONS = "__all__";
@@ -82,13 +66,13 @@ type View = "list" | "detail" | "presets";
 
 function LaunchOptionsManager() {
   const launchOptionsBackend = useBackend("launch-options");
-  const gameBrowserBackend = useBackend("game-browser");
+  const gameLibraryBackend = useBackend("__core:game-library");
   const currentGame = useCurrentGame();
   const { call } = launchOptionsBackend;
 
   // Library + per-game launch options
   const [library, setLibrary] = useState<GameInfo[]>([]);
-  const [collections, setCollections] = useState<CollectionEntry[]>([]);
+  const [collections, setCollections] = useState<GameCollection[]>([]);
   const [launchOptsByApp, setLaunchOptsByApp] = useState<Map<string, string>>(
     new Map(),
   );
@@ -123,14 +107,15 @@ function LaunchOptionsManager() {
 
   const [saving, setSaving] = useState(false);
 
-  // Defensive dedupe — game-browser dedupes already, but a stale
-  // client could double-render cards otherwise.
+  // Defensive dedupe — __core:game-library dedupes already (single
+  // source of truth), but a stale client could double-render cards
+  // otherwise.
   const refresh = useCallback(async () => {
     try {
       const [games, withLO, cols, p] = await Promise.all([
-        gameBrowserBackend.call("getGames").catch(() => []) as Promise<GameInfo[]>,
+        gameLibraryBackend.call("getGames").catch(() => []) as Promise<GameInfo[]>,
         call("getGames").catch(() => []) as Promise<GameLaunchOptions[]>,
-        gameBrowserBackend.call("getCollections").catch(() => []) as Promise<CollectionEntry[]>,
+        gameLibraryBackend.call("getCollections").catch(() => []) as Promise<GameCollection[]>,
         call("getPresets").catch(() => []) as Promise<Preset[]>,
       ]);
       const dedup: GameInfo[] = [];
@@ -151,7 +136,7 @@ function LaunchOptionsManager() {
     } finally {
       setLoading(false);
     }
-  }, [call, gameBrowserBackend]);
+  }, [call, gameLibraryBackend]);
 
   useEffect(() => {
     refresh();
@@ -665,7 +650,7 @@ function LaunchOptionsManager() {
               {visibleLibrary.length === 0 ? (
                 <div className="subsection-desc mt-1">
                   {library.length === 0
-                    ? "No installed games found. Is the game-browser plugin enabled?"
+                    ? "No installed games found. Library data comes from __core:game-library — the loader's single source of truth."
                     : "No games match the current filter."}
                 </div>
               ) : (

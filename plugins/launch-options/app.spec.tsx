@@ -63,16 +63,17 @@ beforeEach(() => {
   callMock.mockClear();
   eventHandlers.clear();
   callMock.mockImplementation((method: string) => {
-    // Both `launch-options` and `game-browser` backends share this mock.
-    // `launch-options::getGames` returns the per-appId launch-options
-    // strings; `game-browser::getGames` returns the library entries
-    // (name + artwork URLs) the card grid renders. The picker merges
-    // by appId at the call site.
+    // Both `launch-options` and `__core:game-library` backends share
+    // this mock. `launch-options::getGames` returns the per-appId
+    // launch-options strings; `__core:game-library::getGames` returns
+    // the library entries (name + artwork URLs) the card grid renders.
+    // The picker merges by appId at the call site.
     if (method === "getGames") {
       // Test mock can't distinguish which backend is calling — we
       // return a shape that satisfies both. The launch-options call
-      // ignores fields it doesn't know; the game-browser call ignores
-      // `launchOptions`. (See the dual-shape mock in the app code.)
+      // ignores fields it doesn't know; the __core:game-library call
+      // ignores `launchOptions`. (See the dual-shape mock in the app
+      // code.)
       return Promise.resolve([
         {
           appId: "730",
