@@ -16,6 +16,14 @@ export interface GameSession {
 
 export interface PlaytimeData {
   sessions: GameSession[];
+  /**
+   * Snapshot of the in-flight session, written by the backend heartbeat
+   * every 60 s while a game is running. If we crash before
+   * handleGameExit fires, the next _loadData picks this up and pushes
+   * it into `sessions` as the orphan — with endTime within 60 s of the
+   * crash, which is the best approximation we can give.
+   */
+  pendingActive?: GameSession | null;
 }
 
 export interface GameStats {
@@ -36,6 +44,12 @@ export interface Stats {
   month: PeriodStats;
   allTime: PeriodStats;
   weeklyBreakdown: { day: string; totalMs: number }[];
+  /**
+   * Per-range divisor for the UI's AVG/DAY metric. `allTime` is `null`
+   * when there are no recorded sessions yet (UI should hide that tile).
+   * Computed server-side because the UI doesn't see the raw session list.
+   */
+  daysInRange: { today: number; week: number; month: number; allTime: number | null };
 }
 
 export interface CurrentSession {
@@ -158,15 +172,17 @@ export function computeStats(
   const weekStart = startOfWeek(now);
   const monthStart = startOfMonth(now);
 
-  const todaySessions = all.filter(
-    (s) => s.startTime >= todayStart || (s.endTime !== null && s.endTime >= todayStart),
-  );
-  const weekSessions = all.filter(
-    (s) => s.startTime >= weekStart || (s.endTime !== null && s.endTime >= weekStart),
-  );
-  const monthSessions = all.filter(
-    (s) => s.startTime >= monthStart || (s.endTime !== null && s.endTime >= monthStart),
-  );
+  // `endTime ?? now` for the comparison so an active session that
+  // started before the period boundary (e.g. a play-through-midnight
+  // session) is still included — without this coercion the filter
+  // drops null-endTime sessions and the user sees 0 hours on the day
+  // they're actively playing.
+  const overlaps = (s: GameSession, periodStart: number) =>
+    (s.endTime ?? now) >= periodStart;
+
+  const todaySessions = all.filter((s) => overlaps(s, todayStart));
+  const weekSessions = all.filter((s) => overlaps(s, weekStart));
+  const monthSessions = all.filter((s) => overlaps(s, monthStart));
 
   return {
     today: aggregateSessions(todaySessions, todayStart, now),
@@ -174,6 +190,12 @@ export function computeStats(
     month: aggregateSessions(monthSessions, monthStart, now),
     allTime: aggregateSessions(all, 0, now),
     weeklyBreakdown: getWeeklyBreakdown(all, now),
+    daysInRange: {
+      today: daysForRange("today", all, now) ?? 1,
+      week: daysForRange("week", all, now) ?? 7,
+      month: daysForRange("month", all, now) ?? new Date(now).getDate(),
+      allTime: daysForRange("allTime", all, now),
+    },
   };
 }
 
@@ -204,4 +226,47 @@ export function colorFor(key: string): string {
   for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) | 0;
   const hue = Math.abs(hash) % 360;
   return `oklch(0.62 0.16 ${hue})`;
+}
+
+/** The four UI ranges the period selector exposes. */
+export type RangeKey = "today" | "week" | "month" | "allTime";
+
+/**
+ * How many days the AVG/DAY divisor should use for a given range.
+ *
+ * - today: 1 (the total IS the day's value)
+ * - week: 7
+ * - month: day-of-month so we don't divide April-day-3 by 30 and get
+ *   a misleading sub-hour average for a single day's play
+ * - allTime: derived from the earliest session in `sessions` so the
+ *   metric is "average per day played" not "average per total days"
+ *
+ * Returns `null` when no meaningful divisor exists (allTime with no
+ * sessions yet). Callers should hide the AVG/DAY tile when null.
+ */
+export function daysForRange(
+  range: RangeKey,
+  sessions: GameSession[],
+  now: number,
+): number | null {
+  switch (range) {
+    case "today":
+      return 1;
+    case "week":
+      return 7;
+    case "month":
+      return new Date(now).getDate();
+    case "allTime": {
+      if (sessions.length === 0) return null;
+      const earliest = sessions.reduce(
+        (min, s) => (s.startTime < min ? s.startTime : min),
+        sessions[0].startTime,
+      );
+      const days = Math.max(
+        1,
+        Math.ceil((now - startOfDay(earliest)) / 86_400_000),
+      );
+      return days;
+    }
+  }
 }

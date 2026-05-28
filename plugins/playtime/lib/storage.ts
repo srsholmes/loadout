@@ -11,7 +11,7 @@
  * the coordinator when a second plugin copies this file.
  */
 
-import { writeFile, readFile, mkdir } from "node:fs/promises";
+import { writeFile, readFile, mkdir, rename } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -51,6 +51,5 @@ export async function writePluginData<T>(path: string, data: T): Promise<void> {
   await mkdir(dir, { recursive: true });
   await writeFile(tmp, JSON.stringify(data, null, 2), "utf-8");
   // Node's rename is atomic on POSIX when src and dst share a filesystem.
-  const { rename } = await import("node:fs/promises");
   await rename(tmp, path);
 }

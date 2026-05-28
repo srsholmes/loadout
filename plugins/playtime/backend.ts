@@ -37,7 +37,14 @@ export default class PlaytimeBackend implements PluginBackend {
   private readonly steamAppsPath: string;
   private data: PlaytimeData = { sessions: [] };
   private appManifests = new Map<string, string>(); // appId -> game name
-  private emitInterval?: Timer;
+  /**
+   * Heartbeat that snapshots `activeSession` to disk every 60 s so a
+   * crash mid-session doesn't lose the whole thing. Previously we only
+   * persisted on game-exit, so any crash truncated the session to
+   * "never happened" — and the historical orphan-recovery path used a
+   * fake 1-minute clamp that silently lied about real session length.
+   */
+  private heartbeatInterval?: Timer;
   private activeSession: GameSession | null = null;
 
   constructor() {
@@ -52,31 +59,43 @@ export default class PlaytimeBackend implements PluginBackend {
     await this._loadData();
     await this._loadManifests();
 
-    // Emit sessionUpdate events every 30 seconds when a game is running
-    // so the overlay's elapsed-time counter stays fresh without polling.
-    this.emitInterval = setInterval(() => {
-      if (this.activeSession) {
-        this.emit?.({
-          event: "sessionUpdate",
-          data: this._buildCurrentSession(),
-        });
-      }
-    }, 30_000);
+    // Heartbeat: persist an `activeSession` snapshot to `pendingActive`
+    // every 60 s so a crash mid-session loses at most ~60 s of play
+    // time. The UI keeps its own 1 s local tick for the elapsed counter
+    // so we don't need a sessionUpdate emit on this cadence — emits
+    // only fire on session boundaries (start / exit).
+    this.heartbeatInterval = setInterval(() => {
+      this._heartbeat().catch((err) =>
+        console.warn("[playtime] Heartbeat failed:", err),
+      );
+    }, 60_000);
 
     console.log("[playtime] Plugin loaded, awaiting game-detection broadcasts");
   }
 
   async onUnload(): Promise<void> {
-    clearInterval(this.emitInterval);
+    clearInterval(this.heartbeatInterval);
 
     if (this.activeSession) {
       this.activeSession.endTime = Date.now();
       this.data.sessions.push(this.activeSession);
       this.activeSession = null;
+      this.data.pendingActive = null;
       await this._saveData();
     }
 
     console.log("[playtime] Plugin unloaded");
+  }
+
+  private async _heartbeat(): Promise<void> {
+    if (!this.activeSession) return;
+    // Don't mutate activeSession.endTime (it stays null in-memory to
+    // mark "still running"); snapshot a finalised copy into the file.
+    this.data.pendingActive = {
+      ...this.activeSession,
+      endTime: Date.now(),
+    };
+    await this._saveData();
   }
 
   // --- Game-detection broadcast hooks ---
@@ -96,6 +115,7 @@ export default class PlaytimeBackend implements PluginBackend {
       this.activeSession.endTime = Date.now();
       this.data.sessions.push(this.activeSession);
       this.activeSession = null;
+      this.data.pendingActive = null;
       await this._saveData();
     }
 
@@ -111,6 +131,14 @@ export default class PlaytimeBackend implements PluginBackend {
       startTime: Date.now(),
       endTime: null,
     };
+    // First snapshot for crash recovery — without this a crash within
+    // the first 60 s (before the heartbeat fires) loses the session
+    // entirely.
+    this.data.pendingActive = {
+      ...this.activeSession,
+      endTime: Date.now(),
+    };
+    await this._saveData();
     console.log(`[playtime] Game started: ${resolvedName} (${appIdStr})`);
     this.emit?.({
       event: "sessionUpdate",
@@ -128,6 +156,7 @@ export default class PlaytimeBackend implements PluginBackend {
     this.activeSession.endTime = Date.now();
     this.data.sessions.push(this.activeSession);
     this.activeSession = null;
+    this.data.pendingActive = null;
     await this._saveData();
     this.emit?.({
       event: "sessionUpdate",
@@ -176,18 +205,29 @@ export default class PlaytimeBackend implements PluginBackend {
   private async _loadManifests(): Promise<void> {
     try {
       const entries = await readdir(this.steamAppsPath);
-      for (const entry of entries) {
-        if (!entry.startsWith("appmanifest_") || !entry.endsWith(".acf")) continue;
-        try {
-          const content = await readFile(join(this.steamAppsPath, entry), "utf-8");
-          const appIdMatch = content.match(/"appid"\s+"(\d+)"/);
-          const nameMatch = content.match(/"name"\s+"([^"]+)"/);
-          if (appIdMatch && nameMatch) {
-            this.appManifests.set(appIdMatch[1], nameMatch[1]);
-          }
-        } catch {
-          // Skip unreadable manifests
-        }
+      // Parallelise the per-manifest reads — sequential awaits add up on
+      // spinning rust or slow USB SD cards.
+      const results = await Promise.all(
+        entries
+          .filter((e) => e.startsWith("appmanifest_") && e.endsWith(".acf"))
+          .map(async (entry) => {
+            try {
+              const content = await readFile(
+                join(this.steamAppsPath, entry),
+                "utf-8",
+              );
+              const appIdMatch = content.match(/"appid"\s+"(\d+)"/);
+              const nameMatch = content.match(/"name"\s+"([^"]+)"/);
+              return appIdMatch && nameMatch
+                ? ([appIdMatch[1], nameMatch[1]] as const)
+                : null;
+            } catch {
+              return null;
+            }
+          }),
+      );
+      for (const pair of results) {
+        if (pair) this.appManifests.set(pair[0], pair[1]);
       }
       console.log(`[playtime] Loaded ${this.appManifests.size} game manifests`);
     } catch {
@@ -197,14 +237,36 @@ export default class PlaytimeBackend implements PluginBackend {
 
   /** Load persisted playtime data from disk. */
   private async _loadData(): Promise<void> {
-    const loaded = await readPluginData<PlaytimeData>(this.dataPath, { sessions: [] });
+    const loaded = await readPluginData<PlaytimeData>(this.dataPath, {
+      sessions: [],
+    });
     this.data = loaded;
-    // Clean up: close any sessions that were left open (crash recovery)
-    for (const s of this.data.sessions) {
-      if (s.endTime === null) {
-        s.endTime = s.startTime + 60_000; // Assume 1 minute for orphaned sessions
-      }
+
+    // Crash recovery: a `pendingActive` snapshot is an orphan from a
+    // backend crash mid-session. Its endTime is from the last heartbeat
+    // (≤ 60 s before the crash), so it's a close approximation of when
+    // the user actually stopped. Promote it into `sessions` and clear.
+    if (this.data.pendingActive) {
+      console.log(
+        `[playtime] Recovered orphaned session: ${this.data.pendingActive.gameName} ` +
+          `(${this.data.pendingActive.appId}, ` +
+          `${Math.round(((this.data.pendingActive.endTime ?? this.data.pendingActive.startTime) - this.data.pendingActive.startTime) / 60_000)}m)`,
+      );
+      this.data.sessions.push(this.data.pendingActive);
+      this.data.pendingActive = null;
     }
+
+    // Defensive: drop anything with endTime=null from older data. The
+    // previous schema's 1-minute clamp silently lied; better to drop
+    // these than carry the wrong number forward.
+    const before = this.data.sessions.length;
+    this.data.sessions = this.data.sessions.filter((s) => s.endTime !== null);
+    if (this.data.sessions.length !== before) {
+      console.warn(
+        `[playtime] Dropped ${before - this.data.sessions.length} legacy null-endTime session(s)`,
+      );
+    }
+
     console.log(`[playtime] Loaded ${this.data.sessions.length} historical sessions`);
   }
 
