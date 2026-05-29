@@ -22,7 +22,24 @@
     "subtitle": "Per-game contextual links",
     "target": { "type": "overlay" },
     "permissions": {
-      "commands": ["which", "flatpak", "systemctl", "pgrep", "xprop"],
+      "commands": [
+        "which",
+        "flatpak",
+        "systemctl",
+        "pgrep",
+        "xprop",
+        "firefox",
+        "google-chrome-stable",
+        "google-chrome",
+        "brave-browser",
+        "brave",
+        "chromium",
+        "chromium-browser",
+        "microsoft-edge-stable",
+        "microsoft-edge",
+        "vivaldi",
+        "vivaldi-stable"
+      ],
       "filesystem": [
         "/sys/class/drm",
         "~/.local/share/Steam/userdata"

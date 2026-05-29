@@ -631,6 +631,49 @@ describe("installBrowserShortcut", () => {
     expect(installed.appId).toBe(0xabcdef01);
   });
 
+  it("coerces a signed (negative) appid from shortcuts.vdf to the equivalent uint32", async () => {
+    // parseBinaryVdf reads `appid` as little-endian int32, so a real
+    // non-Steam shortcut whose top bit is set (e.g. 0xFEDCBA98) comes
+    // back as a NEGATIVE JS number. `findShortcutAppIdByName` must
+    // `>>> 0` it before handing off to `shortcutGameId64`; otherwise
+    // the steam://rungameid/<gameId64> URL we ultimately execute
+    // points at a completely different shortcut.
+    //
+    // This test pins the coercion behavior. If
+    // `shortcutGameId64`'s input contract ever changes (e.g. it
+    // starts taking signed appids), the `>>> 0` site in backend.ts
+    // MUST be re-evaluated and this test updated to match.
+    mockRun.mockImplementation((cmd: string[]) => {
+      if (cmd[0] === "which" && cmd[1] === "firefox") {
+        return Promise.resolve({
+          stdout: "/usr/bin/firefox\n",
+          stderr: "",
+          exitCode: 0,
+        });
+      }
+      return Promise.resolve({ stdout: "", stderr: "", exitCode: 1 });
+    });
+    mockAddShortcut.mockResolvedValueOnce(null);
+    mockReadFile.mockImplementation(() =>
+      Promise.resolve(Buffer.from("stub")),
+    );
+    // `(0xFEDCBA98 | 0)` ⇒ -19088744 — what int32 readback produces.
+    mockParseBinaryVdf.mockImplementation(() => ({
+      shortcuts: {
+        "0": { appid: 0xfedcba98 | 0, appname: "Firefox" },
+      },
+    }));
+
+    const b = new QuickLinksBackend();
+    await b.onLoad();
+    const installed = await b.installBrowserShortcut("firefox-native");
+    expect(installed.appId).toBe(0xfedcba98);
+    expect(installed.appId).toBeGreaterThan(0);
+    // gameId64 stub is `((appId >>> 0) << 32n) + 0x02000000n` — so
+    // a successful coercion means the BigInt did NOT wrap negative.
+    expect(BigInt(installed.gameId64)).toBeGreaterThan(0n);
+  });
+
   it("appends to installedBrowsers — multiple shortcuts can coexist", async () => {
     storageByPlugin["quick-links"] = {
       version: 1,

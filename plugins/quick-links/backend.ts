@@ -7,8 +7,16 @@ import {
 import { withSteamClient, SteamClientUnreachableError } from "@loadout/steam-cdp";
 import { getUserdataDir, getUserIds } from "@loadout/steam-paths";
 import { parseBinaryVdf, shortcutGameId64 } from "@loadout/vdf";
-import { readFile, readdir } from "fs/promises";
+import { readFile } from "fs/promises";
 import { join } from "path";
+import { isChromeOrFirefoxBrowserId } from "./lib/browser-id";
+import { buildLaunchOptionsBase } from "./lib/browser-launch-options";
+import { detectDisplayResolution } from "./lib/display-resolution";
+import { isValidFlatpakAppId } from "./lib/flatpak";
+import {
+  emptyStorage as emptyStorageImpl,
+  hydrate as hydrateImpl,
+} from "./lib/storage-hydrate";
 
 /**
  * Quick Links plugin backend.
@@ -363,116 +371,14 @@ const FLATPAK_BROWSERS: { id: string; name: string; flatpakAppId: string }[] = [
   { id: "librewolf-flatpak", name: "LibreWolf (Flatpak)", flatpakAppId: "io.gitlab.librewolf-community" },
 ];
 
-/**
- * Browser ids the issue-121 banner specifically asks about: Chrome /
- * Firefox in any flavour (native, flatpak, librewolf-as-firefox-fork).
- * The banner suppresses when ANY installed shortcut matches one of
- * these — keeps the banner from nagging a user who set up Brave or
- * Edge as their primary browser.
- */
-function isChromeOrFirefoxBrowserId(browserId: string): boolean {
-  return (
-    browserId.includes("firefox") ||
-    browserId.includes("librewolf") ||
-    browserId.includes("chrome")
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Display resolution detection (used at install time for browser flags)
-// ---------------------------------------------------------------------------
-
-const FALLBACK_RESOLUTION: DisplayResolution = { width: 1920, height: 1080 };
-
-interface DisplayResolution {
-  width: number;
-  height: number;
-}
-
-/**
- * Read the preferred mode of the first connected DRM output. Each
- * cardN-OUTPUT/modes file under /sys/class/drm lists modes in
- * priority order (line 1 = preferred / native). Returns
- * FALLBACK_RESOLUTION if /sys is unreadable or no outputs are
- * connected.
- */
-export async function detectDisplayResolution(): Promise<DisplayResolution> {
-  const drmDir = "/sys/class/drm";
-  let entries: string[];
-  try {
-    entries = await readdir(drmDir);
-  } catch {
-    return FALLBACK_RESOLUTION;
-  }
-  const outputs = entries
-    .filter((e) => /^card\d+-/.test(e) && !e.includes("Writeback"))
-    .sort();
-  for (const out of outputs) {
-    try {
-      const status = (
-        await readFile(join(drmDir, out, "status"), "utf-8")
-      ).trim();
-      if (status !== "connected") continue;
-      const modes = (
-        await readFile(join(drmDir, out, "modes"), "utf-8")
-      ).trim();
-      const first = modes.split("\n")[0]?.trim();
-      const m = first?.match(/^(\d+)x(\d+)/);
-      if (m) {
-        return { width: parseInt(m[1], 10), height: parseInt(m[2], 10) };
-      }
-    } catch {
-      /* keep probing */
-    }
-  }
-  return FALLBACK_RESOLUTION;
-}
-
-/**
- * Per-browser-family launch flag template. Returns the flags that go
- * BETWEEN the browser-invocation prefix and the `{url}` placeholder.
- * `{url}` is filled by the per-URL launch flow (or substituted to
- * about:blank at install time for direct-from-Steam launches).
- */
-function browserSizeFlags(browserId: string, res: DisplayResolution): string {
-  if (browserId.includes("firefox") || browserId.includes("librewolf")) {
-    // Firefox: --new-tab routes the URL into a tab in the existing
-    // window when Firefox is already running (the fast-path direct-
-    // exec case). Cold-start still works — Firefox makes the window
-    // with a tab in it. No CLI window-sizing outside --screenshot
-    // mode.
-    void res; // no CLI sizing for firefox
-    return "--new-tab";
-  }
-  // Chromium-family flags. See gaming-mode-browser commit history
-  // (folded into this plugin for #121) for the rationale on each.
-  return `--window-size=${res.width},${res.height} --window-position=0,0 --force-device-scale-factor=1.5`;
-}
-
-/**
- * Build a launch-options string with `{url}` placeholder. Caller
- * substitutes the placeholder per launch (or with about:blank at
- * install time for direct-from-Steam launches).
- */
-function buildLaunchOptionsBase(
-  browserId: string,
-  res: DisplayResolution,
-  innerArgs: string,
-): string {
-  const flags = browserSizeFlags(browserId, res);
-  return innerArgs.length > 0
-    ? `${innerArgs} ${flags} {url}`
-    : `${flags} {url}`;
-}
+// Re-exported from `./lib/display-resolution` so the existing test
+// suite (and any external import path) continues to work after the
+// pure-helper extraction.
+export { detectDisplayResolution };
 
 // ---------------------------------------------------------------------------
 // Browser detection helpers
 // ---------------------------------------------------------------------------
-
-/** Validate a flatpak app id to keep CLI args safe from injection. */
-function isValidFlatpakAppId(appId: string): boolean {
-  return /^[a-zA-Z][a-zA-Z0-9._-]*$/.test(appId);
-}
 
 /**
  * Resolve a binary name to an absolute path via `which`. Returns
@@ -662,7 +568,20 @@ async function findShortcutAppIdByName(name: string): Promise<number | null> {
           "";
         if (appName !== name) continue;
         if (typeof sc.appid !== "number") continue;
-        return sc.appid >>> 0; // signed → unsigned coercion
+        /*
+         * Signed → unsigned coercion. shortcuts.vdf stores `appid` as a
+         * little-endian int32, so non-Steam shortcut appids (top bit
+         * set, i.e. >= 0x80000000) come out of `parseBinaryVdf` as
+         * negative JavaScript numbers. `shortcutGameId64` expects an
+         * unsigned 32-bit value; without the `>>> 0` the derived
+         * gameId64 silently drifts (BigInt(-1) << 32 ≠ BigInt(0xFFFF_FFFF) << 32).
+         *
+         * Pinned by a regression test in backend.test.ts — if
+         * `shortcutGameId64` ever changes its input contract this MUST
+         * be revisited or the gameId64 written into Steam's URL will
+         * point at the wrong shortcut.
+         */
+        return sc.appid >>> 0;
       }
     }
   }
@@ -672,16 +591,7 @@ async function findShortcutAppIdByName(name: string): Promise<number | null> {
 // ─── Storage hydrate / migration ─────────────────────────────────────
 
 function emptyStorage(): QuickLinksStorage {
-  return {
-    version: 1,
-    templates: DEFAULT_TEMPLATES.map((t) => ({ ...t })),
-    suffixes: Object.fromEntries(
-      Object.entries(DEFAULT_SUFFIXES).map(([k, v]) => [k, [...v]]),
-    ),
-    perGame: {},
-    hidden: [],
-    installedBrowsers: [],
-  };
+  return emptyStorageImpl(DEFAULT_TEMPLATES, DEFAULT_SUFFIXES) as QuickLinksStorage;
 }
 
 /**
@@ -712,75 +622,16 @@ async function loadLegacyBrowserShortcuts(): Promise<InstalledShortcut[]> {
   return [];
 }
 
-/**
- * Merge a partial-on-disk shape with current defaults. The defaults
- * win on shape (so a new built-in template added in a later version
- * shows up on first read), but the user's mutations to existing
- * built-ins (renamed, disabled, urlTemplate edited) win.
- */
 function hydrate(
   raw: Partial<QuickLinksStorage>,
   legacyInstalled: InstalledShortcut[],
 ): QuickLinksStorage {
-  const base = emptyStorage();
-  const userTemplates = Array.isArray(raw.templates) ? raw.templates : [];
-  const userById = new Map(userTemplates.map((t) => [t.id, t]));
-
-  // Built-ins: take base shape, layer user overrides on top.
-  const merged: LinkTemplate[] = [];
-  const seen = new Set<string>();
-  for (const def of base.templates) {
-    const user = userById.get(def.id);
-    if (user && user.builtin) {
-      merged.push({ ...def, ...user, builtin: true });
-    } else {
-      merged.push(def);
-    }
-    seen.add(def.id);
-  }
-  // User-added templates (builtin === false) come after built-ins.
-  for (const t of userTemplates) {
-    if (seen.has(t.id)) continue;
-    if (!t || typeof t.id !== "string" || typeof t.urlTemplate !== "string") continue;
-    merged.push({ ...t, builtin: false });
-  }
-
-  const suffixes =
-    raw.suffixes && typeof raw.suffixes === "object"
-      ? { ...base.suffixes, ...raw.suffixes }
-      : base.suffixes;
-
-  const perGame =
-    raw.perGame && typeof raw.perGame === "object"
-      ? (raw.perGame as Record<string, GamePins>)
-      : {};
-
-  const hidden = Array.isArray(raw.hidden)
-    ? raw.hidden.filter((x): x is string => typeof x === "string")
-    : [];
-
-  const selectedBrowserId =
-    typeof raw.selectedBrowserId === "string" && raw.selectedBrowserId.length > 0
-      ? raw.selectedBrowserId
-      : null;
-
-  // Browser-shortcut migration. If our own storage has installedBrowsers,
-  // use that. Otherwise (first run after #121 lands), import whatever
-  // gaming-mode-browser had registered so the user doesn't lose their
-  // shortcut.
-  const installedBrowsers = Array.isArray(raw.installedBrowsers)
-    ? raw.installedBrowsers
-    : legacyInstalled;
-
-  return {
-    version: 1,
-    selectedBrowserId,
-    templates: merged,
-    suffixes,
-    perGame,
-    hidden,
-    installedBrowsers,
-  };
+  return hydrateImpl(
+    raw,
+    legacyInstalled,
+    DEFAULT_TEMPLATES,
+    DEFAULT_SUFFIXES,
+  ) as QuickLinksStorage;
 }
 
 // ─── Backend ─────────────────────────────────────────────────────────
