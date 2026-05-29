@@ -171,6 +171,15 @@
         "react-dom": "^18.3.0",
       },
     },
+    "plugins/disable-controller-input": {
+      "name": "@loadout/plugin-disable-controller-input",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+      },
+    },
     "plugins/display-settings": {
       "name": "@loadout/plugin-display-settings",
       "version": "0.0.1",
@@ -412,6 +421,8 @@
     "@loadout/plugin-battery-tracker": ["@loadout/plugin-battery-tracker@workspace:plugins/battery-tracker"],
 
     "@loadout/plugin-bluetooth": ["@loadout/plugin-bluetooth@workspace:plugins/bluetooth"],
+
+    "@loadout/plugin-disable-controller-input": ["@loadout/plugin-disable-controller-input@workspace:plugins/disable-controller-input"],
 
     "@loadout/plugin-display-settings": ["@loadout/plugin-display-settings@workspace:plugins/display-settings"],
 
