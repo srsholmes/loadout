@@ -174,4 +174,151 @@ describe("sound-loader plugin", () => {
       expect(container.textContent).toContain("No custom sound packs installed");
     });
   });
+
+  describe("Community tab", () => {
+    const communityPacks = [
+      {
+        id: "psp-uuid",
+        name: "PSP Sounds",
+        author: "SGL-Galaxy",
+        description: "PlayStation Portable menu sounds",
+        version: "1.0.0",
+        downloadUrl: "https://api.deckthemes.com/blobs/psp",
+        previewImageUrl: null,
+        githubUrl: "https://github.com/example/psp",
+        lastChanged: "01/01/2024",
+        manifestVersion: 2,
+        music: false,
+        installed: false,
+      },
+      {
+        id: "lofi-uuid",
+        name: "Lo-Fi Beats",
+        author: "DJ Test",
+        description: "music pack",
+        version: "0.5.0",
+        downloadUrl: "https://api.deckthemes.com/blobs/lofi",
+        previewImageUrl: null,
+        githubUrl: null,
+        lastChanged: "01/01/2024",
+        manifestVersion: 2,
+        music: true,
+        installed: false,
+      },
+    ];
+
+    beforeEach(() => {
+      callMock.mockImplementation((method: string) => {
+        if (method === "listPacks") return Promise.resolve(mockPacks);
+        if (method === "getActivePack") return Promise.resolve(null);
+        if (method === "getUseInOverlay") return Promise.resolve(false);
+        if (method === "getUseInSteam") return Promise.resolve(false);
+        if (method === "getActivePackMappings")
+          return Promise.resolve({ packId: null, mappings: {}, ignore: [] });
+        if (method === "listCommunityPacks")
+          return Promise.resolve(communityPacks);
+        if (method === "getCommunityPacksStatus")
+          return Promise.resolve({
+            state: "ready",
+            syncedAt: Date.now(),
+            entryCount: communityPacks.length,
+            lastError: null,
+          });
+        return Promise.resolve(null);
+      });
+    });
+
+    it("renders the community pack list when the Community tab is selected", async () => {
+      const container = createContainer();
+      const headerSlot = document.createElement("div");
+      document.body.appendChild(headerSlot);
+      const { mount } = await import("./app");
+      mount(container, { headerSlot });
+
+      // Wait for the body to mount.
+      await waitFor(() => {
+        expect(container.textContent).toContain("Default (Steam Sounds)");
+      });
+
+      // Click the "Community" segmented tab in the header.
+      const communityBtn = Array.from(
+        headerSlot.querySelectorAll("button, [role=button]"),
+      ).find((el) => el.textContent?.trim() === "Community") as
+        | HTMLElement
+        | undefined;
+      expect(communityBtn).toBeDefined();
+      communityBtn!.click();
+
+      await waitFor(() => {
+        expect(container.textContent).toContain("PSP Sounds");
+      });
+    });
+
+    it("filters out music packs by default and reveals them on toggle", async () => {
+      const container = createContainer();
+      const headerSlot = document.createElement("div");
+      document.body.appendChild(headerSlot);
+      const { mount } = await import("./app");
+      mount(container, { headerSlot });
+
+      await waitFor(() => {
+        expect(container.textContent).toContain("Default (Steam Sounds)");
+      });
+
+      const communityBtn = Array.from(
+        headerSlot.querySelectorAll("button, [role=button]"),
+      ).find((el) => el.textContent?.trim() === "Community") as
+        | HTMLElement
+        | undefined;
+      communityBtn!.click();
+
+      await waitFor(() => {
+        expect(container.textContent).toContain("PSP Sounds");
+      });
+      // Music pack should be hidden by default.
+      expect(container.textContent).not.toContain("Lo-Fi Beats");
+    });
+
+    it("renders a retry surface when the community-packs status is error and no packs are cached", async () => {
+      callMock.mockImplementation((method: string) => {
+        if (method === "listPacks") return Promise.resolve(mockPacks);
+        if (method === "getActivePack") return Promise.resolve(null);
+        if (method === "getUseInOverlay") return Promise.resolve(false);
+        if (method === "getUseInSteam") return Promise.resolve(false);
+        if (method === "getActivePackMappings")
+          return Promise.resolve({ packId: null, mappings: {}, ignore: [] });
+        if (method === "listCommunityPacks") return Promise.resolve([]);
+        if (method === "getCommunityPacksStatus")
+          return Promise.resolve({
+            state: "error",
+            syncedAt: null,
+            entryCount: 0,
+            lastError: "DNS failure",
+          });
+        return Promise.resolve(null);
+      });
+
+      const container = createContainer();
+      const headerSlot = document.createElement("div");
+      document.body.appendChild(headerSlot);
+      const { mount } = await import("./app");
+      mount(container, { headerSlot });
+
+      await waitFor(() => {
+        expect(container.textContent).toContain("Default (Steam Sounds)");
+      });
+
+      const communityBtn = Array.from(
+        headerSlot.querySelectorAll("button, [role=button]"),
+      ).find((el) => el.textContent?.trim() === "Community") as
+        | HTMLElement
+        | undefined;
+      communityBtn!.click();
+
+      await waitFor(() => {
+        expect(container.textContent).toContain("Could not reach deckthemes.com");
+        expect(container.textContent).toContain("DNS failure");
+      });
+    });
+  });
 });

@@ -225,7 +225,10 @@ export function getCommunityPacksSync(): CommunityPackEntry[] | null {
 
 export function getCommunityPacksStatus(): PacksStatus {
   let state: PacksState;
-  if (entries && entries.length > 0) state = "ready";
+  // A successful sync that returns 0 entries is still "ready" — registry
+  // may legitimately be empty during upstream maintenance, and "pending"
+  // would leave the UI spinner spinning forever.
+  if (entries !== null) state = "ready";
   else if (lastError) state = "error";
   else state = "pending";
   return {

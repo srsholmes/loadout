@@ -4,8 +4,8 @@ import {
   readPluginStorage,
   writePluginStorage,
 } from "@loadout/plugin-storage";
-import { readdir, mkdir, cp, rm } from "node:fs/promises";
-import { join, extname, resolve } from "node:path";
+import { readdir, mkdir, cp, rm, lstat, readlink } from "node:fs/promises";
+import { join, extname, resolve, dirname } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import {
   AudioSteamInjector,
@@ -18,25 +18,16 @@ import {
   refreshCommunityPacks,
   type PacksStatus,
 } from "./lib/sounds-cache";
-import type { CommunityPackEntry } from "./lib/types";
+import {
+  SOUND_EVENTS,
+  isAllowedRegistryUrl,
+  type SoundEvent,
+  type CommunityPackInfo,
+} from "./shared";
 
 const PLUGIN_ID = "sound-loader";
 
-/** Sound event keys supported by the sound engine. */
-const SOUND_EVENTS = [
-  "nav",
-  "select",
-  "back",
-  "toggleOn",
-  "toggleOff",
-  "sliderUp",
-  "error",
-  "sideMenuIn",
-  "sideMenuOut",
-  "tabTransition",
-] as const;
-
-type SoundEvent = (typeof SOUND_EVENTS)[number];
+export { SOUND_EVENTS, type SoundEvent, type CommunityPackInfo } from "./shared";
 
 interface PackManifest {
   name: string;
@@ -93,10 +84,6 @@ const DECKY_TO_LOADOUT: Record<string, string> = {
   "deck_ui_tab_transition_01.wav": "tabTransition",
 };
 
-interface CommunityPackInfo extends CommunityPackEntry {
-  installed: boolean;
-}
-
 /**
  * Strict ID pattern to prevent path traversal when installing community packs.
  * Pack ids are deckthemes uuids — letters, digits, dashes, dots, underscores only.
@@ -129,6 +116,24 @@ export default class SoundLoaderBackend implements PluginBackend {
   private packsCache: Map<string, { manifest: PackManifest; dir: string }> = new Map();
   private steamInjector?: AudioSteamInjector;
 
+  /**
+   * Serializes concurrent `_applySteamState` invocations. A user toggling
+   * the Steam-UI switch while the injector's reload-monitor reinjects can
+   * otherwise interleave `clearStagedFiles` / `stagePackFiles` against the
+   * same `~/.local/share/Steam/steamui/sounds_custom/loadout/` tree —
+   * Steam ends up pointed at deleted files. We chain every call through
+   * this promise so the second waits for the first.
+   */
+  private inflightApply: Promise<void> | null = null;
+
+  /**
+   * Monotonic generation counter for the active injector instance.
+   * Bumped on every `reconnectSteam`, captured at the top of each
+   * `_doApplySteamState` call. If the generation drifts mid-call, the
+   * stale apply bails out instead of driving a closed CDP socket.
+   */
+  private injectorGeneration = 0;
+
   async onLoad(): Promise<void> {
     console.log("[sound-loader] Plugin loaded");
 
@@ -151,12 +156,7 @@ export default class SoundLoaderBackend implements PluginBackend {
     // status separately and will gate its list rendering on this.
     ensureCommunityPacks().catch(() => { /* status reflects the failure */ });
 
-    this.steamInjector = new AudioSteamInjector((msg, level = "info") => {
-      const tag = "[sound-loader:steam]";
-      if (level === "error") console.error(`${tag} ${msg}`);
-      else if (level === "warn") console.warn(`${tag} ${msg}`);
-      else console.log(`${tag} ${msg}`);
-    });
+    this.steamInjector = this._makeInjector();
 
     // Best-effort: apply persisted Steam state at startup. Failures are surfaced
     // as `steamError` events; the user can retry via the UI's Reconnect button.
@@ -165,6 +165,16 @@ export default class SoundLoaderBackend implements PluginBackend {
 
   async onUnload(): Promise<void> {
     await this.steamInjector?.stop();
+  }
+
+  /** Construct a fresh AudioSteamInjector with the standard logger prefix. */
+  private _makeInjector(): AudioSteamInjector {
+    return new AudioSteamInjector((msg, level = "info") => {
+      const tag = "[sound-loader:steam]";
+      if (level === "error") console.error(`${tag} ${msg}`);
+      else if (level === "warn") console.warn(`${tag} ${msg}`);
+      else console.log(`${tag} ${msg}`);
+    });
   }
 
   // --- RPC Methods ---
@@ -245,16 +255,30 @@ export default class SoundLoaderBackend implements PluginBackend {
     return { success: true };
   }
 
-  /** Force a reconnect attempt to Steam's CEF — used by the UI's Reconnect button. */
+  /**
+   * Force a reconnect attempt to Steam's CEF — used by the UI's Reconnect button.
+   *
+   * Awaits any in-flight `_applySteamState` so swapping `this.steamInjector`
+   * out from under it cannot strand the old call driving a closed CDP socket.
+   * After the swap, bumping `injectorGeneration` makes any future stale apply
+   * (e.g. queued behind the reconnect) bail out the moment it notices.
+   */
   async reconnectSteam(): Promise<{ success: boolean; error?: string }> {
     if (!this.steamInjector) return { success: false, error: "injector not initialized" };
+
+    // Wait for any in-flight apply to finish on the old injector.
+    if (this.inflightApply) {
+      try {
+        await this.inflightApply;
+      } catch {
+        // The in-flight apply may have surfaced its own error event already.
+      }
+    }
+
     await this.steamInjector.stop();
-    this.steamInjector = new AudioSteamInjector((msg, level = "info") => {
-      const tag = "[sound-loader:steam]";
-      if (level === "error") console.error(`${tag} ${msg}`);
-      else if (level === "warn") console.warn(`${tag} ${msg}`);
-      else console.log(`${tag} ${msg}`);
-    });
+    this.steamInjector = this._makeInjector();
+    this.injectorGeneration++;
+
     await this._applySteamState();
     return { success: true };
   }
@@ -364,7 +388,16 @@ export default class SoundLoaderBackend implements PluginBackend {
 
   // --- Community Packs RPC Methods ---
 
-  /** List community packs from the live registry, annotated with install status. */
+  /**
+   * List community packs from the live registry, annotated with install
+   * status.
+   *
+   * Trust boundary: the registry is upstream-controlled — a compromised
+   * deckthemes response could hand the UI a `previewImageUrl` that pings
+   * an arbitrary tracker, or a `downloadUrl` pointing at an attacker host.
+   * We host-pin both fields against the network allow-list (`shared.ts`)
+   * here so they never reach the frontend `<img>` or the install path.
+   */
   async listCommunityPacks(): Promise<CommunityPackInfo[]> {
     const registry = await ensureCommunityPacks();
 
@@ -376,10 +409,26 @@ export default class SoundLoaderBackend implements PluginBackend {
       installedDirs = new Set();
     }
 
-    return registry.map((entry) => ({
-      ...entry,
-      installed: installedDirs.has(entry.id),
-    }));
+    return registry
+      .filter((entry) => {
+        if (!isAllowedRegistryUrl(entry.downloadUrl)) {
+          console.warn(
+            `[sound-loader] Dropping pack "${entry.id}" — downloadUrl not on allow-list: ${entry.downloadUrl}`,
+          );
+          return false;
+        }
+        return true;
+      })
+      .map((entry) => ({
+        ...entry,
+        // Scrub the preview URL too — CEF would happily load an arbitrary
+        // tracker; null is the safe degraded state for the frontend.
+        previewImageUrl:
+          entry.previewImageUrl && isAllowedRegistryUrl(entry.previewImageUrl)
+            ? entry.previewImageUrl
+            : null,
+        installed: installedDirs.has(entry.id),
+      }));
   }
 
   /** Current state of the community-packs registry sync. */
@@ -411,6 +460,19 @@ export default class SoundLoaderBackend implements PluginBackend {
     const pack = registry.find((p) => p.id === id);
     if (!pack) {
       return { success: false, error: `Pack "${id}" not found in community registry` };
+    }
+
+    // Trust-boundary check: the registry tells us *where* to download, but
+    // a compromised api.deckthemes.com could hand back an arbitrary host.
+    // Pin to the network allow-list before we fetch.
+    if (!isAllowedRegistryUrl(pack.downloadUrl)) {
+      console.warn(
+        `[sound-loader] Refusing to download from non-allowlisted host: ${pack.downloadUrl}`,
+      );
+      return {
+        success: false,
+        error: `Refusing to download from disallowed host (pack registry may be compromised)`,
+      };
     }
 
     const tempBase = join(tmpdir(), `loadout-pack-${id}-${Date.now()}`);
@@ -447,6 +509,31 @@ export default class SoundLoaderBackend implements PluginBackend {
       }
       await Bun.write(zipPath, buf);
 
+      // Path-traversal pre-check: scan the zip's entry list before
+      // extracting. `unzip -o` happily writes through `..` segments on
+      // builds without `-:`, so a hostile archive (or compromised
+      // registry response) could land files outside `extractDir`.
+      const listing = await runFull(["unzip", "-Z1", zipPath]);
+      if (listing.exitCode !== 0) {
+        return { success: false, error: `Failed to inspect zip: ${listing.stderr}` };
+      }
+      const badEntry = listing.stdout
+        .split("\n")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+        .find((entry) =>
+          entry.startsWith("/") ||
+          entry.startsWith("..") ||
+          entry.includes("/../") ||
+          entry.includes("\\"),
+        );
+      if (badEntry) {
+        return {
+          success: false,
+          error: `Refusing to extract zip with unsafe entry: ${badEntry}`,
+        };
+      }
+
       // Extract
       await mkdir(extractDir, { recursive: true });
       const { stderr, exitCode } = await runFull([
@@ -458,6 +545,18 @@ export default class SoundLoaderBackend implements PluginBackend {
       ]);
       if (exitCode !== 0) {
         return { success: false, error: `Failed to extract zip: ${stderr}` };
+      }
+
+      // Defence-in-depth: after extraction, walk the tree and confirm
+      // nothing escaped `extractDir` via symlinks the zip might have
+      // carried (zip can encode symlinks even when path names look safe).
+      const resolvedExtract = resolve(extractDir);
+      const escape = await this._findExtractionEscape(extractDir, resolvedExtract);
+      if (escape) {
+        return {
+          success: false,
+          error: `Refusing to install pack: extracted entry escapes staging dir (${escape})`,
+        };
       }
 
       // The blob is a flat zip with audio files at the root or inside a
@@ -616,19 +715,19 @@ export default class SoundLoaderBackend implements PluginBackend {
 
     const targetDir = join(SOUND_PACKS_DIR(), id);
 
-    // Verify the resolved path is within SOUND_PACKS_DIR (prevent traversal)
+    // Verify the resolved path is a direct child of SOUND_PACKS_DIR
+    // (prevent traversal). `dirname` here is the defence-in-depth check
+    // against `SAFE_ID` ever loosening.
     const resolvedTarget = resolve(targetDir);
     const resolvedBase = resolve(SOUND_PACKS_DIR());
-    if (!resolvedTarget.startsWith(resolvedBase + "/")) {
+    if (resolvedTarget === resolvedBase || !resolvedTarget.startsWith(resolvedBase + "/")) {
       return { success: false, error: "Invalid pack path" };
     }
 
     try {
-      // Check it exists
-      const entries = await readdir(targetDir);
-      if (!entries) {
-        return { success: false, error: `Pack "${id}" is not installed` };
-      }
+      // Check it exists. readdir resolves to an array or throws ENOENT —
+      // the catch below is the not-installed path.
+      await readdir(targetDir);
     } catch {
       return { success: false, error: `Pack "${id}" is not installed` };
     }
@@ -660,19 +759,54 @@ export default class SoundLoaderBackend implements PluginBackend {
    * Single choke point that reconciles the live Steam-side state with config.
    * Called whenever activePack, useInSteam, or pack inventory changes.
    *
+   * Concurrency: every invocation chains onto `this.inflightApply` so two
+   * setters firing back-to-back (or a setter + the injector's reload
+   * monitor) can't interleave their `clearStagedFiles` / `stagePackFiles`
+   * writes against the same `sounds_custom/loadout/` tree. The final
+   * caller's map is always the one Steam ends up pointing at.
+   *
    * Failures emit a `steamError` event for the UI to surface and do NOT throw —
    * the health check inside the injector will retry connection drops automatically.
    */
   private async _applySteamState(): Promise<void> {
+    // Queue this call behind any in-flight one. The chained promise is the
+    // new tail; we await prior settlement before doing the actual work.
+    const prior = this.inflightApply;
+    const next = (async () => {
+      if (prior) {
+        try { await prior; } catch { /* prior emitted its own error */ }
+      }
+      await this._doApplySteamState();
+    })();
+    this.inflightApply = next.finally(() => {
+      // Only clear if we're still the tail; another call may have queued
+      // behind us already and will reset the field when it finishes.
+      if (this.inflightApply === next) this.inflightApply = null;
+    });
+    return next;
+  }
+
+  /**
+   * The actual apply work. Captures `this.steamInjector` and the current
+   * `injectorGeneration` at entry; if a `reconnectSteam` swaps the injector
+   * mid-call, the generation check makes the stale half abort before it
+   * drives a closed CDP socket.
+   */
+  private async _doApplySteamState(): Promise<void> {
     const injector = this.steamInjector;
     if (!injector) return;
+    const generation = this.injectorGeneration;
+    const isStale = () =>
+      injector !== this.steamInjector || generation !== this.injectorGeneration;
 
     const { activePack, useInSteam } = this.config;
     const noOverride = !useInSteam || !activePack || activePack === "synthesized";
 
     if (noOverride) {
       await clearStagedFiles();
+      if (isStale()) return;
       await injector.removeOverrides();
+      if (isStale()) return;
       this.emit?.({ event: "steamError", data: { error: null } });
       return;
     }
@@ -684,6 +818,7 @@ export default class SoundLoaderBackend implements PluginBackend {
     }
 
     const conn = await injector.tryConnect();
+    if (isStale()) return;
     if (!conn.ok) {
       console.warn(`[sound-loader:steam] connect failed: ${conn.error}`);
       this.emit?.({ event: "steamError", data: { error: conn.error } });
@@ -695,6 +830,7 @@ export default class SoundLoaderBackend implements PluginBackend {
     injector.startMonitor(() => this._applySteamState());
 
     const inj = await injector.injectHook();
+    if (isStale()) return;
     if (!inj.ok) {
       console.warn(`[sound-loader:steam] injectHook failed: ${inj.error}`);
       this.emit?.({ event: "steamError", data: { error: inj.error } });
@@ -710,7 +846,9 @@ export default class SoundLoaderBackend implements PluginBackend {
       this.emit?.({ event: "steamError", data: { error: `Could not write to Steam sounds dir: ${msg}` } });
       return;
     }
+    if (isStale()) return;
     const refresh = await injector.refreshOverrides(map);
+    if (isStale()) return;
     if (!refresh.ok) {
       console.warn(`[sound-loader:steam] refreshOverrides failed: ${refresh.error}`);
       this.emit?.({ event: "steamError", data: { error: refresh.error } });
@@ -760,6 +898,58 @@ export default class SoundLoaderBackend implements PluginBackend {
         console.warn(`[sound-loader] Skipping ${entry}: failed to read pack.json:`, err);
       }
     }
+  }
+
+  /**
+   * Walk the extracted tree and return the first symlink/path whose
+   * resolved target escapes `resolvedExtract`, or null if everything
+   * stays inside. The `unzip -Z1` pre-check rejects relative-traversal
+   * names; this is the defence-in-depth scan for zip-encoded symlinks
+   * (unzip will write them verbatim, and a `target` outside the staging
+   * dir would let the later `cp` walk into arbitrary paths).
+   */
+  private async _findExtractionEscape(
+    dir: string,
+    resolvedExtract: string,
+  ): Promise<string | null> {
+    let entries: string[];
+    try {
+      entries = await readdir(dir);
+    } catch {
+      return null;
+    }
+
+    for (const name of entries) {
+      const full = join(dir, name);
+      let info;
+      try {
+        info = await lstat(full);
+      } catch {
+        continue;
+      }
+      if (info.isSymbolicLink()) {
+        let target: string;
+        try {
+          target = await readlink(full);
+        } catch {
+          return name;
+        }
+        const resolvedTarget = resolve(dirname(full), target);
+        if (
+          resolvedTarget !== resolvedExtract &&
+          !resolvedTarget.startsWith(resolvedExtract + "/")
+        ) {
+          return `${name} -> ${target}`;
+        }
+        // Don't recurse through symlinks.
+        continue;
+      }
+      if (info.isDirectory()) {
+        const inner = await this._findExtractionEscape(full, resolvedExtract);
+        if (inner) return inner;
+      }
+    }
+    return null;
   }
 
   /**
@@ -842,8 +1032,10 @@ export default class SoundLoaderBackend implements PluginBackend {
         useInOverlay: loaded.useInOverlay ?? false,
         useInSteam: loaded.useInSteam ?? false,
       };
-    } catch {
-      // Use defaults
+    } catch (err) {
+      // Corrupted on-disk state — surface it so users see why their
+      // active pack got reset to default.
+      console.warn("[sound-loader] Failed to read persisted config, using defaults:", err);
     }
   }
 

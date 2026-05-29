@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 // next to the consumer so the typing follows the plugin, not the global
 // catch-all.
 import "./lib/types";
+import { SOUND_EVENTS, type SoundEvent, type CommunityPackInfo } from "./shared";
 
 export { MdVolumeUp as icon } from "react-icons/md";
 import {
@@ -28,22 +29,6 @@ import {
   FaVolumeHigh,
 } from "react-icons/fa6";
 
-/** Sound event keys supported by the sound engine. */
-const SOUND_EVENTS = [
-  "nav",
-  "select",
-  "back",
-  "toggleOn",
-  "toggleOff",
-  "sliderUp",
-  "error",
-  "sideMenuIn",
-  "sideMenuOut",
-  "tabTransition",
-] as const;
-
-type SoundEvent = (typeof SOUND_EVENTS)[number];
-
 interface SoundPackInfo {
   id: string;
   name: string;
@@ -52,21 +37,6 @@ interface SoundPackInfo {
   version: string;
   mappedEvents: SoundEvent[];
   ignoredEvents: SoundEvent[];
-}
-
-interface CommunityPackInfo {
-  id: string;
-  name: string;
-  author: string;
-  description: string;
-  version: string;
-  downloadUrl: string;
-  previewImageUrl: string | null;
-  githubUrl: string | null;
-  lastChanged: string;
-  manifestVersion: number;
-  music: boolean;
-  installed: boolean;
 }
 
 interface PacksStatus {
@@ -117,6 +87,50 @@ function getAudioCtx(): AudioContext | null {
     audioCtx.resume().catch(() => {});
   }
   return audioCtx;
+}
+
+/** Close + release the shared AudioContext. Called from `onUnload`. */
+async function closeAudioCtx(): Promise<void> {
+  decodedPackCache.clear();
+  decodedPackCacheOrder.length = 0;
+  const ctx = audioCtx;
+  audioCtx = null;
+  if (!ctx) return;
+  try { await ctx.close(); } catch { /* best-effort */ }
+}
+
+/**
+ * LRU cache of decoded AudioBuffer packs keyed by `packId`. Decoding
+ * runs `atob` + `decodeAudioData` over every file in the pack — a few
+ * MB worst case for music packs. The user toggling Apply To overlay
+ * back and forth used to re-decode every byte; this dedupes.
+ *
+ * The order array is the eviction list; eldest entry leaves when we
+ * exceed the cap. 5 packs is enough headroom for "switch between a
+ * couple favorites" without growing unboundedly.
+ */
+type DecodedPack = Record<string, (() => void) | null>;
+const PACK_CACHE_MAX = 5;
+const decodedPackCache: Map<string, DecodedPack> = new Map();
+const decodedPackCacheOrder: string[] = [];
+
+function getCachedPack(packId: string): DecodedPack | null {
+  const hit = decodedPackCache.get(packId);
+  if (!hit) return null;
+  // Refresh LRU position.
+  const idx = decodedPackCacheOrder.indexOf(packId);
+  if (idx >= 0) decodedPackCacheOrder.splice(idx, 1);
+  decodedPackCacheOrder.push(packId);
+  return hit;
+}
+
+function setCachedPack(packId: string, pack: DecodedPack): void {
+  decodedPackCache.set(packId, pack);
+  decodedPackCacheOrder.push(packId);
+  while (decodedPackCacheOrder.length > PACK_CACHE_MAX) {
+    const evict = decodedPackCacheOrder.shift();
+    if (evict) decodedPackCache.delete(evict);
+  }
 }
 
 /** Decode a base64 audio string into an AudioBuffer for Web Audio API playback. */
@@ -181,30 +195,37 @@ async function installSoundOverrides(
     return;
   }
 
-  // Custom pack — decode audio into AudioBuffers and build playback functions
-  const overrides: Record<string, (() => void) | null> = {};
+  // Reuse the decoded buffers for this pack if we've decoded them
+  // recently. Eliminates the multi-MB `atob` + `decodeAudioData` round
+  // on every Apply To toggle.
+  let overrides = getCachedPack(result.packId);
+  if (!overrides) {
+    overrides = {};
 
-  for (const [event, audioInfo] of Object.entries(result.mappings)) {
-    if ("files" in audioInfo) {
-      // Multiple files — decode all, pick random on each play
-      const buffers = (await Promise.all(
-        audioInfo.files.map((f) => decodeBase64Audio(f.data, f.mimeType)),
-      )).filter((b): b is AudioBuffer => b !== null);
-      if (buffers.length > 0) {
-        overrides[event] = () => {
-          playBuffer(buffers[Math.floor(Math.random() * buffers.length)]);
-        };
-      }
-    } else {
-      const buf = await decodeBase64Audio(audioInfo.data, audioInfo.mimeType);
-      if (buf) {
-        overrides[event] = () => playBuffer(buf);
+    for (const [event, audioInfo] of Object.entries(result.mappings)) {
+      if ("files" in audioInfo) {
+        // Multiple files — decode all, pick random on each play
+        const buffers = (await Promise.all(
+          audioInfo.files.map((f) => decodeBase64Audio(f.data, f.mimeType)),
+        )).filter((b): b is AudioBuffer => b !== null);
+        if (buffers.length > 0) {
+          overrides[event] = () => {
+            playBuffer(buffers[Math.floor(Math.random() * buffers.length)]);
+          };
+        }
+      } else {
+        const buf = await decodeBase64Audio(audioInfo.data, audioInfo.mimeType);
+        if (buf) {
+          overrides[event] = () => playBuffer(buf);
+        }
       }
     }
-  }
 
-  for (const event of result.ignore) {
-    overrides[event] = null;
+    for (const event of result.ignore) {
+      overrides[event] = null;
+    }
+
+    setCachedPack(result.packId, overrides);
   }
 
   // Build an object with the individual playXxx methods the UI components expect
@@ -1064,6 +1085,14 @@ export const mount = mountComponent(SoundLoader);
 export const mountHeader = mountHeaderStub;
 
 /**
+ * Outstanding `api.subscribe` unsubscribes captured from `init()`. The
+ * shell may re-run `init()` (hot reload, plugin disable/enable); without
+ * tearing the old subscriptions down each cycle accumulates a new pair
+ * of `reapply` handlers firing on the same events.
+ */
+const initUnsubscribes: Array<() => void> = [];
+
+/**
  * Plugin startup hook — called by the shell once at app startup (before
  * the user opens this plugin's UI). Reads the persisted active pack and
  * "use in overlay" config from the backend, installs sound overrides if
@@ -1077,6 +1106,13 @@ export async function init(api: {
   call: (method: string, ...args: unknown[]) => Promise<unknown>;
   subscribe: (event: string, handler: (data: unknown) => void) => () => void;
 }): Promise<void> {
+  // Tear down any subscriptions left over from a previous `init()` run
+  // before we register fresh ones.
+  while (initUnsubscribes.length > 0) {
+    const fn = initUnsubscribes.pop();
+    try { fn?.(); } catch { /* best-effort */ }
+  }
+
   // Apply current settings.
   try {
     const useInOverlay = (await api.call("getUseInOverlay")) as boolean;
@@ -1095,6 +1131,20 @@ export async function init(api: {
       console.error("[sound-loader] init: failed to re-apply overrides:", err);
     }
   };
-  api.subscribe("activePackChanged", () => reapply());
-  api.subscribe("useInOverlayChanged", () => reapply());
+  initUnsubscribes.push(api.subscribe("activePackChanged", () => reapply()));
+  initUnsubscribes.push(api.subscribe("useInOverlayChanged", () => reapply()));
+}
+
+/**
+ * Plugin shutdown hook — paired with `init()`. Tears down event
+ * subscriptions, drops the decoded-pack cache, and closes the shared
+ * AudioContext so the plugin reload cycle doesn't leak system audio
+ * handles.
+ */
+export async function onUnload(): Promise<void> {
+  while (initUnsubscribes.length > 0) {
+    const fn = initUnsubscribes.pop();
+    try { fn?.(); } catch { /* best-effort */ }
+  }
+  await closeAudioCtx();
 }
