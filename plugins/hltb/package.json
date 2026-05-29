@@ -13,6 +13,7 @@
     "@loadout/ui": "workspace:*",
     "@loadout/steam-paths": "workspace:*",
     "@loadout/external-cache": "workspace:*",
+    "@loadout/plugin-storage": "workspace:*",
     "@loadout/steam-cdp": "workspace:*",
     "@loadout/vdf": "workspace:*"
   },
@@ -27,7 +28,7 @@
         "localhost"
       ],
       "filesystem": [
-        "~/.config/loadout/hltb/",
+        "~/.config/loadout/plugins/",
         "~/.cache/loadout/hltb/"
       ]
     },

@@ -7,9 +7,12 @@ import {
 import { CDPClient } from "@loadout/steam-cdp";
 import { createExternalCache } from "@loadout/external-cache";
 import { parseBinaryVdf } from "@loadout/vdf";
-import { mkdir, readdir, readFile } from "node:fs/promises";
+import {
+  readPluginStorage,
+  writePluginStorage,
+} from "@loadout/plugin-storage";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import fuzzysort from "fuzzysort";
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -140,7 +143,17 @@ const CACHE_TTL = 12 * 60 * 60 * 1000;
 const DISK_CACHE_TTL_SEC = 12 * 60 * 60;
 const PLUGIN_ID = "hltb";
 const DEBUG_PORT = 8080;
-const DEFAULT_DATA_DIR = join(homedir(), ".config", "loadout", "hltb");
+/**
+ * Fuzzysort score floor for accepting a name-based HLTB match.
+ *
+ * Scores are non-positive: 0 = perfect substring, more negative = worse.
+ * Empirically, scores around -2000 are the boundary between "the
+ * obvious match for a typo'd query" and "the strings happen to share
+ * a few letters." Anything below this is rejected so the badge doesn't
+ * lie about an obscure title (and the wrong answer doesn't get cached
+ * for 12 h).
+ */
+const FUZZY_SCORE_THRESHOLD = -2000;
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -184,19 +197,12 @@ export default class HltbBackend implements PluginBackend {
   emit?: (payload: EmitPayload) => void;
 
   /**
-   * Where persisted settings live on disk. Injectable so tests can
-   * point at a tmp dir — the in-tree test suite previously called
-   * `updateSettings` which wrote `position: "br"` into the developer's
-   * real `~/.config/loadout/hltb/settings.json`, silently
-   * stomping their actual preference every time the suite ran.
+   * Settings persistence now routes through `@loadout/plugin-storage`
+   * (writes to `~/.config/loadout/plugins/hltb.json`); the previous
+   * `dataDir` injection seam was retired with that move. Tests can
+   * scope writes by mocking the `@loadout/plugin-storage` module.
    */
-  private readonly dataDir: string;
-  private readonly settingsPath: string;
-
-  constructor(opts?: { dataDir?: string }) {
-    this.dataDir = opts?.dataDir ?? DEFAULT_DATA_DIR;
-    this.settingsPath = join(this.dataDir, "settings.json");
-  }
+  constructor() {}
 
   // HLTB API state (token + anti-abuse headers, all issued by /api/bleed/init)
   private auth: { token: string; hpKey: string; hpVal: string } | null = null;
@@ -787,29 +793,30 @@ export default class HltbBackend implements PluginBackend {
       // Then exact normalized-name match
       if (!match) match = results.find((g) => g.game_name === normalizedName);
 
-      // Then fuzzy. fuzzysort returns negative scores (0 = perfect);
-      // we filter out non-matches and tie-break ties by HLTB's
-      // `comp_all_count` so a popular game wins over an obscure
-      // namesake when both score equally.
+      // Then fuzzy. fuzzysort returns negative scores (0 = perfect, more
+      // negative = worse). We require the best score to clear
+      // `FUZZY_SCORE_THRESHOLD` before accepting; below that the match
+      // is junk and we'd rather return null than badge an obscure
+      // shortcut with the wrong HLTB game (and have the caller cache
+      // that wrong answer for 12 h). Tie-break by HLTB `comp_all_count`
+      // so a popular game wins over an obscure namesake when scores
+      // tie.
+      //
+      // The previous "fall back to highest-popularity result" path was
+      // the bug — it silently mis-identified everything with no fuzzy
+      // hits as "whatever was most popular in the result set." Dropped.
       if (!match) {
         const fuzzy = fuzzysort.go(normalizedName, results, {
           key: "game_name",
           limit: results.length,
         });
-        if (fuzzy.length > 0) {
-          const sorted = [...fuzzy].sort((a, b) => {
-            if (a.score === b.score)
-              return b.obj.comp_all_count - a.obj.comp_all_count;
-            return b.score - a.score;
-          });
+        const sorted = [...fuzzy].sort((a, b) => {
+          if (a.score === b.score)
+            return b.obj.comp_all_count - a.obj.comp_all_count;
+          return b.score - a.score;
+        });
+        if (sorted.length > 0 && sorted[0].score >= FUZZY_SCORE_THRESHOLD) {
           match = sorted[0].obj;
-        } else {
-          // No fuzzy hits — fall back to the highest-popularity
-          // result so we still show *something* useful rather than
-          // nothing.
-          match = [...results].sort(
-            (a, b) => b.comp_all_count - a.comp_all_count,
-          )[0];
         }
       }
 
@@ -1071,11 +1078,28 @@ export default class HltbBackend implements PluginBackend {
     return { ...this.settings };
   }
 
+  /**
+   * Debounce window for re-injecting the badge system after settings
+   * change. A user dragging the position slider or toggling a tier
+   * filter can fire `updateSettings` 5-20× per second. Re-injecting
+   * the full CSS+script bundle into Steam over CDP on every call
+   * pegs the bridge and the UI stalls visibly. Trailing-edge debounce
+   * collapses the burst into a single re-injection after the user
+   * stops poking.
+   */
+  private readonly INJECT_DEBOUNCE_MS = 250;
+  private injectDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
   async updateSettings(settings: HltbSettings): Promise<void> {
     this.settings = { ...DEFAULT_SETTINGS, ...settings };
     await this.saveSettings();
-    if (this.connected) await this.injectBadgeSystem();
     this.emitState();
+    if (!this.connected) return;
+    if (this.injectDebounceTimer) clearTimeout(this.injectDebounceTimer);
+    this.injectDebounceTimer = setTimeout(() => {
+      this.injectDebounceTimer = null;
+      void this.injectBadgeSystem();
+    }, this.INJECT_DEBOUNCE_MS);
   }
 
   // ─── RPC: Status ────────────────────────────────────────────────
@@ -1680,13 +1704,10 @@ export default class HltbBackend implements PluginBackend {
 
   private async loadSettings(): Promise<void> {
     try {
-      const file = Bun.file(this.settingsPath);
-      if (await file.exists()) {
-        this.settings = {
-          ...DEFAULT_SETTINGS,
-          ...JSON.parse(await file.text()),
-        };
-        console.log("[hltb] Loaded settings from disk");
+      const stored = await readPluginStorage<Partial<HltbSettings>>(PLUGIN_ID);
+      if (stored) {
+        this.settings = { ...DEFAULT_SETTINGS, ...stored };
+        console.log("[hltb] Loaded settings from plugin-storage");
       }
     } catch (err) {
       console.warn("[hltb] Failed to load settings:", err);
@@ -1695,11 +1716,7 @@ export default class HltbBackend implements PluginBackend {
 
   private async saveSettings(): Promise<void> {
     try {
-      await mkdir(this.dataDir, { recursive: true });
-      await Bun.write(
-        this.settingsPath,
-        JSON.stringify(this.settings, null, 2),
-      );
+      await writePluginStorage(PLUGIN_ID, this.settings);
     } catch (err) {
       console.warn("[hltb] Failed to save settings:", err);
     }

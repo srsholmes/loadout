@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { createRoot } from "react-dom/client";
 
 export { FaClock as icon } from "react-icons/fa6";
 import { FaGear } from "react-icons/fa6";
@@ -10,8 +9,8 @@ import {
   GameCard,
   HeaderBackButton,
   IconButton,
+  mountComponent,
   PluginHeader,
-  PluginProvider,
   SearchField,
   SegmentedItem,
   Select,
@@ -1198,34 +1197,8 @@ function HltbHomeWidget() {
   );
 }
 
-export function mount(
-  container: HTMLElement,
-  opts?: { parentFocusKey?: string; headerSlot?: HTMLElement | null },
-): () => void {
-  const root = createRoot(container);
-  root.render(
-    <PluginProvider
-      parentFocusKey={opts?.parentFocusKey}
-      headerSlot={opts?.headerSlot ?? null}
-    >
-      <HltbPlugin />
-    </PluginProvider>,
-  );
-  return () => root.unmount();
-}
-
-export function mountHomeWidget(
-  container: HTMLElement,
-  opts?: { parentFocusKey?: string },
-): () => void {
-  const root = createRoot(container);
-  root.render(
-    <PluginProvider parentFocusKey={opts?.parentFocusKey}>
-      <HltbHomeWidget />
-    </PluginProvider>,
-  );
-  return () => root.unmount();
-}
+export const mount = mountComponent(HltbPlugin);
+export const mountHomeWidget = mountComponent(HltbHomeWidget);
 
 /**
  * Stub `mountHeader` export. Its mere presence is what tells the

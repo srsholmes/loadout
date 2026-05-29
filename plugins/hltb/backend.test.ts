@@ -3,6 +3,20 @@ import type { EmitPayload } from "@loadout/types";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// In-process scratch store for @loadout/plugin-storage so the suite's
+// `updateSettings` calls don't write through to the dev's real
+// `~/.config/loadout/plugins/hltb.json`. Cleared in `beforeEach`.
+const pluginStorageStore = new Map<string, unknown>();
+mock.module("@loadout/plugin-storage", () => ({
+  readPluginStorage: async <T>(id: string): Promise<T | null> =>
+    (pluginStorageStore.get(id) as T | undefined) ?? null,
+  writePluginStorage: async <T>(id: string, data: T): Promise<void> => {
+    pluginStorageStore.set(id, data);
+  },
+  pluginStoragePath: (id: string) => `/tmp/spec/${id}.json`,
+}));
+
 import HltbBackend from "./backend";
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -30,7 +44,6 @@ describe("HltbBackend", () => {
   let emittedEvents: EmitPayload[];
   let originalFetch: typeof globalThis.fetch;
   let mockFetch: ReturnType<typeof mock>;
-  let tmpDataDir: string;
   let tmpCacheDir: string;
   let savedXdgCacheHome: string | undefined;
 
@@ -50,13 +63,11 @@ describe("HltbBackend", () => {
     tmpCacheDir = mkdtempSync(join(tmpdir(), "hltb-spec-cache-"));
     process.env.XDG_CACHE_HOME = tmpCacheDir;
 
-    // Sandbox the on-disk settings file. The `settings` describe()
-    // below calls `updateSettings` which writes through to
-    // `<dataDir>/settings.json` — without redirecting we'd stomp the
-    // dev's real `~/.config/loadout/hltb/settings.json` on every
-    // run, which silently reset their saved BPM-badge position.
-    tmpDataDir = mkdtempSync(join(tmpdir(), "hltb-spec-"));
-    backend = new HltbBackend({ dataDir: tmpDataDir });
+    // Reset the in-process @loadout/plugin-storage fake (declared
+    // at the top of this file) between tests so a `updateSettings`
+    // write from one test doesn't leak into the next.
+    pluginStorageStore.clear();
+    backend = new HltbBackend();
     emittedEvents = [];
     backend.emit = (payload: EmitPayload) => {
       emittedEvents.push(payload);
@@ -66,14 +77,9 @@ describe("HltbBackend", () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
     try {
-      rmSync(tmpDataDir, { recursive: true, force: true });
-    } catch {
-      // best-effort cleanup; tmpdir entries get reaped on reboot anyway
-    }
-    try {
       rmSync(tmpCacheDir, { recursive: true, force: true });
     } catch {
-      /* same — best-effort */
+      /* best-effort */
     }
     if (savedXdgCacheHome === undefined) {
       delete process.env.XDG_CACHE_HOME;
