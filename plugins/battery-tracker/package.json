@@ -5,6 +5,7 @@
   "dependencies": {
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
+    "react-icons": "^5.4.0",
     "@loadout/ui": "workspace:*"
   },
   "plugin": {

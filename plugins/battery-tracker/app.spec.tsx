@@ -94,7 +94,10 @@ describe("battery-tracker plugin", () => {
     const { mount } = await import("./app");
     mount(container);
     await waitFor(() => {
-      expect(container.textContent).toContain("+12.5");
+      // Status is "Discharging" → sign is "-" (charging flag drives it, not the
+      // unsigned `power_now` magnitude — the previous "+12.5" assertion was
+      // pinning the pre-existing UX-lie bug flagged in code review).
+      expect(container.textContent).toContain("-12.5");
     });
   });
 

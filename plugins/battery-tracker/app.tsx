@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { createRoot } from "react-dom/client";
 import { FaBatteryFull, FaBolt } from "react-icons/fa6";
-import { Button, PluginProvider, Spinner, useBackend } from "@loadout/ui";
+import { Button, Spinner, useBackend, mountComponent } from "@loadout/ui";
 import type { BatteryInfo, HistoryEntry } from "./lib/battery";
 
 export const icon = FaBatteryFull;
@@ -9,11 +8,8 @@ export const icon = FaBatteryFull;
 // Re-export types for test convenience
 export type { BatteryInfo, HistoryEntry };
 
-// ---------------------------------------------------------------------------
-// Internal types (UI-only extension — adds optional error field)
-// ---------------------------------------------------------------------------
-
-type BatteryInfoOrError = BatteryInfo & { error?: string };
+// Discriminated union: backend returns one or the other, narrow with `"error" in data`.
+type BatteryInfoResult = BatteryInfo | { error: string };
 
 // ---------------------------------------------------------------------------
 // Pure UI helpers
@@ -122,8 +118,8 @@ function BatteryTracker() {
 
   useEffect(() => {
     call("getBatteryInfo").then((info) => {
-      const data = info as BatteryInfoOrError;
-      if (data.error) setError(data.error);
+      const data = info as BatteryInfoResult;
+      if ("error" in data) setError(data.error);
       else setBattery(data);
     });
     call("getHistory").then((h) => setHistory(h as HistoryEntry[]));
@@ -138,8 +134,8 @@ function BatteryTracker() {
 
   const handleRefresh = useCallback(async () => {
     const info = await call("getBatteryInfo");
-    const data = info as BatteryInfoOrError;
-    if (data.error) setError(data.error);
+    const data = info as BatteryInfoResult;
+    if ("error" in data) setError(data.error);
     else {
       setBattery(data);
       setError(null);
@@ -231,8 +227,8 @@ function BatteryTracker() {
             <div className="grid grid-cols-3 gap-2.5 mb-3">
               <MetricTile
                 label="WATTS"
-                value={`${drawW >= 0 ? "+" : ""}${drawW.toFixed(1)}`}
-                color={drawW >= 0 ? "var(--color-success)" : "var(--fg-1)"}
+                value={`${charging ? "+" : "-"}${drawW.toFixed(1)}`}
+                color={charging ? "var(--color-success)" : "var(--fg-1)"}
               />
               <MetricTile label="VOLTS" value={voltage.toFixed(2)} />
               <MetricTile label="AMPS" value={amps} />
@@ -336,8 +332,8 @@ function BatteryWidget() {
   useEvent({ event: "batteryUpdate", handler: (data) => setBattery(data as BatteryInfo) });
   useEffect(() => {
     call("getBatteryInfo").then((info) => {
-      const d = info as BatteryInfoOrError;
-      if (!d.error) setBattery(d);
+      const d = info as BatteryInfoResult;
+      if (!("error" in d)) setBattery(d);
     });
   }, [call]);
 
@@ -406,7 +402,7 @@ function BatteryWidget() {
             fontFamily: "var(--font-mono)",
           }}
         >
-          <span>{hasDraw ? `${drawW >= 0 ? "+" : ""}${drawW.toFixed(1)} W` : ""}</span>
+          <span>{hasDraw ? `${charging ? "+" : "-"}${drawW.toFixed(1)} W` : ""}</span>
           <span>{hasHealth ? `Health: ${healthPct}%` : ""}</span>
         </div>
       )}
@@ -427,23 +423,6 @@ function Header() {
       </span>
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// mountComponent factory — collapses the createRoot/PluginProvider/unmount
-// boilerplate shared by mount / mountHomeWidget / mountHeader.
-// ---------------------------------------------------------------------------
-
-function mountComponent(Component: React.ComponentType) {
-  return (container: HTMLElement, opts?: { parentFocusKey?: string }): (() => void) => {
-    const root = createRoot(container);
-    root.render(
-      <PluginProvider parentFocusKey={opts?.parentFocusKey}>
-        <Component />
-      </PluginProvider>,
-    );
-    return () => root.unmount();
-  };
 }
 
 export const mount = mountComponent(BatteryTracker);
