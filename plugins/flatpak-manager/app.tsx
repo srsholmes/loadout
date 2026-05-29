@@ -33,6 +33,18 @@ function FlatpakManager() {
    *  manual refresh. */
   const [refreshing, setRefreshing] = useState(false);
   const [updatingAll, setUpdatingAll] = useState(false);
+  /**
+   * Determinate progress for the bulk update flow. Non-null while
+   * `handleUpdateAll` is iterating, null otherwise — the body uses its
+   * presence to swap in a progress card and the per-app `updateComplete`
+   * events skip their auto-refresh while it's set (so we refresh once at
+   * the end instead of after every item).
+   */
+  const [updateProgress, setUpdateProgress] = useState<{
+    current: number;
+    total: number;
+    currentName: string | null;
+  } | null>(null);
   const [removingUnused, setRemovingUnused] = useState(false);
   const [busyApps, setBusyApps] = useState<Set<string>>(new Set());
   const [tab, setTab] = useState<TabId>("installed");
@@ -56,7 +68,11 @@ function FlatpakManager() {
     }
   }, [call]);
 
-  // Listen for update completion events from the backend
+  // Listen for update completion events from the backend. The
+  // single-app refresh is gated on `updateProgress` being null so the
+  // bulk loop in `handleUpdateAll` doesn't trigger N back-to-back
+  // refresh cycles (one per iteration) — the loop refreshes once at the
+  // very end.
   useEvent({
     event: "updateComplete",
     handler: (data) => {
@@ -64,7 +80,7 @@ function FlatpakManager() {
       if (type === "all") {
         setUpdatingAll(false);
         refresh();
-      } else if (type === "single") {
+      } else if (type === "single" && !updateProgress) {
         refresh();
       }
     },
@@ -75,17 +91,35 @@ function FlatpakManager() {
     refresh();
   }, [refresh]);
 
+  /**
+   * Sequential per-app update loop, replacing the bulk `updateAll` RPC
+   * for the UI flow. Trade-off: we lose flatpak's (minimal) bulk
+   * parallelism but gain a determinate progress bar — we know `total`
+   * up-front from the `updates` list, so `current` and `currentName`
+   * give the body a real progress signal instead of an unbounded
+   * spinner.
+   */
   const handleUpdateAll = useCallback(async () => {
+    const queue = [...updates];
+    if (queue.length === 0) return;
     setUpdatingAll(true);
+    setUpdateProgress({ current: 0, total: queue.length, currentName: queue[0].name });
     try {
-      await call("updateAll");
-    } catch (err) {
-      console.error("[flatpak-manager] Update all failed:", err);
+      for (let i = 0; i < queue.length; i++) {
+        const u = queue[i];
+        setUpdateProgress({ current: i, total: queue.length, currentName: u.name });
+        try {
+          await call("updateApp", u.appId);
+        } catch (err) {
+          console.error(`[flatpak-manager] Update failed for ${u.appId}:`, err);
+        }
+      }
     } finally {
+      setUpdateProgress(null);
       setUpdatingAll(false);
       refresh();
     }
-  }, [call, refresh]);
+  }, [call, refresh, updates]);
 
   const handleUpdateApp = useCallback(
     async (appId: string) => {
@@ -232,6 +266,9 @@ function FlatpakManager() {
       {headerNode}
       <div className="p-7 h-full overflow-y-auto">
         <div className="page-content">
+          {updateProgress && (
+            <UpdateProgressCard progress={updateProgress} />
+          )}
           {tab === "installed" && (
             apps.length === 0 ? (
               <div className="card">
@@ -306,6 +343,60 @@ function FlatpakManager() {
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * Determinate progress card surfaced at the top of the body while the
+ * bulk-update loop runs. Shows the running `current/total` counter,
+ * the percentage, the app being installed, and an animated fill bar.
+ * Disappears when the loop completes (caller sets progress back to
+ * null).
+ */
+function UpdateProgressCard({
+  progress,
+}: {
+  progress: { current: number; total: number; currentName: string | null };
+}) {
+  const pct = Math.round((progress.current / progress.total) * 100);
+  return (
+    <div className="card mb-3.5" aria-live="polite">
+      <div className="subsection">
+        <div className="flex items-center justify-between mb-1.5">
+          <div className="text-[13.5px] font-semibold">
+            Updating {Math.min(progress.current + 1, progress.total)} of {progress.total}
+          </div>
+          <span className="mono text-[11px] text-[var(--fg-3)]">{pct}%</span>
+        </div>
+        {progress.currentName && (
+          <div className="text-[12px] text-[var(--fg-2)] truncate mb-2">
+            {progress.currentName}
+          </div>
+        )}
+        <div
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={progress.total}
+          aria-valuenow={progress.current}
+          aria-valuetext={`${pct}%`}
+          style={{
+            height: 6,
+            background: "var(--bg-inset)",
+            borderRadius: 3,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              height: "100%",
+              width: `${pct}%`,
+              background: "var(--accent)",
+              transition: "width 250ms ease-out",
+            }}
+          />
+        </div>
+      </div>
+    </div>
   );
 }
 
