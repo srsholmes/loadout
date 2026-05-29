@@ -1,0 +1,38 @@
+{
+  "name": "@loadout/plugin-steamgriddb",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Browse and apply custom game art (grids, heroes, logos, icons) from SteamGridDB",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-icons": "^5.6.0",
+    "@loadout/ui": "workspace:*",
+    "@loadout/types": "workspace:*",
+    "@loadout/external-cache": "workspace:*",
+    "@loadout/plugin-storage": "workspace:*",
+    "@loadout/steam-cdp": "workspace:*",
+    "@loadout/steam-paths": "workspace:*",
+    "@loadout/vdf": "workspace:*"
+  },
+  "plugin": {
+    "id": "steamgriddb",
+    "name": "SteamGridDB",
+    "description": "Browse and apply custom game art (grids, heroes, logos, icons) from SteamGridDB",
+    "permissions": {
+      "network": [
+        "www.steamgriddb.com",
+        "cdn2.steamgriddb.com",
+        "cdn.cloudflare.steamstatic.com",
+        "localhost"
+      ],
+      "filesystem": [
+        "~/.local/share/Steam/userdata",
+        "~/.cache/loadout/steamgriddb"
+      ]
+    },
+    "category": "Steam",
+    "subtitle": "Custom artwork for your library",
+    "target": { "type": "overlay" }
+  }
+}

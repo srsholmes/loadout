@@ -1,0 +1,72 @@
+Steam Loader — SteamGridDB plugin
+Copyright (c) 2026 Simon Holmes
+Licensed under BSD-3-Clause (see LICENSE).
+
+
+Reference: SteamGridDB/decky-steamgriddb
+-----------------------------------------
+
+The SteamGridDB-maintained Decky Loader plugin
+[SteamGridDB/decky-steamgriddb](https://github.com/SteamGridDB/decky-steamgriddb)
+is licensed GPL-3.0-or-later. This plugin is **not derived from
+that source**: no TypeScript, Python, configuration, or asset files
+were copied or transliterated.
+
+What we did learn from reading their open-source code (in
+addition to the official SteamGridDB API docs) is purely factual
+information — uncopyrightable per idea-expression dichotomy:
+
+- That the SteamGridDB API exposes
+  `https://www.steamgriddb.com/api/v2/{grids|heroes|logos|icons}/steam/{steamAppId}`
+  as a direct lookup keyed off Steam's app id (i.e. no SGDB-game-id
+  resolution required). This is the same shape any client of the
+  public API uses; it is documented at the SGDB API homepage.
+- That Steam's CEF runtime exposes an `IPC` method
+  `SteamClient.Apps.SetCustomArtworkForApp(appId, base64Data,
+  format, eAssetType)` that applies custom art instantly without a
+  Steam restart, and that `eAssetType` maps as
+  `{ Capsule: 0, Hero: 1, Logo: 2, WideCapsule: 3, Icon: 4 }`. This
+  is Valve's IPC, not Decky's, but Decky's plugin is the canonical
+  reference for the enum values.
+
+We do **not** ship, vendor, or otherwise embed any code, tarball,
+or asset from `SteamGridDB/decky-steamgriddb`. We do **not** reuse
+their dedicated SteamGridDB API key (the hex-encoded
+`deckyloader42069` in their `useSGDB.tsx` is whitelisted server-
+side for that plugin only — using it elsewhere would be a TOS
+breach). End users of this plugin generate their own SteamGridDB
+API key under their own profile.
+
+
+SteamGridDB API
+---------------
+
+This plugin queries `https://www.steamgriddb.com/api/v2/...` at
+runtime using the user's own SteamGridDB API key, persisted via
+`@steam-loader/plugin-storage` to
+`~/.config/steam-loader/plugins/steamgriddb.json` on the user's
+machine. The key never leaves the user's device. We do not bundle
+or redistribute SteamGridDB's catalogue, thumbnails, or assets;
+the UI hotlinks thumbnails directly from the SGDB CDN at view
+time, the same way any browser viewing steamgriddb.com does.
+
+SteamGridDB's terms govern the user's use of the API.
+
+
+Steam CDN thumbnails
+--------------------
+
+The library-picker shows each Steam-installed game's default
+600×900 capsule by hotlinking
+`https://cdn.cloudflare.steamstatic.com/steam/apps/{appid}/library_600x900.jpg`.
+Steam's CDN serves these images for use in Steam-related clients;
+we do not cache or rehost them.
+
+
+Steam app manifests
+-------------------
+
+The plugin reads `appmanifest_*.acf` files under the user's Steam
+library paths to build a `{appid, name}` index of installed
+games. These files are owned by the user (Valve writes them, the
+user owns the disk); we do not ship them.
