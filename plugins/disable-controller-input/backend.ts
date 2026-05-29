@@ -212,7 +212,23 @@ export default class DisableControllerInputBackend implements PluginBackend {
   private state: State = { version: 1, devices: [] };
   private unavailable = false;
   private reconcileTimer?: ReturnType<typeof setInterval>;
+  /**
+   * `_reconcile` skip-if-busy flag — keeps the 2 s timer from piling up
+   * extra ticks behind a slow walk (e.g. busctl back-pressure on a host
+   * with many composite devices). RPC calls don't honour this flag; they
+   * serialize via `opLock` instead.
+   */
   private reconciling = false;
+  /**
+   * Tail of the operation queue. RPC methods (`setDisabled`,
+   * `forgetController`) and `_reconcile` all run their critical sections
+   * via `_serialize`, which chains onto this promise — so a reconcile
+   * tick can't read stale cache state mid-RPC, and an RPC can't observe
+   * the bus mid-snapshot. Resolves the race the review flagged where a
+   * reconcile would re-snapshot just-re-enabled targets back into
+   * `savedKinds`.
+   */
+  private opLock: Promise<void> = Promise.resolve();
 
   async onLoad(): Promise<void> {
     console.log("[disable-controller-input] Plugin loaded");
@@ -285,71 +301,103 @@ export default class DisableControllerInputBackend implements PluginBackend {
     hash: number,
     disabled: boolean,
   ): Promise<{ ok: boolean; error?: string }> {
-    const dev = this.state.devices.find((d) => d.hash === hash);
-    if (!dev) return { ok: false, error: "Unknown device" };
+    return this._serialize(async () => {
+      const dev = this.state.devices.find((d) => d.hash === hash);
+      if (!dev) return { ok: false, error: "Unknown device" };
 
-    const connected =
-      Date.now() - dev.lastSeenMs < RECONCILE_INTERVAL_MS * 2;
+      const connected =
+        Date.now() - dev.lastSeenMs < RECONCILE_INTERVAL_MS * 2;
 
-    if (disabled) {
-      if (connected) {
-        const kinds = await getTargetKinds(dev.lastDbusPath);
-        if (kinds.length > 0) dev.savedKinds = kinds;
-        const r = await setTargetKinds(dev.lastDbusPath, NULL_KINDS);
-        if (!r.ok) {
-          return {
-            ok: false,
-            error: `SetTargetDevices failed: ${r.stderr.trim() || `exit ${r.code}`}`,
-          };
+      if (disabled) {
+        if (connected) {
+          const kinds = await getTargetKinds(dev.lastDbusPath);
+          if (kinds.length > 0) dev.savedKinds = kinds;
+          const r = await setTargetKinds(dev.lastDbusPath, NULL_KINDS);
+          if (!r.ok) {
+            return {
+              ok: false,
+              error: `SetTargetDevices failed: ${r.stderr.trim() || `exit ${r.code}`}`,
+            };
+          }
         }
-      }
-      dev.disabled = true;
-    } else {
-      if (connected) {
-        const kinds = dev.savedKinds.length > 0 ? dev.savedKinds : DEFAULT_KINDS;
-        const r = await setTargetKinds(dev.lastDbusPath, kinds);
-        if (!r.ok) {
-          return {
-            ok: false,
-            error: `SetTargetDevices failed: ${r.stderr.trim() || `exit ${r.code}`}`,
-          };
+        dev.disabled = true;
+      } else {
+        if (connected) {
+          const kinds = dev.savedKinds.length > 0 ? dev.savedKinds : DEFAULT_KINDS;
+          const r = await setTargetKinds(dev.lastDbusPath, kinds);
+          if (!r.ok) {
+            return {
+              ok: false,
+              error: `SetTargetDevices failed: ${r.stderr.trim() || `exit ${r.code}`}`,
+            };
+          }
         }
+        dev.disabled = false;
       }
-      dev.disabled = false;
-    }
 
-    await this._persist();
-    this.emit?.({ event: "controllersChanged", data: undefined });
-    return { ok: true };
+      await this._persist();
+      this.emit?.({ event: "controllersChanged", data: undefined });
+      return { ok: true };
+    });
   }
 
   async forgetController(
     hash: number,
   ): Promise<{ ok: boolean; error?: string }> {
-    const idx = this.state.devices.findIndex((d) => d.hash === hash);
-    if (idx === -1) return { ok: false, error: "Unknown device" };
-    const dev = this.state.devices[idx];
+    return this._serialize(async () => {
+      const idx = this.state.devices.findIndex((d) => d.hash === hash);
+      if (idx === -1) return { ok: false, error: "Unknown device" };
+      const dev = this.state.devices[idx];
 
-    // Don't strand a silenced target on the bus. Re-enable first if
-    // the device is reachable.
-    const connected =
-      !this.unavailable &&
-      Date.now() - dev.lastSeenMs < RECONCILE_INTERVAL_MS * 2;
-    if (dev.disabled && connected) {
-      const kinds = dev.savedKinds.length > 0 ? dev.savedKinds : DEFAULT_KINDS;
-      await setTargetKinds(dev.lastDbusPath, kinds);
-    }
+      // Don't strand a silenced target on the bus. Re-enable first if
+      // the device is reachable. If the re-enable busctl call itself
+      // fails, log it — the device drops from the cache regardless
+      // (the user asked us to forget it), but the orphaned silenced
+      // target stays on the bus until InputPlumber restarts. Surfacing
+      // that in the journal is the only way an operator can tell
+      // something needs cleanup.
+      const connected =
+        !this.unavailable &&
+        Date.now() - dev.lastSeenMs < RECONCILE_INTERVAL_MS * 2;
+      if (dev.disabled && connected) {
+        const kinds = dev.savedKinds.length > 0 ? dev.savedKinds : DEFAULT_KINDS;
+        const r = await setTargetKinds(dev.lastDbusPath, kinds);
+        if (!r.ok) {
+          console.warn(
+            `[disable-controller-input] forget: re-enable failed for ${dev.name}; silenced target may remain on the bus until InputPlumber restarts: ${r.stderr.trim() || `exit ${r.code}`}`,
+          );
+        }
+      }
 
-    this.state.devices.splice(idx, 1);
-    await this._persist();
-    this.emit?.({ event: "controllersChanged", data: undefined });
-    return { ok: true };
+      this.state.devices.splice(idx, 1);
+      await this._persist();
+      this.emit?.({ event: "controllersChanged", data: undefined });
+      return { ok: true };
+    });
   }
 
   // ---------- internals ----------
 
   private async _persist(): Promise<void> {
     await writePluginStorage<State>(PLUGIN_ID, this.state);
+  }
+
+  /**
+   * Run `fn` as the sole holder of the operation lock. The next caller
+   * waits on the promise we publish to `opLock`. We swap `opLock`
+   * before awaiting the previous tail so the queue chains correctly
+   * even if multiple callers arrive synchronously.
+   */
+  private async _serialize<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = this.opLock;
+    let release!: () => void;
+    this.opLock = new Promise<void>((r) => (release = r));
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
   }
 
   /** Walk the bus, merge fresh observations into the cache, and
@@ -359,6 +407,7 @@ export default class DisableControllerInputBackend implements PluginBackend {
     if (this.reconciling) return;
     this.reconciling = true;
     try {
+      await this._serialize(async () => {
       // Re-check service availability cheaply — the daemon may have
       // come up since onLoad.
       if (this.unavailable) {
@@ -452,6 +501,7 @@ export default class DisableControllerInputBackend implements PluginBackend {
       if (topologyChanged) {
         this.emit?.({ event: "controllersChanged", data: undefined });
       }
+      });
     } finally {
       this.reconciling = false;
     }
