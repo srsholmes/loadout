@@ -151,6 +151,16 @@
       "name": "@loadout/vdf",
       "version": "0.0.1",
     },
+    "plugins/battery-tracker": {
+      "name": "@loadout/plugin-battery-tracker",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+        "react-icons": "^5.4.0",
+      },
+    },
     "plugins/bluetooth": {
       "name": "@loadout/plugin-bluetooth",
       "version": "0.0.1",
@@ -193,6 +203,15 @@
         "react-dom": "^18.3.0",
       },
     },
+    "plugins/network-info": {
+      "name": "@loadout/plugin-network-info",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+      },
+    },
     "plugins/playtime": {
       "name": "@loadout/plugin-playtime",
       "version": "0.0.1",
@@ -209,6 +228,18 @@
       "name": "@loadout/plugin-steam-gamescope-ipc",
       "version": "0.0.1",
       "dependencies": {
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+      },
+    },
+    "plugins/storage-cleaner": {
+      "name": "@loadout/plugin-storage-cleaner",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/exec": "workspace:*",
+        "@loadout/steam-paths": "workspace:*",
+        "@loadout/types": "workspace:*",
         "@loadout/ui": "workspace:*",
         "react": "^18.3.0",
         "react-dom": "^18.3.0",
@@ -378,6 +409,8 @@
 
     "@loadout/per-game-profiles": ["@loadout/per-game-profiles@workspace:packages/per-game-profiles"],
 
+    "@loadout/plugin-battery-tracker": ["@loadout/plugin-battery-tracker@workspace:plugins/battery-tracker"],
+
     "@loadout/plugin-bluetooth": ["@loadout/plugin-bluetooth@workspace:plugins/bluetooth"],
 
     "@loadout/plugin-display-settings": ["@loadout/plugin-display-settings@workspace:plugins/display-settings"],
@@ -386,11 +419,15 @@
 
     "@loadout/plugin-flatpak-manager": ["@loadout/plugin-flatpak-manager@workspace:plugins/flatpak-manager"],
 
+    "@loadout/plugin-network-info": ["@loadout/plugin-network-info@workspace:plugins/network-info"],
+
     "@loadout/plugin-playtime": ["@loadout/plugin-playtime@workspace:plugins/playtime"],
 
     "@loadout/plugin-steam-gamescope-ipc": ["@loadout/plugin-steam-gamescope-ipc@workspace:plugins/steam-gamescope-ipc"],
 
     "@loadout/plugin-storage": ["@loadout/plugin-storage@workspace:packages/plugin-storage"],
+
+    "@loadout/plugin-storage-cleaner": ["@loadout/plugin-storage-cleaner@workspace:plugins/storage-cleaner"],
 
     "@loadout/plugin-tdp-control": ["@loadout/plugin-tdp-control@workspace:plugins/tdp-control"],
 
