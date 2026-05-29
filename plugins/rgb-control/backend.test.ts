@@ -515,21 +515,17 @@ describe("RgbControlBackend", () => {
       });
 
       await backend.onLoad();
-      // Force the SECOND write (the colour command) to throw — the
-      // first (brightness) succeeds, the second fails.
+      await backend.setBrightness("oxp:all", 0);
+
+      // Force the SECOND write inside setColor (the colour command
+      // itself, after the brightness-enable pre-write) to throw — the
+      // first succeeds, the second fails.
       let writeCount = 0;
       mockWriteSync.mockImplementation(() => {
         writeCount++;
         if (writeCount === 2) throw new Error("simulated colour write failure");
         return 64;
       });
-      await backend.setBrightness("oxp:all", 0);
-      mockWriteSync.mockImplementation(() => {
-        writeCount++;
-        if (writeCount === 2) throw new Error("simulated colour write failure");
-        return 64;
-      });
-      writeCount = 0;
 
       const ok = await backend.setColor("oxp:all", 255, 0, 0);
       expect(ok).toBe(false);

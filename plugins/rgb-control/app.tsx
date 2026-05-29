@@ -563,13 +563,35 @@ function ChannelSlider({ label, value, onChange }: { label: string; value: numbe
 export const mount = mountComponent(RgbControl);
 
 function Header() {
+  const { call } = useBackend(PLUGIN_ID);
+  const [info, setInfo] = useState<RgbInfo | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    call("getRgbInfo")
+      .then((d) => {
+        if (!cancelled) setInfo(d as RgbInfo);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [call]);
+
+  const subtitle = (() => {
+    if (!info) return "Detecting hardware…";
+    if (!info.available) return "No RGB hardware detected";
+    const zoneCount = info.zones.length;
+    const zoneLabel = zoneCount === 1 ? "1 zone" : `${zoneCount} zones`;
+    return `Driver: ${info.driver} · ${zoneLabel}`;
+  })();
+
   return (
     <div className="flex flex-col gap-0.5 min-w-0">
       <h1 className="text-xl font-semibold tracking-[-0.015em] m-0 leading-tight">
         RGB Zones
       </h1>
       <span className="text-[11.5px] text-base-content/55 tracking-[0.02em] truncate leading-tight">
-        Driver: OneXPlayer HID V2 · 1 zone
+        {subtitle}
       </span>
     </div>
   );

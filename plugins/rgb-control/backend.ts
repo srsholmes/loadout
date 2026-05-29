@@ -16,6 +16,7 @@ import {
   clamp,
   toHex,
 } from "./lib/oxp";
+import { parseOpenRgbList } from "./lib/openrgb-parse";
 
 /**
  * RGB backend interface — the detected hardware driver in use.
@@ -273,45 +274,7 @@ export default class RgbControlBackend implements PluginBackend {
       const listOutput = await exec("openrgb --noautoconnect -l 2>/dev/null");
       if (!listOutput) return false;
 
-      const zones: RgbZone[] = [];
-      // Parse OpenRGB device listing
-      // Format includes lines like "0: DeviceName" and zone info
-      const deviceBlocks = listOutput.split(/(?=^\d+:\s)/m);
-      for (const block of deviceBlocks) {
-        const headerMatch = block.match(/^(\d+):\s+(.+)/);
-        if (!headerMatch) continue;
-
-        const deviceIndex = headerMatch[1];
-        const deviceName = headerMatch[2].trim();
-
-        // Extract zones from the block
-        const zoneMatches = block.matchAll(/Zone\s+(\d+):\s+(.+)/g);
-        let hasZones = false;
-        for (const zm of zoneMatches) {
-          hasZones = true;
-          zones.push({
-            id: `openrgb:${deviceIndex}:${zm[1]}`,
-            name: `${deviceName} - ${zm[2].trim()}`,
-            color: { r: 0, g: 0, b: 0 },
-            brightness: 100,
-            mode: "static",
-            supportedModes: [...ALL_MODES],
-          });
-        }
-
-        // If no zones parsed, treat the whole device as one zone
-        if (!hasZones) {
-          zones.push({
-            id: `openrgb:${deviceIndex}:0`,
-            name: deviceName,
-            color: { r: 0, g: 0, b: 0 },
-            brightness: 100,
-            mode: "static",
-            supportedModes: [...ALL_MODES],
-          });
-        }
-      }
-
+      const zones: RgbZone[] = parseOpenRgbList(listOutput);
       if (zones.length === 0) return false;
 
       this.driver = { type: "openrgb", name: "OpenRGB", zones };
