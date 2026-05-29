@@ -10,6 +10,7 @@
     "@loadout/types": "workspace:*",
     "@loadout/steam-paths": "workspace:*",
     "@loadout/plugin-storage": "workspace:*",
+    "@loadout/external-cache": "workspace:*",
     "@loadout/steam-cdp": "workspace:*"
   },
   "plugin": {
@@ -19,12 +20,13 @@
     "permissions": {
       "network": [
         "www.protondb.com",
-        "store.steampowered.com"
+        "store.steampowered.com",
+        "localhost"
       ],
       "filesystem": [
         "read:~/.local/share/Steam",
         "write:~/.config/loadout/plugins",
-        "write:~/.cache/loadout/plugins"
+        "write:~/.cache/loadout/protondb-badges"
       ]
     },
     "category": "Steam",

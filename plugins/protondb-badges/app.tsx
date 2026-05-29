@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, useReducer } from "react";
 import {
   Badge,
   Button,
@@ -170,8 +170,16 @@ function ProtonDBBadges() {
   /** Header search query — filters the grid in place. */
   const [searchQuery, setSearchQuery] = useState("");
   /** Live aggregate of every tier we've seen across the rendered cards.
-   *  Drives the "Library Breakdown" stat bar on the settings card. */
-  const [tierMap, setTierMap] = useState<Record<string, TierKey | "pending">>({});
+   *  Drives the "Library Breakdown" stat bar on the settings card.
+   *
+   *  Stored on a ref + bumped via a version counter, instead of a
+   *  spread setState, so each card's `onTier` callback is O(1) instead
+   *  of O(n)-per-update — a library-grid load fires hundreds of these
+   *  in a burst and the spread copy was the hot path. React 18
+   *  auto-batches the `bumpTierVersion` dispatches inside the same
+   *  microtask, so the visible render rate is unchanged. */
+  const tierMapRef = useRef<Map<string, TierKey | "pending">>(new Map());
+  const [tierVersion, bumpTierVersion] = useReducer((n: number) => n + 1, 0);
 
   useEffect(() => {
     void call("getSettings").then((s) => setSettings(s as ProtonDBSettings));
@@ -229,17 +237,19 @@ function ProtonDBBadges() {
 
   const handleClearCache = useCallback(async () => {
     await call("clearCache");
-    setTierMap({});
+    tierMapRef.current.clear();
+    bumpTierVersion();
   }, [call]);
 
   /** Card→parent callback: stash the tier so the breakdown card can
-   *  aggregate live as cards finish loading. */
+   *  aggregate live as cards finish loading. Map mutation is O(1);
+   *  the version bump triggers a single re-render per microtask. */
   const reportTier = useCallback(
     (appId: string, tier: TierKey | "pending" | null) => {
       if (!tier) return;
-      setTierMap((prev) =>
-        prev[appId] === tier ? prev : { ...prev, [appId]: tier },
-      );
+      if (tierMapRef.current.get(appId) === tier) return;
+      tierMapRef.current.set(appId, tier);
+      bumpTierVersion();
     },
     [],
   );
@@ -273,11 +283,14 @@ function ProtonDBBadges() {
       bronze: 0,
       borked: 0,
     };
-    for (const tier of Object.values(tierMap)) {
+    for (const tier of tierMapRef.current.values()) {
       if (tier && tier in counts) counts[tier as TierKey]++;
     }
     return counts;
-  }, [tierMap]);
+    // tierVersion is the re-render trigger; the ref itself is stable
+    // so eslint can't see the dependency that actually matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tierVersion]);
   const breakdownTotal = TIER_ORDER.reduce((a, t) => a + tierCounts[t], 0);
 
   const subtitle = (() => {

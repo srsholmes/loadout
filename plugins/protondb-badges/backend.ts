@@ -13,9 +13,11 @@ import {
   SHARED_JS_CONTEXT_TITLES,
   type CEFTab,
 } from "@loadout/steam-cdp";
-import { createExternalCache } from "./lib/external-cache";
+import { createExternalCache } from "@loadout/external-cache";
+import { createLookupSlots, type LookupSlots } from "./lib/lookup-slot";
 import {
   DEFAULT_SETTINGS,
+  coerceSettings,
   type ProtonDBSettings,
 } from "./lib/settings";
 import {
@@ -102,8 +104,7 @@ const HEALTH_INTERVAL_MS = 5000;
  *
  * Storage persists via `@loadout/plugin-storage` at
  * `~/.config/loadout/plugins/protondb-badges.json`. API responses persist
- * via the inlined `lib/external-cache.ts` TTL disk cache at
- * `~/.cache/loadout/protondb-badges/`.
+ * via `@loadout/external-cache` at `~/.cache/loadout/protondb-badges/`.
  */
 export default class ProtonDBBadgesBackend implements PluginBackend {
   emit?: (payload: EmitPayload) => void;
@@ -125,9 +126,10 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
    * without throttling, ProtonDB will start 429-ing. Cap at 4 in flight
    * at a time. Cache hits skip the queue entirely.
    */
-  private inflightLookups = 0;
-  private lookupQueue: Array<() => void> = [];
   private static readonly MAX_CONCURRENT_LOOKUPS = 4;
+  private lookupSlots: LookupSlots = createLookupSlots(
+    ProtonDBBadgesBackend.MAX_CONCURRENT_LOOKUPS,
+  );
 
   // ─── CDP injection state ────────────────────────────────────────
 
@@ -161,8 +163,23 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
   private storePollInterval?: ReturnType<typeof setInterval>;
   private static readonly STORE_POLL_MS = 500;
 
+  /** Polls SharedJSContext's URL for the BPM library-app route so the
+   *  badge follows wherever the user navigates in the Steam UI — not
+   *  only when a game actually launches. Matches the source plugin's
+   *  behaviour 1:1; the migration originally dropped this in favour of
+   *  `handleGameLaunch` broadcasts, but the user-visible regression was
+   *  that the badge stayed static until you actually started a game. */
+  private bpmPollInterval?: ReturnType<typeof setInterval>;
+  private static readonly BPM_POLL_MS = 500;
+  /** Last appId pushed to BPM via URL polling. Mirrors `storeTabAppIds`
+   *  for the BPM channel — avoids re-pushing on every tick when the
+   *  user is sitting on a game page. */
+  private bpmCurrentAppId: string | null = null;
+
   /** Tracks the appId of the currently-running game per the loader's
-   *  game-detection broadcast. Drives the BPM badge push. */
+   *  game-detection broadcast. Used as a fallback signal: if URL
+   *  polling can't extract an appId (e.g. user is on the Home tab)
+   *  but a game is running, the badge stays on the running game. */
   private currentGameAppId: string | null = null;
 
   // ─── Lifecycle ──────────────────────────────────────────────────
@@ -195,17 +212,25 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
     );
 
     // Store tabs need URL polling because the storefront SPA doesn't
-    // broadcast nav changes over CDP. The BPM tab is push-driven from
-    // `handleGameLaunch` / `handleGameExit` so it doesn't poll.
+    // broadcast nav changes over CDP.
     this.storePollInterval = setInterval(
       () => this._pollStoreTabs(),
       ProtonDBBadgesBackend.STORE_POLL_MS,
+    );
+
+    // BPM also needs URL polling so the badge tracks library
+    // navigation (`/library/app/<id>`), not just the
+    // game-launched/exited signal. Source-plugin behaviour.
+    this.bpmPollInterval = setInterval(
+      () => this._pollBPMUrl(),
+      ProtonDBBadgesBackend.BPM_POLL_MS,
     );
   }
 
   async onUnload(): Promise<void> {
     if (this.healthInterval) clearInterval(this.healthInterval);
     if (this.storePollInterval) clearInterval(this.storePollInterval);
+    if (this.bpmPollInterval) clearInterval(this.bpmPollInterval);
 
     await this._removeBadgeSystem();
 
@@ -250,7 +275,7 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
     const cached = this.reportCache.get(appId);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) return cached.data;
 
-    return this._withLookupSlot(async () => {
+    return this.lookupSlots.withSlot(async () => {
       // Re-check the cache once we've actually entered the slot — a
       // sibling caller may have populated it while we were queued.
       const recached = this.reportCache.get(appId);
@@ -260,7 +285,7 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
 
       // Disk cache lookup before paying the network. Hits hydrate the
       // in-memory Map so subsequent same-session reads stay hot.
-      const fromDisk = await this._safeDiskGet<ProtonDBReport | null>(
+      const fromDisk = await this.diskCache.get<ProtonDBReport | null>(
         `report:${appId}`,
       );
       if (fromDisk !== undefined) {
@@ -323,7 +348,7 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
     const cached = this.searchCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) return cached.data;
 
-    const fromDisk = await this._safeDiskGet<SteamSearchResult[]>(
+    const fromDisk = await this.diskCache.get<SteamSearchResult[]>(
       `search:${cacheKey}`,
     );
     if (fromDisk !== undefined) {
@@ -364,7 +389,7 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
     const cached = this.linuxCache.get(appId);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) return cached.data;
 
-    const fromDisk = await this._safeDiskGet<boolean>(`linux:${appId}`);
+    const fromDisk = await this.diskCache.get<boolean>(`linux:${appId}`);
     if (fromDisk !== undefined) {
       this.linuxCache.set(appId, { data: fromDisk, timestamp: Date.now() });
       return fromDisk;
@@ -425,8 +450,12 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
     return { ...this.settings };
   }
 
-  async updateSettings(settings: ProtonDBSettings): Promise<void> {
-    this.settings = { ...DEFAULT_SETTINGS, ...settings };
+  async updateSettings(settings: Partial<ProtonDBSettings>): Promise<void> {
+    // Structurally validate before persisting. RPC callers can hand us
+    // anything; `coerceSettings` clamps each field to a valid value or
+    // the current one — so a bad input can't poison disk state or the
+    // in-page runtime.
+    this.settings = coerceSettings(this.settings, settings);
     await this._saveSettings();
     // Re-inject so the in-page runtime's settings snapshot matches the
     // new values. `_injectBadgeSystem` cleans the previous runtime via
@@ -480,7 +509,7 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
    * even though the underlying source is now the broadcast rather
    * than CDP URL polling.
    */
-  async getCurrentRouteAppId(): Promise<string | null> {
+  async getCurrentGameAppId(): Promise<string | null> {
     return this.currentGameAppId;
   }
 
@@ -677,14 +706,61 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
   }
 
   /**
+   * Poll SharedJSContext's URL for the BPM library-app route so the
+   * badge updates whenever the user navigates between game pages, not
+   * only when a game actually launches. Matches `/library/app/<id>`
+   * (with the optional `routes/` prefix that older Steam UI strings
+   * include).
+   *
+   * Falls back to `currentGameAppId` when the user navigates somewhere
+   * the regex doesn't match (Home, Friends, Settings, …) AND a game is
+   * actually running — keeps the badge visible during gameplay even if
+   * the BPM view is on a non-game page.
+   *
+   * Pushes only on transition, mirroring `_pollStoreTabs`.
+   */
+  private async _pollBPMUrl(): Promise<void> {
+    const shared = this.connections.get("SharedJSContext");
+    if (!shared || !shared.client.connected) return;
+
+    let url: string | null | undefined;
+    try {
+      url = (await this._cdpEvaluate(shared, "window.location.href")) as
+        | string
+        | null
+        | undefined;
+    } catch {
+      return;
+    }
+
+    const navAppId = url?.match(/\/(?:routes\/)?library\/app\/(\d+)/)?.[1] ?? null;
+    const nextAppId = navAppId ?? this.currentGameAppId;
+    if (nextAppId === this.bpmCurrentAppId) return;
+    this.bpmCurrentAppId = nextAppId;
+    await this._pushBadgeToBPM(nextAppId);
+  }
+
+  /**
    * Poll every store-tab CDP connection for URL changes. The storefront
    * SPA doesn't broadcast nav events over CDP, so the only way to learn
    * the user navigated to a different game page is to read
    * `window.location.href` on a timer.
    *
-   * Pushes badge data only on URL change, not every tick.
+   * Pushes badge data only on URL change, not every tick. Skips
+   * entirely when no store-prefixed connections exist, so an idle
+   * Deck (no Steam storefront tabs open) doesn't burn a wakeup every
+   * 500 ms iterating an empty connections map.
    */
   private async _pollStoreTabs(): Promise<void> {
+    let hasStoreTab = false;
+    for (const key of this.connections.keys()) {
+      if (key.startsWith("store:")) {
+        hasStoreTab = true;
+        break;
+      }
+    }
+    if (!hasStoreTab) return;
+
     for (const [key, conn] of this.connections) {
       if (!key.startsWith("store:")) continue;
       if (!conn.client.connected) continue;
@@ -720,22 +796,6 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
 
   // ─── Private helpers ────────────────────────────────────────────
 
-  private async _withLookupSlot<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.inflightLookups >= ProtonDBBadgesBackend.MAX_CONCURRENT_LOOKUPS) {
-      await new Promise<void>((resolve) => {
-        this.lookupQueue.push(resolve);
-      });
-    }
-    this.inflightLookups++;
-    try {
-      return await fn();
-    } finally {
-      this.inflightLookups--;
-      const next = this.lookupQueue.shift();
-      if (next) next();
-    }
-  }
-
   private async _safeDiskSet<T>(
     key: string,
     value: T,
@@ -748,20 +808,14 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
     }
   }
 
-  private async _safeDiskGet<T>(key: string): Promise<T | undefined> {
-    try {
-      return await this.diskCache.get<T>(key);
-    } catch {
-      return undefined;
-    }
-  }
-
   private async _loadSettings(): Promise<void> {
     try {
       const stored = await readPluginStorage<Partial<ProtonDBSettings>>(
         PLUGIN_ID,
       );
-      this.settings = { ...DEFAULT_SETTINGS, ...stored };
+      // Defend against on-disk corruption / manual edits the same way
+      // `updateSettings` defends against bad RPC input.
+      this.settings = coerceSettings(DEFAULT_SETTINGS, stored);
     } catch (err) {
       console.warn("[protondb-badges] Failed to load settings:", err);
     }

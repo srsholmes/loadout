@@ -523,31 +523,31 @@ describe("ProtonDBBadgesBackend", () => {
   // ── Game detection broadcast hooks ───────────────────────────
   // The loader broadcasts handleGameLaunch / handleGameExit on every
   // game state change. The plugin uses them to (a) track the current
-  // appId for `getCurrentRouteAppId` and (b) push a badge to the BPM
+  // appId for `getCurrentGameAppId` and (b) push a badge to the BPM
   // tab. Without a CDP connection the push is a no-op; we test the
   // bookkeeping surface here.
 
   describe("game-detection hooks", () => {
-    it("getCurrentRouteAppId starts null", async () => {
-      expect(await backend.getCurrentRouteAppId()).toBeNull();
+    it("getCurrentGameAppId starts null", async () => {
+      expect(await backend.getCurrentGameAppId()).toBeNull();
     });
 
     it("handleGameLaunch sets the current appId", async () => {
       await backend.handleGameLaunch(12345, "Portal 2");
-      expect(await backend.getCurrentRouteAppId()).toBe("12345");
+      expect(await backend.getCurrentGameAppId()).toBe("12345");
     });
 
     it("handleGameExit clears the current appId", async () => {
       await backend.handleGameLaunch(12345, "Portal 2");
       await backend.handleGameExit(12345);
-      expect(await backend.getCurrentRouteAppId()).toBeNull();
+      expect(await backend.getCurrentGameAppId()).toBeNull();
     });
 
     it("handleGameExit for a non-current appId is a no-op", async () => {
       await backend.handleGameLaunch(12345, "Portal 2");
       await backend.handleGameExit(99999);
       // 99999 isn't the current game → no clear.
-      expect(await backend.getCurrentRouteAppId()).toBe("12345");
+      expect(await backend.getCurrentGameAppId()).toBe("12345");
     });
 
     it("handleGameLaunch ignores non-numeric / non-finite appIds", async () => {
@@ -555,12 +555,12 @@ describe("ProtonDBBadgesBackend", () => {
         Number.NaN as unknown as number,
         "bogus",
       );
-      expect(await backend.getCurrentRouteAppId()).toBeNull();
+      expect(await backend.getCurrentGameAppId()).toBeNull();
       await backend.handleGameLaunch(
         "not-a-number" as unknown as number,
         "bogus",
       );
-      expect(await backend.getCurrentRouteAppId()).toBeNull();
+      expect(await backend.getCurrentGameAppId()).toBeNull();
     });
   });
 });

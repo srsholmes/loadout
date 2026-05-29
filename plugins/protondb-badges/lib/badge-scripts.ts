@@ -146,11 +146,11 @@ export function generateBPMScript(settings: ProtonDBSettings): string {
     var report = data.report;
     if (!report || !settings.enableLibraryBadge) { removeBadge(); return; }
 
-    currentAppId = data.appId || null;
     var tier = (report.tier || "pending").toLowerCase();
-
-    // Skip re-render if same tier and badge exists
-    if (badgeEl && currentTier === tier) return;
+    // Always re-render. Skipping on same-tier left the submit href and
+    // the click handler closure pointing at the previous appId, so
+    // clicking the badge on a same-tier game opened the wrong ProtonDB
+    // page. createElement cost is trivial; BPM nav is human-paced.
     removeBadge();
     currentAppId = data.appId || null;
     currentTier = tier;
@@ -220,7 +220,9 @@ export function generateBPMScript(settings: ProtonDBSettings): string {
     badgeEl = container;
   }
 
-  // Backend pushes data via CDP — no polling needed
+  // Backend pushes data via CDP — no polling needed. Settings changes
+  // re-inject the whole runtime (backend.updateSettings triggers
+  // _injectBadgeSystem again), so there is no in-page settings hook.
   window.__protondb_badges = {
     cleanup: function() {
       removeBadge();
@@ -229,9 +231,6 @@ export function generateBPMScript(settings: ProtonDBSettings): string {
       createBadge(data);
     },
     removeBadge: removeBadge,
-    updateSettings: function(newSettings) {
-      settings = newSettings;
-    }
   };
 })();
 `;
