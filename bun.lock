@@ -350,6 +350,15 @@
         "react-icons": "^5.6.0",
       },
     },
+    "plugins/theme-loader": {
+      "name": "@loadout/plugin-theme-loader",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+      },
+    },
   },
   "packages": {
     "@adobe/css-tools": ["@adobe/css-tools@4.4.4", "", {}, "sha512-Elp+iwUx5rN5+Y8xLt5/GRoG20WGoDCQ/1Fb+1LiGtvwbDavuSk0jhD/eZdckHAuzcDzccnkv+rEjyWfRx18gg=="],
@@ -535,6 +544,8 @@
     "@loadout/plugin-storage-cleaner": ["@loadout/plugin-storage-cleaner@workspace:plugins/storage-cleaner"],
 
     "@loadout/plugin-tdp-control": ["@loadout/plugin-tdp-control@workspace:plugins/tdp-control"],
+
+    "@loadout/plugin-theme-loader": ["@loadout/plugin-theme-loader@workspace:plugins/theme-loader"],
 
     "@loadout/sgdb-art": ["@loadout/sgdb-art@workspace:packages/sgdb-art"],
 
