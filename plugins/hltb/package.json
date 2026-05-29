@@ -1,0 +1,39 @@
+{
+  "name": "@loadout/plugin-hltb",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Injects HowLongToBeat completion times into Steam library and store pages",
+  "author": "Loadout",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "fuzzysort": "^3.1.0",
+    "@loadout/types": "workspace:*",
+    "@loadout/ui": "workspace:*",
+    "@loadout/steam-paths": "workspace:*",
+    "@loadout/external-cache": "workspace:*",
+    "@loadout/plugin-storage": "workspace:*",
+    "@loadout/steam-cdp": "workspace:*",
+    "@loadout/vdf": "workspace:*"
+  },
+  "plugin": {
+    "id": "hltb",
+    "name": "How Long To Beat",
+    "description": "Injects HowLongToBeat completion times into Steam library and store pages",
+    "permissions": {
+      "network": [
+        "howlongtobeat.com",
+        "store.steampowered.com",
+        "localhost"
+      ],
+      "filesystem": [
+        "~/.config/loadout/plugins/",
+        "~/.cache/loadout/hltb/"
+      ]
+    },
+    "category": "Steam",
+    "subtitle": "HowLongToBeat overlays",
+    "target": { "type": "overlay" }
+  }
+}
