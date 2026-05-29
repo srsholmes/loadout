@@ -302,11 +302,11 @@
       "dependencies": {
         "@loadout/external-cache": "workspace:*",
         "@loadout/plugin-storage": "workspace:*",
+        "@loadout/sgdb-art": "workspace:*",
         "@loadout/steam-cdp": "workspace:*",
         "@loadout/steam-paths": "workspace:*",
         "@loadout/types": "workspace:*",
         "@loadout/ui": "workspace:*",
-        "@loadout/vdf": "workspace:*",
         "react": "^18.3.0",
         "react-dom": "^18.3.0",
         "react-icons": "^5.6.0",

@@ -11,9 +11,9 @@
     "@loadout/types": "workspace:*",
     "@loadout/external-cache": "workspace:*",
     "@loadout/plugin-storage": "workspace:*",
+    "@loadout/sgdb-art": "workspace:*",
     "@loadout/steam-cdp": "workspace:*",
-    "@loadout/steam-paths": "workspace:*",
-    "@loadout/vdf": "workspace:*"
+    "@loadout/steam-paths": "workspace:*"
   },
   "plugin": {
     "id": "steamgriddb",

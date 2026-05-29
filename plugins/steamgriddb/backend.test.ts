@@ -51,7 +51,7 @@ function mockFetchJson(json: unknown, status = 200, ok = true) {
 }
 
 // CRITICAL: every test that calls `setApiKey`, `saveSgdbMatch`,
-// `forgetSgdbMatch`, or `pruneMatches` will hit
+// or `pruneMatches` will hit
 // `writePluginStorage("steamgriddb", …)`, which resolves to
 // `$XDG_CONFIG_HOME/loadout/plugins/steamgriddb.json` (defaulting
 // to `~/.config/...`). Without a sandbox these tests CLOBBER the
@@ -573,12 +573,6 @@ describe("SteamGridDBBackend", () => {
       expect(got).toEqual({ sgdbId: 12345, name: "Team Fortress 2" });
     });
 
-    it("forgetSgdbMatch drops the entry", async () => {
-      await backend.saveSgdbMatch("440", 12345, "TF2");
-      await backend.forgetSgdbMatch("440");
-      expect(await backend.getSavedSgdbMatch("440")).toBeNull();
-    });
-
     it("pruneMatches removes entries not in the valid set", async () => {
       await backend.saveSgdbMatch("440", 1, "TF2");
       await backend.saveSgdbMatch("730", 2, "CS2");
@@ -597,6 +591,125 @@ describe("SteamGridDBBackend", () => {
       // Match still there — we didn't wipe everything on what's almost
       // certainly a `getGames` failure.
       expect(await backend.getSavedSgdbMatch("440")).not.toBeNull();
+    });
+  });
+
+  // ── PersistedConfig v1 → v2 migration round-trip ────────────────
+
+  describe("migrateConfig (v1 → v2 round-trip)", () => {
+    it("upgrades a v1 file (apiKey only, no matches) cleanly", () => {
+      const v1 = { version: 1 as const, apiKey: "abc123" };
+      const migrated = migrateConfig(v1);
+      expect(migrated.version).toBe(2);
+      expect(migrated.apiKey).toBe("abc123");
+      expect(migrated.matches).toBeUndefined();
+    });
+    it("carries v2 fields through unchanged", () => {
+      const v2 = {
+        version: 2 as const,
+        apiKey: "abc",
+        matches: { "440": { sgdbId: 1, name: "TF2" } },
+      };
+      const migrated = migrateConfig(v2);
+      expect(migrated.version).toBe(2);
+      expect(migrated.apiKey).toBe("abc");
+      expect(migrated.matches).toEqual(v2.matches);
+    });
+    it("drops non-string apiKey defensively", () => {
+      // The shape of `PersistedConfigStored` lets `apiKey` be `unknown`
+      // — if a hand-edited file has `apiKey: 42`, migration should
+      // drop the bogus value, not propagate it into the v2 file.
+      const migrated = migrateConfig({ apiKey: 42 });
+      expect(migrated.apiKey).toBeUndefined();
+    });
+    it("drops a non-object / array `matches`", () => {
+      expect(migrateConfig({ matches: "nope" }).matches).toBeUndefined();
+      expect(
+        migrateConfig({
+          matches: [{ sgdbId: 1, name: "X" }],
+        }).matches,
+      ).toBeUndefined();
+    });
+    it("survives an empty file with no recognisable fields", () => {
+      const migrated = migrateConfig({});
+      expect(migrated.version).toBe(2);
+      expect(migrated.apiKey).toBeUndefined();
+      expect(migrated.matches).toBeUndefined();
+    });
+  });
+
+  // ── safeDiskSet / safeDiskGet swallow filesystem errors ─────────
+
+  describe("disk-cache error swallow", () => {
+    it("safeDiskSet does not throw when the underlying cache write fails", async () => {
+      // Force the disk-cache write to fail by spying on the
+      // backend's internal cache. We reach into the private member
+      // through a typed cast — the assertion is just "doesn't throw".
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const internalCache = (backend as any).diskCache;
+      const original = internalCache.set;
+      internalCache.set = async () => {
+        throw new Error("simulated disk-full");
+      };
+      try {
+        await expect(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (backend as any).safeDiskSet("key", { foo: 1 }, 60),
+        ).resolves.toBeUndefined();
+      } finally {
+        internalCache.set = original;
+      }
+    });
+    it("safeDiskGet returns undefined when the underlying cache read throws", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const internalCache = (backend as any).diskCache;
+      const original = internalCache.get;
+      internalCache.get = async () => {
+        throw new Error("simulated corruption");
+      };
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const got = await (backend as any).safeDiskGet("key");
+        expect(got).toBeUndefined();
+      } finally {
+        internalCache.get = original;
+      }
+    });
+  });
+
+  // ── clearArt file-sweep across userdata/.../grid ───────────────
+
+  describe("clearArt file-sweep", () => {
+    it("uses filenameMatcherFor to identify files to unlink", () => {
+      // Direct assertion against the pure matcher rather than the
+      // full clearArt I/O path — we sandbox the filesystem at
+      // tmpdir() level but stubbing `getSteamDir()` mid-method is
+      // fragile. The matcher is what determines correctness of the
+      // sweep: if it picks the right filenames, the unlink targets
+      // are right. Pinned here as a regression guard.
+      const matcher = filenameMatcherFor("123", "grid_l", "shortcut");
+      expect(matcher).toBeInstanceOf(RegExp);
+      expect(matcher.test("123.png")).toBe(true);
+      expect(matcher.test("123.jpg")).toBe(true);
+      expect(matcher.test("123.jpeg")).toBe(true);
+      expect(matcher.test("123.webp")).toBe(true);
+      // grid_l = landscape, no suffix → must NOT match the portrait
+      // sibling (which has `p` between stem and ext).
+      expect(matcher.test("123p.png")).toBe(false);
+      // Other-game stems must NOT match.
+      expect(matcher.test("999.png")).toBe(false);
+    });
+    it("picks both stems for shortcuts (dual-stem sweep)", () => {
+      // The matcher anchors on the stems returned by filenameStemsFor.
+      // For shortcuts we get both the 32-bit appid AND the gameid64.
+      // Without dual-stem coverage clearArt would leave stale files
+      // under the other stem after a clear.
+      const stems = filenameStemsFor("123", "shortcut");
+      expect(stems.length).toBeGreaterThanOrEqual(2);
+      const matcher = filenameMatcherFor("123", "hero", "shortcut");
+      for (const stem of stems) {
+        expect(matcher.test(`${stem}_hero.png`)).toBe(true);
+      }
     });
   });
 });

@@ -208,9 +208,17 @@ function SteamGridDB() {
     Record<string, number>
   >({});
 
-  // Check API key on mount
+  // Check API key on mount. `cancelled` guards against the user
+  // unmounting the plugin mid-fetch — without it, the .then() would
+  // write into a stale setter and React 18 warns in dev.
   useEffect(() => {
-    call("hasApiKey").then((result) => setHasKey(result as boolean));
+    let cancelled = false;
+    void call("hasApiKey").then((result) => {
+      if (!cancelled) setHasKey(result as boolean);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [call]);
 
   // Pull the unified library + collection counts from the

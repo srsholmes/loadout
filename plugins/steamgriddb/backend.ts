@@ -6,7 +6,6 @@ import {
   writePluginStorage,
 } from "@loadout/plugin-storage";
 import { createExternalCache } from "@loadout/external-cache";
-import { shortcutGameId64 } from "@loadout/vdf";
 import { readdir, mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -23,16 +22,21 @@ const STEAM_DEBUG_PORT = 8080;
  *  "Clear Cache" button on the gear/cog menu. */
 const DISK_CACHE_TTL_SEC = 6 * 60 * 60;
 
-export type GameSource = "steam" | "shortcut";
+// Single source of truth for the grid-folder write contract lives in
+// `@loadout/sgdb-art`: `stemsFor` (dual-stem rule for shortcuts),
+// `filenameFor` + `STEM_SUFFIX` (per-art-type filename), and
+// `STEAM_ASSET_TYPE` (the eAssetType numeric map for the CDP write).
+// This plugin's per-tile picker re-uses those exports so its byte
+// layout stays identical to the bulk `applyAllArtwork` pipeline.
+import {
+  filenameFor as artFilenameFor,
+  stemsFor as artStemsFor,
+  STEAM_ASSET_TYPE,
+  type ArtType,
+  type SgdbGameSource,
+} from "@loadout/sgdb-art";
 
-/** Map our SGDB-style art-type strings to Steam's `eAssetType` enum. */
-const ASSET_TYPE_TO_STEAM: Record<string, number> = {
-  grid_p: 0, // Capsule (vertical / portrait)
-  grid_l: 3, // Wide capsule (landscape)
-  hero: 1,
-  logo: 2,
-  icon: 4,
-};
+export type GameSource = SgdbGameSource;
 
 interface CEFTab {
   id: string;
@@ -230,12 +234,6 @@ export default class SteamGridDBBackend implements PluginBackend {
     return { success: true };
   }
 
-  /** Forget the persisted API key. */
-  async clearApiKey(): Promise<void> {
-    this.apiKey = null;
-    await this.persist();
-  }
-
   /** Write the current in-memory state back to plugin-storage. */
   private async persist(): Promise<void> {
     await writePluginStorage<PersistedConfig>(PLUGIN_ID, {
@@ -286,13 +284,6 @@ export default class SteamGridDBBackend implements PluginBackend {
     await this.persist();
   }
 
-  /** Drop the saved match for an appId so the next pick re-resolves. */
-  async forgetSgdbMatch(appId: string): Promise<void> {
-    if (!(appId in this.matches)) return;
-    delete this.matches[appId];
-    await this.persist();
-  }
-
   /**
    * GC saved matches against the user's current library. Frontend
    * calls this once after pulling `getGames` from game-browser so
@@ -319,56 +310,6 @@ export default class SteamGridDBBackend implements PluginBackend {
   }
 
   // ─── SGDB lookups keyed off the Steam app id ──────────────────
-
-  /**
-   * Resolve a Steam app id to its SGDB game record. The API endpoint
-   * accepts the app id directly: `/games/steam/{appid}` returns the
-   * SGDB game whose `external_platforms.steam` array contains it.
-   *
-   * Returns `null` when SGDB has no record (rare for Steam-installed
-   * games, but possible for very new releases or beta-only apps).
-   * The UI uses that to surface a clear "no art on SGDB yet" state.
-   */
-  async getSgdbGameForSteamAppId(
-    steamAppId: string,
-  ): Promise<{ id: number; name: string; verified: boolean } | null> {
-    const cacheKey = `game-by-steam:${steamAppId}`;
-    const fromDisk = await this.safeDiskGet<{
-      id: number;
-      name: string;
-      verified: boolean;
-    } | null>(cacheKey);
-    if (fromDisk !== undefined) return fromDisk;
-
-    const res = await fetch(`${SGDB_API_BASE}/games/steam/${steamAppId}`, {
-      headers: this.getHeaders(),
-    });
-    if (res.status === 404) {
-      // Cache the negative result — Steam appIds rarely sprout an
-      // SGDB game retroactively, and re-paying this 404 on every
-      // library scroll wastes the user's bandwidth.
-      await this.safeDiskSet(cacheKey, null, DISK_CACHE_TTL_SEC);
-      return null;
-    }
-    if (!res.ok) {
-      throw new Error(`SteamGridDB lookup failed: ${res.status}`);
-    }
-    const json = (await res.json()) as {
-      success: boolean;
-      data?: { id: number; name: string; verified?: boolean };
-    };
-    if (!json.success || !json.data) {
-      await this.safeDiskSet(cacheKey, null, DISK_CACHE_TTL_SEC);
-      return null;
-    }
-    const result = {
-      id: json.data.id,
-      name: json.data.name,
-      verified: !!json.data.verified,
-    };
-    await this.safeDiskSet(cacheKey, result, DISK_CACHE_TTL_SEC);
-    return result;
-  }
 
   /**
    * Search SteamGridDB for games matching a query.
@@ -405,50 +346,6 @@ export default class SteamGridDBBackend implements PluginBackend {
 
     await this.safeDiskSet(cacheKey, json.data, DISK_CACHE_TTL_SEC);
     return json.data;
-  }
-
-  /**
-   * Fetch the full SGDB game record by its SGDB id, including the
-   * `external_platforms` map that holds the Steam app id(s) for the
-   * game (when SGDB has them on file).
-   *
-   * Returns `{ steamAppId: string | null }` — `null` when SGDB has
-   * no Steam mapping (e.g. Epic / GOG-only releases or non-Steam
-   * shortcuts). The UI uses that to surface a clear error instead
-   * of asking the user to type an app id.
-   */
-  async getGameById(gameId: number): Promise<{ steamAppId: string | null }> {
-    const cacheKey = `game-by-id:${gameId}`;
-    const fromDisk = await this.safeDiskGet<{ steamAppId: string | null }>(
-      cacheKey,
-    );
-    if (fromDisk !== undefined) return fromDisk;
-
-    const res = await fetch(`${SGDB_API_BASE}/games/id/${gameId}?platforms=steam`, {
-      headers: this.getHeaders(),
-    });
-    if (!res.ok) {
-      throw new Error(`SteamGridDB game lookup failed: ${res.status}`);
-    }
-    const json = (await res.json()) as {
-      success: boolean;
-      data?: {
-        external_platforms?: Array<{ type: string; id: string | number }>;
-      };
-    };
-    if (!json.success || !json.data) {
-      const empty = { steamAppId: null };
-      await this.safeDiskSet(cacheKey, empty, DISK_CACHE_TTL_SEC);
-      return empty;
-    }
-    const platforms = json.data.external_platforms ?? [];
-    // SGDB returns `external_platforms` as an array of `{ type, id }`
-    // entries. Multiple entries can exist when a game ships across
-    // store fronts; we want the first whose type is "steam".
-    const steamRow = platforms.find((p) => p.type === "steam");
-    const result = { steamAppId: steamRow ? String(steamRow.id) : null };
-    await this.safeDiskSet(cacheKey, result, DISK_CACHE_TTL_SEC);
-    return result;
   }
 
   /**
@@ -579,8 +476,7 @@ export default class SteamGridDBBackend implements PluginBackend {
     // run this even after a CDP success: it's how Steam stores
     // custom art on disk regardless, and it makes the change
     // survive a Steam restart without re-touching CDP.
-    const urlPath = new URL(url).pathname;
-    const ext = urlPath.substring(urlPath.lastIndexOf(".")) || ".png";
+    const ext = extFromUrl(url);
     const stems = filenameStemsFor(appId, source);
     const filenames = stems.map((stem) => filenameFor(stem, type, ext));
 
@@ -601,24 +497,52 @@ export default class SteamGridDBBackend implements PluginBackend {
     // Fan out across (users × filenames). Multi-account Steam setups
     // would otherwise pay N×M sequential write latency — and even
     // single-user shortcuts write two stems (32-bit appid + 64-bit
-    // gameid64). The disk is the only contention; `Bun.write` is
-    // already non-blocking, and we don't depend on write ordering
-    // since every file gets identical bytes. Mkdirs are batched per
-    // user dir before the writes, not interleaved.
+    // gameid64). Per-user isolation: a single user's mkdir failure
+    // (perm error, weird symlink) must not abort the whole batch —
+    // other users' grid dirs are independent. Skip the user whose
+    // mkdir failed and write the rest; log the failure for visibility.
     const validUserDirs = userDirs.filter((u) => /^\d+$/.test(u));
-    await Promise.all(
-      validUserDirs.map((userDir) =>
-        mkdir(join(userdataPath, userDir, "config", "grid"), { recursive: true }),
-      ),
+    const mkdirResults = await Promise.allSettled(
+      validUserDirs.map(async (userDir) => {
+        await mkdir(join(userdataPath, userDir, "config", "grid"), {
+          recursive: true,
+        });
+        return userDir;
+      }),
     );
-    const targets = validUserDirs.flatMap((userDir) =>
+    const writableUserDirs: string[] = [];
+    for (let i = 0; i < mkdirResults.length; i++) {
+      const r = mkdirResults[i];
+      if (r.status === "fulfilled") {
+        writableUserDirs.push(r.value);
+      } else {
+        console.warn(
+          `[steamgriddb] skipping user ${validUserDirs[i]}: mkdir failed (${r.reason}).`,
+        );
+      }
+    }
+    const targets = writableUserDirs.flatMap((userDir) =>
       filenames.map((filename) => ({
         userDir,
         outputPath: join(userdataPath, userDir, "config", "grid", filename),
       })),
     );
-    await Promise.all(targets.map((t) => Bun.write(t.outputPath, imageData)));
-    const savedPaths = targets.map((t) => t.outputPath);
+    // Same isolation for writes: a single broken target shouldn't
+    // sabotage every other Steam profile's art update.
+    const writeResults = await Promise.allSettled(
+      targets.map((t) => Bun.write(t.outputPath, imageData)),
+    );
+    const savedPaths: string[] = [];
+    for (let i = 0; i < writeResults.length; i++) {
+      const r = writeResults[i];
+      if (r.status === "fulfilled") {
+        savedPaths.push(targets[i].outputPath);
+      } else {
+        console.warn(
+          `[steamgriddb] write failed for ${targets[i].outputPath}: ${r.reason}`,
+        );
+      }
+    }
 
     if (savedPaths.length === 0 && !instant) {
       throw new Error("No Steam user profiles found in userdata");
@@ -706,7 +630,7 @@ export default class SteamGridDBBackend implements PluginBackend {
     appId: string,
     type: string,
   ): Promise<boolean> {
-    const eAssetType = ASSET_TYPE_TO_STEAM[type];
+    const eAssetType = STEAM_ASSET_TYPE[type as ArtType];
     if (eAssetType == null) return false;
 
     const targetUrl = await this.findSharedJsContextTab();
@@ -762,7 +686,7 @@ export default class SteamGridDBBackend implements PluginBackend {
     imageData: ArrayBuffer,
     type: string,
   ): Promise<boolean> {
-    const eAssetType = ASSET_TYPE_TO_STEAM[type];
+    const eAssetType = STEAM_ASSET_TYPE[type as ArtType];
     if (eAssetType == null) return false;
 
     // Find the SharedJSContext tab.
@@ -783,16 +707,28 @@ export default class SteamGridDBBackend implements PluginBackend {
     // shortcuts. Decky's plugin (sibling repo) does the same dance:
     // ClearCustomArtworkForApp resolves before the clear actually
     // lands, so we wait before issuing Set.
+    //
+    // Failure-rollback: if Set throws after Clear succeeded, Steam's
+    // runtime state is wiped (the on-disk file from `applyArt`'s
+    // path-2 write still arrives a moment later, so the persistent
+    // state is correct — only the live tile is briefly empty). The
+    // inner expression reports `clearedButNoSet: true` in that case
+    // so the surrounding `applyArt` flow knows the disk write has to
+    // be relied upon for the user-visible recovery and can surface a
+    // "Steam may need a restart to show the new art" hint instead of
+    // a flat "apply failed". No silent destructive failure.
     const expression = `
       (async () => {
         if (typeof SteamClient === 'undefined' || !SteamClient.Apps) {
           return { ok: false, error: 'SteamClient not available' };
         }
+        let cleared = false;
         try {
           await SteamClient.Apps.ClearCustomArtworkForApp(
             ${JSON.stringify(numericAppId)},
             ${eAssetType}
           );
+          cleared = true;
           await new Promise((r) => setTimeout(r, 500));
           await SteamClient.Apps.SetCustomArtworkForApp(
             ${JSON.stringify(numericAppId)},
@@ -802,7 +738,11 @@ export default class SteamGridDBBackend implements PluginBackend {
           );
           return { ok: true };
         } catch (err) {
-          return { ok: false, error: String(err) };
+          return {
+            ok: false,
+            error: String(err),
+            clearedButNoSet: cleared,
+          };
         }
       })()
     `;
@@ -818,6 +758,26 @@ export default class SteamGridDBBackend implements PluginBackend {
         `[steamgriddb] CDP applied ${type} for app ${appId} (instant)`,
       );
       return true;
+    }
+    if (
+      result &&
+      typeof result === "object" &&
+      "clearedButNoSet" in result &&
+      (result as { clearedButNoSet: boolean }).clearedButNoSet
+    ) {
+      // Steam's runtime art was cleared but the Set step failed. The
+      // disk write that follows in `applyArt`'s path-2 is the user-
+      // facing recovery: it lands the new art at the correct
+      // userdata/.../grid path, and Steam picks it up on next
+      // restart. Log + emit a friendly hint so the UI surfaces this.
+      console.warn(
+        `[steamgriddb] CDP Set failed after Clear for app ${appId}; ` +
+          `disk write will rescue — Steam restart may be needed for instant view.`,
+      );
+      this.emit?.({
+        event: "cdpPartialFailure",
+        data: { appId, type, error: (result as { error?: string }).error },
+      });
     }
     return false;
   }
@@ -940,37 +900,37 @@ export default class SteamGridDBBackend implements PluginBackend {
  * Steam Big Picture (which reads `{shortcut_appid_uint32}*.png`) and
  * the loader's `/api/steam-grid/<gameid64>/...` route (which probes
  * `{gameid64}*.png`) both resolve.
+ *
+ * Thin string-appId adapter around `stemsFor` in `@loadout/sgdb-art` —
+ * the package's numeric-appId version is the canonical implementation.
+ * If a shortcut has a non-numeric appId we fall back to a single stem
+ * (the appId itself) rather than crashing.
  */
 export function filenameStemsFor(appId: string, source: GameSource): string[] {
   if (source === "shortcut") {
     const n = parseInt(appId, 10);
-    if (Number.isFinite(n)) {
-      return [appId, shortcutGameId64(n)];
-    }
+    if (Number.isFinite(n)) return artStemsFor(n, source);
   }
   return [appId];
 }
 
-/** Build the full filename for a single stem + asset type + extension. */
+/** Build the full filename for a single stem + asset type + extension.
+ *
+ * Thin re-export of `@loadout/sgdb-art`'s `filenameFor` — kept as a
+ * named export so `backend.test.ts` and the per-tile picker both go
+ * through one entry-point, and so a non-`ArtType` `type` string from
+ * the wire side gets a sane "${stem}${ext}" fallback instead of a
+ * `STEM_SUFFIX[undefined]` runtime undefined-concat.
+ */
 export function filenameFor(
   stem: string,
   type: string,
   ext: string,
 ): string {
-  switch (type) {
-    case "grid_p":
-      return `${stem}p${ext}`;
-    case "grid_l":
-      return `${stem}${ext}`;
-    case "hero":
-      return `${stem}_hero${ext}`;
-    case "logo":
-      return `${stem}_logo${ext}`;
-    case "icon":
-      return `${stem}_icon${ext}`;
-    default:
-      return `${stem}${ext}`;
+  if (type in ({ grid_p: 1, grid_l: 1, hero: 1, logo: 1, icon: 1 } as const)) {
+    return artFilenameFor(stem, type as ArtType, ext);
   }
+  return `${stem}${ext}`;
 }
 
 /**
@@ -1005,12 +965,18 @@ export function filenameMatcherFor(
     }
   });
   const alt = cores.length === 1 ? cores[0] : `(?:${cores.join("|")})`;
-  return new RegExp(`^${alt}\\.(png|jpe?g)$`, "i");
+  // Keep this extension set in lockstep with `extFromUrl`'s
+  // ALLOWED_IMAGE_EXTS in `./shared` — apply writes whatever ext the
+  // source URL has, so the clear sweep must recognise all of them or
+  // a `.webp` apply followed by a clear would leave orphaned files
+  // behind in the user's `userdata/.../grid` dir.
+  return new RegExp(`^${alt}\\.(png|jpe?g|webp|ico)$`, "i");
 }
 
-// `cleanTitleForSearch` lives in `./shared` so the frontend can use the
+// Pure helpers live in `./shared` so the frontend can use the
 // same regex without taking a dep on this backend module.
-export { cleanTitleForSearch } from "./shared";
+import { cleanTitleForSearch, extFromUrl } from "./shared";
+export { cleanTitleForSearch };
 
 interface SgdbImage {
   id: number;
