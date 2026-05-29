@@ -18,6 +18,9 @@
     "category": "Steam",
     "subtitle": "Edit per-game launch options",
     "permissions": {
+      "network": [
+        "localhost"
+      ],
       "filesystem": [
         "~/.config/loadout/launch-presets.json",
         "~/.local/share/Steam/userdata"
