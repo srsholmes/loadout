@@ -1166,12 +1166,33 @@ function ConnectScreen({
           </div>
           <div className="text-lg font-bold mb-1.5">Connect to SteamGridDB</div>
           <div className="text-[13px] text-[var(--fg-2)] max-w-[380px] mx-auto leading-relaxed">
-            Paste your SteamGridDB API key once — it's stored in plugin
+            SteamGridDB needs an API key to fetch artwork. Generate one
+            (free) and paste it in — it's stored locally in plugin
             preferences and reused for every game.
           </div>
         </div>
+
+        {/* Step 1 — generate the key. The overlay can't reliably open a
+            browser under Gaming Mode without the quick-links plugin
+            installed, so we surface the URL as selectable text and
+            recommend opening it on another device. Mirrors the same
+            pattern as the loader's WelcomeScreen onboarding. */}
         <div className="subsection">
-          <div className="subsection-label">API key</div>
+          <div className="subsection-label">Step 1 · Generate a key</div>
+          <div className="subsection-desc">
+            Sign in at SteamGridDB and visit your API preferences:
+          </div>
+          <div className="mt-2 px-3 py-2.5 rounded-xl bg-[var(--bg-inset)] border border-[var(--line)] font-mono text-[12.5px] text-[var(--accent)] break-all select-all">
+            https://www.steamgriddb.com/profile/preferences/api
+          </div>
+          <div className="subsection-desc mt-2">
+            Open on your phone or another device — copy the key from the
+            page, then paste it below.
+          </div>
+        </div>
+
+        <div className="subsection">
+          <div className="subsection-label">Step 2 · Paste it here</div>
           <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-[var(--bg-inset)] border border-[var(--line)]">
             <FaKey size={13} />
             <TextInput
@@ -1180,14 +1201,11 @@ function ConnectScreen({
               value={value}
               onChange={onChange}
               onKeyDown={(e) => e.key === "Enter" && value.trim() && onSave()}
-              placeholder="Paste API key from steamgriddb.com/profile/preferences"
+              placeholder="Paste API key"
               className="flex-1 bg-transparent border-none outline-none text-[var(--fg-1)] font-mono text-[12.5px]"
             />
           </div>
-          <div className="subsection-desc">
-            Generate a key under your SteamGridDB profile → Preferences → API.
-          </div>
-          <div className="flex gap-2 justify-end">
+          <div className="flex gap-2 justify-end mt-2">
             <Button variant="primary" onClick={onSave} disabled={!value.trim()}>
               <FaCheck size={12} className="mr-1.5" /> Save &amp; connect
             </Button>
