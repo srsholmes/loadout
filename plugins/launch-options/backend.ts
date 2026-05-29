@@ -318,14 +318,25 @@ export default class LaunchOptionsBackend implements PluginBackend {
    * by the public wrapper, and also from `appendLaunchToken` /
    * `removeLaunchToken` which already hold the lock — calling the public
    * method again would deadlock on `await prev`.
+   *
+   * Strategy: always do both the CDP call AND the VDF write. The CDP
+   * call updates Steam's in-memory state so the change reflects in the
+   * Steam UI immediately. The VDF write makes the change visible to
+   * the immediate post-save refresh — without it, the frontend reads
+   * the VDF straight back and sees the *old* value because Steam
+   * writes the VDF asynchronously, ~1 s after SetAppLaunchOptions
+   * returns. That race was the cause of the "click trash, nothing
+   * happens" bug for the clear path: CDP set the in-memory state to
+   * `""` but the VDF still had the old string when the frontend
+   * re-read it. Both writes converge on the same value (Steam's
+   * autosave just rewrites what we already wrote), so there's no
+   * conflict.
    */
   private async _setLaunchOptionsUnlocked(
     appId: string,
     options: string,
   ): Promise<void> {
-    if (await trySetViaSteamClient(appId, options)) {
-      return;
-    }
+    await trySetViaSteamClient(appId, options);
     await this._writeLaunchOptionsToVdfUnlocked(appId, options);
   }
 

@@ -216,20 +216,36 @@ describe("LaunchOptionsBackend", () => {
       expect(copyArgs[1]).toMatch(/\.bak$/);
     });
 
-    it("uses SteamClient API when Steam is reachable — no VDF write", async () => {
+    it("writes VDF even when SteamClient succeeds, so the post-save refresh isn't stale", async () => {
       mockSetAppLaunchOptions.mockImplementation(() => Promise.resolve());
+
+      const vdfContent = JSON.stringify({
+        UserLocalConfigStore: {
+          Software: {
+            Valve: {
+              Steam: { apps: { "12345": { LaunchOptions: "old" } } },
+            },
+          },
+        },
+      });
+      mockReaddir.mockImplementation(() => Promise.resolve(["99999"]));
+      mockReadFile.mockImplementation(() => Promise.resolve(vdfContent));
 
       await backend.setLaunchOptions("12345", "mangohud %command%");
 
-      // SteamClient succeeded — no fallback to VDF
+      // CDP call fires…
       expect(mockSetAppLaunchOptions).toHaveBeenCalledTimes(1);
       expect(mockSetAppLaunchOptions.mock.calls[0]).toEqual([
         "12345",
         "mangohud %command%",
       ]);
-      // No backup, no write — Steam owns the file from here on
-      expect(mockCopyFile).not.toHaveBeenCalled();
-      expect(mockWriteFile).not.toHaveBeenCalled();
+      // …and the VDF write fires too. Steam writes the VDF
+      // asynchronously after SetAppLaunchOptions returns; without our
+      // own write the frontend's immediate refresh reads the old
+      // value (the "click trash, nothing happens" bug). Both writes
+      // converge on the same final value.
+      expect(mockCopyFile).toHaveBeenCalledTimes(1);
+      expect(mockWriteFile).toHaveBeenCalledTimes(1);
     });
 
     it("falls back to VDF write when SteamClient throws", async () => {
@@ -384,8 +400,11 @@ describe("LaunchOptionsBackend", () => {
       );
       expect(mockSetAppLaunchOptions.mock.calls[0][1]).toContain("mangohud");
       expect(mockSetAppLaunchOptions.mock.calls[0][1]).toContain("%command%");
-      // No VDF mutation — Steam owns the persist
-      expect(mockWriteFile).not.toHaveBeenCalled();
+      // VDF write also fires (Steam's own write is async — see the
+      // "writes VDF even when SteamClient succeeds" test above for
+      // the race rationale). appendLaunchToken flows through the same
+      // _setLaunchOptionsUnlocked path, so the same VDF write happens.
+      expect(mockWriteFile).toHaveBeenCalledTimes(1);
       // appendLaunchToken returns the new string
       expect(result).toContain("/home/u/lsfg");
     });
