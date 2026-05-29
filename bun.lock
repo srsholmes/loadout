@@ -195,6 +195,27 @@
         "react-dom": "^18.3.0",
       },
     },
+    "plugins/recomp": {
+      "name": "@loadout/plugin-recomp",
+      "version": "0.1.0",
+      "dependencies": {
+        "@loadout/exec": "workspace:*",
+        "@loadout/external-cache": "workspace:*",
+        "@loadout/file-picker": "workspace:*",
+        "@loadout/plugin-storage": "workspace:*",
+        "@loadout/sgdb-art": "workspace:*",
+        "@loadout/steam-cdp": "workspace:*",
+        "@loadout/steam-paths": "workspace:*",
+        "@loadout/steam-shortcut": "workspace:*",
+        "@loadout/types": "workspace:*",
+        "@loadout/ui": "workspace:*",
+        "@loadout/vdf": "workspace:*",
+        "fuzzysort": "^3.1.0",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+        "react-icons": "^5.6.0",
+      },
+    },
     "plugins/steam-gamescope-ipc": {
       "name": "@loadout/plugin-steam-gamescope-ipc",
       "version": "0.0.1",
@@ -375,6 +396,8 @@
     "@loadout/plugin-fan-control": ["@loadout/plugin-fan-control@workspace:plugins/fan-control"],
 
     "@loadout/plugin-playtime": ["@loadout/plugin-playtime@workspace:plugins/playtime"],
+
+    "@loadout/plugin-recomp": ["@loadout/plugin-recomp@workspace:plugins/recomp"],
 
     "@loadout/plugin-steam-gamescope-ipc": ["@loadout/plugin-steam-gamescope-ipc@workspace:plugins/steam-gamescope-ipc"],
 
