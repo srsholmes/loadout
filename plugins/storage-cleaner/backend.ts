@@ -7,7 +7,7 @@ import { homedir } from "node:os";
 import { formatSize } from "./lib/size";
 import { isValidAppId } from "./lib/appid";
 import { parseDfOutput, type DiskPartition } from "./lib/parse-df";
-import { parseAcf } from "./lib/parse-acf";
+import { buildAppManifestMap, type ManifestFile } from "./lib/manifests";
 
 interface GameEntry {
   appId: string;
@@ -21,26 +21,29 @@ interface OrphanedEntry extends GameEntry {
 }
 
 /**
- * Parse Steam's ACF (Valve KeyValues) manifest files to extract appid -> name mapping.
+ * Read every appmanifest_*.acf in `steamAppsDir` and aggregate into an
+ * appId → name map. I/O happens here; the pure filter + parse + collect
+ * lives in `lib/manifests.ts` so its silent-skip branches are
+ * directly testable.
  */
 async function parseAppManifests(steamAppsDir: string): Promise<Map<string, string>> {
-  const map = new Map<string, string>();
+  let entries: string[];
   try {
-    const entries = await readdir(steamAppsDir);
-    for (const entry of entries) {
-      if (!entry.startsWith("appmanifest_") || !entry.endsWith(".acf")) continue;
-      try {
-        const content = await Bun.file(join(steamAppsDir, entry)).text();
-        const parsed = parseAcf(content);
-        if (parsed) map.set(parsed.appId, parsed.name);
-      } catch {
-        // Skip unreadable manifests
-      }
-    }
+    entries = await readdir(steamAppsDir);
   } catch {
-    // steamapps dir may not exist
+    return new Map();
   }
-  return map;
+  const files: ManifestFile[] = [];
+  for (const name of entries) {
+    if (!name.startsWith("appmanifest_") || !name.endsWith(".acf")) continue;
+    try {
+      const content = await Bun.file(join(steamAppsDir, name)).text();
+      files.push({ name, content });
+    } catch {
+      // Skip unreadable manifests.
+    }
+  }
+  return buildAppManifestMap(files);
 }
 
 /**
