@@ -31,7 +31,11 @@ export function parseDfOutput(stdout: string): DiskPartition[] {
       used: parts[2],
       available: parts[3],
       usePercent: parts[4],
-      mountpoint: parts[5],
+      // Mountpoint can contain spaces (rare — user-mounted volumes
+      // with literal spaces in their label). The fixed columns 0..4
+      // are always single tokens, so everything from index 5 onwards
+      // is the mountpoint.
+      mountpoint: parts.slice(5).join(" "),
     });
   }
 

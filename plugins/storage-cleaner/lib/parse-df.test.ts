@@ -60,4 +60,17 @@ describe("parseDfOutput", () => {
     expect(parseDfOutput("")).toEqual([]);
     expect(parseDfOutput("Filesystem header only")).toEqual([]);
   });
+
+  it("preserves multi-word mountpoints (spaces in mount label)", () => {
+    const out = [
+      "Filesystem      Size  Used Avail Use% Mounted on",
+      "/dev/sdc1       1.0T  100G  900G  10% /run/media/My SD Card",
+    ].join("\n");
+
+    const result = parseDfOutput(out);
+    expect(result).toHaveLength(1);
+    expect(result[0].mountpoint).toBe("/run/media/My SD Card");
+    expect(result[0].size).toBe("1.0T");
+    expect(result[0].usePercent).toBe("10%");
+  });
 });

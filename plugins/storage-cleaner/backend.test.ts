@@ -1,17 +1,20 @@
 import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import type { EmitPayload } from "@loadout/types";
+import * as fsp from "node:fs/promises";
 import StorageCleanerBackend from "./backend";
 
 /**
  * StorageCleanerBackend tests.
  *
- * run / runFull (from @loadout/exec) internally call Bun.spawn, so we
- * spy on Bun.spawn to intercept all external commands (df / du / rm).
- * Spec files are exempt from the no-Bun.spawn eslint rule.
+ * Two mock surfaces:
+ *  - `Bun.spawn` for everything that shells out: `df -h` and the now
+ *    single-batched `du -sb path1 path2 ...` per RPC.
+ *  - `fsp.rm` for the cache-deletion path, which now goes through
+ *    `node:fs/promises#rm` directly (no subprocess) — also spied so
+ *    tests can never trash a real Steam install on the dev machine.
  *
- * Each test stubs Bun.spawn with a specific stdout/exitCode to verify
- * parsing, sorting, error handling, and the emit/event contract. The
- * underlying filesystem isn't touched.
+ * Both spies are set up in `beforeEach` and restored in `afterEach`
+ * per `docs/test-mock-contamination.md`.
  */
 
 interface StubSpawn {
@@ -43,6 +46,7 @@ describe("StorageCleanerBackend", () => {
   let backend: StorageCleanerBackend;
   let emittedEvents: EmitPayload[];
   let spawnSpy: ReturnType<typeof spyOn>;
+  let rmSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
     backend = new StorageCleanerBackend();
@@ -55,10 +59,15 @@ describe("StorageCleanerBackend", () => {
     spawnSpy = spyOn(Bun, "spawn").mockImplementation(
       () => makeSpawnStub({}) as unknown as ReturnType<typeof Bun.spawn>,
     );
+    // Default: fs.rm is a no-op. Tests that need an error reassign via
+    // `.mockImplementation` (per the spy-stacking gotcha in
+    // test-mock-contamination.md).
+    rmSpy = spyOn(fsp, "rm").mockImplementation(async () => {});
   });
 
   afterEach(() => {
     spawnSpy.mockRestore();
+    rmSpy.mockRestore();
   });
 
   // ── Lifecycle ─────────────────────────────────────────────────────
@@ -80,12 +89,13 @@ describe("StorageCleanerBackend", () => {
         "valid123notreally/",
         "730; rm -rf /",
       ]);
-      // All should be in errors, none in deleted
       expect(result.deleted).toEqual([]);
       expect(result.errors).toHaveLength(4);
       for (const error of result.errors) {
         expect(error).toContain("invalid app ID");
       }
+      // None of the rejected appIds should have reached fs.rm.
+      expect(rmSpy).not.toHaveBeenCalled();
     });
 
     it("accepts purely numeric appIds", async () => {
@@ -94,6 +104,7 @@ describe("StorageCleanerBackend", () => {
         expect(error).not.toContain("invalid app ID");
       }
       expect(result.deleted).toEqual(["730", "440", "570"]);
+      expect(rmSpy).toHaveBeenCalledTimes(3);
     });
 
     it("emits cacheCleared event for shadercache", async () => {
@@ -103,19 +114,22 @@ describe("StorageCleanerBackend", () => {
       expect((emittedEvents[0].data as { type: string }).type).toBe("shadercache");
     });
 
-    it("surfaces non-zero exit codes as per-appId errors", async () => {
-      spawnSpy.mockImplementation(
-        () =>
-          makeSpawnStub({
-            stderr: "rm: no such file",
-            exitCode: 1,
-          }) as unknown as ReturnType<typeof Bun.spawn>,
-      );
+    it("surfaces fs.rm failures as per-appId errors", async () => {
+      rmSpy.mockImplementation(async () => {
+        throw new Error("EACCES: permission denied");
+      });
       const result = await backend.cleanShaderCache(["730"]);
       expect(result.deleted).toEqual([]);
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0]).toContain("730:");
-      expect(result.errors[0]).toContain("rm: no such file");
+      expect(result.errors[0]).toContain("EACCES");
+    });
+
+    it("uses recursive + force so a missing dir isn't an error", async () => {
+      await backend.cleanShaderCache(["730"]);
+      const opts = rmSpy.mock.calls[0]?.[1] as { recursive?: boolean; force?: boolean } | undefined;
+      expect(opts?.recursive).toBe(true);
+      expect(opts?.force).toBe(true);
     });
   });
 
@@ -136,7 +150,6 @@ describe("StorageCleanerBackend", () => {
         "440",
         "hello",
       ]);
-      // 2 should fail validation
       const validationErrors = result.errors.filter((e) =>
         e.includes("invalid app ID"),
       );
@@ -202,6 +215,30 @@ describe("StorageCleanerBackend", () => {
         );
       }
     });
+
+    it("batches du into a single subprocess per RPC, not one per dir", async () => {
+      // Pre-populate two shadercache dirs by stubbing readdir.
+      const readdirSpy = spyOn(fsp, "readdir").mockImplementation(
+        async (path: unknown) => {
+          const p = String(path);
+          if (p.endsWith("shadercache")) return ["111", "222"] as never;
+          if (p.endsWith("compatdata")) return ["333"] as never;
+          return [] as never;
+        },
+      );
+      try {
+        spawnSpy.mockClear();
+        await backend.getOrphanedData();
+        const duCalls = spawnSpy.mock.calls.filter((args) => {
+          const argv = (args[0] as string[] | undefined) ?? [];
+          return argv[0] === "du";
+        });
+        // One batched du call for all candidates — not 3.
+        expect(duCalls.length).toBeLessThanOrEqual(1);
+      } finally {
+        readdirSpy.mockRestore();
+      }
+    });
   });
 
   // ── getDiskUsage ──────────────────────────────────────────────────
@@ -228,6 +265,26 @@ describe("StorageCleanerBackend", () => {
         usePercent: "40%",
         mountpoint: "/",
       });
+    });
+
+    it("dedupes a multi-library setup (root + home + extra library on same FS)", async () => {
+      spawnSpy.mockImplementation(
+        () =>
+          makeSpawnStub({
+            stdout:
+              "Filesystem      Size  Used Avail Use% Mounted on\n" +
+              "/dev/nvme0n1p2  500G  200G  300G  40% /\n" +
+              "/dev/nvme0n1p2  500G  200G  300G  40% /home\n" +
+              "/dev/sdb1       1.0T  500G  500G  50% /run/media/mmcblk0p1\n",
+            exitCode: 0,
+          }) as unknown as ReturnType<typeof Bun.spawn>,
+      );
+      const result = await backend.getDiskUsage();
+      // Two distinct filesystems: the system root and the SD-card lib.
+      expect(result.map((r) => r.filesystem)).toEqual([
+        "/dev/nvme0n1p2",
+        "/dev/sdb1",
+      ]);
     });
 
     it("returns empty array when df returns no rows", async () => {

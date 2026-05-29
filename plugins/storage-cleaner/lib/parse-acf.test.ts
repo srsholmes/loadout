@@ -18,19 +18,52 @@ describe("parseAcf", () => {
   });
 
   it("handles names with spaces and punctuation", () => {
-    const content = `"appid"  "440"\n"name"  "Team Fortress 2: Source"`;
+    const content = `"AppState" { "appid" "440" "name" "Team Fortress 2: Source" }`;
     expect(parseAcf(content)).toEqual({
       appId: "440",
       name: "Team Fortress 2: Source",
     });
   });
 
+  it("ignores appid/name inside nested blocks like InstalledDepots", () => {
+    // Real ACF files carry nested blocks (UserConfig, MountedDepots,
+    // InstalledDepots, ...). A naive first-match would happily grab a
+    // depot's appid override. The parser must only look at depth 1
+    // keys of AppState.
+    const content = `
+"AppState"
+{
+  "appid"   "730"
+  "name"    "Counter-Strike 2"
+  "InstalledDepots"
+  {
+    "734"
+    {
+      "appid"     "999999"
+      "name"      "FakeName"
+    }
+  }
+  "UserConfig"
+  {
+    "name"      "ShouldNotWin"
+  }
+}`;
+    expect(parseAcf(content)).toEqual({
+      appId: "730",
+      name: "Counter-Strike 2",
+    });
+  });
+
+  it("returns null when there is no AppState block", () => {
+    expect(parseAcf(`"appid" "730" "name" "Stray"`)).toBeNull();
+  });
+
   it("returns null when appid is missing", () => {
-    expect(parseAcf(`"name"  "No App"`)).toBeNull();
+    expect(parseAcf(`"AppState" { "name" "No App" }`)).toBeNull();
   });
 
   it("returns null when name is missing", () => {
-    expect(parseAcf(`"appid"  "730"`)).toBeNull();
+    expect(parseAcf(`"AppState" { "appid" "730" }`)).toBeNull();
   });
 
   it("returns null for empty input", () => {
@@ -38,6 +71,6 @@ describe("parseAcf", () => {
   });
 
   it("returns null when appid is non-numeric", () => {
-    expect(parseAcf(`"appid"  "abc"\n"name"  "X"`)).toBeNull();
+    expect(parseAcf(`"AppState" { "appid" "abc" "name" "X" }`)).toBeNull();
   });
 });
