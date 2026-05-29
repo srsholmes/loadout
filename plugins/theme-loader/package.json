@@ -1,0 +1,30 @@
+{
+  "name": "@loadout/plugin-theme-loader",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Browse, install, and toggle community CSS themes for Steam's Big Picture UI",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@loadout/ui": "workspace:*"
+  },
+  "plugin": {
+    "id": "theme-loader",
+    "name": "Theme Loader",
+    "description": "Browse, install, and toggle community CSS themes for Steam's Big Picture UI",
+    "permissions": {
+      "network": [
+        "api.deckthemes.com",
+        "localhost"
+      ],
+      "filesystem": [
+        "~/.local/share/loadout/theme-loader/css-themes",
+        "~/.cache/loadout/theme-loader"
+      ],
+      "commands": ["unzip", "xdg-open"]
+    },
+    "category": "Steam",
+    "subtitle": "Inject CSS into Steam Big Picture",
+    "target": { "type": "overlay" }
+  }
+}
