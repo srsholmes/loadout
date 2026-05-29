@@ -179,13 +179,24 @@ describe("scanLibrary", () => {
     expect(celeste).toBeDefined();
     expect(celeste?.source).toBe("steam");
     expect(celeste?.sizeOnDisk).toBe(1234567);
+    // Steam apps now expose the loader's local route as the canonical
+    // header URL so the per-userdata custom-art lookup wins over the
+    // public CDN, and freshly-applied SGDB art shows up the next time
+    // the grid mounts. The CDN URL is still available as
+    // `cdnHeaderUrl` for plugins that explicitly want it.
     expect(celeste?.headerUrl).toContain(
-      "cdn.cloudflare.steamstatic.com/steam/apps/504230/header.jpg",
+      "/api/steam-grid/504230/12345/header",
     );
-    expect(celeste?.capsuleUrl).toContain("library_600x900.jpg");
+    expect(celeste?.capsuleUrl).toContain(
+      "/api/steam-grid/504230/12345/capsule",
+    );
     expect(celeste?.localHeaderUrl).toContain(
       "/api/steam-grid/504230/12345/header",
     );
+    expect(celeste?.cdnHeaderUrl).toContain(
+      "cdn.cloudflare.steamstatic.com/steam/apps/504230/header.jpg",
+    );
+    expect(celeste?.cdnCapsuleUrl).toContain("library_600x900.jpg");
 
     const shortcut = games.find((g) => g.source === "shortcut");
     expect(shortcut).toBeDefined();
