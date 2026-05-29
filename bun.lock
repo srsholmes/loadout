@@ -350,6 +350,25 @@
         "react-dom": "^18.3.0",
       },
     },
+    "plugins/store-bridge": {
+      "name": "@loadout/plugin-store-bridge",
+      "version": "0.1.0",
+      "dependencies": {
+        "@loadout/exec": "workspace:*",
+        "@loadout/external-cache": "workspace:*",
+        "@loadout/plugin-storage": "workspace:*",
+        "@loadout/sgdb-art": "workspace:*",
+        "@loadout/steam-cdp": "workspace:*",
+        "@loadout/steam-paths": "workspace:*",
+        "@loadout/steam-shortcut": "workspace:*",
+        "@loadout/types": "workspace:*",
+        "@loadout/ui": "workspace:*",
+        "@loadout/vdf": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+        "react-icons": "^5.6.0",
+      },
+    },
     "plugins/tdp-control": {
       "name": "@loadout/plugin-tdp-control",
       "version": "0.0.1",
@@ -558,6 +577,8 @@
     "@loadout/plugin-storage": ["@loadout/plugin-storage@workspace:packages/plugin-storage"],
 
     "@loadout/plugin-storage-cleaner": ["@loadout/plugin-storage-cleaner@workspace:plugins/storage-cleaner"],
+
+    "@loadout/plugin-store-bridge": ["@loadout/plugin-store-bridge@workspace:plugins/store-bridge"],
 
     "@loadout/plugin-tdp-control": ["@loadout/plugin-tdp-control@workspace:plugins/tdp-control"],
 
