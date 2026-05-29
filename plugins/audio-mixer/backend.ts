@@ -23,7 +23,6 @@ import {
 // Re-export the RPC-visible types so existing import sites (and the
 // UI in `app.tsx`) can keep pulling them from the backend module.
 export type { AudioDevice, AudioStream, DeviceKind, MixerState, StreamKind };
-export { mixerChanged };
 
 const PLUGIN_ID = "audio-mixer";
 
@@ -195,6 +194,19 @@ export default class AudioMixerBackend implements PluginBackend {
     if (!this.available) {
       return { success: false, error: "Audio mixer unavailable" };
     }
+    const res = await this._writeVolume(id, volume);
+    if (!res.success) return res;
+    // Push fresh snapshot so the UI sees the change immediately.
+    void this.poll();
+    return res;
+  }
+
+  /** Lower-level volume write — no follow-up poll. Used by
+   *  applyGameProfile to avoid a redundant poll round on game launch. */
+  private async _writeVolume(
+    id: number,
+    volume: number,
+  ): Promise<{ success: boolean; error?: string }> {
     const clamped = Math.max(0, Math.min(1.5, volume));
     const { exitCode, stderr } = await runFull([
       "wpctl",
@@ -206,8 +218,6 @@ export default class AudioMixerBackend implements PluginBackend {
       return { success: false, error: stderr.trim() || "wpctl failed" };
     }
     await this.persistAppForId(id, { volume: clamped });
-    // Push fresh snapshot so the UI sees the change immediately.
-    void this.poll();
     return { success: true };
   }
 
@@ -253,6 +263,16 @@ export default class AudioMixerBackend implements PluginBackend {
     if (!this.available) {
       return { success: false, error: "Audio mixer unavailable" };
     }
+    const res = await this._writeDefault(id);
+    if (!res.success) return res;
+    void this.poll();
+    return res;
+  }
+
+  /** Lower-level default-sink write — no follow-up poll. */
+  private async _writeDefault(
+    id: number,
+  ): Promise<{ success: boolean; error?: string }> {
     const { exitCode, stderr } = await runFull([
       "wpctl",
       "set-default",
@@ -261,7 +281,6 @@ export default class AudioMixerBackend implements PluginBackend {
     if (exitCode !== 0) {
       return { success: false, error: stderr.trim() || "wpctl failed" };
     }
-    void this.poll();
     return { success: true };
   }
 
@@ -321,8 +340,9 @@ export default class AudioMixerBackend implements PluginBackend {
   // Persistence helpers
   // -----------------------------------------------------------------------
 
-  /** Find a stream by PipeWire object id in the most recent snapshot. */
-  private _streamForId(id: number): AudioStream | null {
+  /** Find a stream by PipeWire object id in the most recent snapshot.
+   *  Underscore prefix is the contract marker that keeps it off the RPC wire. */
+  _streamForId(id: number): AudioStream | null {
     if (!this.lastSnapshot) return null;
     return (
       [
@@ -337,11 +357,18 @@ export default class AudioMixerBackend implements PluginBackend {
    * into the persisted entry for that app and write to disk. Calls
    * targeting devices (sinks/sources) are silently ignored — WirePlumber
    * already persists those natively.
+   *
+   * Defensive: if `lastSnapshot` hasn't been primed yet (a setVolume races
+   * onLoad), take a single inline snapshot rather than persisting with an
+   * empty app name (which would write apps[""] garbage).
    */
   private async persistAppForId(
     id: number,
     patch: Partial<SavedAppVolume>,
   ): Promise<void> {
+    if (this.lastSnapshot === null) {
+      this.lastSnapshot = await this.snapshot();
+    }
     const stream = this._streamForId(id);
     if (!stream || !stream.appName) return;
     const prev = this.apps[stream.appName] ?? {
@@ -513,7 +540,16 @@ export default class AudioMixerBackend implements PluginBackend {
     };
   }
 
-  /** Apply a per-game audio profile. Engine handles bound-app bookkeeping. */
+  /** Apply a per-game audio profile. Engine handles bound-app bookkeeping.
+   *
+   *  Uses the lower-level `_writeVolume` / `_writeDefault` paths so we don't
+   *  trigger the public `setVolume`/`setDefault` post-poll — that would race
+   *  the snapshot we already have in flight and burn an extra pw-dump pair.
+   *  We emit a single `mixerChanged` at the end instead.
+   *
+   *  If the stored `defaultSinkName` no longer exists (e.g. user unplugged
+   *  the bluetooth headset they bound the profile to), emit a
+   *  `staleSinkProfile` event so the UI can prompt the user to re-pick. */
   private async applyGameProfile(
     payload: AudioProfilePayload,
     ctx: { appId: number; gameName: string },
@@ -526,24 +562,38 @@ export default class AudioMixerBackend implements PluginBackend {
         (s) => s.nodeName === payload.defaultSinkName,
       );
       if (target) {
-        await this.setDefault(target.id);
+        await this._writeDefault(target.id);
       } else {
         console.warn(
           `[audio-mixer] Per-game default sink "${payload.defaultSinkName}" not found for ${ctx.gameName || `App ${ctx.appId}`}`,
         );
+        this.emit?.({
+          event: "staleSinkProfile",
+          data: {
+            appId: ctx.appId,
+            gameName: ctx.gameName,
+            missingSinkName: payload.defaultSinkName,
+          },
+        });
       }
     }
     if (typeof payload.masterVolume === "number") {
+      // Re-resolve default sink after the (possibly new) setDefault took
+      // effect. Cheap: one pw-dump pair.
       const post = await this.snapshot();
       this.lastSnapshot = post;
       const sink = post.sinks.find((s) => s.isDefault);
       if (sink) {
-        await this.setVolume(sink.id, payload.masterVolume);
+        await this._writeVolume(sink.id, payload.masterVolume);
       }
     }
+    // Single fan-out to subscribers instead of one poll per write.
+    void this.poll();
   }
 
-  /** Restore the pre-game audio device state from the engine snapshot. */
+  /** Restore the pre-game audio device state from the engine snapshot.
+   *  Uses the lower-level write paths to skip per-write polls; single
+   *  fan-out poll at the end. */
   private async restoreGameSnapshot(snap: AudioGameSnapshot): Promise<void> {
     const state = await this.snapshot();
     this.lastSnapshot = state;
@@ -553,7 +603,7 @@ export default class AudioMixerBackend implements PluginBackend {
         (s) => s.nodeName === snap.defaultSinkName,
       );
       if (target) {
-        await this.setDefault(target.id);
+        await this._writeDefault(target.id);
       }
     }
     if (typeof snap.masterVolume === "number") {
@@ -561,8 +611,9 @@ export default class AudioMixerBackend implements PluginBackend {
       this.lastSnapshot = post;
       const sink = post.sinks.find((s) => s.isDefault);
       if (sink) {
-        await this.setVolume(sink.id, snap.masterVolume);
+        await this._writeVolume(sink.id, snap.masterVolume);
       }
     }
+    void this.poll();
   }
 }

@@ -337,6 +337,13 @@ function AudioMixer() {
     [call],
   );
 
+  // Sink-only changes are intentionally NOT bound to per-game profiles.
+  // The contract: WirePlumber persists the system default sink natively,
+  // and the per-game profile only writes (sink + masterVolume) when the
+  // user commits a volume gesture (see homepage widget `handleCommit`).
+  // This matches the source plugin and keeps the binding surface narrow:
+  // accidentally tapping a sink tile to test it won't pin that sink to
+  // the running game.
   const handleSetDefault = useCallback(
     (id: number) => {
       call("setDefault", id).catch((e) =>

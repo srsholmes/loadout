@@ -4,7 +4,6 @@ import {
   expect,
   beforeEach,
   afterEach,
-  mock,
   spyOn,
 } from "bun:test";
 import type { EmitPayload } from "@loadout/types";
@@ -552,7 +551,102 @@ describe("AudioMixerBackend", () => {
       );
       expect(setVolCalls).toHaveLength(0);
     });
+
+    it("falls back to inline pw-dump when lastSnapshot is null on persist", async () => {
+      // Regression for review item #6: if `persistAppForId` is reached
+      // before the priming snapshot has populated `lastSnapshot`, it
+      // must NOT write apps[""] garbage — it should take a single
+      // inline snapshot to resolve the appName.
+      await backend.onLoad();
+      // Force lastSnapshot back to null to simulate the race.
+      (backend as unknown as { lastSnapshot: null }).lastSnapshot = null;
+      await backend.setVolume(100, 0.4); // Firefox stream id
+      const written = files.get(STORAGE_PATH);
+      expect(written).toBeDefined();
+      const parsed = JSON.parse(written!);
+      // App name was resolved from the inline snapshot, not lost.
+      expect(parsed.apps.Firefox).toBeDefined();
+      expect(parsed.apps.Firefox.volume).toBe(0.4);
+      // And no apps[""] garbage key was written.
+      expect(parsed.apps[""]).toBeUndefined();
+    });
+  });
+
+  describe("per-game profiles", () => {
+    let calls: string[][];
+
+    beforeEach(() => {
+      calls = [];
+      mountSpawn((argv) => {
+        calls.push(argv);
+        if (argv[0] !== "wpctl" && argv[0] !== "pw-dump") {
+          return { exitCode: 0, stdout: "/usr/bin/" + (argv.at(-1) ?? "") };
+        }
+        if (argv[0] === "pw-dump") {
+          return { exitCode: 0, stdout: PW_DUMP_TYPICAL };
+        }
+        if (argv[0] === "wpctl" && argv[1] === "status") {
+          return { exitCode: 0, stdout: WPCTL_STATUS_TYPICAL };
+        }
+        return { exitCode: 0 };
+      });
+    });
+
+    it("emits staleSinkProfile when the stored sink no longer exists", async () => {
+      await backend.onLoad();
+      await backend.setPerGameEnabled(true);
+      await backend.setGameProfile(123, "Hades II", {
+        defaultSinkName: "alsa_output.usb-vanished-device.analog-stereo",
+        masterVolume: 0.6,
+      });
+      // Reset emit buffer so we only see launch-time events below.
+      emitted.length = 0;
+      await backend.handleGameLaunch(123, "Hades II");
+      const stale = emitted.find((p) => p.event === "staleSinkProfile");
+      expect(stale).toBeDefined();
+      const data = stale!.data as {
+        appId: number;
+        gameName: string;
+        missingSinkName: string;
+      };
+      expect(data.appId).toBe(123);
+      expect(data.missingSinkName).toBe(
+        "alsa_output.usb-vanished-device.analog-stereo",
+      );
+    });
+
+    it("does NOT emit staleSinkProfile when the stored sink resolves", async () => {
+      await backend.onLoad();
+      await backend.setPerGameEnabled(true);
+      await backend.setGameProfile(124, "Firefox", {
+        // This sink IS in PW_DUMP_TYPICAL.
+        defaultSinkName: "alsa_output.usb-headset.analog-stereo",
+        masterVolume: 0.5,
+      });
+      emitted.length = 0;
+      await backend.handleGameLaunch(124, "Firefox");
+      const stale = emitted.find((p) => p.event === "staleSinkProfile");
+      expect(stale).toBeUndefined();
+    });
+
+    it("applyGameProfile writes via wpctl set-default + set-volume", async () => {
+      await backend.onLoad();
+      await backend.setPerGameEnabled(true);
+      await backend.setGameProfile(125, "Hades II", {
+        defaultSinkName: "alsa_output.usb-headset.analog-stereo",
+        masterVolume: 0.5,
+      });
+      const baseline = calls.length;
+      await backend.handleGameLaunch(125, "Hades II");
+      const newCalls = calls.slice(baseline);
+      const setDefault = newCalls.find(
+        (c) => c[0] === "wpctl" && c[1] === "set-default" && c[2] === "43",
+      );
+      const setVolume = newCalls.find(
+        (c) => c[0] === "wpctl" && c[1] === "set-volume",
+      );
+      expect(setDefault).toBeDefined();
+      expect(setVolume).toBeDefined();
+    });
   });
 });
-
-void mock; // bun:test re-export reserved for parity with peer specs.
