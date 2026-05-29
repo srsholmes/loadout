@@ -142,9 +142,12 @@ describe("InputPlumberBackend", () => {
 
       await backend.onLoad();
       // The broadcast is fire-and-forget (`void this.broadcastStatus()`),
-      // so we need to drain the microtask queue before asserting.
-      await Promise.resolve();
-      await Promise.resolve();
+      // so we need to drain the microtask queue before asserting. The
+      // getStatus probe goes: installer.getStatus → .finally cleanup →
+      // resume in broadcastStatus → emit. A handful of microtask hops
+      // covers the chain; setTimeout(0) is the bigger hammer that
+      // also yields to any pending macrotasks.
+      await new Promise((r) => setTimeout(r, 0));
 
       const status = emitted.find(
         (e) => e.event === "input-plumber-status",
@@ -171,12 +174,12 @@ describe("InputPlumberBackend", () => {
         throw new Error("boom");
       };
       // Should not reject — broadcastStatus catches internally and
-      // logs to console.error.
+      // logs via this.log.warn (no console.error noise).
       await expect(backend.onLoad()).resolves.toBeUndefined();
       // And no input-plumber-status event was emitted (the throw
-      // short-circuited the emit call).
-      await Promise.resolve();
-      await Promise.resolve();
+      // short-circuited the emit call). Drain a macrotask so the
+      // rejection settles and the catch in broadcastStatus runs.
+      await new Promise((r) => setTimeout(r, 0));
       expect(
         emitted.find((e) => e.event === "input-plumber-status"),
       ).toBeUndefined();
@@ -209,6 +212,42 @@ describe("InputPlumberBackend", () => {
         throw new Error("status probe failed");
       };
       await expect(backend.getStatus()).rejects.toThrow("status probe failed");
+    });
+
+    it("coalesces concurrent callers onto a single probe", async () => {
+      // Block the underlying probe so we can fire two getStatus() calls
+      // while the first is still in flight. Without coalescing, each
+      // caller would dispatch its own installer.getStatus() — and a
+      // race on `statusInflight` teardown could let the second call
+      // re-enter even when a probe is "in flight".
+      let resolve!: (v: unknown) => void;
+      let probeCalls = 0;
+      statusImpl = () => {
+        probeCalls += 1;
+        return new Promise((r) => {
+          resolve = r;
+        });
+      };
+
+      const a = backend.getStatus();
+      const b = backend.getStatus();
+      // Both callers must share the same in-flight probe.
+      expect(probeCalls).toBe(1);
+
+      resolve({
+        installed: true,
+        binaryPath: "/usr/bin/inputplumber",
+        managedBy: "distro",
+        version: "0.50.0",
+        serviceActive: true,
+        serviceEnabled: true,
+        scriptPresent: true,
+        summary: "ok",
+      });
+
+      const [ra, rb] = await Promise.all([a, b]);
+      expect(ra).toEqual(rb);
+      expect(probeCalls).toBe(1);
     });
   });
 

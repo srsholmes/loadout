@@ -41,13 +41,24 @@ IP_DATA_DIR="$IP_ROOT/data/inputplumber"
 IP_SERVICE_PATH="/etc/systemd/system/inputplumber.service"
 IP_DBUS_POLICY="/etc/dbus-1/system.d/org.shadowblip.InputPlumber.conf"
 IP_POLKIT_RULES="/etc/polkit-1/rules.d/org.shadowblip.InputPlumber.rules"
-# Polkit only scans /usr/share/polkit-1/actions/ for action descriptors,
-# never /etc — so this write needs a writable /usr. On rpm-ostree that
-# means hotfix unlock is active or the image already ships /usr writable.
-# When the deployment is locked, the cp will fail with EROFS and we just
-# warn, since most plugin clients still work without polkit (they use
-# the service's own dbus policy in /etc).
-IP_POLKIT_ACTIONS="/usr/share/polkit-1/actions/org.shadowblip.InputPlumber.policy"
+# ──────────────────────────────────────────────────────────────────────
+# Polkit action-descriptor placement (immutable-/usr aware)
+# ──────────────────────────────────────────────────────────────────────
+# Polkit historically scans /usr/share/polkit-1/actions/ ONLY, but on
+# distros where /usr is immutable (rpm-ostree: Bazzite, SteamOS, Silverblue)
+# we can't write there without `bootc usr-overlay` / `rpm-ostree usroverlay`.
+#
+# In practice modern polkit (>=0.105 — every supported distro) ALSO honours
+# /etc/polkit-1/actions/, so when the /usr write fails we fall back there.
+# This keeps `busctl get-property` working for plugin clients on Bazzite
+# and SteamOS without forcing the user to unlock /usr.
+#
+# Refs:
+#   - https://www.freedesktop.org/software/polkit/docs/latest/ (action layout)
+#   - project_inputplumber_polkit_install.md (2026-05-03 fix that
+#     surfaced the "Action not registered" symptom on Bazzite)
+IP_POLKIT_ACTIONS_USR="/usr/share/polkit-1/actions/org.shadowblip.InputPlumber.policy"
+IP_POLKIT_ACTIONS_ETC="/etc/polkit-1/actions/org.shadowblip.InputPlumber.policy"
 
 log()  { printf '[install-inputplumber] %s\n' "$*"; }
 warn() { printf '[install-inputplumber] WARN: %s\n' "$*" >&2; }
@@ -212,13 +223,30 @@ if [ -f "$EXTRACT_DIR/usr/share/polkit-1/rules.d/org.shadowblip.InputPlumber.rul
     cp -f "$EXTRACT_DIR/usr/share/polkit-1/rules.d/org.shadowblip.InputPlumber.rules" "$IP_POLKIT_RULES"
 fi
 
-# Polkit actions only load from /usr — best effort.
-if [ -f "$EXTRACT_DIR/usr/share/polkit-1/actions/org.shadowblip.InputPlumber.policy" ]; then
-    if mkdir -p "$(dirname "$IP_POLKIT_ACTIONS")" 2>/dev/null \
-       && cp -f "$EXTRACT_DIR/usr/share/polkit-1/actions/org.shadowblip.InputPlumber.policy" "$IP_POLKIT_ACTIONS" 2>/dev/null; then
-        log "installed polkit action → $IP_POLKIT_ACTIONS"
+# Polkit action descriptor — try /usr first (the historical location),
+# fall back to /etc on immutable-/usr systems (Bazzite/SteamOS/Silverblue).
+# Modern polkit honours both. Without the descriptor, clients calling
+# privileged dbus methods get "Action not registered".
+SRC_POLICY="$EXTRACT_DIR/usr/share/polkit-1/actions/org.shadowblip.InputPlumber.policy"
+if [ -f "$SRC_POLICY" ]; then
+    if mkdir -p "$(dirname "$IP_POLKIT_ACTIONS_USR")" 2>/dev/null \
+       && cp -f "$SRC_POLICY" "$IP_POLKIT_ACTIONS_USR" 2>/dev/null; then
+        log "installed polkit action → $IP_POLKIT_ACTIONS_USR"
+    elif [ "$IS_RPM_OSTREE" -eq 1 ] \
+         && mkdir -p "$(dirname "$IP_POLKIT_ACTIONS_ETC")" 2>/dev/null \
+         && cp -f "$SRC_POLICY" "$IP_POLKIT_ACTIONS_ETC" 2>/dev/null; then
+        log "installed polkit action → $IP_POLKIT_ACTIONS_ETC (immutable /usr fallback)"
+    elif mkdir -p "$(dirname "$IP_POLKIT_ACTIONS_ETC")" 2>/dev/null \
+         && cp -f "$SRC_POLICY" "$IP_POLKIT_ACTIONS_ETC" 2>/dev/null; then
+        # Non-ostree systems with a hardened /usr (or NixOS, or read-only
+        # bind mounts) still get the /etc fallback as a last resort.
+        log "installed polkit action → $IP_POLKIT_ACTIONS_ETC (/usr not writable)"
     else
-        warn "could not write $IP_POLKIT_ACTIONS (likely read-only /usr); some privileged dbus methods may report 'Action not registered'"
+        warn "could not write polkit action to either $IP_POLKIT_ACTIONS_USR or $IP_POLKIT_ACTIONS_ETC"
+        warn "privileged dbus methods may report 'Action not registered'."
+        if [ "$IS_RPM_OSTREE" -eq 1 ]; then
+            warn "rpm-ostree detected — unlock /usr with 'sudo bootc usr-overlay' (or 'sudo rpm-ostree usroverlay' on older releases) and re-run."
+        fi
     fi
 fi
 

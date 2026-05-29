@@ -13,8 +13,11 @@
  * button when the daemon is already there.
  */
 
-import type { PluginBackend, EmitPayload } from "@loadout/types";
+import type { PluginBackend, EmitPayload, PluginLogger } from "@loadout/types";
 import * as installer from "./lib/install";
+import type { InstallStartResult } from "./shared";
+
+export type { InstallStartResult };
 
 // Periodic status broadcast cadence. State is stable across a session
 // (only mutates when the user installs / starts / stops InputPlumber
@@ -28,13 +31,9 @@ const STATUS_INTERVAL_MS = 30_000;
  *  methods invalidate explicitly to force a fresh read. */
 const STATUS_CACHE_TTL_MS = 60_000;
 
-export interface InstallStartResult {
-  started: boolean;
-  error?: string;
-}
-
 export default class InputPlumberBackend implements PluginBackend {
   emit?: (payload: EmitPayload) => void;
+  log?: PluginLogger;
 
   private statusTimer?: ReturnType<typeof setInterval>;
   private installRunning = false;
@@ -55,12 +54,12 @@ export default class InputPlumberBackend implements PluginBackend {
   // -----------------------------------------------------------------------
 
   async onLoad(): Promise<void> {
-    console.log("[input-plumber] Plugin loading");
+    this.log?.info("Plugin loading");
     this.statusTimer = setInterval(() => {
       void this.broadcastStatus();
     }, STATUS_INTERVAL_MS);
     void this.broadcastStatus();
-    console.log("[input-plumber] Plugin loaded");
+    this.log?.info("Plugin loaded");
   }
 
   async onUnload(): Promise<void> {
@@ -68,7 +67,7 @@ export default class InputPlumberBackend implements PluginBackend {
       clearInterval(this.statusTimer);
       this.statusTimer = undefined;
     }
-    console.log("[input-plumber] Plugin unloaded");
+    this.log?.info("Plugin unloaded");
   }
 
   // -----------------------------------------------------------------------
@@ -84,16 +83,26 @@ export default class InputPlumberBackend implements PluginBackend {
     // landing while the periodic broadcast is mid-probe doesn't
     // double-fire.
     if (this.statusInflight) return this.statusInflight;
-    this.statusInflight = (async () => {
-      try {
-        const value = await installer.getStatus();
-        this.statusCache = { value, expires: Date.now() + STATUS_CACHE_TTL_MS };
-        return value;
-      } finally {
-        this.statusInflight = null;
-      }
+    // Race-safety: store the `.finally`-chained promise (not the raw
+    // probe) so concurrent callers and the teardown observe the same
+    // value. The slot only clears if it still points at *this* probe
+    // — that way a fresh caller's reservation can't get clobbered by
+    // a stale teardown. The assignment lands before any await so a
+    // sync second caller sees the in-flight promise rather than a
+    // freshly-null'd field. We assign `p` to `statusInflight` before
+    // the `.finally` chain runs (microtask boundary), so the
+    // `=== p` identity check inside `.finally` succeeds for the
+    // common case.
+    const probe = (async () => {
+      const value = await installer.getStatus();
+      this.statusCache = { value, expires: Date.now() + STATUS_CACHE_TTL_MS };
+      return value;
     })();
-    return this.statusInflight;
+    const p = probe.finally(() => {
+      if (this.statusInflight === p) this.statusInflight = null;
+    });
+    this.statusInflight = p;
+    return p;
   }
 
   /** Drop the cached status so the next getStatus() call re-probes.
@@ -108,7 +117,9 @@ export default class InputPlumberBackend implements PluginBackend {
       const status = await this.getStatus();
       this.emit?.({ event: "input-plumber-status", data: status });
     } catch (err) {
-      console.error("[input-plumber] broadcastStatus failed:", err);
+      this.log?.warn(
+        `broadcastStatus failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 

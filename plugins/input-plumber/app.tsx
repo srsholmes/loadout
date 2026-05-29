@@ -14,44 +14,20 @@ import {
   useBackend,
   useFocusable,
 } from "@loadout/ui";
+import type {
+  InstallLogEvent,
+  InstallRunResult,
+  InstallStateEvent,
+  InstallStatus,
+} from "./shared";
 
 export const icon = FaPlug;
 
-// ---------------------------------------------------------------------------
-// Types — mirror backend.ts
-// ---------------------------------------------------------------------------
-
-type ManagedBy = "us" | "distro" | "none";
-
-interface InstallStatus {
-  installed: boolean;
-  binaryPath: string | null;
-  managedBy: ManagedBy;
-  version: string | null;
-  serviceActive: boolean;
-  serviceEnabled: boolean;
-  scriptPresent: boolean;
-  summary: string;
-}
-
-interface InstallRunResult {
-  success: boolean;
-  exitCode: number;
-  timedOut: boolean;
-  durationSeconds: number;
-  error?: string;
-}
-
-interface InstallLogEvent {
-  kind: "stdout" | "stderr" | "status";
-  text: string;
-}
-
-interface InstallStateEvent {
-  running: boolean;
-  result?: InstallRunResult;
-}
-
+// Hard cap on retained install-log lines. Chatty installs (pacman/dnf
+// with verbose output, a tarball fallback streaming hundreds of lines)
+// would otherwise blow the React state heap. When we hit the cap we
+// drop the oldest lines in a single `slice` instead of allocating a
+// fresh array per chunk — one allocation on overflow vs one per push.
 const LOG_CAP = 500;
 
 // ---------------------------------------------------------------------------
@@ -118,10 +94,14 @@ function InputPlumberPanel() {
     handler: (data) => {
       const ev = data as InstallLogEvent;
       setLogs((prev) => {
-        const next = [...prev, ev.text];
-        if (next.length > LOG_CAP) {
-          return next.slice(next.length - LOG_CAP);
-        }
+        // Below the cap: still a fresh array (React state has to be
+        // referentially new to re-render), but no re-slice.
+        if (prev.length < LOG_CAP) return [...prev, ev.text];
+        // At/over the cap: drop the oldest line, keep the new one.
+        // One slice + one push, regardless of how chatty the install
+        // gets — bounded GC pressure per log chunk.
+        const next = prev.slice(prev.length - LOG_CAP + 1);
+        next.push(ev.text);
         return next;
       });
       requestAnimationFrame(() => {

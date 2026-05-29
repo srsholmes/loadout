@@ -138,6 +138,41 @@ describe("input-plumber plugin", () => {
     });
   });
 
+  it("caps the log buffer at LOG_CAP and keeps the most recent lines", async () => {
+    // Regression guard for the unbounded array.push + slice pattern
+    // that thrashed GC on chatty installs. We fire well past the cap
+    // (500 lines) and assert that the earliest lines are dropped and
+    // the latest survive — the cap is enforced and ordering is right.
+    rpcFor(notInstalledStatus);
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(eventHandlers.has("install-log")).toBe(true);
+    });
+
+    const handler = eventHandlers.get("install-log")!;
+    // 600 lines, each tagged with its index so we can verify which
+    // ones got dropped. "FIRST" lines should be evicted, "LAST" lines
+    // should survive.
+    for (let i = 0; i < 600; i++) {
+      handler({ kind: "stdout", text: `line ${i}\n` });
+    }
+
+    await waitFor(() => {
+      const text = container.querySelector("pre")?.textContent ?? "";
+      // The first lines must be evicted.
+      expect(text.includes("line 0\n")).toBe(false);
+      expect(text.includes("line 99\n")).toBe(false);
+      // The most recent line is retained.
+      expect(text).toContain("line 599");
+      // And exactly LOG_CAP (500) lines are kept.
+      const lineCount = text.split("\n").filter(Boolean).length;
+      expect(lineCount).toBe(500);
+    });
+  });
+
   it("install-state event with success surfaces the duration", async () => {
     rpcFor(notInstalledStatus);
     const container = document.createElement("div");

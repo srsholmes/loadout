@@ -16,44 +16,17 @@
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { runFull, spawn } from "@loadout/exec";
+import type { InstallRunResult, InstallStatus, ManagedBy } from "../shared";
+
+// Re-export so existing callers (backend.ts, tests) keep working without
+// caring whether the type lives here or in ../shared. The source of truth
+// is ../shared so the frontend can import it without dragging in fs/exec.
+export type { InstallRunResult, InstallStatus, ManagedBy };
 
 const PLUGIN_ROOT = join(import.meta.dir, "..");
 const INSTALL_SCRIPT = join(PLUGIN_ROOT, "scripts", "install-inputplumber.sh");
 
 const VAR_BIN = "/var/lib/inputplumber/bin/inputplumber";
-
-export type ManagedBy = "us" | "distro" | "none";
-
-export interface InstallStatus {
-  /** Is the daemon binary present anywhere known? */
-  installed: boolean;
-  /** Where it lives, or null if not installed. */
-  binaryPath: string | null;
-  /**
-   * "us"     — at /var/lib/inputplumber/bin/inputplumber (this script).
-   * "distro" — anywhere else on PATH (system package).
-   * "none"   — not present.
-   */
-  managedBy: ManagedBy;
-  /** Reported by `inputplumber --version` if reachable. */
-  version: string | null;
-  /** Is inputplumber.service currently active? */
-  serviceActive: boolean;
-  /** Is inputplumber.service enabled (starts on boot)? */
-  serviceEnabled: boolean;
-  /** Does the bundled install script exist on disk? */
-  scriptPresent: boolean;
-  /** One-line human summary. */
-  summary: string;
-}
-
-export interface InstallRunResult {
-  success: boolean;
-  exitCode: number;
-  timedOut: boolean;
-  durationSeconds: number;
-  error?: string;
-}
 
 export interface RunnerOptions {
   onLog?: (chunk: string, stream: "stdout" | "stderr") => void;
