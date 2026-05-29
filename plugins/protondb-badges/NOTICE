@@ -1,0 +1,20 @@
+ProtonDB Badges plugin
+Copyright (c) 2026 Simon Holmes
+Licensed under BSD-3-Clause (see LICENSE).
+
+This plugin is an independent reimplementation of the ProtonDB-badge
+injection concept popularised by the protondb-decky Decky-Loader plugin:
+
+  https://github.com/OMGDuke/protondb-decky
+  Dual-licensed: GPL-3.0 OR BSD-3-Clause
+  Original Copyright (c) Steam Deck Homebrew
+
+The upstream is dual-licensed; this plugin elects the BSD-3-Clause arm.
+No source code from protondb-decky was copied or transliterated. Our
+backend uses Chrome DevTools Protocol injection (the same architectural
+pattern as our css-loader plugin), distinct from the Decky-frontend-lib
+patching the upstream uses.
+
+ProtonDB itself (https://www.protondb.com) is a third-party service and
+is not affiliated with this project. We consume its public report-summary
+API.
