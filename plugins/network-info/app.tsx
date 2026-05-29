@@ -30,6 +30,22 @@ async function fetchCloudflareLocation(): Promise<string | null> {
   }
 }
 
+/**
+ * `crypto.getRandomValues` is capped at 65 536 bytes per call by the
+ * Web Crypto spec; Chromium (and therefore CEF, where the overlay
+ * runs) enforces it strictly, Bun and most test runners don't. Without
+ * chunking, the multi-MB upload buffer below throws
+ * `QuotaExceededError` the moment we try to seed it — which was the
+ * actual cause of the speed test bailing with "Test failed" the
+ * instant the upload phase started.
+ */
+function fillRandom(buf: Uint8Array): void {
+  const CHUNK = 65536;
+  for (let off = 0; off < buf.length; off += CHUNK) {
+    crypto.getRandomValues(buf.subarray(off, Math.min(off + CHUNK, buf.length)));
+  }
+}
+
 interface SpeedResults {
   download: number | null;
   upload: number | null;
@@ -209,7 +225,7 @@ class SpeedTestEngine {
     ];
     const maxBytes = Math.max(...configs.map((c) => c.bytes));
     const randomData = new Uint8Array(maxBytes);
-    crypto.getRandomValues(randomData);
+    fillRandom(randomData);
 
     return this.measureTransfer("upload", configs, results, async (bytes) => {
       const data = randomData.slice(0, bytes);
@@ -336,6 +352,7 @@ function NetworkInfo() {
 
   // Speed test state
   const [status, setStatus] = useState<"idle" | "running" | "finished" | "error">("idle");
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
   const [results, setResults] = useState<SpeedResults>({
     download: null,
@@ -375,6 +392,7 @@ function NetworkInfo() {
 
   const startTest = useCallback(() => {
     engineRef.current?.stop();
+    setErrorMsg(null);
     setResults({
       download: null,
       upload: null,
@@ -397,7 +415,10 @@ function NetworkInfo() {
       setStatus("finished");
       setPhase("done");
     };
-    engine.onError = () => setStatus("error");
+    engine.onError = (msg) => {
+      setErrorMsg(msg);
+      setStatus("error");
+    };
 
     engineRef.current = engine;
     setStatus("running");
@@ -568,7 +589,7 @@ function NetworkInfo() {
                 className="subsection-desc mt-2"
                 style={{ color: "var(--color-error)" }}
               >
-                Test failed — check network connection
+                Test failed{errorMsg ? `: ${errorMsg}` : " — check network connection"}
               </div>
             )}
             {status === "finished" && results.measuredAt && (
