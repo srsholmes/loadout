@@ -2,9 +2,10 @@ import type { PluginBackend, EmitPayload } from "@loadout/types";
 import { runCode, runFull } from "@loadout/exec";
 import { CDPClient } from "@loadout/steam-cdp";
 import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
-import { cp, mkdir, rm } from "node:fs/promises";
+import { cp, mkdir, rename, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
+import { isTargetTab } from "./lib/tab-matching";
 import type {
   CommunityThemeEntry,
   ThemeListEntry,
@@ -83,30 +84,6 @@ interface ThemeLoaderStorage {
   packVariants: Record<string, Record<string, string>>;
 }
 
-/** Tab titles / URL patterns we target for CSS injection */
-const TARGET_TAB_PATTERNS = [
-  // SharedJSContext / SP
-  { titleMatch: ["SharedJSContext", "Steam Shared Context presented by Valve™", "Steam", "SP"] },
-  // Big Picture Mode shell — mostly empty in current Steam; the visible
-  // BPM UI now lives in the MainMenu_uid2 popup tab below.
-  { titleMatch: ["Steam Big Picture Mode"] },
-  // BPM main menu popup — where the actual visible BPM UI renders.
-  // Without this, themes that style BPM appear to do nothing because
-  // their CSS attaches to the empty parent shell. The MainMenu_uid2
-  // popup is created per session, hence the prefix match.
-  { titlePrefix: "MainMenu" },
-  // QuickAccess (matches QuickAccess and QuickAccess_uid2 popup)
-  { titlePrefix: "QuickAccess" },
-];
-
-function isTargetTab(tab: CEFTab): boolean {
-  for (const pattern of TARGET_TAB_PATTERNS) {
-    if ("titleMatch" in pattern && pattern.titleMatch?.includes(tab.title)) return true;
-    if ("titlePrefix" in pattern && pattern.titlePrefix && tab.title.startsWith(pattern.titlePrefix)) return true;
-  }
-  return false;
-}
-
 /** Strict ID pattern to prevent path traversal when installing community themes. */
 const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
 
@@ -129,6 +106,13 @@ export default class ThemeLoaderBackend implements PluginBackend {
   private connected = false;
   /** Health check interval */
   private healthInterval?: ReturnType<typeof setInterval>;
+  /**
+   * Guard against concurrent re-injection storms — the 5 s health
+   * check can race with `onLoad`'s initial re-inject and with manual
+   * `reconnect()` calls. Each path that wants to re-inject all
+   * active themes folds into this single in-flight promise.
+   */
+  private inflightReinject: Promise<void> | null = null;
 
   async onLoad(): Promise<void> {
     console.log("[theme-loader] Plugin loaded");
@@ -142,16 +126,14 @@ export default class ThemeLoaderBackend implements PluginBackend {
       .then(() => this.emitState())
       .catch(() => { /* status reflects the failure */ });
 
-    // Try initial connection, but don't block if Steam isn't running
+    // Try initial connection, but don't block if Steam isn't running.
+    // Re-injection folds into `reinjectAllActiveThemes` so a parallel
+    // health-check tick can't double-inject the same CSS.
     this.tryConnect().then(async (connected) => {
       if (connected) {
-        // Re-inject persisted active themes
-        for (const [id, injected] of this.activeThemes) {
-          const css = await this.loadThemeCss(id);
-          if (css !== null) {
-            await this.injectToAllTabs(injected.styleId, css);
-            console.log(`[theme-loader] Re-injected theme: ${id}`);
-          }
+        await this.reinjectAllActiveThemes();
+        if (this.activeThemes.size > 0) {
+          console.log(`[theme-loader] Re-injected ${this.activeThemes.size} active theme(s)`);
         }
       }
     }).catch(() => {
@@ -295,13 +277,9 @@ export default class ThemeLoaderBackend implements PluginBackend {
 
     const didConnect = await this.tryConnect();
     if (didConnect) {
-      // Re-inject all active themes
-      for (const [id, injected] of this.activeThemes) {
-        const css = await this.loadThemeCss(id);
-        if (css !== null) {
-          await this.injectToAllTabs(injected.styleId, css);
-        }
-      }
+      // Re-inject all active themes via the shared in-flight guard
+      // so this manual reconnect can't race with the 5 s health check.
+      await this.reinjectAllActiveThemes();
       this.emitState();
       return { success: true };
     }
@@ -420,18 +398,41 @@ export default class ThemeLoaderBackend implements PluginBackend {
         return { success: false, error: `Theme "${entry.name}" not found in downloaded archive` };
       }
 
-      // Copy to the install dir under the canonical id so we can
-      // look it up again later. Remove any previous install first.
+      // Stage-then-swap install:
+      //   1. Copy the new theme into `<targetDir>.new`.
+      //   2. Atomically swap the old install out: rename existing
+      //      `<targetDir>` → `<targetDir>.old`, then rename
+      //      `<targetDir>.new` → `<targetDir>`.
+      //   3. Delete `<targetDir>.old` once the swap is complete.
+      //
+      // If step 1 fails (disk full / EIO / bad cp), we clean up the
+      // staging dir and leave the user's previous install untouched.
+      // If step 2 fails after the .new dir is in place, the catch
+      // block restores the .old dir back to targetDir so the user is
+      // never left without a theme.
       const targetDir = join(THEME_PACKS_DIR, id);
-      try { await rm(targetDir, { recursive: true, force: true }); } catch { /* nothing to remove */ }
+      const stagingDir = `${targetDir}.new`;
+      const backupDir = `${targetDir}.old`;
       await mkdir(THEME_PACKS_DIR, { recursive: true });
-      await cp(themeRoot, targetDir, { recursive: true });
 
-      // Capture per-theme attribution: the upstream LICENSE (typically
-      // at the repo root, above the theme subdir) plus author/source
-      // metadata from the community registry. Stored alongside
-      // `theme.json` so it survives uninstall/reinstall and is
-      // surfaced in the UI for license display.
+      // Clear any leftover staging / backup from a previous crashed
+      // install so the swap below sees a clean slate.
+      try { await rm(stagingDir, { recursive: true, force: true }); } catch { /* nothing to remove */ }
+      try { await rm(backupDir, { recursive: true, force: true }); } catch { /* nothing to remove */ }
+
+      try {
+        await cp(themeRoot, stagingDir, { recursive: true });
+      } catch (err) {
+        // Staging copy failed — leave the old install untouched and
+        // surface the error.
+        try { await rm(stagingDir, { recursive: true, force: true }); } catch { /* transient FS */ }
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, error: `Install failed during copy: ${msg}` };
+      }
+
+      // Capture per-theme attribution into the staged dir BEFORE the
+      // swap so the meta sidecar lands atomically with the rest of
+      // the install.
       const license = await findUpstreamLicense(themeRoot, extractDir);
       const meta: ThemeMeta = {
         author: entry.author ?? null,
@@ -440,7 +441,43 @@ export default class ThemeLoaderBackend implements PluginBackend {
         sourceUrl: entry.githubUrl ?? null,
         license,
       };
-      await writeThemeMeta(targetDir, meta);
+      try {
+        await writeThemeMeta(stagingDir, meta);
+      } catch (err) {
+        try { await rm(stagingDir, { recursive: true, force: true }); } catch { /* transient FS */ }
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, error: `Install failed writing metadata: ${msg}` };
+      }
+
+      // Atomic swap. `rename` is atomic on the same filesystem (we
+      // stage under the same parent dir to guarantee this). On any
+      // failure, attempt to restore the previous install from the
+      // backup so the user is never left without a working theme.
+      let hadOldInstall = false;
+      try {
+        try {
+          await rename(targetDir, backupDir);
+          hadOldInstall = true;
+        } catch (err: unknown) {
+          // ENOENT is fine — first install — but other errors are fatal.
+          const code = (err as NodeJS.ErrnoException)?.code;
+          if (code !== "ENOENT") throw err;
+        }
+        await rename(stagingDir, targetDir);
+      } catch (err) {
+        // Swap failed. Try to restore the previous install if we
+        // moved it out of the way.
+        if (hadOldInstall) {
+          try { await rename(backupDir, targetDir); } catch { /* best effort */ }
+        }
+        try { await rm(stagingDir, { recursive: true, force: true }); } catch { /* transient FS */ }
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, error: `Install failed during swap: ${msg}` };
+      }
+
+      // Swap succeeded — drop the backup. A failure here is harmless;
+      // the new install is already live.
+      try { await rm(backupDir, { recursive: true, force: true }); } catch { /* harmless leftover */ }
 
       await this.rescanPacks();
       this.emit?.({ event: "themesChanged", data: { themeId: id, kind: "installed" } });
@@ -518,9 +555,25 @@ export default class ThemeLoaderBackend implements PluginBackend {
       return { success: false, error: `Value "${value}" not valid for "${patchName}"` };
     }
 
+    // Snapshot prior value so we can revert in-memory state if the
+    // disk write fails — otherwise the next restart silently shows
+    // the OLD variant while the live UI thinks it has the new one.
+    const prior = this.packVariants[id]?.[patchName];
     if (!this.packVariants[id]) this.packVariants[id] = {};
     this.packVariants[id][patchName] = value;
-    await this.saveStateToDisk();
+    try {
+      await this.saveStateToDisk({ throwOnError: true });
+    } catch (err) {
+      // Roll back in-memory state to match disk.
+      if (prior === undefined) {
+        delete this.packVariants[id][patchName];
+        if (Object.keys(this.packVariants[id]).length === 0) delete this.packVariants[id];
+      } else {
+        this.packVariants[id][patchName] = prior;
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, error: `Failed to persist variant selection: ${msg}` };
+    }
 
     // If the theme is currently active, re-inject with the new variant
     if (this.activeThemes.has(id)) {
@@ -706,14 +759,32 @@ export default class ThemeLoaderBackend implements PluginBackend {
       if (wasConnected) this.emitState();
       const didReconnect = await this.tryConnect();
       if (didReconnect) {
-        for (const [id, injected] of this.activeThemes) {
-          const css = await this.loadThemeCss(id);
-          if (css !== null) {
-            await this.injectToAllTabs(injected.styleId, css);
-          }
-        }
+        await this.reinjectAllActiveThemes();
       }
     }
+  }
+
+  /**
+   * Re-inject every currently-active theme into every connected tab.
+   * Concurrent callers (initial onLoad, manual reconnect, and the
+   * 5 s health check) fold into a single in-flight promise so a
+   * reconnect mid-health-check doesn't fire the same CSS injection
+   * twice.
+   */
+  private reinjectAllActiveThemes(): Promise<void> {
+    if (this.inflightReinject) return this.inflightReinject;
+    const run = (async () => {
+      for (const [id, injected] of this.activeThemes) {
+        const css = await this.loadThemeCss(id);
+        if (css !== null) {
+          await this.injectToAllTabs(injected.styleId, css);
+        }
+      }
+    })();
+    this.inflightReinject = run.finally(() => {
+      this.inflightReinject = null;
+    });
+    return this.inflightReinject;
   }
 
   /**
@@ -737,7 +808,17 @@ export default class ThemeLoaderBackend implements PluginBackend {
     }
   }
 
-  private async saveStateToDisk(): Promise<void> {
+  /**
+   * Persist active-theme list + per-pack variant selections.
+   *
+   * By default, fs errors are logged and swallowed (callers in
+   * enable/disable/uninstall can't recover from a write failure
+   * mid-flow). Pass `throwOnError: true` from callers that need to
+   * roll back in-memory state if the disk write fails — currently
+   * `setThemePackVariant`, where a silent failure leaves the UI
+   * showing one variant while disk holds another.
+   */
+  private async saveStateToDisk(opts: { throwOnError?: boolean } = {}): Promise<void> {
     try {
       await writePluginStorage<ThemeLoaderStorage>(PLUGIN_ID, {
         activeThemes: Array.from(this.activeThemes.keys()),
@@ -745,6 +826,7 @@ export default class ThemeLoaderBackend implements PluginBackend {
       });
     } catch (err) {
       console.warn("[theme-loader] Failed to save state:", err);
+      if (opts.throwOnError) throw err;
     }
   }
 }

@@ -15,10 +15,6 @@
     "permissions": {
       "network": [
         "api.deckthemes.com",
-        "share.deckthemes.com",
-        "cdn.deckthemes.com",
-        "github.com",
-        "codeload.github.com",
         "localhost"
       ],
       "filesystem": [

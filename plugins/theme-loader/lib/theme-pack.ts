@@ -9,7 +9,7 @@
  *
  * We support manifest_version 1 and 2.
  */
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 // ─── CSS Class Translation ─────────────────────────────────────────
@@ -22,7 +22,7 @@ import { join, resolve } from "node:path";
 import { getTranslationsSync } from "./translations-cache";
 
 /** Replace old obfuscated class names in CSS with current ones. */
-function translateCss(css: string, translations: Map<string, string>): string {
+export function translateCss(css: string, translations: Map<string, string>): string {
   if (translations.size === 0) return css;
 
   // Collect only translations that appear in the CSS, sorted longest-first
@@ -126,7 +126,6 @@ export async function readThemeMeta(packDir: string): Promise<ThemeMeta | null> 
 }
 
 export async function writeThemeMeta(packDir: string, meta: ThemeMeta): Promise<void> {
-  const { writeFile } = await import("node:fs/promises");
   await writeFile(join(packDir, META_FILE), JSON.stringify(meta, null, 2) + "\n");
 }
 
