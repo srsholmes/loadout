@@ -267,11 +267,10 @@ const sgdbCache = createExternalCache("sgdb-art");
 const ALL_ART_TYPES: ArtType[] = ["grid_p", "grid_l", "hero", "logo", "icon"];
 
 /**
- * Steam's `eAssetType` enum. Same mapping the steamgriddb plugin uses
- * internally — kept in sync here so a future change has to touch
- * exactly one place.
+ * Steam's `eAssetType` enum. Exported so the steamgriddb plugin's
+ * per-tile picker uses the same mapping as the bulk pipeline.
  */
-const STEAM_ASSET_TYPE: Record<ArtType, 0 | 1 | 2 | 3 | 4> = {
+export const STEAM_ASSET_TYPE: Record<ArtType, 0 | 1 | 2 | 3 | 4> = {
   grid_p: 0,
   grid_l: 3,
   hero: 1,
@@ -404,16 +403,23 @@ function pickBestImage(images: SgdbImage[]): SgdbImage | null {
 }
 
 // ─── File helpers ──────────────────────────────────────────────────────────
+//
+// These three are the single source of truth for the Steam grid-folder
+// write contract (dual-stem rule for non-Steam shortcuts, suffix layout
+// per art type, eAssetType numeric map above). The steamgriddb plugin
+// re-exports them via its own thin string-appId wrapper so its per-tile
+// picker stays byte-identical to the bulk `applyAllArtwork` pipeline
+// below — if Steam ever adds a third stem or renames a suffix, only
+// this file changes.
 
 /** Both stems for non-Steam shortcuts; just the appid for native Steam
- *  titles (Steam doesn't allocate a 64-bit gameid for those). Mirrors
- *  `filenameStemsFor` in `plugins/steamgriddb/backend.ts`. */
-function stemsFor(appId: number, source: SgdbGameSource): string[] {
+ *  titles (Steam doesn't allocate a 64-bit gameid for those). */
+export function stemsFor(appId: number, source: SgdbGameSource): string[] {
   if (source === "shortcut") return [String(appId), shortcutGameId64(appId)];
   return [String(appId)];
 }
 
-const STEM_SUFFIX: Record<ArtType, string> = {
+export const STEM_SUFFIX: Record<ArtType, string> = {
   grid_p: "p",
   grid_l: "",
   hero: "_hero",
@@ -421,7 +427,7 @@ const STEM_SUFFIX: Record<ArtType, string> = {
   icon: "_icon",
 };
 
-function filenameFor(stem: string, type: ArtType, ext: string): string {
+export function filenameFor(stem: string, type: ArtType, ext: string): string {
   return `${stem}${STEM_SUFFIX[type]}${ext}`;
 }
 
