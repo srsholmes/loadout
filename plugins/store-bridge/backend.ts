@@ -31,8 +31,6 @@ import { scanForInstalls } from "./lib/scan";
 import {
   configureEpicDriver,
 } from "./lib/stores/epic";
-// Side-effect import: registers the Epic driver into the store registry.
-import "./lib/stores/epic";
 
 // Cache TTL for legendary's library — re-fetched on demand by the
 // UI but never on every render. 6h is generous; the user can hit
@@ -101,16 +99,39 @@ export default class StoreBridgeBackend implements PluginBackend {
   private installQueue: Promise<void> = Promise.resolve();
 
   /**
-   * Cancel tokens for queued-but-not-yet-spawned installs. The
-   * install unit checks this set on dequeue and short-circuits
-   * (throws Install cancelled) before invoking the driver, so a
-   * user who clicks Cancel while their install is still waiting
-   * behind another doesn't end up with the install proceeding
-   * silently. Live-process cancel goes through driver.cancelInstall;
-   * this set covers the gap where the process hasn't been spawned
-   * yet so the driver has nothing to kill.
+   * Live install attempt ids per (storeId, gameId) key. Each
+   * `installGame` / `importDetected` call mints a fresh attempt id
+   * (monotonic counter) and registers it here SYNCHRONOUSLY — i.e.
+   * before any await — so that if `cancelInstall` lands between the
+   * enqueue and the dequeue, the cancel call can snapshot every
+   * currently-live attempt for the key without missing any.
    */
-  private cancelledInstalls = new Set<string>();
+  private liveAttempts = new Map<string, Set<number>>();
+
+  /**
+   * Cancel tokens for queued-or-running installs, keyed by
+   * `storeId/gameId` and storing the set of attempt ids the user
+   * has cancelled. The install unit checks "is MY attempt in the
+   * cancelled set?" — not "does the key have any entries?" — so a
+   * fast cancel+reinstall double-click can't un-cancel the new
+   * attempt that just got enqueued.
+   *
+   * The set-per-key (not boolean) shape is the load-bearing fix: a
+   * boolean `Map<key, true>` can't distinguish "the user cancelled
+   * the OLD attempt" from "the new attempt is also cancelled" when
+   * a new install for the same gameId is enqueued microseconds
+   * after the cancel call. The PR review flagged this as the HIGH
+   * concurrency bug.
+   */
+  private cancelledAttempts = new Map<string, Set<number>>();
+
+  /**
+   * Monotonic attempt counter — one id per `installGame` /
+   * `importDetected` call. Keeps each attempt's cancel state
+   * independent of any previous-or-concurrent attempt for the same
+   * gameId.
+   */
+  private nextAttemptId = 1;
 
   /**
    * Serialise every write to `this.state`. Without this the install
@@ -291,27 +312,35 @@ export default class StoreBridgeBackend implements PluginBackend {
   // ── Install / uninstall / launch ─────────────────────────────────────────
 
   async installGame(storeId: StoreId, gameId: string): Promise<void> {
+    validateGameId(gameId);
     const driver = this.requireDriver(storeId);
     const installDir = `${storeInstallDir(storeId)}/${gameId}`;
     const key = `${storeId}/${gameId}`;
+    // Synchronous claim — captures this attempt in `liveAttempts`
+    // before any await, so a `cancelInstall` arriving in the same
+    // tick snapshots this attempt id (and a LATER claim that
+    // happens after the cancel-snapshot lands does NOT — that's
+    // the fix for the HIGH cancel-token race).
+    const attemptId = this.claimAttempt(key);
     const emit = this.makeEmitter({ gameId, storeId });
     // Seed the in-flight registry up-front so the Downloads tab and
     // detail view show this install — even while it's queued
     // behind another active install rather than actually running.
     this.inFlight.set(key, { storeId, gameId, percent: 0 });
-    this.cancelledInstalls.delete(key); // fresh start; any prior cancel doesn't carry
     // Serialise through the install queue. Two `legendary install`
     // calls running concurrently lock-contend on the install-db
     // file and the loser exits 0 without doing anything; the queue
     // makes the second click wait until the first finishes.
     return this.enqueueInstall(async () => {
       try {
-        // Cancel-while-queued: if the user clicked Cancel while
-        // this install was waiting for its turn, bail before
-        // invoking the driver — `driver.cancelInstall` had nothing
-        // to kill (no process yet) so the cancel token is the only
-        // signal that anything happened.
-        if (this.cancelledInstalls.has(key)) {
+        // Cancel-while-queued: if THIS attempt was cancelled while
+        // it was waiting for its turn, bail before invoking the
+        // driver — `driver.cancelInstall` had nothing to kill (no
+        // process yet) so the cancel token is the only signal that
+        // anything happened. We check the attempt id, not the key,
+        // so a fast cancel+reinstall double-click doesn't un-cancel
+        // a previously-queued attempt or vice versa.
+        if (this.isAttemptCancelled(key, attemptId)) {
           emit({
             kind: "error",
             id: `${storeId}:install:${gameId}`,
@@ -329,7 +358,7 @@ export default class StoreBridgeBackend implements PluginBackend {
           // live process then throws the same string. Without this
           // guard the user sees two identical toasts.
           const message = err instanceof Error ? err.message : String(err);
-          const cancelledByUser = this.cancelledInstalls.has(key);
+          const cancelledByUser = this.isAttemptCancelled(key, attemptId);
           if (!cancelledByUser) {
             emit({
               kind: "error",
@@ -342,16 +371,15 @@ export default class StoreBridgeBackend implements PluginBackend {
         await this.mutateState((s) =>
           updateInstalledGame(s, storeId, gameId, installed),
         );
-        // Always register the shortcut + tag + collection. The
-        // previous opt-out (`settings.autoAddToSteam`) was confusing:
-        // the only reason to install via Store Bridge is to play
-        // through Steam, so the implicit add-to-Steam matches
-        // RecompHub's behaviour. Repair paths (Remove + Add via
-        // detail view) still exist for the edge case where Steam
-        // loses the shortcut. We treat add-to-Steam as a separate
-        // failure: if it throws the install itself still succeeded
-        // (game is on disk + recorded in state), but the user gets
-        // a dedicated toast and the gameStatusChanged event reports
+        // Always register the shortcut + tag + collection. The only
+        // reason to install via Store Bridge is to play through
+        // Steam, so the implicit add-to-Steam matches RecompHub's
+        // behaviour. Repair paths (Remove + Add via detail view)
+        // still exist for the edge case where Steam loses the
+        // shortcut. We treat add-to-Steam as a separate failure:
+        // if it throws the install itself still succeeded (game is
+        // on disk + recorded in state), but the user gets a
+        // dedicated toast and the gameStatusChanged event reports
         // `addedToSteam: false` so the UI shows an "Add to Steam"
         // button on the tile.
         let addedToSteam = true;
@@ -389,12 +417,11 @@ export default class StoreBridgeBackend implements PluginBackend {
           },
         });
       } finally {
-        // Always clear the cancel token. Without this, a
-        // cancel-while-running path leaves the entry forever — the
-        // pre-install `delete` only clears the SAME-gameId next
-        // install. A user who cancels 5 different installs would
-        // accumulate 5 leaked entries per session.
-        this.cancelledInstalls.delete(key);
+        // Drop just THIS attempt's cancel token so a future
+        // install for the same gameId starts clean. The
+        // attempt-scoped key means concurrent attempts can't trip
+        // over each other's bookkeeping.
+        this.clearAttempt(key, attemptId);
       }
     });
   }
@@ -413,6 +440,64 @@ export default class StoreBridgeBackend implements PluginBackend {
     const next = this.installQueue.then(() => unit());
     this.installQueue = next.catch(() => {});
     return next;
+  }
+
+  /**
+   * Synchronously claim a new attempt id for an install/import on
+   * `key` and register it in `liveAttempts`. Must run BEFORE any
+   * `await` in the caller so a `cancelInstall` arriving in the same
+   * tick captures the attempt in its live-set snapshot.
+   */
+  private claimAttempt(key: string): number {
+    const attemptId = this.nextAttemptId++;
+    let set = this.liveAttempts.get(key);
+    if (!set) {
+      set = new Set();
+      this.liveAttempts.set(key, set);
+    }
+    set.add(attemptId);
+    return attemptId;
+  }
+
+  /** Has `attemptId` for `key` been cancelled by the user? */
+  private isAttemptCancelled(key: string, attemptId: number): boolean {
+    return this.cancelledAttempts.get(key)?.has(attemptId) ?? false;
+  }
+
+  /**
+   * Drop `attemptId` from both the live + cancelled sets for `key`.
+   * Called from the install/import unit's `finally` so the
+   * bookkeeping doesn't leak across attempts.
+   */
+  private clearAttempt(key: string, attemptId: number): void {
+    const live = this.liveAttempts.get(key);
+    if (live) {
+      live.delete(attemptId);
+      if (live.size === 0) this.liveAttempts.delete(key);
+    }
+    const cancelled = this.cancelledAttempts.get(key);
+    if (cancelled) {
+      cancelled.delete(attemptId);
+      if (cancelled.size === 0) this.cancelledAttempts.delete(key);
+    }
+  }
+
+  /**
+   * Mark every currently-live attempt for `key` as cancelled. Used
+   * by `cancelInstall` — snapshots the set at the moment the user
+   * clicks Cancel, so a NEW attempt minted later (e.g. a rapid
+   * cancel+reinstall double-click) gets a fresh id that ISN'T in
+   * the snapshot and therefore isn't accidentally cancelled.
+   */
+  private cancelLiveAttempts(key: string): void {
+    const live = this.liveAttempts.get(key);
+    if (!live || live.size === 0) return;
+    let cancelled = this.cancelledAttempts.get(key);
+    if (!cancelled) {
+      cancelled = new Set();
+      this.cancelledAttempts.set(key, cancelled);
+    }
+    for (const id of live) cancelled.add(id);
   }
 
   /**
@@ -464,6 +549,7 @@ export default class StoreBridgeBackend implements PluginBackend {
    * finished moments before they hit the button.
    */
   async cancelInstall(storeId: StoreId, gameId: string): Promise<void> {
+    validateGameId(gameId);
     const driver = this.requireDriver(storeId);
     const key = `${storeId}/${gameId}`;
     // Cover three states: (a) install is queued but not yet
@@ -472,7 +558,13 @@ export default class StoreBridgeBackend implements PluginBackend {
     // driver kills the live subprocess; (c) install isn't ours to
     // cancel — we still drop the inFlight entry as a no-op to
     // unstick stale UI in case something else got out of sync.
-    this.cancelledInstalls.add(key);
+    //
+    // We cancel every CURRENTLY-LIVE attempt id for this key,
+    // captured at the moment the user clicks Cancel. A new attempt
+    // enqueued microseconds later gets a fresh id that's NOT in
+    // this set, so the cancel doesn't bleed forward into it — fix
+    // for the HIGH bug the PR review flagged.
+    this.cancelLiveAttempts(key);
     const installDir = `${storeInstallDir(storeId)}/${gameId}`;
     if (driver.cancelInstall) {
       // Best-effort: a driver that doesn't expose cancel still
@@ -534,25 +626,49 @@ export default class StoreBridgeBackend implements PluginBackend {
   }
 
   async uninstallGame(storeId: StoreId, gameId: string): Promise<void> {
+    validateGameId(gameId);
     const driver = this.requireDriver(storeId);
-    const installed = this.state.stores[storeId]?.installed[gameId];
-    if (installed?.steamAppId) {
-      await removeFromSteam(installed.steamAppId);
-    }
-    await driver.uninstall(gameId, installed?.installDir ?? "");
-    await this.mutateState((s) => removeInstalledGame(s, storeId, gameId));
+    // Wrap the read-modify-write in the state mutex so concurrent
+    // uninstalls (or an uninstall racing addInstalledToSteam) can't
+    // produce a torn intermediate state. Without this, the read of
+    // `installed` here could observe a stale snapshot that a
+    // concurrent mutation has already moved on from — the review
+    // flagged the read-modify-write asymmetry as the MEDIUM bug.
+    await this.mutateState(async (s) => {
+      const installed = s.stores[storeId]?.installed[gameId];
+      // Drive the driver FIRST. If the driver throws (legendary
+      // errors, install path missing), leave the Steam shortcut +
+      // state.json entry in place so the user can retry without
+      // orphaning their shortcut — fix for the MEDIUM bug the
+      // review flagged.
+      await driver.uninstall(gameId, installed?.installDir ?? "");
+      if (installed?.steamAppId) {
+        await removeFromSteam(installed.steamAppId);
+      }
+      return removeInstalledGame(s, storeId, gameId);
+    });
     this.emit?.({ event: "gameStatusChanged", data: { storeId, gameId, status: "uninstalled" } });
   }
 
   async launchGame(storeId: StoreId, gameId: string): Promise<void> {
-    const installed = this.state.stores[storeId]?.installed[gameId];
+    validateGameId(gameId);
+    // Funnel the read through `readState()` for symmetry with the
+    // rest of the backend — see the comment on `addInstalledToSteam`.
+    const snapshot = await this.readState();
+    const installed = snapshot.stores[storeId]?.installed[gameId];
     if (!installed) throw new Error(`Not installed: ${storeId}/${gameId}`);
     await launchInstalled(installed);
   }
 
   async addInstalledToSteam(storeId: StoreId, gameId: string): Promise<void> {
+    validateGameId(gameId);
     const driver = this.requireDriver(storeId);
-    let installed = this.state.stores[storeId]?.installed[gameId];
+    // Read through `readState()` to share the mutex symmetry the
+    // rest of the backend established. Direct `this.state` reads
+    // can observe a snapshot a concurrent writer is mid-mutating;
+    // the review flagged this as the MEDIUM symmetry slip.
+    let snapshot = await this.readState();
+    let installed = snapshot.stores[storeId]?.installed[gameId];
     if (!installed) throw new Error(`Not installed: ${storeId}/${gameId}`);
     // Refresh launch metadata if the record is missing it — covers
     // records persisted before we started caching executable/platform
@@ -602,8 +718,11 @@ export default class StoreBridgeBackend implements PluginBackend {
     };
     await this.mutateState((s) => updateInstalledGame(s, storeId, gameId, updated));
     // Best-effort artwork apply — skip silently if Steam isn't running or
-    // the store didn't ship cover URLs.
-    const libEntry = this.state.stores[storeId]?.library[gameId];
+    // the store didn't ship cover URLs. Re-read through the mutex so
+    // the lookup sees the post-`updateInstalledGame` snapshot rather
+    // than a stale pre-write one.
+    snapshot = await this.readState();
+    const libEntry = snapshot.stores[storeId]?.library[gameId];
     if (libEntry) {
       await applyArtwork(libEntry, appId).catch((err: unknown) => {
         this.log?.warn(
@@ -623,16 +742,25 @@ export default class StoreBridgeBackend implements PluginBackend {
   }
 
   async removeFromSteam(storeId: StoreId, gameId: string): Promise<void> {
-    const installed = this.state.stores[storeId]?.installed[gameId];
-    if (!installed?.steamAppId) return;
-    await removeFromSteam(installed.steamAppId);
-    const updated: InstalledGame = {
-      ...installed,
-      addedToSteam: false,
-      steamAppId: undefined,
-      steamGameId64: undefined,
-    };
-    await this.mutateState((s) => updateInstalledGame(s, storeId, gameId, updated));
+    validateGameId(gameId);
+    // Wrap the read-modify-write in the state mutex — a concurrent
+    // `addInstalledToSteam` racing this could otherwise observe the
+    // pre-remove `installed` snapshot, run its own update against
+    // it, and clobber the remove. The whole block runs through one
+    // chain so the read + remove + write are atomic w.r.t. other
+    // state mutations.
+    await this.mutateState(async (s) => {
+      const installed = s.stores[storeId]?.installed[gameId];
+      if (!installed?.steamAppId) return s;
+      await removeFromSteam(installed.steamAppId);
+      const updated: InstalledGame = {
+        ...installed,
+        addedToSteam: false,
+        steamAppId: undefined,
+        steamGameId64: undefined,
+      };
+      return updateInstalledGame(s, storeId, gameId, updated);
+    });
     this.emit?.({
       event: "gameStatusChanged",
       data: { storeId, gameId, status: "removed-from-steam" },
@@ -700,17 +828,25 @@ export default class StoreBridgeBackend implements PluginBackend {
   }
 
   async importDetected(storeId: StoreId, gameId: string, dir: string): Promise<void> {
+    validateGameId(gameId);
     const driver = this.requireDriver(storeId);
     const key = `${storeId}/${gameId}`;
+    // Synchronous claim — same race-window reasoning as installGame.
+    const attemptId = this.claimAttempt(key);
     const emit = this.makeEmitter({ gameId, storeId });
     this.inFlight.set(key, { storeId, gameId, percent: 0 });
-    this.cancelledInstalls.delete(key);
     // Same queue as installGame — `legendary import` also touches
     // the install-db lock and would lose the race against a
     // concurrent install.
     return this.enqueueInstall(async () => {
       try {
-        if (this.cancelledInstalls.has(key)) {
+        if (this.isAttemptCancelled(key, attemptId)) {
+          // Cancel-while-queued: emit a `cancelled`-flavoured
+          // pipelineEvent so the catalog tile flips back to its
+          // pre-import state. Without this dedicated event the UI
+          // sees only the silent inFlight drop and wouldn't surface
+          // a toast — the review flagged the import-cancel
+          // symmetry gap as a LOW-quality slip.
           emit({
             kind: "error",
             id: `${storeId}:import:${gameId}`,
@@ -725,11 +861,16 @@ export default class StoreBridgeBackend implements PluginBackend {
         try {
           installed = await driver.importExisting(gameId, dir, emit);
         } catch (err) {
-          emit({
-            kind: "error",
-            id: `${storeId}:import:${gameId}`,
-            message: err instanceof Error ? err.message : String(err),
-          });
+          // Suppress the redundant emit on the user-cancel path —
+          // same shape as installGame's catch.
+          const message = err instanceof Error ? err.message : String(err);
+          if (!this.isAttemptCancelled(key, attemptId)) {
+            emit({
+              kind: "error",
+              id: `${storeId}:import:${gameId}`,
+              message,
+            });
+          }
           throw err;
         }
         await this.mutateState((s) =>
@@ -771,9 +912,7 @@ export default class StoreBridgeBackend implements PluginBackend {
           },
         });
       } finally {
-        // Mirror installGame's cleanup — same cancelledInstalls
-        // leak shape applies here.
-        this.cancelledInstalls.delete(key);
+        this.clearAttempt(key, attemptId);
       }
     });
   }
@@ -900,6 +1039,50 @@ export default class StoreBridgeBackend implements PluginBackend {
 
 // Default install dir helper re-exported so the UI can show it.
 export { storeInstallDir };
+
+/**
+ * Allow-list pattern for RPC-supplied `gameId` values. Real Epic
+ * AppNames are alphanumerics with optional `_` / `-` (mirrored in
+ * `lib/stores/epic/legendary.ts:APP_NAME_RE`). The shape is shared
+ * with the legendary argv validator so both layers reject the same
+ * malicious-shape inputs.
+ *
+ * Anything outside this pattern is a security flag: a path-traversal
+ * attempt (`../etc/passwd`), a slash that would escape the per-store
+ * install root when concatenated, a control character, whitespace,
+ * or an empty string. We assert at every RPC entry point that
+ * eventually shovels `gameId` into a filesystem path so the
+ * `rm -rf` cleanup paths in `cancelInstall` / `uninstall` can't be
+ * tricked into wiping arbitrary directories.
+ */
+const GAME_ID_RE = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/;
+const GAME_ID_MAX_LEN = 128;
+
+/**
+ * Reject any `gameId` that could escape its per-store install root
+ * or smuggle control characters into a subprocess. Throws — every
+ * call site is at the boundary of an `await` so the throw turns
+ * into a rejected promise the RPC layer surfaces as an error toast.
+ *
+ * The review flagged the missing gate on `cancelInstall` /
+ * `installGame` / `importDetected` / `uninstallGame` as the MEDIUM
+ * path-injection hole.
+ */
+function validateGameId(gameId: unknown): asserts gameId is string {
+  if (typeof gameId !== "string") {
+    throw new Error(`Invalid gameId: ${JSON.stringify(gameId)}. Must be a string.`);
+  }
+  if (gameId.length === 0 || gameId.length > GAME_ID_MAX_LEN) {
+    throw new Error(
+      `Invalid gameId: length ${gameId.length}, expected 1..${GAME_ID_MAX_LEN}.`,
+    );
+  }
+  if (!GAME_ID_RE.test(gameId)) {
+    throw new Error(
+      `Invalid gameId: ${JSON.stringify(gameId)}. Expected alphanumerics, underscores or dashes (must start with alnum/underscore).`,
+    );
+  }
+}
 
 /**
  * Allow-list for `addScanPath` — must stay in sync with the

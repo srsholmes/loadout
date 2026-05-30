@@ -29,28 +29,46 @@ export async function scanForInstalls(
   const found: DetectedInstall[] = [];
   const seen = new Set<string>();
 
-  for (const root of scanPaths) {
-    await walk(root, 0, async (dir) => {
-      onProgress?.(dir);
-      if (excludeDirs.has(dir)) return;
-      for (const driver of drivers) {
-        // Drivers without `identifyInstall` (e.g. streaming stores
-        // like xCloud) have no on-disk install to find — skip.
-        if (!driver.identifyInstall) continue;
-        const r = await driver.identifyInstall(dir).catch(() => null);
-        if (!r) continue;
-        const key = `${driver.id}:${dir}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        found.push({
-          storeId: driver.id as StoreId,
-          gameId: r.id,
-          title: r.title,
-          dir,
-        });
-      }
-    });
-  }
+  // Fan the per-root walks out in parallel via `Promise.allSettled`
+  // so an unreadable / cold-cached root (slow SD card on a Deck)
+  // doesn't block the others. The shared `found` + `seen` writes
+  // are safe — JS is single-threaded, the per-driver awaits inside
+  // `walk` interleave but each push completes atomically. Mirrors
+  // the per-user-dir isolation pattern the steamgriddb plugin
+  // landed for its art scan.
+  await Promise.allSettled(
+    scanPaths.map((root) =>
+      walk(root, 0, async (dir) => {
+        onProgress?.(dir);
+        if (excludeDirs.has(dir)) return;
+        // Run each driver's identifier in parallel too. Each
+        // `identifyInstall` does its own `access()` + `readdir()`,
+        // so once we have multiple drivers (GOG / Amazon planned)
+        // a sequential loop pays the I/O latency for each driver
+        // back-to-back instead of fanning the file-system calls
+        // out concurrently.
+        await Promise.all(
+          drivers.map(async (driver) => {
+            // Drivers without `identifyInstall` (e.g. streaming
+            // stores like xCloud) have no on-disk install to
+            // find — skip.
+            if (!driver.identifyInstall) return;
+            const r = await driver.identifyInstall(dir).catch(() => null);
+            if (!r) return;
+            const key = `${driver.id}:${dir}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            found.push({
+              storeId: driver.id as StoreId,
+              gameId: r.id,
+              title: r.title,
+              dir,
+            });
+          }),
+        );
+      }),
+    ),
+  );
   return found;
 }
 

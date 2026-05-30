@@ -26,11 +26,39 @@ export function parseProgressLine(line: string): number | null {
   return Math.max(0, Math.min(100, n));
 }
 
-/** Parse the URL legendary prints during `auth --import`. We fall
- *  back to the canonical login URL if we can't find it in stdout. */
+/**
+ * Parse the URL legendary prints during `auth --import`. We fall
+ * back to the canonical login URL if we can't find one — and we
+ * REJECT any non-https match outright so a compromised legendary
+ * stdout can't redirect us to `http://attacker.epiclogin.evil/…`.
+ * We also require the hostname to live under the `epicgames.com`,
+ * `unrealengine.com`, or `legendary.gl` umbrella; anything else
+ * (including `epiclogin.evil` matched purely by substring) falls
+ * back to the canonical URL.
+ *
+ * The review flagged the no-allow-list parser as a LOW security
+ * issue.
+ */
+const TRUSTED_AUTH_HOSTS = [
+  "legendary.gl",
+  "epicgames.com",
+  "unrealengine.com",
+];
+
 export function parseAuthUrl(stdout: string): string {
-  const m = stdout.match(/https?:\/\/\S*epiclogin\S*/i);
-  return m ? m[0] : EPIC_LOGIN_URL;
+  const m = stdout.match(/https:\/\/\S*epiclogin\S*/i);
+  if (!m) return EPIC_LOGIN_URL;
+  try {
+    const candidate = new URL(m[0]);
+    if (candidate.protocol !== "https:") return EPIC_LOGIN_URL;
+    const host = candidate.hostname.toLowerCase();
+    const trusted = TRUSTED_AUTH_HOSTS.some(
+      (t) => host === t || host.endsWith(`.${t}`),
+    );
+    return trusted ? candidate.toString() : EPIC_LOGIN_URL;
+  } catch {
+    return EPIC_LOGIN_URL;
+  }
 }
 
 /**
@@ -272,9 +300,6 @@ export class Legendary {
     }
   }
 }
-
-/** Exported for spec coverage of the validator itself. */
-export const _appNameRegex = APP_NAME_RE;
 
 function safeJsonArray<T>(stdout: string): T[] {
   const trimmed = stdout.trim();

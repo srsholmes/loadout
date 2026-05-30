@@ -27,13 +27,11 @@
         "api.github.com",
         "github.com",
         "objects.githubusercontent.com",
-        "api.epicgames.dev",
-        "launcher-public-service-prod06.ol.epicgames.com",
+        "codeload.github.com",
         "cdn1.epicgames.com",
         "cdn2.unrealengine.com",
         "cdn2.steamgriddb.com",
-        "www.steamgriddb.com",
-        "localhost"
+        "www.steamgriddb.com"
       ],
       "filesystem": [
         "read:~/.local/share/Steam",

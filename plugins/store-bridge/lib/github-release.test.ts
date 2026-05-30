@@ -9,10 +9,10 @@ import { downloadFile, fetchLatestRelease, githubToken } from "./github-release"
 // process — patching globalThis.fetch is the lowest-friction shim
 // and lets us assert on the URL + headers the helper produced.
 const originalFetch = globalThis.fetch;
-let lastRequest: { url: string; init?: RequestInit } | null = null;
+let requests: Array<{ url: string; init?: RequestInit }> = [];
 function stubFetch(impl: (url: string, init?: RequestInit) => Promise<Response>) {
   (globalThis as { fetch: typeof fetch }).fetch = ((url: string, init?: RequestInit) => {
-    lastRequest = { url, init };
+    requests.push({ url, init });
     return impl(url, init);
   }) as unknown as typeof fetch;
 }
@@ -22,7 +22,7 @@ describe("downloadFile", () => {
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "store-bridge-download-"));
-    lastRequest = null;
+    requests = [];
     // Force the no-token branch so the assertions are predictable.
     process.env.GITHUB_TOKEN = "";
   });
@@ -45,9 +45,13 @@ describe("downloadFile", () => {
     );
     const dest = join(dir, "nested", "out.bin");
     const seen: Array<[number, number]> = [];
-    await downloadFile("https://example.test/file.bin", dest, (d, t) => {
-      seen.push([d, t]);
-    });
+    await downloadFile(
+      "https://github.com/x/y/releases/download/v1/legendary",
+      dest,
+      (d, t) => {
+        seen.push([d, t]);
+      },
+    );
     const written = await readFile(dest);
     expect(written).toEqual(Buffer.from(payload));
     // Progress callback fires at least once with the final total.
@@ -58,62 +62,96 @@ describe("downloadFile", () => {
   it("throws on non-2xx responses", async () => {
     stubFetch(() => Promise.resolve(new Response("nope", { status: 404 })));
     await expect(
-      downloadFile("https://example.test/missing", join(dir, "x.bin")),
+      downloadFile(
+        "https://github.com/x/y/releases/download/v1/missing",
+        join(dir, "x.bin"),
+      ),
     ).rejects.toThrow(/HTTP 404/);
   });
 
-  it("refuses to follow a redirect off github.com / githubusercontent.com", async () => {
-    // Simulate the response a compromised release would produce:
-    // the body comes back fine, but `res.url` (the post-redirect
-    // final URL fetch reports) is an attacker host. Bun's fetch
-    // would have stripped Authorization, but the body would still
-    // be written to disk without this guard.
-    stubFetch(() => {
-      const r = new Response(new Uint8Array([0xde, 0xad, 0xbe, 0xef]), {
-        status: 200,
-        headers: { "content-length": "4" },
-      });
-      Object.defineProperty(r, "url", { value: "https://evil.example/payload" });
-      return Promise.resolve(r);
-    });
+  it("rejects an off-domain start URL before issuing the first request", async () => {
+    stubFetch(() => Promise.resolve(new Response("nope", { status: 200 })));
     await expect(
-      downloadFile("https://github.com/x/y/releases/download/v1/legendary", join(dir, "x.bin")),
-    ).rejects.toThrow(/redirect landed on untrusted host evil\.example/);
+      downloadFile("https://evil.example/payload", join(dir, "x.bin")),
+    ).rejects.toThrow(/untrusted host evil\.example/);
+    // The host check happens BEFORE the fetch — no request issued.
+    expect(requests).toHaveLength(0);
   });
 
-  it("allows the canonical github.com → objects.githubusercontent.com redirect", async () => {
-    stubFetch(() => {
-      const r = new Response(new Uint8Array([0xde, 0xad, 0xbe, 0xef]), {
-        status: 200,
-        headers: { "content-length": "4" },
-      });
-      Object.defineProperty(r, "url", {
-        value: "https://objects.githubusercontent.com/blob/abc",
-      });
-      return Promise.resolve(r);
+  it("walks the canonical github.com → objects.githubusercontent.com redirect manually", async () => {
+    // First hop: 302 from github.com to objects.githubusercontent.com.
+    // Second hop: 200 with the body. The manual walk re-validates the
+    // host on each hop before issuing the next fetch.
+    stubFetch((url) => {
+      if (url.startsWith("https://github.com/")) {
+        return Promise.resolve(
+          new Response(null, {
+            status: 302,
+            headers: { location: "https://objects.githubusercontent.com/blob/abc" },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response(new Uint8Array([0xde, 0xad, 0xbe, 0xef]), {
+          status: 200,
+          headers: { "content-length": "4" },
+        }),
+      );
+    });
+    await downloadFile(
+      "https://github.com/x/y/releases/download/v1/legendary",
+      join(dir, "ok.bin"),
+    );
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.url).toContain("github.com");
+    expect(requests[1]?.url).toContain("objects.githubusercontent.com");
+  });
+
+  it("refuses to follow a redirect to a non-allow-listed host", async () => {
+    // 302 from github.com pointing at an attacker host — the manual
+    // walker must reject BEFORE issuing the second fetch, so the
+    // attacker host never sees our request (no Authorization leak,
+    // no body read).
+    stubFetch((url) => {
+      if (url.startsWith("https://github.com/")) {
+        return Promise.resolve(
+          new Response(null, {
+            status: 302,
+            headers: { location: "https://evil.example/payload" },
+          }),
+        );
+      }
+      return Promise.resolve(new Response("should not happen", { status: 200 }));
     });
     await expect(
       downloadFile(
         "https://github.com/x/y/releases/download/v1/legendary",
-        join(dir, "ok.bin"),
+        join(dir, "x.bin"),
       ),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow(/untrusted host evil\.example/);
+    // Exactly one request — the second hop refused before being
+    // dispatched, so the attacker host never received anything.
+    expect(requests).toHaveLength(1);
   });
 
   it("doesn't trip on github.com.evil.com lookalike hosts", async () => {
-    stubFetch(() => {
-      const r = new Response(new Uint8Array([0]), {
-        status: 200,
-        headers: { "content-length": "1" },
-      });
-      Object.defineProperty(r, "url", {
-        value: "https://github.com.evil.com/payload",
-      });
-      return Promise.resolve(r);
+    stubFetch((url) => {
+      if (url.startsWith("https://github.com/x")) {
+        return Promise.resolve(
+          new Response(null, {
+            status: 302,
+            headers: { location: "https://github.com.evil.com/payload" },
+          }),
+        );
+      }
+      return Promise.resolve(new Response("should not happen", { status: 200 }));
     });
     await expect(
-      downloadFile("https://github.com/x/y/asset", join(dir, "lookalike.bin")),
-    ).rejects.toThrow(/redirect landed on untrusted host github\.com\.evil\.com/);
+      downloadFile(
+        "https://github.com/x/y/asset",
+        join(dir, "lookalike.bin"),
+      ),
+    ).rejects.toThrow(/untrusted host github\.com\.evil\.com/);
   });
 
   it("sends an Authorization header when GITHUB_TOKEN is set", async () => {
@@ -127,8 +165,11 @@ describe("downloadFile", () => {
         ),
     );
     process.env.GITHUB_TOKEN = "ghp_abc123";
-    await downloadFile("https://example.test/auth.bin", join(dir, "auth.bin"));
-    const headers = lastRequest!.init!.headers as Record<string, string>;
+    await downloadFile(
+      "https://github.com/x/y/releases/download/v1/auth.bin",
+      join(dir, "auth.bin"),
+    );
+    const headers = requests[0]!.init!.headers as Record<string, string>;
     expect(headers["Authorization"]).toBe("Bearer ghp_abc123");
   });
 
@@ -142,17 +183,42 @@ describe("downloadFile", () => {
           }),
         ),
     );
-    await downloadFile("https://example.test/ua.bin", join(dir, "ua.bin"));
-    expect(lastRequest?.init?.headers).toBeDefined();
-    const headers = lastRequest!.init!.headers as Record<string, string>;
+    await downloadFile(
+      "https://github.com/x/y/releases/download/v1/ua.bin",
+      join(dir, "ua.bin"),
+    );
+    expect(requests[0]?.init?.headers).toBeDefined();
+    const headers = requests[0]!.init!.headers as Record<string, string>;
     expect(headers["User-Agent"]).toContain("Loadout-StoreBridge");
+  });
+
+  it("aborts after MAX_HOPS redirects to prevent loops", async () => {
+    // Two github hosts that bounce back and forth — the walker should
+    // give up after 10 hops and throw without ever returning a body.
+    stubFetch((url) => {
+      const next = url.includes("/a")
+        ? "https://objects.githubusercontent.com/b"
+        : "https://github.com/a";
+      return Promise.resolve(
+        new Response(null, {
+          status: 302,
+          headers: { location: next },
+        }),
+      );
+    });
+    await expect(
+      downloadFile("https://github.com/a", join(dir, "loop.bin")),
+    ).rejects.toThrow();
+    // Hard cap: never more than the 10-hop limit (one extra check
+    // would still tolerate the off-by-one).
+    expect(requests.length).toBeLessThanOrEqual(11);
   });
 });
 
 describe("fetchLatestRelease", () => {
   const env = process.env.GITHUB_TOKEN;
   beforeEach(() => {
-    lastRequest = null;
+    requests = [];
     process.env.GITHUB_TOKEN = "";
   });
   afterEach(() => {
@@ -178,7 +244,7 @@ describe("fetchLatestRelease", () => {
     const r = await fetchLatestRelease("derrod/legendary");
     expect(r.tag_name).toBe("v1.2.3");
     expect(r.assets[0]?.name).toBe("legendary");
-    expect(lastRequest?.url).toContain("/repos/derrod/legendary/releases/latest");
+    expect(requests[0]?.url).toContain("/repos/derrod/legendary/releases/latest");
   });
 
   it("throws on non-200", async () => {

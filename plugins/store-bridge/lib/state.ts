@@ -1,6 +1,5 @@
-import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
-import { join } from "node:path";
-import { configDir, gamesDir } from "./platform";
+import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
+import { gamesDir } from "./platform";
 import type {
   PersistedState,
   Settings,
@@ -9,7 +8,15 @@ import type {
   InstalledGame,
 } from "./types";
 
-const STATE_FILE = "state.json";
+/**
+ * Per-plugin storage id. The persisted JSON file lands at
+ *   $XDG_CONFIG_HOME/loadout/plugins/store-bridge.json
+ * via `@loadout/plugin-storage`, which is the canonical location
+ * every other migrated plugin uses. Earlier iterations of this
+ * plugin rolled their own `~/.config/loadout/store-bridge/state.json`
+ * path; the migration review flagged that as a DoD slip.
+ */
+const PLUGIN_ID = "store-bridge";
 
 export function defaultStoreState(_storeId: StoreId): StoreState {
   return {
@@ -22,7 +29,6 @@ export function defaultStoreState(_storeId: StoreId): StoreState {
 
 export function defaultSettings(): Settings {
   return {
-    autoAddToSteam: true,
     enabledStores: ["epic"],
     driverOverrides: {},
     scanPaths: [],
@@ -40,78 +46,64 @@ export function defaultState(): PersistedState {
 }
 
 /**
- * Load + shape-normalise state.json. Missing keys (because the user
+ * Load + shape-normalise state. Missing keys (because the user
  * upgraded from an earlier version) get filled with defaults rather
  * than left undefined, so callers never have to guard with `?? {}`.
+ *
+ * Storage is routed through `@loadout/plugin-storage`, which returns
+ * `{}` on missing/unparseable files — the merge below treats that the
+ * same as "fresh install".
  */
 export async function loadState(): Promise<PersistedState> {
-  const path = join(configDir(), STATE_FILE);
-  try {
-    const raw = await readFile(path, "utf-8");
-    const parsed = JSON.parse(raw) as Partial<PersistedState>;
-    const defaults = defaultState();
-    const stores = { ...defaults.stores };
-    if (parsed.stores) {
-      for (const [id, st] of Object.entries(parsed.stores)) {
-        if (!st) continue;
-        const sid = id as StoreId;
-        const base = defaults.stores[sid] ?? defaultStoreState(sid);
-        stores[sid] = {
-          ...base,
-          ...st,
-          library: st.library ?? {},
-          installed: st.installed ?? {},
-        };
-      }
-    }
-    // Settings shape migration: `legendaryBinary` was a flat field
-    // before driver overrides existed. Hoist any persisted value
-    // into the new `driverOverrides.epic.binary` slot so the rest
-    // of the codebase can read one location.
-    const settings: Settings = { ...defaults.settings, ...parsed.settings };
-    if (
-      settings.legendaryBinary &&
-      !settings.driverOverrides?.epic?.binary
-    ) {
-      settings.driverOverrides = {
-        ...settings.driverOverrides,
-        epic: {
-          ...settings.driverOverrides?.epic,
-          binary: settings.legendaryBinary,
-        },
+  const parsed = await readPluginStorage<PersistedState>(PLUGIN_ID);
+  const defaults = defaultState();
+  const stores = { ...defaults.stores };
+  if (parsed.stores) {
+    for (const [id, st] of Object.entries(parsed.stores)) {
+      if (!st) continue;
+      const sid = id as StoreId;
+      const base = defaults.stores[sid] ?? defaultStoreState(sid);
+      stores[sid] = {
+        ...base,
+        ...st,
+        library: st.library ?? {},
+        installed: st.installed ?? {},
       };
     }
-    delete settings.legendaryBinary;
-    return {
-      version: 1,
-      stores,
-      settings,
-    };
-  } catch {
-    return defaultState();
   }
+  // Settings shape migration: `legendaryBinary` was a flat field
+  // before driver overrides existed. Hoist any persisted value
+  // into the new `driverOverrides.epic.binary` slot so the rest
+  // of the codebase can read one location.
+  const settings: Settings = { ...defaults.settings, ...parsed.settings };
+  if (
+    settings.legendaryBinary &&
+    !settings.driverOverrides?.epic?.binary
+  ) {
+    settings.driverOverrides = {
+      ...settings.driverOverrides,
+      epic: {
+        ...settings.driverOverrides?.epic,
+        binary: settings.legendaryBinary,
+      },
+    };
+  }
+  delete settings.legendaryBinary;
+  return {
+    version: 1,
+    stores,
+    settings,
+  };
 }
 
 /**
- * FIFO write queue — identical pattern to plugins/recomp/lib/state.ts.
- * Without it, two concurrent saveState callers can interleave their
- * atomic-write-and-rename sequences and produce a torn state.json.
- * Logical race on the in-memory snapshot is not protected by this
- * queue; callers must serialise their own reads if they care.
+ * Persist state. `@loadout/plugin-storage` handles the atomic
+ * tmp + rename internally so a crash mid-write never tears the
+ * file. Concurrent writers are serialised one level up via the
+ * backend's `stateMutex`.
  */
-let writeQueue: Promise<void> = Promise.resolve();
-
 export async function saveState(state: PersistedState): Promise<void> {
-  const next = writeQueue.then(async () => {
-    const dir = configDir();
-    await mkdir(dir, { recursive: true });
-    const path = join(dir, STATE_FILE);
-    const tmpPath = path + ".tmp";
-    await writeFile(tmpPath, JSON.stringify(state, null, 2));
-    await rename(tmpPath, path);
-  });
-  writeQueue = next.catch(() => {});
-  return next;
+  await writePluginStorage<PersistedState>(PLUGIN_ID, state);
 }
 
 function withStore(

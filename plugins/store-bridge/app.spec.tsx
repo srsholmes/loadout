@@ -81,7 +81,6 @@ function fakeBackend(opts: {
         return Promise.resolve([]);
       case "getSettings":
         return Promise.resolve({
-          autoAddToSteam: true,
           enabledStores: ["epic"],
           driverOverrides: {},
           scanPaths: [],

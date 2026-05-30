@@ -1,6 +1,37 @@
-import { readdir, readFile, access } from "node:fs/promises";
+import { readdir, access } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { join } from "node:path";
+
+/**
+ * Strip control characters + path separators from a game title and
+ * cap at `TITLE_MAX_LEN`. `legendary list-installed` / `info` JSON
+ * surfaces attacker-controllable text from `.egstore` manifests on
+ * USB drives — without this filter a `\n` in a planted title would
+ * corrupt `shortcuts.vdf`, and a `/` would slip a path separator
+ * into a Steam shortcut display name (and downstream into any
+ * filesystem write derived from it).
+ *
+ * Falls back to `(untitled)` if every char is stripped — guarantees
+ * the Steam shortcut display name is never the empty string, which
+ * the VDF writer would round-trip into `""` and Steam would render
+ * as a blank tile.
+ *
+ * Exported so both this file's `identifyEpicInstall` and
+ * `epic/index.ts:buildInstalledRecord` can apply the same rule.
+ */
+export const TITLE_MAX_LEN = 256;
+export function sanitiseTitle(raw: string): string {
+  // Strip C0 controls (\x00-\x1f) + DEL + path separators. Keep the
+  // rest of UTF-8 — Epic ships titles with em-dashes, smart quotes,
+  // and emoji that should round-trip intact.
+  const cleaned = raw
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1f\x7f/\\]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, TITLE_MAX_LEN);
+  return cleaned || "(untitled)";
+}
 
 /**
  * An Epic install signature lives in `<dir>/.egstore/Manifests/` —
@@ -50,15 +81,16 @@ export async function identifyEpicInstall(
     // unreadable .egstore — still treat as Epic, just without an id
   }
 
-  // Cap title length: when AppName extraction fails we fall back to
-  // the directory basename, which an attacker on a planted USB can
-  // make arbitrarily long. The title round-trips into state.json
-  // and the Steam shortcut display name, so a megabyte-sized basename
-  // would corrupt both. 256 is a comfortable ceiling — real Epic
-  // titles top out around 80 chars.
-  const TITLE_MAX_LEN = 256;
+  // Cap title length + strip control chars / path separators: when
+  // AppName extraction fails we fall back to the directory basename,
+  // which an attacker on a planted USB can make arbitrarily long
+  // or pad with `\n` / `/` characters. The title round-trips into
+  // state.json and the Steam shortcut display name, so any of those
+  // corruptions would propagate downstream. Share the sanitiser
+  // with `EpicDriverImpl.buildInstalledRecord` so both boundaries
+  // apply the same rule.
   const fallbackTitle = basename(dir);
-  const title = (appName || fallbackTitle).slice(0, TITLE_MAX_LEN);
+  const title = sanitiseTitle(appName || fallbackTitle);
   return { id: appName, title };
 }
 
@@ -112,26 +144,4 @@ async function fileExists(p: string): Promise<boolean> {
 function basename(p: string): string {
   const parts = p.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] ?? p;
-}
-
-/** Convenience: read a manifest's raw bytes for callers that want to
- *  parse it themselves. The current scan flow doesn't use this — we
- *  delegate to legendary — but it's here so a future feature
- *  (e.g. verifying the install) can pull bytes without duplicating
- *  the path math. */
-export async function readManifestBytes(
-  dir: string,
-  appName: string,
-): Promise<Uint8Array | null> {
-  for (const candidate of [
-    join(dir, ".egstore", `${appName}.manifest`),
-    join(dir, ".egstore", "Manifests", `${appName}.manifest`),
-  ]) {
-    try {
-      return new Uint8Array(await readFile(candidate));
-    } catch {
-      // try next
-    }
-  }
-  return null;
 }

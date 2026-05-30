@@ -6,7 +6,6 @@ import {
   useMemo,
   useState,
 } from "react";
-import { createRoot } from "react-dom/client";
 import {
   Badge,
   Button,
@@ -15,13 +14,14 @@ import {
   IconButton,
   Panel,
   PluginHeader,
-  PluginProvider,
   SearchField,
   SegmentedItem,
   Spinner,
   TabBar,
   Text,
   TextInput,
+  mountComponent,
+  mountHeaderStub,
   notify,
   useBackend,
 } from "@loadout/ui";
@@ -102,7 +102,6 @@ interface DriverOverrides {
 }
 
 interface Settings {
-  autoAddToSteam: boolean;
   enabledStores: StoreId[];
   driverOverrides?: Partial<Record<StoreId, DriverOverrides>>;
   scanPaths: string[];
@@ -253,10 +252,11 @@ interface InProgressInstall {
 function CatalogView() {
   const nav = useNav();
   const { call, useEvent } = useBackend("store-bridge");
-  // gaming-mode-browser hosts the cross-plugin "launch URL via a browser
-  // shortcut" RPC. Read once at the top level — calling useBackend() from
-  // inside an event handler would violate the rules of hooks.
-  const browser = useBackend("gaming-mode-browser");
+  // quick-links hosts the cross-plugin "launch URL via a browser shortcut"
+  // RPC (it absorbed the retired gaming-mode-browser flow). Read once at
+  // the top level — calling useBackend() from inside an event handler
+  // would violate the rules of hooks.
+  const browser = useBackend("quick-links");
 
   const [stores, setStores] = useState<StoreInfo[]>([]);
   const [activeStore, setActiveStore] = useState<StoreId>("epic");
@@ -1757,22 +1757,5 @@ function SettingsView() {
 
 // ── Mount ────────────────────────────────────────────────────────────────
 
-export function mount(
-  container: HTMLElement,
-  opts?: { parentFocusKey?: string; headerSlot?: HTMLElement | null },
-): () => void {
-  const root = createRoot(container);
-  root.render(
-    <PluginProvider
-      parentFocusKey={opts?.parentFocusKey}
-      headerSlot={opts?.headerSlot ?? null}
-    >
-      <App />
-    </PluginProvider>,
-  );
-  return () => root.unmount();
-}
-
-export function mountHeader(): () => void {
-  return () => {};
-}
+export const mount = mountComponent(App);
+export const mountHeader = mountHeaderStub;

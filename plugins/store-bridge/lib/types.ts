@@ -104,8 +104,6 @@ export interface DriverOverrides {
 
 /** Plugin-wide settings, persisted to disk. */
 export interface Settings {
-  /** Auto-add installed games as Steam shortcuts on install completion. */
-  autoAddToSteam: boolean;
   /** Stores the UI surfaces (chip row). */
   enabledStores: StoreId[];
   /**

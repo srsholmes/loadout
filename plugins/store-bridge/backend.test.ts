@@ -15,6 +15,20 @@ mock.module("./lib/platform", () => ({
   storeInstallDir: (id: string) => join(sandbox, "games", id),
 }));
 
+// In-process scratch store for @loadout/plugin-storage so each test's
+// state writes are isolated from the dev's real
+// `~/.config/loadout/plugins/store-bridge.json`. Cleared per test.
+const pluginStorageStore = new Map<string, unknown>();
+mock.module("@loadout/plugin-storage", () => ({
+  readPluginStorage: async <T>(id: string): Promise<Partial<T>> =>
+    (pluginStorageStore.get(id) as Partial<T> | undefined) ?? {},
+  writePluginStorage: async <T>(id: string, data: T): Promise<void> => {
+    pluginStorageStore.set(id, data);
+  },
+  pluginStoragePath: (id: string) => `/tmp/spec/${id}.json`,
+  loadoutConfigDir: () => "/tmp/spec",
+}));
+
 // Stub Epic driver so we never actually invoke legendary or wire
 // it via `configureEpicDriver`. The backend imports the Epic side
 // for its side-effect registration — we replace that with a stub
@@ -64,8 +78,10 @@ mock.module("./lib/stores/epic", () => {
   };
 });
 
-// Steam APIs aren't reachable from tests; auto-add-to-steam is gated
-// off via settings.autoAddToSteam = false in each test.
+// Steam APIs aren't reachable from tests; the steam-shortcut module
+// is mocked above to return a fake `{appId, gameId64}` so the
+// add-to-Steam tail every install runs through doesn't hit a real
+// VDF write.
 mock.module("./lib/steam-shortcut", () => ({
   addToSteam: async () => ({ appId: 1, gameId64: "1" }),
   removeFromSteam: async () => {},
@@ -83,6 +99,7 @@ mock.module("./lib/launcher", () => ({
 
 beforeEach(async () => {
   sandbox = await mkdtemp(join(tmpdir(), "store-bridge-be-"));
+  pluginStorageStore.clear();
 });
 afterEach(async () => {
   await rm(sandbox, { recursive: true, force: true });
@@ -101,8 +118,6 @@ describe("StoreBridgeBackend", () => {
     const { default: Backend } = await import("./backend");
     const be = new Backend();
     await be.onLoad();
-    // Disable auto-add so we don't touch the Steam mock during install.
-    await be.updateSettings({ autoAddToSteam: false });
     const lib = await be.getLibrary("epic");
     expect(lib).toHaveLength(1);
     expect(lib[0]?.title).toBe("Fortnite");
@@ -113,7 +128,6 @@ describe("StoreBridgeBackend", () => {
     const { default: Backend } = await import("./backend");
     const be = new Backend();
     await be.onLoad();
-    await be.updateSettings({ autoAddToSteam: false });
     await be.getLibrary("epic"); // populate library
     await be.installGame("epic", "fortnite");
     const lib = await be.getLibrary("epic");
@@ -247,7 +261,6 @@ describe("StoreBridgeBackend — install queue + cancel regression", () => {
     const { default: Backend } = await import("./backend");
     const be = new Backend();
     await be.onLoad();
-    await be.updateSettings({ autoAddToSteam: false });
     await be.getLibrary("epic");
 
     await Promise.all([
@@ -307,7 +320,6 @@ describe("StoreBridgeBackend — install queue + cancel regression", () => {
     const { default: Backend } = await import("./backend");
     const be = new Backend();
     await be.onLoad();
-    await be.updateSettings({ autoAddToSteam: false });
     await be.getLibrary("epic");
 
     const aPromise = be.installGame("epic", "A");
@@ -368,7 +380,6 @@ describe("StoreBridgeBackend — install queue + cancel regression", () => {
     const { default: Backend } = await import("./backend");
     const be = new Backend();
     await be.onLoad();
-    await be.updateSettings({ autoAddToSteam: false });
     await be.getLibrary("epic");
     await be.installGame("epic", "A");
 
@@ -544,5 +555,288 @@ describe("StoreBridgeBackend — install queue + cancel regression", () => {
     expect(status).toBeDefined();
     expect(status?.data?.title).toBe("Alba: A Wildlife Adventure");
     expect(status?.data?.addedToSteam).toBe(true);
+  });
+});
+
+// ── Regression coverage for the review feedback.
+
+describe("StoreBridgeBackend — PR review regressions", () => {
+  it("cancel-while-queued doesn't un-cancel itself when a new attempt is enqueued (cancel-token race)", async () => {
+    // Reproduces the HIGH cancel-token race the review flagged.
+    // Setup: queue blocker → queue install A (attempt 1) → cancel A
+    // (still queued) → queue install A (attempt 2). When the queue
+    // drains, attempt 1's queued-cancel must STILL bite (driver
+    // never invoked for it), and attempt 2 must run normally.
+    //
+    // OLD broken code: `installGame` (attempt 2) ran
+    // `cancelledInstalls.delete(key)` SYNCHRONOUSLY before the
+    // queue dispatched. That cleared the cancel intent for
+    // attempt 1, so when the queue dispatched attempt 1 it saw
+    // `!cancelledInstalls.has(key)` and proceeded with the install.
+    // Result: both attempts ran (cancel was lost).
+    //
+    // NEW code: cancel is keyed on the attempt id captured at
+    // enqueue time. `claimAttempt(key)` for attempt 2 mints a
+    // FRESH id that ISN'T in the cancelled set, so attempt 2 isn't
+    // covered — and attempt 1's id remains in the cancelled set
+    // so its queued unit short-circuits.
+    let blockerResolver: (() => void) | null = null;
+    let blockerEntered: () => void = () => {};
+    const blockerEnteredP = new Promise<void>((resolve) => {
+      blockerEntered = resolve;
+    });
+    const installCalls: string[] = [];
+    const driver: StoreDriver = {
+      id: "epic",
+      displayName: "Epic Games",
+      preflight: async () => ({ ok: true, missing: [], canSelfInstall: false }),
+      authStatus: async () => "unknown",
+      listLibrary: async () => [
+        { id: "Blocker", title: "Blocker" },
+        { id: "A", title: "A" },
+      ],
+      install: async (id, dir) => {
+        installCalls.push(id);
+        if (id === "Blocker") {
+          blockerEntered();
+          await new Promise<void>((resolve) => {
+            blockerResolver = resolve;
+          });
+        }
+        return {
+          id,
+          title: id,
+          installedAt: "2026-01-01T00:00:00Z",
+          installDir: dir,
+          executable: `${id}.exe`,
+          platform: "windows",
+          source: "installed",
+          addedToSteam: false,
+        };
+      },
+      uninstall: async () => {},
+      launchSpec: () => ({ exe: "/x", args: "" }),
+    };
+    registerDriver(driver);
+
+    const { default: Backend } = await import("./backend");
+    const be = new Backend();
+    await be.onLoad();
+    await be.getLibrary("epic");
+
+    // Blocker fills the queue slot.
+    const blocker = be.installGame("epic", "Blocker");
+    await blockerEnteredP;
+    // Attempt 1 queues behind Blocker (no driver call yet).
+    const a1 = be.installGame("epic", "A");
+    // Cancel attempt 1 — still queued, driver hasn't run yet.
+    await be.cancelInstall("epic", "A");
+    // Attempt 2 queues behind attempt 1. OLD code would
+    // synchronously `cancelledInstalls.delete("epic/A")` here,
+    // clearing the cancel intent of attempt 1.
+    const a2 = be.installGame("epic", "A");
+    // Drain.
+    blockerResolver!();
+    await blocker;
+    await a1;
+    await a2;
+    // Attempt 1 was cancelled-while-queued — driver.install for
+    // it must NEVER have been called.
+    // Attempt 2 must have run — driver.install for A invoked once.
+    const aCalls = installCalls.filter((c) => c === "A");
+    expect(aCalls).toHaveLength(1);
+  });
+
+  it("validateGameId rejects malicious inputs at the RPC boundary", async () => {
+    const driver: StoreDriver = {
+      id: "epic",
+      displayName: "Epic Games",
+      preflight: async () => ({ ok: true, missing: [], canSelfInstall: false }),
+      authStatus: async () => "unknown",
+      listLibrary: async () => [],
+      install: async () => {
+        throw new Error("driver.install should never be called");
+      },
+      uninstall: async () => {
+        throw new Error("driver.uninstall should never be called");
+      },
+      launchSpec: () => ({ exe: "/x", args: "" }),
+    };
+    registerDriver(driver);
+
+    const { default: Backend } = await import("./backend");
+    const be = new Backend();
+    await be.onLoad();
+
+    // Every RPC entry point that constructs an on-disk path from
+    // gameId must reject malformed input BEFORE invoking the
+    // driver. If validateGameId was bypassed, driver.install /
+    // driver.uninstall would throw the sentinel above and the
+    // assertion would fail with a different message.
+    const evil = ["../etc/passwd", "a/b", "", "foo bar", "../../root", " "];
+    for (const bad of evil) {
+      await expect(be.installGame("epic", bad)).rejects.toThrow(/Invalid gameId/);
+      await expect(be.cancelInstall("epic", bad)).rejects.toThrow(/Invalid gameId/);
+      await expect(be.uninstallGame("epic", bad)).rejects.toThrow(/Invalid gameId/);
+      await expect(be.importDetected("epic", bad, "/some/dir")).rejects.toThrow(
+        /Invalid gameId/,
+      );
+      await expect(be.launchGame("epic", bad)).rejects.toThrow(/Invalid gameId/);
+      await expect(be.addInstalledToSteam("epic", bad)).rejects.toThrow(
+        /Invalid gameId/,
+      );
+      await expect(be.removeFromSteam("epic", bad)).rejects.toThrow(/Invalid gameId/);
+    }
+  });
+
+  it("uninstallGame keeps the Steam shortcut + state record when the driver throws", async () => {
+    let removeFromSteamCalls = 0;
+    // Driver throws — the read-modify-write block should bail
+    // before the shortcut is removed or the state entry is dropped.
+    const driver: StoreDriver = {
+      id: "epic",
+      displayName: "Epic Games",
+      preflight: async () => ({ ok: true, missing: [], canSelfInstall: false }),
+      authStatus: async () => "unknown",
+      listLibrary: async () => [{ id: "A", title: "A" }],
+      install: async (id, dir) => ({
+        id,
+        title: id,
+        installedAt: "2026-01-01T00:00:00Z",
+        installDir: dir,
+        executable: `${id}.exe`,
+        platform: "windows",
+        source: "installed",
+        addedToSteam: false,
+      }),
+      uninstall: async () => {
+        throw new Error("legendary uninstall failed");
+      },
+      launchSpec: () => ({ exe: "/x", args: "" }),
+    };
+    registerDriver(driver);
+
+    // Custom steam-shortcut mock that counts removeFromSteam calls.
+    mock.module("./lib/steam-shortcut", () => ({
+      addToSteam: async () => ({ appId: 42, gameId64: "42" }),
+      removeFromSteam: async () => {
+        removeFromSteamCalls++;
+      },
+      shortcutDisplayName: (d: { displayName: string }, g: { title: string }) =>
+        `${g.title} (${d.displayName})`,
+    }));
+
+    const { default: Backend } = await import("./backend");
+    const be = new Backend();
+    await be.onLoad();
+    await be.getLibrary("epic");
+    await be.installGame("epic", "A");
+    // Sanity: the install path adds to Steam.
+    const before = await be.getLibrary("epic");
+    expect(before[0]?.installed?.addedToSteam).toBe(true);
+    expect(before[0]?.installed?.steamAppId).toBe(42);
+
+    // The driver throws — uninstallGame must NOT remove the
+    // shortcut and must NOT drop the state record. Without the
+    // fix the shortcut would be orphaned.
+    await expect(be.uninstallGame("epic", "A")).rejects.toThrow(
+      /legendary uninstall failed/,
+    );
+    expect(removeFromSteamCalls).toBe(0);
+    const after = await be.getLibrary("epic");
+    expect(after[0]?.installed).toBeDefined();
+    expect(after[0]?.installed?.steamAppId).toBe(42);
+  });
+
+  it("importDetected cancel-while-queued emits a cancelled pipelineEvent", async () => {
+    let firstResolver: (() => void) | null = null;
+    let aEntered: () => void = () => {};
+    const aEnteredP = new Promise<void>((resolve) => {
+      aEntered = resolve;
+    });
+    const importCalls: string[] = [];
+    const driver: StoreDriver = {
+      id: "epic",
+      displayName: "Epic Games",
+      preflight: async () => ({ ok: true, missing: [], canSelfInstall: false }),
+      authStatus: async () => "unknown",
+      listLibrary: async () => [],
+      install: async (id, dir, emit) => {
+        aEntered();
+        await new Promise<void>((resolve) => {
+          firstResolver = resolve;
+        });
+        emit({ kind: "complete", id: `epic:install:${id}` });
+        return {
+          id,
+          title: id,
+          installedAt: "2026-01-01T00:00:00Z",
+          installDir: dir,
+          executable: `${id}.exe`,
+          platform: "windows",
+          source: "installed",
+          addedToSteam: false,
+        };
+      },
+      uninstall: async () => {},
+      launchSpec: () => ({ exe: "/x", args: "" }),
+      identifyInstall: async () => null,
+      importExisting: async (id, dir) => {
+        importCalls.push(id);
+        return {
+          id,
+          title: id,
+          installedAt: "2026-01-01T00:00:00Z",
+          installDir: dir,
+          executable: `${id}.exe`,
+          platform: "windows",
+          source: "imported",
+          addedToSteam: false,
+        };
+      },
+    };
+    registerDriver(driver);
+    mock.module("./lib/steam-shortcut", () => ({
+      addToSteam: async () => ({ appId: 1, gameId64: "1" }),
+      removeFromSteam: async () => {},
+      shortcutDisplayName: (d: { displayName: string }, g: { title: string }) =>
+        `${g.title} (${d.displayName})`,
+    }));
+
+    const events: Array<{ event: string; data?: Record<string, unknown> }> = [];
+    const { default: Backend } = await import("./backend");
+    const be = new Backend();
+    be.emit = (e) => events.push(e);
+    await be.onLoad();
+    await be.getLibrary("epic");
+
+    // Block the queue with an install for game A so the import for
+    // game B queues behind it. While queued, cancel game B's
+    // import — the unit should bail before `importExisting` runs
+    // and emit a `cancelled`-flavoured event the UI consumes for
+    // a toast.
+    const installPromise = be.installGame("epic", "A");
+    await aEnteredP;
+    const importPromise = be.importDetected("epic", "B", "/mnt/games/B");
+    // Cancel the queued import.
+    await be.cancelInstall("epic", "B");
+    // Drain the queue.
+    firstResolver!();
+    await installPromise;
+    await importPromise;
+
+    // `importExisting` was never invoked — the queued cancel
+    // short-circuited the unit.
+    expect(importCalls).not.toContain("B");
+    // The cancelled event surfaces in pipelineEvent.error with
+    // the "cancelled" message so the UI can toast it.
+    const cancelled = events.find(
+      (e) =>
+        e.event === "pipelineEvent" &&
+        typeof e.data?.id === "string" &&
+        (e.data.id as string).includes(":import:B") &&
+        /cancelled/i.test(String(e.data?.message ?? "")),
+    );
+    expect(cancelled).toBeDefined();
   });
 });

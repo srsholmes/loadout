@@ -39,7 +39,6 @@ mock.module("./legendary", () => ({
     }
   },
   EPIC_LOGIN_URL: "https://legendary.gl/epiclogin",
-  _appNameRegex: /^[A-Za-z0-9_][A-Za-z0-9_-]*$/,
 }));
 
 mock.module("./install-legendary", () => ({
@@ -51,6 +50,11 @@ mock.module("./install-legendary", () => ({
 
 mock.module("./identify", () => ({
   identifyEpicInstall: async () => null,
+  // Pass-through sanitiser — the real `identify.ts:sanitiseTitle` is
+  // covered by its own spec. The stub keeps `epic/index.ts`'s named
+  // import resolvable inside this in-process test module.
+  sanitiseTitle: (raw: string) => raw,
+  TITLE_MAX_LEN: 256,
 }));
 
 mock.module("@loadout/external-cache", () => ({
@@ -132,6 +136,8 @@ describe("EpicDriverImpl.identifyInstall", () => {
     mock.module("./identify", () => ({
       identifyEpicInstall: async (dir: string) =>
         dir.endsWith("/known") ? { id: "Known", title: "Known Game" } : null,
+      sanitiseTitle: (raw: string) => raw,
+      TITLE_MAX_LEN: 256,
     }));
     // Re-import so the new identify mock takes effect for this test.
     const { epicDriver } = await import("./index");

@@ -17,7 +17,7 @@ import {
   resolveLegendaryBinary,
 } from "./install-legendary";
 import { Legendary, EPIC_LOGIN_URL } from "./legendary";
-import { identifyEpicInstall } from "./identify";
+import { identifyEpicInstall, sanitiseTitle } from "./identify";
 import type { LegendaryInfoEntry, LegendaryInstalledEntry } from "./types";
 
 /**
@@ -404,18 +404,21 @@ class EpicDriverImpl implements StoreDriver {
       fromList?.launch_parameters ?? info?.install?.launch_parameters;
     const platformRaw =
       fromList?.platform ?? info?.install?.platform ?? guessPlatform(executable);
-    // Cap the title at 256 chars. The cap also lives in identify.ts
-    // for the scan-import boundary, but `legendary list-installed`
-    // and `legendary info` JSON ultimately surface attacker-controlled
-    // text from `.egstore` manifests on USB drives. Without a cap
-    // here a megabyte title would corrupt state.json + the Steam
-    // shortcut display name.
-    const TITLE_MAX_LEN = 256;
+    // Cap the title at 256 chars + strip control characters and
+    // path separators. The cap lives in identify.ts for the
+    // scan-import boundary too, but `legendary list-installed` and
+    // `legendary info` JSON ultimately surface attacker-controlled
+    // text from `.egstore` manifests on USB drives. Without these
+    // filters a megabyte title would corrupt state.json + the Steam
+    // shortcut display name, and an embedded `\n` / `/` could
+    // corrupt `shortcuts.vdf` or smuggle a path separator into a
+    // filename downstream. The review flagged this as the MEDIUM
+    // control-char hygiene gap.
     const rawTitle =
       fromList?.title ?? info?.game?.title ?? base?.title ?? appName;
     return {
       id: appName,
-      title: rawTitle.slice(0, TITLE_MAX_LEN),
+      title: sanitiseTitle(rawTitle),
       installedAt: base?.installedAt ?? new Date().toISOString(),
       installDir: installPath,
       installSize: fromList?.install_size ?? info?.install?.install_size ?? base?.installSize,
