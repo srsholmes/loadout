@@ -1113,6 +1113,12 @@ function StepDone({
           value={`${enabledCount} of ${totalPlugins} enabled`}
         />
       </div>
+      <div className="text-[12px] text-base-content/50 mt-4 max-w-md mx-auto text-center">
+        Tip: to open this overlay with a controller button in-game, set a wake
+        button in the <span className="font-medium">InputPlumber</span> plugin —
+        pick any paddle or the Quick&nbsp;Access / keyboard button on your
+        handheld.
+      </div>
     </div>
   );
 }

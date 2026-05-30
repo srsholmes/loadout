@@ -5,7 +5,9 @@ import {
   FaCircle,
   FaCircleExclamation,
   FaDownload,
+  FaGamepad,
   FaPlug,
+  FaPowerOff,
 } from "react-icons/fa6";
 import {
   mountComponent,
@@ -19,6 +21,9 @@ import type {
   InstallRunResult,
   InstallStateEvent,
   InstallStatus,
+  WakeStatus,
+  WakeButtonOption,
+  WakeOpResult,
 } from "./shared";
 
 export const icon = FaPlug;
@@ -283,8 +288,207 @@ function InputPlumberPanel() {
         )}
         </div>
         </div>
+
+        <WakeButtonSection />
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Overlay wake button picker
+// ---------------------------------------------------------------------------
+
+/** One selectable button row — gamepad-focusable, shows a check when active. */
+function WakeOptionRow({
+  label,
+  sublabel,
+  active,
+  disabled,
+  onSelect,
+  icon,
+}: {
+  label: string;
+  sublabel?: string;
+  active: boolean;
+  disabled?: boolean;
+  onSelect: () => void;
+  icon?: React.ReactNode;
+}) {
+  const { ref, focused } = useFocusable({ onEnterPress: onSelect });
+  return (
+    <button
+      ref={ref}
+      onClick={onSelect}
+      disabled={disabled}
+      className={`btn btn-sm justify-start w-full ${
+        active ? "btn-primary" : "btn-ghost"
+      } ${focused ? "ring-2 ring-primary/40" : ""}`}
+    >
+      {active ? (
+        <FaCheck className="w-3 h-3 mr-2 shrink-0" />
+      ) : (
+        <span className="w-3 mr-2 shrink-0 inline-flex justify-center">
+          {icon}
+        </span>
+      )}
+      <span className="truncate">{label}</span>
+      {sublabel && (
+        <span className="ml-auto text-[11px] opacity-60 pl-2">{sublabel}</span>
+      )}
+    </button>
+  );
+}
+
+function WakeButtonSection() {
+  const { call, useEvent } = useBackend("input-plumber");
+  const [wake, setWake] = useState<WakeStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setWake((await call("getWakeStatus")) as WakeStatus);
+  }, [call]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  useEvent({
+    event: "wake-status",
+    handler: (data) => setWake(data as WakeStatus),
+  });
+
+  const runOp = useCallback(
+    async (method: string, arg?: string) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const r = (await call(method, arg)) as WakeOpResult | WakeStatus;
+        if ("ok" in r && !r.ok) setError(r.error ?? "Operation failed.");
+        await refresh();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [call, refresh],
+  );
+
+  const cardWrap = (body: React.ReactNode) => (
+    <div className="card mt-3.5">
+      <div className="card-body p-4.5">
+        <div className="flex items-center gap-2 mb-2">
+          <FaGamepad className="w-4 h-4 shrink-0 text-base-content/60" />
+          <div className="subsection-label mb-0">Overlay wake button</div>
+        </div>
+        <div className="subsection-desc">
+          Pick the physical button that opens the Loadout overlay in-game. Any
+          handheld InputPlumber supports works — paddles, the Quick Access /
+          keyboard button, or any extra button. The choice is bound to the
+          overlay&apos;s wake key (F16) and takes effect immediately.
+        </div>
+        {body}
+        {error && (
+          <div
+            className="subsection-desc mt-2"
+            style={{ color: "var(--color-error)" }}
+          >
+            {error}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  if (!wake) {
+    return cardWrap(
+      <div className="flex items-center justify-center h-10 mt-2">
+        <Spinner size={18} />
+      </div>,
+    );
+  }
+
+  // InputPlumber not running yet.
+  if (!wake.ipActive) {
+    if (wake.isDeck) {
+      return cardWrap(
+        <div className="mt-3">
+          <div className="subsection-desc mb-2">
+            InputPlumber ships disabled on Steam Deck. Enable it to detect your
+            controller&apos;s buttons (your gamepad keeps working — Loadout just
+            adds a keyboard target for the wake key).
+          </div>
+          <FocusButton
+            onClick={() => void runOp("prepareWake")}
+            disabled={busy}
+            variant="primary"
+          >
+            {busy ? "Enabling…" : "Enable & detect buttons"}
+          </FocusButton>
+        </div>,
+      );
+    }
+    return cardWrap(
+      <div className="subsection-desc mt-3 text-base-content/60">
+        InputPlumber isn&apos;t running. Install or start it above, then a
+        button picker will appear here.
+      </div>,
+    );
+  }
+
+  if (wake.devices.length === 0) {
+    return cardWrap(
+      <div className="subsection-desc mt-3 text-base-content/60">
+        No controller detected by InputPlumber. Connect your handheld&apos;s
+        controller and refresh.
+      </div>,
+    );
+  }
+
+  return cardWrap(
+    <div className="mt-3 flex flex-col gap-3">
+      {wake.devices.map((device) => {
+        const recommended = device.buttons.filter((b) => b.recommended);
+        const other = device.buttons.filter((b) => !b.recommended);
+        const renderRow = (b: WakeButtonOption) => (
+          <WakeOptionRow
+            key={b.raw}
+            label={b.label}
+            sublabel={b.category === "keyboard" ? "keyboard" : undefined}
+            active={wake.selectedRaw === b.raw}
+            disabled={busy}
+            onSelect={() => void runOp("setWakeButton", b.raw)}
+          />
+        );
+        return (
+          <div key={device.name} className="flex flex-col gap-1.5">
+            {wake.devices.length > 1 && (
+              <div className="subsection-desc text-[11px] uppercase tracking-wide opacity-50">
+                {device.name}
+              </div>
+            )}
+            {recommended.map(renderRow)}
+            {other.length > 0 && (
+              <>
+                <div className="subsection-desc text-[11px] uppercase tracking-wide opacity-40 mt-1">
+                  Other buttons (may interfere with gameplay)
+                </div>
+                {other.map(renderRow)}
+              </>
+            )}
+          </div>
+        );
+      })}
+      <WakeOptionRow
+        label="Off — no wake button"
+        active={wake.selectedRaw === null}
+        disabled={busy}
+        onSelect={() => void runOp("clearWakeButton")}
+        icon={<FaPowerOff className="w-3 h-3 opacity-60" />}
+      />
+    </div>,
   );
 }
 

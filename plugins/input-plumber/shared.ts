@@ -57,3 +57,45 @@ export interface InstallStateEvent {
   running: boolean;
   result?: InstallRunResult;
 }
+
+// ── Overlay wake button ─────────────────────────────────────────────────────
+// Shared between the backend (renders/loads the IP profile) and the picker UI.
+
+/** A pickable physical button, derived from a device's IP capabilities. */
+export interface WakeButtonOption {
+  /** Raw capability string, e.g. "Gamepad:Button:RightPaddle1". The opaque id
+   *  the backend round-trips back to bind the button. */
+  raw: string;
+  /** Leaf capability name, e.g. "RightPaddle1". */
+  name: string;
+  /** Capability category, "gamepad" | "keyboard". */
+  category: string;
+  /** Human label for the UI. */
+  label: string;
+  /** True for "extra" buttons (paddles, QAM/keyboard button); false for core
+   *  gameplay buttons we'd rather the user didn't hijack. */
+  recommended: boolean;
+}
+
+export interface WakeStatusDevice {
+  /** InputPlumber composite-device name. */
+  name: string;
+  /** Buttons the user can bind on this device. */
+  buttons: WakeButtonOption[];
+}
+
+export interface WakeStatus {
+  /** Is the IP service answering on the bus right now? */
+  ipActive: boolean;
+  /** Is this a Steam Deck (needs the enable + auto_manage step)? */
+  isDeck: boolean;
+  /** Connected composite devices with their pickable buttons. */
+  devices: WakeStatusDevice[];
+  /** Raw capability currently bound, or null for none/Off. */
+  selectedRaw: string | null;
+}
+
+export interface WakeOpResult {
+  ok: boolean;
+  error?: string;
+}

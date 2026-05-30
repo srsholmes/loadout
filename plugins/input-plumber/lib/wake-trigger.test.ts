@@ -1,0 +1,239 @@
+/**
+ * Overlay wake-trigger orchestration tests.
+ *
+ * wake-trigger.ts shells out to busctl via @loadout/exec (→ Bun.spawn),
+ * writes files via node:fs/promises, and persists via @loadout/plugin-storage.
+ * We stub all three: a busctl argv dispatcher, fs spies backed by an in-memory
+ * map, and an in-memory storage bucket. No real DBus / fs / device required.
+ */
+
+import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
+import * as pluginStorage from "@loadout/plugin-storage";
+import * as fsp from "node:fs/promises";
+import { getWakeStatus, setWakeButton, clearWakeButton } from "./wake-trigger";
+import { PROFILE_PATH } from "./profile";
+
+const PATH0 = "/org/shadowblip/InputPlumber/CompositeDevice0";
+
+interface SpawnExpectation {
+  match: (cmd: readonly string[]) => boolean;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+}
+
+function makeSpawnStub(expectations: SpawnExpectation[]) {
+  const calls: string[][] = [];
+  const stub = (cmd: readonly string[] | string, _opts?: unknown) => {
+    const argv = Array.isArray(cmd) ? (cmd as string[]) : [cmd as string];
+    calls.push([...argv]);
+    const exp = expectations.find((e) => e.match(argv));
+    const mk = (s: string) =>
+      new ReadableStream({
+        start(c) {
+          c.enqueue(new TextEncoder().encode(s));
+          c.close();
+        },
+      });
+    return {
+      stdout: mk(exp?.stdout ?? ""),
+      stderr: mk(exp?.stderr ?? ""),
+      exited: Promise.resolve(exp?.exitCode ?? 0),
+      kill() {},
+    } as unknown as ReturnType<typeof Bun.spawn>;
+  };
+  return { stub, calls };
+}
+
+function has(cmd: readonly string[], needle: string): boolean {
+  return cmd.some((s) => s.includes(needle));
+}
+
+/** A connected, capability-rich composite device on a non-Deck host. */
+function happyPathExpectations(): SpawnExpectation[] {
+  return [
+    // service availability + path enumeration
+    {
+      match: (c) => c[0] === "busctl" && has(c, "tree"),
+      stdout: `${PATH0}\n`,
+    },
+    {
+      match: (c) => has(c, "get-property") && has(c, "Name"),
+      stdout: 's "OrangePi Apex"',
+    },
+    {
+      match: (c) => has(c, "get-property") && has(c, "Capabilities"),
+      stdout: 'as 3 "Gamepad:Button:South" "Gamepad:Button:RightPaddle1" "Keyboard:KeyRecord"',
+    },
+    {
+      match: (c) => has(c, "get-property") && has(c, "TargetDevices"),
+      stdout: `ao 1 "${PATH0}/Target0"`,
+    },
+    {
+      match: (c) => has(c, "get-property") && has(c, "DeviceType"),
+      stdout: 's "xb360"',
+    },
+    {
+      match: (c) => has(c, "call") && has(c, "LoadProfilePath"),
+      stdout: "",
+      exitCode: 0,
+    },
+    // systemctl / udevadm — always succeed
+    { match: (c) => c[0] === "systemctl" || c[0] === "udevadm", exitCode: 0 },
+  ];
+}
+
+describe("wake-trigger orchestration", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let spawnSpy: ReturnType<typeof spyOn<any, any>>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fsSpies: ReturnType<typeof spyOn<any, any>>[] = [];
+  const storage = new Map<string, unknown>();
+  const writtenFiles = new Map<string, string>();
+
+  beforeEach(() => {
+    storage.clear();
+    writtenFiles.clear();
+
+    spyOn(pluginStorage, "readPluginStorage").mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async (id: string) => (storage.get(id) ?? {}) as any,
+    );
+    spyOn(pluginStorage, "writePluginStorage").mockImplementation(
+      async (id: string, data: unknown) => {
+        storage.set(id, data);
+      },
+    );
+
+    fsSpies.length = 0;
+    fsSpies.push(
+      spyOn(fsp, "mkdir").mockImplementation(async () => undefined),
+      spyOn(fsp, "writeFile").mockImplementation(async (p: unknown, content: unknown) => {
+        writtenFiles.set(String(p), String(content));
+      }),
+      spyOn(fsp, "rm").mockImplementation(async () => undefined),
+      // DMI read → non-Deck host by default.
+      spyOn(fsp, "readFile").mockImplementation(async (p: unknown) => {
+        if (String(p).includes("product_name")) return "OrangePi Apex";
+        if (String(p).includes("sys_vendor")) return "OrangePi";
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }),
+    );
+  });
+
+  afterEach(() => {
+    spawnSpy?.mockRestore();
+    for (const s of fsSpies) s.mockRestore();
+  });
+
+  it("getWakeStatus reports IP active, non-Deck, and pickable buttons", async () => {
+    const { stub } = makeSpawnStub(happyPathExpectations());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+
+    const status = await getWakeStatus();
+    expect(status.ipActive).toBe(true);
+    expect(status.isDeck).toBe(false);
+    expect(status.devices).toHaveLength(1);
+    expect(status.devices[0].name).toBe("OrangePi Apex");
+    const names = status.devices[0].buttons.map((b) => b.name).sort();
+    expect(names).toEqual(["KeyRecord", "RightPaddle1", "South"]);
+    expect(status.selectedRaw).toBeNull();
+  });
+
+  it("setWakeButton renders the profile, loads it, and persists the choice", async () => {
+    const { stub, calls } = makeSpawnStub(happyPathExpectations());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+
+    const r = await setWakeButton("Gamepad:Button:RightPaddle1");
+    expect(r.ok).toBe(true);
+
+    // Wrote the profile with the chosen mapping, preserving the xb360 target.
+    const profile = writtenFiles.get(PROFILE_PATH);
+    expect(profile).toBeDefined();
+    expect(profile).toContain("button: RightPaddle1");
+    expect(profile).toContain("- xb360");
+    expect(profile).toContain("- keyboard");
+    expect(profile).toContain("keyboard: KeyF16");
+
+    // Issued a LoadProfilePath call against the device path + profile path.
+    const loadCall = calls.find((c) => has(c, "LoadProfilePath"));
+    expect(loadCall).toBeDefined();
+    expect(loadCall).toContain(PATH0);
+    expect(loadCall).toContain(PROFILE_PATH);
+
+    // Persisted the selection.
+    const persisted = storage.get("input-plumber") as {
+      wake?: { selectedRaw?: string };
+    };
+    expect(persisted.wake?.selectedRaw).toBe("Gamepad:Button:RightPaddle1");
+  });
+
+  it("setWakeButton fails cleanly when InputPlumber is absent on a non-Deck host", async () => {
+    const { stub } = makeSpawnStub([
+      { match: (c) => c[0] === "busctl" && has(c, "tree"), exitCode: 1 },
+    ]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+
+    const r = await setWakeButton("Gamepad:Button:RightPaddle1");
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("not running");
+  });
+
+  it("clearWakeButton forgets the selection and loads a no-mapping profile", async () => {
+    const { stub, calls } = makeSpawnStub(happyPathExpectations());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+    storage.set("input-plumber", {
+      wake: { selectedRaw: "Gamepad:Button:RightPaddle1", deviceName: "OrangePi Apex" },
+    });
+
+    const r = await clearWakeButton();
+    expect(r.ok).toBe(true);
+    expect(writtenFiles.get(PROFILE_PATH)).toContain("mapping: []");
+    expect(calls.find((c) => has(c, "LoadProfilePath"))).toBeDefined();
+    const persisted = storage.get("input-plumber") as {
+      wake?: { selectedRaw: string | null };
+    };
+    expect(persisted.wake?.selectedRaw).toBeNull();
+  });
+
+  it("on a Steam Deck, an absent IP triggers enable + override write", async () => {
+    // DMI now reports a Deck; IP starts unavailable then comes up.
+    fsSpies[3].mockImplementation(async (p: unknown) => {
+      if (String(p).includes("product_name")) return "Jupiter";
+      if (String(p).includes("sys_vendor")) return "Valve";
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+
+    let treeCalls = 0;
+    const exps = happyPathExpectations();
+    // Override the tree matcher: first probe fails (IP down), later succeed.
+    exps[0] = {
+      match: (c) => c[0] === "busctl" && has(c, "tree"),
+      // bun's stub reads exitCode synchronously per call; emulate "comes up"
+      // by counting invocations via a getter-like closure.
+      get exitCode() {
+        treeCalls += 1;
+        return treeCalls <= 1 ? 1 : 0;
+      },
+      stdout: `${PATH0}\n`,
+    } as SpawnExpectation;
+
+    const { stub, calls } = makeSpawnStub(exps);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+
+    const r = await setWakeButton("Gamepad:Button:RightPaddle1");
+    expect(r.ok).toBe(true);
+    // Enabled the service and wrote the Deck override.
+    expect(
+      calls.find((c) => c[0] === "systemctl" && has(c, "enable") && has(c, "inputplumber.service")),
+    ).toBeDefined();
+    expect(writtenFiles.get("/etc/inputplumber/devices.d/50-steam_deck.yaml")).toContain(
+      "auto_manage: true",
+    );
+  });
+});

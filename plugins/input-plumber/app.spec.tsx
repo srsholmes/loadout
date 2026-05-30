@@ -209,4 +209,126 @@ describe("input-plumber plugin", () => {
     expect(installButton).toBeTruthy();
     expect(installButton.disabled).toBe(true);
   });
+
+  // -----------------------------------------------------------------------
+  // Overlay wake button picker
+  // -----------------------------------------------------------------------
+
+  const wakeActive = {
+    ipActive: true,
+    isDeck: false,
+    selectedRaw: "Gamepad:Button:RightPaddle1",
+    devices: [
+      {
+        name: "OrangePi Apex",
+        buttons: [
+          {
+            raw: "Gamepad:Button:RightPaddle1",
+            name: "RightPaddle1",
+            category: "gamepad",
+            label: "Right Back Paddle (R4)",
+            recommended: true,
+          },
+          {
+            raw: "Keyboard:KeyRecord",
+            name: "KeyRecord",
+            category: "keyboard",
+            label: "Key Record",
+            recommended: true,
+          },
+          {
+            raw: "Gamepad:Button:South",
+            name: "South",
+            category: "gamepad",
+            label: "South",
+            recommended: false,
+          },
+        ],
+      },
+    ],
+  };
+
+  /** Wire the install RPCs to `installedActiveStatus` and the wake RPCs to a
+   *  provided wake status, so both cards render. */
+  function rpcWithWake(wake: unknown) {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") return Promise.resolve(installedActiveStatus);
+      if (method === "isInstallRunning")
+        return Promise.resolve({ running: false });
+      if (method === "getWakeStatus") return Promise.resolve(wake);
+      if (method === "setWakeButton") return Promise.resolve({ ok: true });
+      if (method === "clearWakeButton") return Promise.resolve({ ok: true });
+      if (method === "prepareWake") return Promise.resolve(wake);
+      return Promise.resolve(null);
+    });
+  }
+
+  it("lists pickable buttons and marks the bound one active", async () => {
+    rpcWithWake(wakeActive);
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Overlay wake button");
+      expect(container.textContent).toContain("Right Back Paddle (R4)");
+      expect(container.textContent).toContain("Key Record");
+      // Gameplay button is grouped under the "Other buttons" warning header.
+      expect(container.textContent).toContain("Other buttons");
+    });
+
+    // The bound button (RightPaddle1) renders as the active (primary) row.
+    const active = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Right Back Paddle (R4)"),
+    ) as HTMLButtonElement;
+    expect(active.className).toContain("btn-primary");
+  });
+
+  it("clicking a button binds it via setWakeButton with the raw capability", async () => {
+    rpcWithWake(wakeActive);
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Key Record");
+    });
+
+    const kbdBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Key Record"),
+    )!;
+    fireEvent.click(kbdBtn);
+
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith(
+        "setWakeButton",
+        "Keyboard:KeyRecord",
+      );
+    });
+  });
+
+  it("on a Deck with IP disabled, offers an enable button that calls prepareWake", async () => {
+    rpcWithWake({
+      ipActive: false,
+      isDeck: true,
+      selectedRaw: null,
+      devices: [],
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Enable & detect buttons");
+    });
+
+    const enable = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Enable & detect buttons"),
+    )!;
+    fireEvent.click(enable);
+
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("prepareWake", undefined);
+    });
+  });
 });

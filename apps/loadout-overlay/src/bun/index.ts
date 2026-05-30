@@ -319,11 +319,12 @@ function toggleOverlay(source: string) {
 //
 // QamToggle / CtrlThree / CtrlFour stay hardcoded — they're keyboard
 // wake shortcuts, not part of the user-configurable ControllerShortcuts.
-// F16 is treated as a toggle here because InputPlumber on the OXP Apex
-// (and most Bazzite handhelds) maps the hardware Keyboard button to
-// it. If a machine uses F16 for something else, QamToggle should be
-// disabled. TODO: make wake triggers configurable via a separate
-// KeyboardShortcuts map so these aren't hardcoded.
+// F16 is the overlay's fixed internal wake key. *Which physical button*
+// emits it is now user-configurable: the input-plumber plugin renders an
+// InputPlumber profile mapping the chosen button (a back paddle, the
+// QAM/keyboard button, etc.) → KeyF16, driven by the connected device's
+// runtime Capabilities. So F16 stays a toggle here and the binding lives
+// in IP, device-agnostically, rather than being hardcoded per device.
 //
 // Guide+A/B/X/Y go through the user-configurable `shortcuts` map so the
 // UI's controller-shortcut bindings actually take effect (previously
