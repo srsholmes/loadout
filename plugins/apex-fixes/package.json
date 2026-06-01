@@ -15,7 +15,7 @@
     "name": "Apex Fixes",
     "description": "Device-specific workarounds for the OneXPlayer Apex — oxpec EC sensor driver (fan detection), sleep/wake fixes, and gamepad USB recovery.",
     "permissions": {
-      "commands": ["modprobe", "insmod", "rmmod", "systemctl", "rpm-ostree", "ostree", "udevadm", "lsusb"],
+      "commands": ["modprobe", "insmod", "rmmod", "systemctl", "rpm-ostree", "ostree", "udevadm", "lsusb", "tee", "mkdir", "rm", "chmod", "cp", "test", "chcon"],
       "filesystem": ["/sys/class/dmi", "/sys/class/hwmon", "/etc/systemd/system", "/etc/udev/rules.d", "/usr/lib/systemd/system-sleep", "/usr/local/sbin", "/sys/bus/pci"]
     },
     "category": "Device",
