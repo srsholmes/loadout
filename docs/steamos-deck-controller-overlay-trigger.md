@@ -108,18 +108,18 @@ enumerates devices — **no separate systemd one-shot needed**.
 ## Per-device prerequisites
 
 This feature drives **already-running InputPlumber**. It does not install IP
-itself, nor ship device-recognition YAMLs. Each handheld needs the upstream IP
-package + a matching device file under `/etc/inputplumber/devices.d/` (or
-`/usr/share/inputplumber/devices/`) so IP exposes it as a `CompositeDevice`. The
-picker can only list buttons IP can already see; without a device file the
-picker shows "No controller detected by InputPlumber".
+itself, nor ship device-recognition YAMLs — every supported handheld's device
+file ships with the upstream IP package (Apex, ROG Ally, Legion Go, AYANEO,
+OneXFly, Steam Deck, etc.). The picker can only list buttons IP can already
+enumerate; if a device shows up in `busctl tree --list org.shadowblip.InputPlumber`
+the picker can bind it.
 
-| Handheld | IP daemon | Device YAML | Notes |
-|----------|-----------|-------------|-------|
-| **Steam Deck (SteamOS)** | Ships **disabled** — opt-in via the picker's *Enable & detect buttons* button, which writes `auto_manage: true` to `/etc/inputplumber/devices.d/50-steam_deck.yaml` + `systemctl enable --now inputplumber.service`. Deck profile targets `deck-uhid` to preserve Steam Input chord compatibility. | Bundled with IP upstream. | Steam Input keeps working post-takeover (controller still looks identical to Steam). |
-| **OXP Apex** (Bazzite) | Bazzite ships IP enabled. | **Loadout does not ship this file.** Apex requires `/etc/inputplumber/devices.d/50-onexplayer_apex.yaml` — currently provided out-of-band (legacy steam-loader install, or to-be-migrated `apex-fixes` plugin). | Apex's QAM-adjacent button surfaces as `Gamepad:Button:Keyboard` once the device YAML is in place. |
-| **ROG Ally / Ally X**, **Legion Go**, **AYANEO** | IP packages ship matching device YAMLs upstream. | Bundled. | Works out-of-box once IP is enabled. |
-| **CachyOS / Nobara / ChimeraOS** desktops | IP via package manager; no auto-managed handheld. | None pre-installed. | Picker shows whatever IP enumerates. |
+| Handheld | IP daemon | Notes |
+|----------|-----------|-------|
+| **Steam Deck (SteamOS)** | Ships **disabled** — opt-in via the picker's *Enable & detect buttons* button, which writes `auto_manage: true` to `/etc/inputplumber/devices.d/50-steam_deck.yaml` + `systemctl enable --now inputplumber.service`. Deck profile targets `deck-uhid` to preserve Steam Input chord compatibility. | Steam Input keeps working post-takeover (controller still looks identical to Steam). |
+| **OXP Apex** | Bazzite ships IP enabled, upstream device file recognizes the Apex. | The Apex's QAM-adjacent button surfaces as `Gamepad:Button:Keyboard`. A user-level `/etc/inputplumber/devices.d/50-onexplayer_apex.yaml` override (swap `xbox-series` → `xbox-elite` target so paddles pass through) is unrelated to wake-button and outside this feature's scope. |
+| **ROG Ally / Ally X**, **Legion Go**, **AYANEO**, **OneXFly** | Recognized by upstream IP packaging. | Works out-of-box once IP is enabled. |
+| **CachyOS / Nobara / ChimeraOS** desktops | IP via package manager; no auto-managed handheld. | Picker shows whatever IP enumerates. |
 
 **Pre-existing IP profile collision:** `LoadProfilePath` is replace-not-merge —
 the user's chosen wake profile fully supersedes IP's previously-loaded default
