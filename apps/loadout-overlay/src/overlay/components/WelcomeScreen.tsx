@@ -22,6 +22,7 @@ import {
 type StepId =
   | "welcome"
   | "input"
+  | "wake"
   | "appearance"
   | "artwork"
   | "plugins"
@@ -31,12 +32,15 @@ type StepId =
 const STEPS: { id: StepId; label: string }[] = [
   { id: "welcome",    label: "Welcome" },
   { id: "input",      label: "Input routing" },
+  { id: "wake",       label: "Wake button" },
   { id: "appearance", label: "Appearance" },
   { id: "artwork",    label: "Artwork" },
   { id: "plugins",    label: "Plugins" },
   { id: "shortcuts",  label: "Shortcuts" },
   { id: "done",       label: "All set" },
 ];
+
+const WAKE_CAPTURE_TIMEOUT_MS = 10_000;
 
 const SHORTCUT_BUTTONS: { key: keyof ControllerShortcuts; label: string }[] = [
   { key: "guide_b", label: "Guide + B" },
@@ -283,6 +287,7 @@ export function WelcomeScreen({
             >
               {stepId === "welcome" && <StepWelcome />}
               {stepId === "input" && <StepInput />}
+              {stepId === "wake" && <StepWakeButton />}
               {stepId === "appearance" && (
                 <StepAppearance theme={theme} onSelect={previewTheme} />
               )}
@@ -498,7 +503,9 @@ interface IpStatus {
   serviceActive: boolean;
   serviceEnabled: boolean;
   scriptPresent: boolean;
-  hhd: HhdStatus;
+  /** Optional — the plugin's getStatus doesn't currently emit this field;
+   *  HHD-detection lives elsewhere now (apex-fixes has migrated off HHD). */
+  hhd?: HhdStatus;
   summary: string;
 }
 interface IpInstallLog { kind: "stdout" | "stderr" | "status"; text: string }
@@ -596,7 +603,7 @@ function StepInput() {
 
   const needsInstall = !status.installed;
   const needsServiceUp = status.installed && !status.serviceActive;
-  const hhdConflict = status.hhd.active;
+  const hhdConflict = status.hhd?.active ?? false;
 
   let buttonLabel: string;
   if (running) {
@@ -643,7 +650,7 @@ function StepInput() {
           </div>
 
           {/* HHD row — only shown when HHD is present (active or dormant) */}
-          {status.hhd.installed && (
+          {status.hhd?.installed && (
             <div className="flex items-center justify-between gap-3">
               <span className="text-base-content/80">Handheld Daemon (HHD)</span>
               <span className={
@@ -731,6 +738,253 @@ function StepInput() {
           {logs.join("") || "waiting for output…"}
         </pre>
       )}
+    </div>
+  );
+}
+
+// ─── Step 2b: Wake button — press-to-capture ───────────────────────────────
+
+interface WakeStatusLite {
+  ipActive: boolean;
+  isDeck: boolean;
+  devices: { name: string; buttons: unknown[] }[];
+  selectedRaw: string | null;
+}
+
+interface WakeCaptureResultLite {
+  ok: boolean;
+  error?: string;
+  timedOut?: boolean;
+  capturedRaw?: string;
+  capturedLabel?: string;
+}
+
+function labelForWakeRaw(raw: string | null): string | null {
+  if (!raw) return null;
+  const parts = raw.split(":").map((s) => s.trim()).filter(Boolean);
+  const name = parts[parts.length - 1] ?? raw;
+  const known: Record<string, string> = {
+    leftpaddle1: "Left Back Paddle (L4)",
+    leftpaddle2: "Left Back Paddle (L5)",
+    rightpaddle1: "Right Back Paddle (R4)",
+    rightpaddle2: "Right Back Paddle (R5)",
+    lefttop: "Left Extra Button",
+    righttop: "Right Extra Button",
+    keyboard: "Keyboard Button",
+    quickaccess: "Quick Access (QAM) Button",
+    quickaccess2: "Quick Access (QAM) Button",
+    quickaccessmenu: "Quick Access (QAM) Button",
+  };
+  const k = known[name.toLowerCase()];
+  if (k) return k;
+  if (parts[0]?.toLowerCase() === "keyboard") {
+    return name.replace(/^Key/, "Key ").replace(/([a-z])([A-Z])/g, "$1 $2");
+  }
+  return name.replace(/([a-z])([A-Z0-9])/g, "$1 $2");
+}
+
+function StepWakeButton() {
+  const { call, useEvent, ready } = useBackend("input-plumber");
+  const [wake, setWake] = useState<WakeStatusLite | null>(null);
+  const [capturing, setCapturing] = useState(false);
+  const [remaining, setRemaining] = useState(0);
+  const [info, setInfo] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    if (!ready) return;
+    try {
+      const s = (await call("getWakeStatus")) as WakeStatusLite;
+      setWake(s);
+    } catch {
+      setWake(null);
+    }
+  }, [call, ready]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  useEvent({
+    event: "wake-status",
+    handler: (data) => setWake(data as WakeStatusLite),
+  });
+
+  useEffect(() => {
+    if (!capturing) return;
+    const tick = setInterval(() => {
+      setRemaining((r) => (r > 0 ? r - 1 : 0));
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [capturing]);
+
+  const startCapture = useCallback(async () => {
+    setError(null);
+    setInfo(null);
+    setCapturing(true);
+    setRemaining(Math.ceil(WAKE_CAPTURE_TIMEOUT_MS / 1000));
+    try {
+      const r = (await call("captureWakeButton", WAKE_CAPTURE_TIMEOUT_MS)) as WakeCaptureResultLite;
+      if (r.ok) {
+        setInfo(`Bound: ${r.capturedLabel ?? r.capturedRaw ?? "button"}`);
+      } else {
+        setError(r.timedOut ? "No button pressed — try again." : r.error ?? "Capture failed.");
+      }
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCapturing(false);
+      setRemaining(0);
+    }
+  }, [call, refresh]);
+
+  const clear = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      await call("clearWakeButton");
+      await refresh();
+      setInfo("Wake button disabled.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [call, refresh]);
+
+  // Plugin not available (disabled / not installed) — surface a friendly note
+  // and let the user move on; they can set this later from the plugin panel.
+  if (!ready || wake === null) {
+    return (
+      <div className="max-w-xl">
+        <p className="text-[13px] text-base-content/70 mb-4">
+          Pick the physical button on your handheld that opens this overlay
+          in-game. You can change this any time from the InputPlumber plugin.
+        </p>
+        <div className="rounded-xl bg-base-200 border border-base-300 p-4 text-[12px] text-base-content/60">
+          InputPlumber plugin isn&apos;t loaded yet. Skip this step — you can
+          set the wake button from Plugins → InputPlumber after first boot.
+        </div>
+      </div>
+    );
+  }
+
+  if (!wake.ipActive) {
+    return (
+      <div className="max-w-xl">
+        <p className="text-[13px] text-base-content/70 mb-4">
+          Pick the physical button on your handheld that opens this overlay
+          in-game.
+        </p>
+        <div className="rounded-xl bg-base-200 border border-base-300 p-4 text-[12px] text-base-content/60">
+          InputPlumber isn&apos;t running yet — finish installing it on the
+          previous step, then come back. You can also set this later from the
+          InputPlumber plugin.
+        </div>
+      </div>
+    );
+  }
+
+  if (wake.devices.length === 0) {
+    return (
+      <div className="max-w-xl">
+        <p className="text-[13px] text-base-content/70 mb-4">
+          Pick the physical button on your handheld that opens this overlay
+          in-game.
+        </p>
+        <div className="rounded-xl bg-base-200 border border-base-300 p-4 text-[12px] text-base-content/60">
+          No controller detected by InputPlumber. Connect a handheld
+          controller and revisit this step, or skip and set it later.
+        </div>
+      </div>
+    );
+  }
+
+  const currentLabel = labelForWakeRaw(wake.selectedRaw);
+
+  return (
+    <div className="max-w-xl">
+      <p className="text-[13px] text-base-content/70 mb-4">
+        Press <span className="font-medium">Set wake button</span>, then push
+        the button you want on your handheld — a back paddle, the QAM /
+        keyboard button, anything extra. The choice takes effect immediately.
+      </p>
+
+      <div className="rounded-xl bg-base-200 border border-base-300 p-4 mb-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-[11px] uppercase tracking-wide opacity-50">
+              Currently bound
+            </div>
+            <div className="truncate font-medium">
+              {currentLabel ?? <span className="opacity-60">None</span>}
+            </div>
+          </div>
+        </div>
+
+        {capturing ? (
+          <div className="flex items-center gap-3 mt-4">
+            <Spinner variant="dots" size="sm" />
+            <div className="flex-1">
+              <div className="font-medium">Press a button on your handheld…</div>
+              <div className="text-[12px] opacity-60">
+                Try a back paddle or the QAM/keyboard button. {remaining}s left.
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-2 mt-4">
+            <Focusable
+              focusKey="welcome-wake-set"
+              onActivate={() => void startCapture()}
+            >
+              <button
+                type="button"
+                onClick={() => void startCapture()}
+                disabled={busy}
+                tabIndex={-1}
+                className="btn btn-primary btn-sm"
+              >
+                {currentLabel ? "Change button" : "Set wake button"}
+              </button>
+            </Focusable>
+            {currentLabel && (
+              <Focusable
+                focusKey="welcome-wake-clear"
+                onActivate={() => void clear()}
+              >
+                <button
+                  type="button"
+                  onClick={() => void clear()}
+                  disabled={busy}
+                  tabIndex={-1}
+                  className="btn btn-ghost btn-sm"
+                >
+                  Off
+                </button>
+              </Focusable>
+            )}
+          </div>
+        )}
+
+        {info && (
+          <div className="text-[12px] mt-3" style={{ color: "var(--color-success, #4ade80)" }}>
+            {info}
+          </div>
+        )}
+        {error && (
+          <div className="text-[12px] mt-3" style={{ color: "var(--color-error)" }}>
+            {error}
+          </div>
+        )}
+      </div>
+
+      <div className="text-[11px] text-base-content/40 leading-snug">
+        Optional — Ctrl+Shift+O and the controller shortcuts on the next step
+        also open the overlay. You can change or clear this later from the
+        InputPlumber plugin.
+      </div>
     </div>
   );
 }
