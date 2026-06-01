@@ -31,7 +31,9 @@
         "cdn1.epicgames.com",
         "cdn2.unrealengine.com",
         "cdn2.steamgriddb.com",
-        "www.steamgriddb.com"
+        "www.steamgriddb.com",
+        "localhost",
+        "127.0.0.1"
       ],
       "filesystem": [
         "read:~/.local/share/Steam",
