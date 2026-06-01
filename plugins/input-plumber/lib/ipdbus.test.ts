@@ -43,6 +43,20 @@ describe("parseObjectPathArrayProp", () => {
       "/org/a/Target1",
     ]);
   });
+
+  it("parses string arrays of paths too (IP v0.77+ changed TargetDevices from ao → as)", () => {
+    // CompositeDevice.TargetDevices switched D-Bus signature; the values are
+    // still paths, just typed as plain strings now. Regression guard.
+    expect(parseObjectPathArrayProp('as 2 "/org/a/Target0" "/org/a/Target1"')).toEqual([
+      "/org/a/Target0",
+      "/org/a/Target1",
+    ]);
+  });
+
+  it("returns empty array for ao 0 and as 0", () => {
+    expect(parseObjectPathArrayProp("ao 0")).toEqual([]);
+    expect(parseObjectPathArrayProp("as 0")).toEqual([]);
+  });
 });
 
 describe("pickCompositePaths", () => {

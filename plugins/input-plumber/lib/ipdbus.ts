@@ -81,9 +81,13 @@ export function parseStringArrayProp(stdout: string): string[] | null {
   return out;
 }
 
-/** Parse an `ao N "/p1" …` object-path array property line. */
+/** Parse an `ao N "/p1" …` (or `as N …`) array-of-paths property line.
+ *  InputPlumber switched `CompositeDevice.TargetDevices` from `ao` (object-path
+ *  array) to `as` (string array) around v0.77 — accept both signatures so the
+ *  plugin keeps reading targets correctly across versions. The path values
+ *  are identical, only the D-Bus type marker differs. */
 export function parseObjectPathArrayProp(stdout: string): string[] | null {
-  const m = stdout.trim().match(/^ao\s+(\d+)((?:\s+"[^"]*")*)$/);
+  const m = stdout.trim().match(/^a[os]\s+(\d+)((?:\s+"[^"]*")*)$/);
   if (!m) return null;
   if (parseInt(m[1], 10) === 0) return [];
   const out: string[] = [];
