@@ -28,7 +28,6 @@ import * as oxpec from "./src/oxpec";
 import * as lightSleep from "./src/light-sleep";
 import * as sleepEnable from "./src/sleep-enable";
 import * as xhci from "./src/xhci-recovery";
-import * as ipMigrate from "./src/inputplumber-migrate";
 
 export type FixKey = "oxpec" | "lightSleep" | "sleepEnable" | "xhciRecovery";
 
@@ -56,11 +55,6 @@ export interface ApplyOutcome {
   rebootRequired?: boolean;
 }
 
-export interface MigrationStartResult {
-  started: boolean;
-  error?: string;
-}
-
 const ALL_FIX_KEYS: FixKey[] = ["oxpec", "lightSleep", "sleepEnable", "xhciRecovery"];
 
 // Periodic status broadcast cadence. The four sub-fix probes each
@@ -84,10 +78,6 @@ export default class ApexFixesBackend implements PluginBackend {
   private statusTimer?: ReturnType<typeof setInterval>;
   private isApex = false;
   private deviceModel = "";
-
-  // Migration run state — at most one migrate in flight.
-  private migrationRunning = false;
-  private migrationCancel: { cancel: () => void } | null = null;
 
   // Cached ApexStatus. Each call fans out 4-12 sudo probes across the
   // four sub-fix modules (oxpec / lightSleep / sleepEnable / xhci) —
@@ -411,110 +401,5 @@ export default class ApexFixesBackend implements PluginBackend {
 
   async reloadStatus(): Promise<ApexStatus> {
     return this.getStatus();
-  }
-
-  // -----------------------------------------------------------------------
-  // HHD → InputPlumber migration
-  //
-  // Runs the vendored migrate script and streams stdout/stderr back to
-  // the UI as `migration-log` events. `migration-state` frames the run
-  // (started / finished) so the UI can gate its buttons. At most one
-  // migrate is in flight at any time. The script is idempotent — the
-  // same RPC is used for both first-time install and reinstall.
-  // -----------------------------------------------------------------------
-
-  async getMigrationStatus(): Promise<ipMigrate.MigrationStatus> {
-    return ipMigrate.getStatus();
-  }
-
-  isMigrationRunning(): { running: boolean } {
-    return { running: this.migrationRunning };
-  }
-
-  async startMigration(): Promise<MigrationStartResult> {
-    if (!this.isApex) {
-      return { started: false, error: "non-APEX hardware" };
-    }
-    if (this.migrationRunning) {
-      return { started: false, error: "migration already in progress" };
-    }
-
-    this.migrationRunning = true;
-    const cancel: { cancel: () => void } = { cancel: () => {} };
-    this.migrationCancel = cancel;
-
-    this.emit?.({ event: "migration-state", data: { running: true } });
-    this.emit?.({
-      event: "migration-log",
-      data: { kind: "status", text: `── Starting install ──\n` },
-    });
-
-    // Intentionally not awaited — control returns to the caller while the
-    // script keeps running; the UI follows progress via events.
-    void ipMigrate
-      .migrate({
-        cancellation: cancel,
-        onLog: (text, stream) => {
-          this.emit?.({
-            event: "migration-log",
-            data: { kind: stream, text },
-          });
-        },
-      })
-      .then((result) => {
-        this.emit?.({
-          event: "migration-log",
-          data: {
-            kind: "status",
-            text: result.success
-              ? `── install complete (${result.durationSeconds}s) ──\n`
-              : `── install failed (${result.error ?? "exit " + result.exitCode}) ──\n`,
-          },
-        });
-        this.emit?.({
-          event: "migration-state",
-          data: { running: false, result },
-        });
-      })
-      .catch((err) => {
-        this.emit?.({
-          event: "migration-log",
-          data: {
-            kind: "status",
-            text: `── install threw: ${err instanceof Error ? err.message : String(err)} ──\n`,
-          },
-        });
-        this.emit?.({
-          event: "migration-state",
-          data: {
-            running: false,
-            result: {
-              success: false,
-              exitCode: -1,
-              timedOut: false,
-              durationSeconds: 0,
-              error: err instanceof Error ? err.message : String(err),
-            },
-          },
-        });
-      })
-      .finally(() => {
-        this.migrationRunning = false;
-        this.migrationCancel = null;
-        // Refresh the main status too — the migration flipped systemd
-        // unit state that the fix cards surface.
-        this.invalidateStatusCache();
-        void this.broadcastStatus();
-      });
-
-    return { started: true };
-  }
-
-  cancelMigration(): { cancelled: boolean; error?: string } {
-    if (!this.migrationCancel) {
-      return { cancelled: false, error: "no migration in progress" };
-    }
-    this.migrationCancel.cancel();
-    return { cancelled: true };
   }
 }
