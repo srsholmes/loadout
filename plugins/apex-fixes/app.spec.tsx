@@ -2,37 +2,37 @@
  * apex-fixes frontend spec.
  *
  * The plugin renders one card per fix (oxpec / lightSleep / sleepEnable /
- * xhciRecovery) plus an InputPlumber MigrationSection. Each card surfaces
- * `Apply` / `Revert` / `Reapply` buttons that fan out to the backend RPCs
- * `applyFix(key)` / `revertFix(key)`; the xHCI card has an extra
- * `Rebind now` action that calls `rebindXhciNow`. When the backend
- * reports `success:false`, the page shows a red error banner.
+ * xhciRecovery). Each card surfaces `Apply` / `Revert` / `Reapply`
+ * buttons that fan out to the backend RPCs `applyFix(key)` /
+ * `revertFix(key)`; the xHCI card has an extra `Rebind now` action that
+ * calls `rebindXhciNow`. When the backend reports `success:false`, the
+ * page shows a red error banner.
  *
  * We mock `useBackend` so the spec controls every RPC return value, then
  * drive the UI synchronously through the page's own click handlers.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import type * as UiModule from "@loadout/ui";
+import { describe, it, expect, mock, beforeEach } from "bun:test";
+// Captured BEFORE mock.module() runs below, so this holds the real
+// module for the partial-mock spread. (bun's mock.module is not hoisted,
+// unlike vitest's vi.mock — static imports evaluate first.)
+import * as actualUi from "@loadout/ui";
 import { waitFor, fireEvent } from "../../test/render";
 
-const callMock = vi.fn((_method: string, ..._args: unknown[]) => Promise.resolve(null as unknown));
+const callMock = mock((_method: string, ..._args: unknown[]) => Promise.resolve(null as unknown));
 const eventHandlers = new Map<string, (data: unknown) => void>();
 
-vi.mock("@loadout/ui", async () => {
-  const actual = await vi.importActual<typeof UiModule>("@loadout/ui");
-  return {
-    ...actual,
-    PluginProvider: ({ children }: any) => children,
-    useBackend: () => ({
-      call: callMock,
-      useEvent: ({ event, handler }: any) => {
-        eventHandlers.set(event, handler);
-      },
-      ready: true,
-    }),
-  };
-});
+mock.module("@loadout/ui", () => ({
+  ...actualUi,
+  PluginProvider: ({ children }: any) => children,
+  useBackend: () => ({
+    call: callMock,
+    useEvent: ({ event, handler }: any) => {
+      eventHandlers.set(event, handler);
+    },
+    ready: true,
+  }),
+}));
 
 const apexStatus = {
   deviceModel: "ONEXPLAYER ONEXPLAYER X1",
@@ -51,30 +51,12 @@ const nonApexStatus = {
   fixes: apexStatus.fixes,
 };
 
-const migrationStatus = {
-  hidOxpLoaded: false,
-  hidOxpServiceEnabled: false,
-  inputplumberInstalled: false,
-  inputplumberActive: false,
-  inputplumberEnabled: false,
-  hhdActive: true,
-  hhdMasked: false,
-  scriptsPresent: true,
-  prebuiltKoAvailable: true,
-  runningKernel: "6.17.7-test",
-  stack: "hhd",
-  summary: "HHD active; InputPlumber not installed",
-};
-
 function defaultRpc() {
   callMock.mockImplementation((method: string, ..._args: unknown[]) => {
     if (method === "getStatus") return Promise.resolve(apexStatus);
-    if (method === "getMigrationStatus") return Promise.resolve(migrationStatus);
-    if (method === "isMigrationRunning") return Promise.resolve({ running: false });
     if (method === "applyFix") return Promise.resolve({ success: true, steps: ["loaded module"] });
     if (method === "revertFix") return Promise.resolve({ success: true, steps: ["unloaded module"] });
     if (method === "rebindXhciNow") return Promise.resolve({ success: true, gamepadPresent: true, attempts: 1 });
-    if (method === "startMigration") return Promise.resolve({ started: true });
     return Promise.resolve(null);
   });
 }
@@ -157,8 +139,6 @@ describe("apex-fixes plugin", () => {
   it("surfaces the backend error when applyFix returns success:false", async () => {
     callMock.mockImplementation((method: string) => {
       if (method === "getStatus") return Promise.resolve(apexStatus);
-      if (method === "getMigrationStatus") return Promise.resolve(migrationStatus);
-      if (method === "isMigrationRunning") return Promise.resolve({ running: false });
       if (method === "applyFix")
         return Promise.resolve({ success: false, steps: [], error: "i2c bus stuck" });
       return Promise.resolve(null);
