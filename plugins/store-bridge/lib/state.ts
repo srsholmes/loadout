@@ -18,7 +18,7 @@ import type {
  */
 const PLUGIN_ID = "store-bridge";
 
-export function defaultStoreState(_storeId: StoreId): StoreState {
+export function defaultStoreState(): StoreState {
   return {
     libraryCacheFetchedAt: 0,
     library: {},
@@ -39,7 +39,7 @@ export function defaultState(): PersistedState {
   return {
     version: 1,
     stores: {
-      epic: defaultStoreState("epic"),
+      epic: defaultStoreState(),
     },
     settings: defaultSettings(),
   };
@@ -62,7 +62,7 @@ export async function loadState(): Promise<PersistedState> {
     for (const [id, st] of Object.entries(parsed.stores)) {
       if (!st) continue;
       const sid = id as StoreId;
-      const base = defaults.stores[sid] ?? defaultStoreState(sid);
+      const base = defaults.stores[sid] ?? defaultStoreState();
       stores[sid] = {
         ...base,
         ...st,
@@ -71,28 +71,10 @@ export async function loadState(): Promise<PersistedState> {
       };
     }
   }
-  // Settings shape migration: `legendaryBinary` was a flat field
-  // before driver overrides existed. Hoist any persisted value
-  // into the new `driverOverrides.epic.binary` slot so the rest
-  // of the codebase can read one location.
-  const settings: Settings = { ...defaults.settings, ...parsed.settings };
-  if (
-    settings.legendaryBinary &&
-    !settings.driverOverrides?.epic?.binary
-  ) {
-    settings.driverOverrides = {
-      ...settings.driverOverrides,
-      epic: {
-        ...settings.driverOverrides?.epic,
-        binary: settings.legendaryBinary,
-      },
-    };
-  }
-  delete settings.legendaryBinary;
   return {
     version: 1,
     stores,
-    settings,
+    settings: { ...defaults.settings, ...parsed.settings },
   };
 }
 
@@ -111,7 +93,7 @@ function withStore(
   storeId: StoreId,
   patch: (s: StoreState) => StoreState,
 ): PersistedState {
-  const current = state.stores[storeId] ?? defaultStoreState(storeId);
+  const current = state.stores[storeId] ?? defaultStoreState();
   return {
     ...state,
     stores: { ...state.stores, [storeId]: patch(current) },

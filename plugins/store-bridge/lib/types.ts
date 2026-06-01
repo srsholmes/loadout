@@ -106,11 +106,6 @@ export interface DriverOverrides {
 export interface Settings {
   /** Stores the UI surfaces (chip row). */
   enabledStores: StoreId[];
-  /**
-   * @deprecated Use `driverOverrides.epic.binary`. Kept readable on
-   * load for back-compat; writes go to the new field.
-   */
-  legendaryBinary?: string;
   /** Per-driver overrides — currently just the CLI binary path. */
   driverOverrides?: Partial<Record<StoreId, DriverOverrides>>;
   /** User-added directories to scan for already-installed games. */

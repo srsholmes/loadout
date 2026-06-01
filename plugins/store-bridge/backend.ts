@@ -237,6 +237,7 @@ export default class StoreBridgeBackend implements PluginBackend {
     if (!driver.completeAuth) {
       throw new Error(`Driver ${storeId} doesn't support paste-back auth.`);
     }
+    validateAuthCode(code);
     await driver.completeAuth(code);
     await this.mutateState((s) => updateAuthStatus(s, storeId, "authed"));
     this.emit?.({ event: "authEvent", data: { storeId, status: "authed" } });
@@ -261,7 +262,7 @@ export default class StoreBridgeBackend implements PluginBackend {
   // ── Library ──────────────────────────────────────────────────────────────
 
   async getLibrary(storeId: StoreId): Promise<GameInfo[]> {
-    const slice = this.state.stores[storeId] ?? defaultStoreState(storeId);
+    const slice = this.state.stores[storeId] ?? defaultStoreState();
     const stale = Date.now() - slice.libraryCacheFetchedAt > LIBRARY_CACHE_TTL_MS;
     if (Object.keys(slice.library).length === 0 || stale) {
       await this.refreshLibrary(storeId).catch((err: unknown) => {
@@ -287,6 +288,7 @@ export default class StoreBridgeBackend implements PluginBackend {
   }
 
   async getGameDetail(storeId: StoreId, gameId: string): Promise<GameInfo | null> {
+    validateGameId(gameId);
     const view = await this.viewForStore(storeId);
     return view.find((g) => g.id === gameId) ?? null;
   }
@@ -304,6 +306,7 @@ export default class StoreBridgeBackend implements PluginBackend {
     storeId: StoreId,
     gameId: string,
   ): Promise<{ downloadSize?: number; installSize?: number; version?: string } | null> {
+    validateGameId(gameId);
     const driver = this.requireDriver(storeId);
     if (!driver.getRemoteSize) return null;
     return driver.getRemoteSize(gameId);
@@ -340,12 +343,13 @@ export default class StoreBridgeBackend implements PluginBackend {
         // anything happened. We check the attempt id, not the key,
         // so a fast cancel+reinstall double-click doesn't un-cancel
         // a previously-queued attempt or vice versa.
+        //
+        // NOTE: do NOT emit "Install cancelled" here — `cancelInstall`
+        // already emitted it synchronously when the user clicked
+        // Cancel (inFlight had this key seeded at line 329, so the
+        // sync emit branch ran). Emitting again here would surface a
+        // duplicate toast on every queued-cancel.
         if (this.isAttemptCancelled(key, attemptId)) {
-          emit({
-            kind: "error",
-            id: `${storeId}:install:${gameId}`,
-            message: "Install cancelled",
-          });
           return;
         }
         let installed: InstalledGame;
@@ -663,10 +667,12 @@ export default class StoreBridgeBackend implements PluginBackend {
   async addInstalledToSteam(storeId: StoreId, gameId: string): Promise<void> {
     validateGameId(gameId);
     const driver = this.requireDriver(storeId);
-    // Read through `readState()` to share the mutex symmetry the
-    // rest of the backend established. Direct `this.state` reads
-    // can observe a snapshot a concurrent writer is mid-mutating;
-    // the review flagged this as the MEDIUM symmetry slip.
+    // Initial read is a pre-flight — we need `installed` to feed
+    // the long-running `addToSteam` (CDP + shortcuts.vdf writes)
+    // BEFORE we can land the mutateState write. That's fine: the
+    // mutateState callback re-reads under the mutex and bails if
+    // the entry vanished, so a concurrent uninstall during the
+    // `addToSteam` await can't resurrect a deleted record.
     let snapshot = await this.readState();
     let installed = snapshot.stores[storeId]?.installed[gameId];
     if (!installed) throw new Error(`Not installed: ${storeId}/${gameId}`);
@@ -710,13 +716,34 @@ export default class StoreBridgeBackend implements PluginBackend {
       );
     }
     const { appId, gameId64 } = await addToSteam(driver, installed);
-    const updated: InstalledGame = {
-      ...installed,
-      addedToSteam: true,
-      steamAppId: appId,
-      steamGameId64: gameId64,
-    };
-    await this.mutateState((s) => updateInstalledGame(s, storeId, gameId, updated));
+    // Read-modify-write through the mutex. If a concurrent
+    // `uninstallGame` landed between the pre-flight read and now,
+    // `current` is undefined and we abort the write — the Steam
+    // shortcut we just registered is harmless (orphaned, removable
+    // via Remove from Steam) and writing a phantom installed entry
+    // would be worse. If `current` exists but its fields drifted
+    // (e.g. concurrent metadata refresh), we layer the addedToSteam
+    // fields on top of the current snapshot rather than the stale
+    // pre-await one.
+    let wrote = false;
+    await this.mutateState((s) => {
+      const current = s.stores[storeId]?.installed[gameId];
+      if (!current) return s;
+      const updated: InstalledGame = {
+        ...current,
+        addedToSteam: true,
+        steamAppId: appId,
+        steamGameId64: gameId64,
+      };
+      wrote = true;
+      return updateInstalledGame(s, storeId, gameId, updated);
+    });
+    if (!wrote) {
+      this.log?.warn(
+        `[store-bridge] addInstalledToSteam wrote shortcut for ${gameId} but the install record was removed mid-flight; skipping state write.`,
+      );
+      return;
+    }
     // Best-effort artwork apply — skip silently if Steam isn't running or
     // the store didn't ship cover URLs. Re-read through the mutex so
     // the lookup sees the post-`updateInstalledGame` snapshot rather
@@ -749,6 +776,7 @@ export default class StoreBridgeBackend implements PluginBackend {
     // it, and clobber the remove. The whole block runs through one
     // chain so the read + remove + write are atomic w.r.t. other
     // state mutations.
+    let removed = false;
     await this.mutateState(async (s) => {
       const installed = s.stores[storeId]?.installed[gameId];
       if (!installed?.steamAppId) return s;
@@ -759,12 +787,17 @@ export default class StoreBridgeBackend implements PluginBackend {
         steamAppId: undefined,
         steamGameId64: undefined,
       };
+      removed = true;
       return updateInstalledGame(s, storeId, gameId, updated);
     });
-    this.emit?.({
-      event: "gameStatusChanged",
-      data: { storeId, gameId, status: "removed-from-steam" },
-    });
+    // Only emit when state actually changed — the no-op short-circuit
+    // shouldn't trigger a reload in every subscriber.
+    if (removed) {
+      this.emit?.({
+        event: "gameStatusChanged",
+        data: { storeId, gameId, status: "removed-from-steam" },
+      });
+    }
   }
 
   // ── Settings ─────────────────────────────────────────────────────────────
@@ -787,10 +820,11 @@ export default class StoreBridgeBackend implements PluginBackend {
       return { ok: false, error: "Use an absolute path." };
     }
     // Whitelist the dirs we actually expect users to point scan at —
-    // mirrors the `read:` permissions in plugin.json. The plugin host
-    // doesn't enforce those permissions at the FS layer, so this is
-    // the only gate stopping a user (or a UI bug) from pointing the
-    // walker at `/etc`, `/`, or their home dir's hidden configs.
+    // mirrors the `read:` permissions in `package.json.plugin`. The
+    // plugin host doesn't enforce those permissions at the FS layer,
+    // so this is the only gate stopping a user (or a UI bug) from
+    // pointing the walker at `/etc`, `/`, or their home dir's hidden
+    // configs.
     if (!isAllowedScanPath(trimmed)) {
       return {
         ok: false,
@@ -800,7 +834,13 @@ export default class StoreBridgeBackend implements PluginBackend {
           "to one of those locations first.",
       };
     }
-    await this.mutateState((s) => stateAddScanPath(s, trimmed));
+    // Persist the canonical absolute form so the scan walker `lstat`s
+    // the real path rather than the literal "~/..." string. The
+    // allow-list check above already expanded + resolved, so we know
+    // canonicaliseScanPath cannot fail here.
+    const canonical = canonicaliseScanPath(trimmed);
+    if (!canonical) return { ok: false, error: "Couldn't resolve $HOME." };
+    await this.mutateState((s) => stateAddScanPath(s, canonical));
     return { ok: true };
   }
 
@@ -809,15 +849,18 @@ export default class StoreBridgeBackend implements PluginBackend {
   }
 
   async scanForInstalls(): Promise<{ detected: DetectedInstall[] }> {
+    // Funnel reads through readState so a concurrent `addScanPath` /
+    // `updateSettings` writer doesn't tear the snapshot we walk.
+    const snapshot = await this.readState();
     const exclude = new Set<string>();
-    for (const slice of Object.values(this.state.stores)) {
+    for (const slice of Object.values(snapshot.stores)) {
       if (!slice) continue;
       for (const game of Object.values(slice.installed)) {
         exclude.add(game.installDir);
       }
     }
     const detected = await scanForInstalls(
-      this.state.settings.scanPaths,
+      snapshot.settings.scanPaths,
       exclude,
       (dir: string) => {
         this.emit?.({ event: "scanProgress", data: { dir } });
@@ -829,6 +872,7 @@ export default class StoreBridgeBackend implements PluginBackend {
 
   async importDetected(storeId: StoreId, gameId: string, dir: string): Promise<void> {
     validateGameId(gameId);
+    validateImportDir(dir);
     const driver = this.requireDriver(storeId);
     const key = `${storeId}/${gameId}`;
     // Synchronous claim — same race-window reasoning as installGame.
@@ -841,17 +885,11 @@ export default class StoreBridgeBackend implements PluginBackend {
     return this.enqueueInstall(async () => {
       try {
         if (this.isAttemptCancelled(key, attemptId)) {
-          // Cancel-while-queued: emit a `cancelled`-flavoured
-          // pipelineEvent so the catalog tile flips back to its
-          // pre-import state. Without this dedicated event the UI
-          // sees only the silent inFlight drop and wouldn't surface
-          // a toast — the review flagged the import-cancel
-          // symmetry gap as a LOW-quality slip.
-          emit({
-            kind: "error",
-            id: `${storeId}:import:${gameId}`,
-            message: "Import cancelled",
-          });
+          // Cancel-while-queued: `cancelInstall` already emitted the
+          // "Install cancelled" toast synchronously (inFlight was
+          // seeded above, so its sync emit branch ran). Bail without
+          // a duplicate emit. Same shape as installGame's queued
+          // cancel path.
           return;
         }
         if (!driver.importExisting) {
@@ -991,9 +1029,8 @@ export default class StoreBridgeBackend implements PluginBackend {
   }
 
   private async viewForStore(storeId: StoreId): Promise<GameInfo[]> {
-    const slice = this.state.stores[storeId] ?? defaultStoreState(storeId);
+    const slice = this.state.stores[storeId] ?? defaultStoreState();
     const out: GameInfo[] = [];
-    const installedIds = new Set(Object.keys(slice.installed));
     for (const lib of Object.values(slice.library)) {
       const installed = slice.installed[lib.id];
       out.push({
@@ -1022,7 +1059,6 @@ export default class StoreBridgeBackend implements PluginBackend {
     // Imported titles that aren't in the library (yet) still surface,
     // so a user-side "import an old install" doesn't disappear.
     for (const installed of Object.values(slice.installed)) {
-      if (installedIds.has(installed.id) && slice.library[installed.id]) continue;
       if (slice.library[installed.id]) continue;
       out.push({
         storeId,
@@ -1085,10 +1121,29 @@ function validateGameId(gameId: unknown): asserts gameId is string {
 }
 
 /**
+ * Resolve a user-supplied scan path to its canonical absolute form:
+ * expand `~/`, then `path.resolve` to strip `..` and `.` segments.
+ * Returns `null` when `$HOME` is unset (the unit-service environment
+ * always sets it; null is the defensive "refuse silently" branch).
+ *
+ * Exported so `addScanPath` can persist the canonical form rather
+ * than the raw input — without this, `~/Games` lands in state.json
+ * literally and the scan walker `lstat`s the bare tilde string.
+ */
+function canonicaliseScanPath(rawPath: string): string | null {
+  const home = process.env.HOME ?? "";
+  if (!home) return null;
+  const expanded = rawPath.startsWith("~/")
+    ? rawPath.replace(/^~/, home)
+    : rawPath;
+  return resolvePath(expanded);
+}
+
+/**
  * Allow-list for `addScanPath` — must stay in sync with the
- * `read:` filesystem permissions declared in plugin.json. Plugin
- * host doesn't enforce those permissions at runtime, so this gate
- * is the only thing preventing a scan walker pointed at `/etc`.
+ * `read:` filesystem permissions declared in `package.json.plugin`.
+ * Plugin host doesn't enforce those permissions at runtime, so this
+ * gate is the only thing preventing a scan walker pointed at `/etc`.
  *
  * The naive prefix check is bypassable via `..` segments — e.g.
  * `/mnt/games/../etc` startsWith `/mnt/`. Node's path resolver
@@ -1100,13 +1155,8 @@ function validateGameId(gameId: unknown): asserts gameId is string {
 function isAllowedScanPath(rawPath: string): boolean {
   const home = process.env.HOME ?? "";
   if (!home) return false;
-  const expanded = rawPath.startsWith("~/")
-    ? rawPath.replace(/^~/, home)
-    : rawPath;
-  // Resolve normalises away `..` and `.` segments. Symlinks aren't
-  // followed at this layer (no realpath) — that's intentional,
-  // resolution-only is enough to close the prefix-traversal hole.
-  const resolved = resolvePath(expanded);
+  const resolved = canonicaliseScanPath(rawPath);
+  if (!resolved) return false;
   const roots = [
     `${home}/Games`,
     `${home}/.local/share/Heroic`,
@@ -1118,4 +1168,46 @@ function isAllowedScanPath(rawPath: string): boolean {
   return roots.some(
     (root) => resolved === root || resolved.startsWith(`${root}/`),
   );
+}
+
+/**
+ * Reject argv-flag smuggling + non-absolute paths for `importDetected`.
+ * `dir` flows into `runFull(["legendary", "import", appName, dir, …])`
+ * as root, and legendary parses `--config-file=…`-shaped strings as
+ * flags. `validateGameId` already guards `gameId`; this is the
+ * matching gate for the second positional arg.
+ */
+function validateImportDir(dir: unknown): asserts dir is string {
+  if (typeof dir !== "string") {
+    throw new Error(`Invalid import dir: ${JSON.stringify(dir)}. Must be a string.`);
+  }
+  if (!dir.startsWith("/")) {
+    throw new Error(`Invalid import dir: must be an absolute path, got ${JSON.stringify(dir)}.`);
+  }
+  if (dir.includes("\0") || /[\r\n]/.test(dir)) {
+    throw new Error(`Invalid import dir: contains control characters.`);
+  }
+}
+
+/**
+ * `code` flows into `runFull([legendary, "auth", "--code", code])` as
+ * root. Argv form prevents shell injection, but defence-in-depth
+ * mirrors the `validateGameId` pattern: reject empty / control-char /
+ * leading-flag-shape inputs at the RPC boundary so legendary never
+ * sees a smuggled `--config-file=…` flag.
+ */
+function validateAuthCode(code: unknown): asserts code is string {
+  if (typeof code !== "string") {
+    throw new Error(`Invalid auth code: ${JSON.stringify(code)}. Must be a string.`);
+  }
+  const trimmed = code.trim();
+  if (trimmed.length === 0 || trimmed.length > 1024) {
+    throw new Error(`Invalid auth code: length ${trimmed.length}, expected 1..1024.`);
+  }
+  if (trimmed.startsWith("-")) {
+    throw new Error(`Invalid auth code: leading "-" would be parsed as a flag by legendary.`);
+  }
+  if (/[\0\r\n]/.test(trimmed)) {
+    throw new Error(`Invalid auth code: contains control characters.`);
+  }
 }

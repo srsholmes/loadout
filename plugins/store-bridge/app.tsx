@@ -28,6 +28,8 @@ import {
 import { FaGear, FaPlus, FaTrash, FaRotate } from "react-icons/fa6";
 import { extractAuthCode } from "./lib/auth-code";
 import { PIPELINE_ADD_TO_STEAM_PREFIX } from "./lib/types";
+import { formatBytes, formatReleaseDate, friendlyErrorMessage } from "./lib/format";
+import { pickTileAction } from "./lib/tile-action";
 
 /**
  * Close the overlay via the Electrobun host's `hide` RPC after the
@@ -843,30 +845,6 @@ function CatalogTile({
 
 }
 
-type TileAction =
-  | { kind: "install"; label: string; variant: "primary"; disabled?: boolean }
-  | { kind: "cancel"; label: string; variant: "danger"; disabled?: boolean }
-  | { kind: "launch"; label: string; variant: "primary"; disabled?: boolean }
-  | { kind: "add-to-steam"; label: string; variant: "secondary"; disabled?: boolean };
-
-function pickTileAction(g: GameInfo, isInstalling: boolean): TileAction {
-  if (isInstalling) {
-    // During install the tile's primary button becomes Cancel —
-    // the install state is already visible in the progress strip
-    // above, so the button doubles as the abort affordance rather
-    // than a disabled "Installing…" placeholder.
-    return { kind: "cancel", label: "Cancel", variant: "danger" };
-  }
-  if (g.status === "library") {
-    return { kind: "install", label: "Install", variant: "primary" };
-  }
-  // Installed or imported — needs to land in Steam before launch
-  // works via `steam://rungameid/`.
-  if (g.installed?.addedToSteam) {
-    return { kind: "launch", label: "Play", variant: "primary" };
-  }
-  return { kind: "add-to-steam", label: "Add to Steam", variant: "secondary" };
-}
 
 function DetectedRow({
   d,
@@ -1358,51 +1336,6 @@ function Detail({
   );
 }
 
-function formatBytes(bytes?: number): string | null {
-  if (!bytes || bytes <= 0) return null;
-  const gib = bytes / (1024 * 1024 * 1024);
-  if (gib >= 1) return `${gib.toFixed(2)} GiB`;
-  const mib = bytes / (1024 * 1024);
-  return `${mib.toFixed(1)} MiB`;
-}
-
-function formatReleaseDate(iso?: string): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  // Use the locale's short month + year — Epic's release dates aren't
-  // always accurate to the day, so a Mmm YYYY format reads cleaner.
-  return d.toLocaleDateString(undefined, { month: "short", year: "numeric" });
-}
-
-/**
- * Rewrite raw legendary stderr / Error messages into something a
- * non-technical user can act on. We keep the original message as
- * the fall-through so anything we don't have a heuristic for
- * still surfaces — opaque is better than swallowed.
- */
-function friendlyErrorMessage(raw: string): string {
-  const m = raw.toLowerCase();
-  if (/login session expired|refresh failed|no account|not logged in/.test(m)) {
-    return "Epic sign-in expired. Sign out and sign in again in Settings.";
-  }
-  if (/no space left|enospc|disk full/.test(m)) {
-    return "Out of disk space. Free up space or change the install location.";
-  }
-  if (/nameresolution|connection refused|network is unreachable|connection reset|timed out/.test(m)) {
-    return "Couldn't reach Epic. Check your internet and retry.";
-  }
-  if (/blocked by a concurrent run/.test(m)) {
-    return "Another install was running and blocked this one. Try again.";
-  }
-  if (/can't determine the launch executable/i.test(raw)) {
-    // Already a friendly message — pass through.
-    return raw;
-  }
-  // Trim very long stderr blobs so the toast stays legible.
-  const trimmed = raw.trim();
-  return trimmed.length > 160 ? trimmed.slice(0, 157) + "…" : trimmed;
-}
 
 // ── Settings view ────────────────────────────────────────────────────────
 

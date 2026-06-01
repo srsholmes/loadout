@@ -141,9 +141,10 @@ describe("StoreBridgeBackend", () => {
     await be.onLoad();
     expect((await be.addScanPath("")).ok).toBe(false);
     expect((await be.addScanPath("relative/path")).ok).toBe(false);
-    // Paths outside the whitelist (declared in plugin.json) are
-    // rejected to keep the walker from scanning /etc or the home
-    // dir's hidden configs even if someone manually pastes a path.
+    // Paths outside the whitelist (declared in `package.json.plugin`)
+    // are rejected to keep the walker from scanning /etc or the
+    // home dir's hidden configs even if someone manually pastes a
+    // path.
     expect((await be.addScanPath("/etc")).ok).toBe(false);
     expect((await be.addScanPath("/mnt/games")).ok).toBe(true);
     const s = await be.getSettings();
@@ -828,15 +829,185 @@ describe("StoreBridgeBackend — PR review regressions", () => {
     // `importExisting` was never invoked — the queued cancel
     // short-circuited the unit.
     expect(importCalls).not.toContain("B");
-    // The cancelled event surfaces in pipelineEvent.error with
-    // the "cancelled" message so the UI can toast it.
-    const cancelled = events.find(
+    // EXACTLY ONE cancelled pipelineEvent fires for game B — the
+    // synchronous emit inside `cancelInstall`. The import unit's
+    // queued-cancel branch no longer re-emits, so the user sees a
+    // single "Install cancelled" toast rather than two back-to-back.
+    const cancelledForB = events.filter(
       (e) =>
         e.event === "pipelineEvent" &&
-        typeof e.data?.id === "string" &&
-        (e.data.id as string).includes(":import:B") &&
+        e.data?.gameId === "B" &&
         /cancelled/i.test(String(e.data?.message ?? "")),
     );
-    expect(cancelled).toBeDefined();
+    expect(cancelledForB.length).toBe(1);
+  });
+});
+
+describe("StoreBridgeBackend — post-multi-agent-review fixes", () => {
+  // Earlier tests in this file `registerDriver(...)` with variants
+  // that omit fields (e.g. no `completeAuth`, no `selfInstall`) —
+  // the registry is a module-scope Map shared across `it()` blocks,
+  // so we re-seed a full driver before each test in this group.
+  beforeEach(() => {
+    const driver: StoreDriver = {
+      id: "epic",
+      displayName: "Epic Games",
+      preflight: async () => ({ ok: true, missing: [], canSelfInstall: true }),
+      selfInstall: async () => {},
+      authStatus: async () => "unknown",
+      startAuth: async () => ({ url: "https://example.test/login" }),
+      completeAuth: async () => {},
+      signOut: async () => {},
+      listLibrary: async () => [
+        { id: "fortnite", title: "Fortnite", coverUrl: "https://cdn.test/f.jpg" },
+      ],
+      install: async (id, dir) => ({
+        id,
+        title: id,
+        installedAt: "2026-01-01T00:00:00Z",
+        installDir: dir,
+        executable: `${id}.exe`,
+        platform: "windows",
+        source: "installed",
+        addedToSteam: false,
+      }),
+      uninstall: async () => {},
+      launchSpec: () => ({ exe: "/x.exe", args: "" }),
+      identifyInstall: async () => null,
+      importExisting: async (id, dir) => ({
+        id,
+        title: id,
+        installedAt: "2026-01-01T00:00:00Z",
+        installDir: dir,
+        executable: `${id}.exe`,
+        platform: "windows",
+        source: "imported",
+        addedToSteam: false,
+      }),
+    };
+    registerDriver(driver);
+    mock.module("./lib/steam-shortcut", () => ({
+      addToSteam: async () => ({ appId: 1, gameId64: "1" }),
+      removeFromSteam: async () => {},
+      shortcutDisplayName: (d: { displayName: string }, g: { title: string }) =>
+        `${g.title} (${d.displayName})`,
+    }));
+  });
+
+  it("removeFromSteam skips the gameStatusChanged emit on no-op (no steamAppId to clear)", async () => {
+    const events: Array<{ event: string; data?: Record<string, unknown> }> = [];
+    const { default: Backend } = await import("./backend");
+    const be = new Backend();
+    be.emit = (e) => events.push(e);
+    await be.onLoad();
+    // The mocked Epic driver's `install` returns an entry with
+    // `addedToSteam: false` and no `steamAppId`. Add to Steam is
+    // mocked to a no-op (`addToSteam` returns {appId:1, gameId64:"1"})
+    // but the install flow doesn't always run through it — to
+    // construct the "no steamAppId" state, install then immediately
+    // call removeFromSteam without first calling addInstalledToSteam.
+    //
+    // Actually, the install flow calls addInstalledToSteam implicitly
+    // (so the record DOES have steamAppId=1). Force the no-op path
+    // by calling removeFromSteam on a gameId that doesn't exist in
+    // state. The mutateState callback returns `s` unchanged and we
+    // expect ZERO gameStatusChanged events.
+    events.length = 0;
+    await be.removeFromSteam("epic", "nonexistent");
+    const removeEvents = events.filter(
+      (e) => e.event === "gameStatusChanged" && e.data?.status === "removed-from-steam",
+    );
+    expect(removeEvents.length).toBe(0);
+  });
+
+  it("addInstalledToSteam writes through the mutex; concurrent uninstall wins cleanly without a phantom write", async () => {
+    // Reproduces the TOCTOU the review flagged: a concurrent
+    // uninstall landing between the pre-flight read and the post-
+    // addToSteam write must NOT resurrect the deleted entry.
+    // installGame internally calls addInstalledToSteam, so gate
+    // ONLY the second call with a counter — otherwise the install
+    // tail blocks the test setup.
+    let releaseSecond: () => void = () => {};
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    let callCount = 0;
+    mock.module("./lib/steam-shortcut", () => ({
+      addToSteam: async () => {
+        callCount++;
+        if (callCount >= 2) await secondGate;
+        return { appId: 42, gameId64: "42" };
+      },
+      removeFromSteam: async () => {},
+      shortcutDisplayName: (d: { displayName: string }, g: { title: string }) =>
+        `${g.title} (${d.displayName})`,
+    }));
+
+    const { default: Backend } = await import("./backend");
+    const be = new Backend();
+    await be.onLoad();
+    await be.getLibrary("epic");
+    await be.installGame("epic", "fortnite");
+    // First addToSteam call already resolved (during installGame's
+    // implicit add). Now call addInstalledToSteam again — this hits
+    // the gated second call. While it's gated, drop the install
+    // record via uninstall.
+    const addPromise = be.addInstalledToSteam("epic", "fortnite");
+    // Microtask flush so addInstalledToSteam's pre-flight read +
+    // entry into the awaited addToSteam settles before uninstall
+    // grabs the mutex.
+    await new Promise((r) => setTimeout(r, 10));
+    await be.uninstallGame("epic", "fortnite");
+    // Release the gated addToSteam. Its post-await mutateState
+    // callback must observe the now-empty installed map and refuse
+    // to write a phantom record.
+    releaseSecond();
+    await addPromise;
+    const lib = await be.getLibrary("epic");
+    expect(lib[0]?.status).toBe("library");
+    expect(lib[0]?.installed).toBeUndefined();
+  });
+
+  it("addScanPath persists the canonicalised (expanded) form, not the literal '~/...'", async () => {
+    const { default: Backend } = await import("./backend");
+    const be = new Backend();
+    await be.onLoad();
+    // Force HOME to a path inside the whitelist root so `~/Games`
+    // canonicalises into the allowed range.
+    const origHome = process.env.HOME;
+    try {
+      process.env.HOME = "/mnt";
+      const r = await be.addScanPath("~/Games");
+      expect(r.ok).toBe(true);
+      const settings = await be.getSettings();
+      expect(settings.scanPaths).not.toContain("~/Games");
+      expect(settings.scanPaths).toContain("/mnt/Games");
+    } finally {
+      if (origHome !== undefined) process.env.HOME = origHome;
+      else delete process.env.HOME;
+    }
+  });
+
+  it("importDetected rejects flag-shaped dirs that would smuggle into legendary's argv", async () => {
+    const { default: Backend } = await import("./backend");
+    const be = new Backend();
+    await be.onLoad();
+    await expect(
+      be.importDetected("epic", "fortnite", "--config-file=/etc/passwd"),
+    ).rejects.toThrow(/absolute path/i);
+    await expect(
+      be.importDetected("epic", "fortnite", "/mnt/games/x\nrm -rf /"),
+    ).rejects.toThrow(/control characters/i);
+  });
+
+  it("completeAuth rejects flag-shaped + control-char codes", async () => {
+    const { default: Backend } = await import("./backend");
+    const be = new Backend();
+    await be.onLoad();
+    await expect(be.completeAuth("epic", "--code")).rejects.toThrow(/leading "-"/);
+    await expect(be.completeAuth("epic", "")).rejects.toThrow(/length 0/);
+    await expect(be.completeAuth("epic", "code\rinjected")).rejects.toThrow(
+      /control characters/,
+    );
   });
 });

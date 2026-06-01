@@ -14,9 +14,7 @@
     "@loadout/plugin-storage": "workspace:*",
     "@loadout/sgdb-art": "workspace:*",
     "@loadout/steam-cdp": "workspace:*",
-    "@loadout/steam-paths": "workspace:*",
-    "@loadout/steam-shortcut": "workspace:*",
-    "@loadout/vdf": "workspace:*"
+    "@loadout/steam-shortcut": "workspace:*"
   },
   "plugin": {
     "id": "store-bridge",
@@ -27,7 +25,6 @@
         "api.github.com",
         "github.com",
         "objects.githubusercontent.com",
-        "codeload.github.com",
         "cdn1.epicgames.com",
         "cdn2.unrealengine.com",
         "cdn2.steamgriddb.com",
@@ -43,6 +40,7 @@
         "read:~/.config/loadout/steamgriddb",
         "write:~/.config/loadout/store-bridge",
         "write:~/.cache/loadout/store-bridge",
+        "write:~/.cache/loadout/store-bridge-epic-info",
         "write:~/.local/share/loadout/store-bridge",
         "write:~/Games/store-bridge",
         "read:~/Games",

@@ -17,7 +17,7 @@ const callMock = mock(
   (_method: string, ..._args: unknown[]) => Promise.resolve(null as unknown),
 ) as unknown as CallMock;
 
-const browserCallMock = mock(
+const quickLinksCallMock = mock(
   (_method: string, ..._args: unknown[]) => Promise.resolve(null as unknown),
 ) as unknown as CallMock;
 
@@ -42,7 +42,7 @@ mock.module("@loadout/ui", () => ({
     </PluginHeaderSlotProvider>
   ),
   useBackend: (pluginId: string) => ({
-    call: pluginId === "gaming-mode-browser" ? browserCallMock : callMock,
+    call: pluginId === "quick-links" ? quickLinksCallMock : callMock,
     useEvent: () => {},
     ready: true,
   }),

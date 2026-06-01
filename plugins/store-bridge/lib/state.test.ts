@@ -89,61 +89,6 @@ describe("state — load / defaults", () => {
     expect(state.stores.epic).toBeDefined();
   });
 
-  it("migrates legacy `legendaryBinary` field into driverOverrides.epic.binary", async () => {
-    await writeRaw({
-      version: 1,
-      stores: {
-        epic: {
-          libraryCacheFetchedAt: 0,
-          library: {},
-          installed: {},
-          authStatus: "unknown",
-        },
-      },
-      settings: {
-        enabledStores: ["epic"],
-        legendaryBinary: "/opt/legendary",
-        scanPaths: [],
-      },
-    });
-    const { loadState } = await import("./state");
-    const state = await loadState();
-    expect(state.settings.driverOverrides?.epic?.binary).toBe("/opt/legendary");
-    // Deprecated flat field is dropped from the loaded shape so the
-    // rest of the codebase only reads from one location.
-    expect(
-      (state.settings as { legendaryBinary?: string }).legendaryBinary,
-    ).toBeUndefined();
-  });
-
-  it("doesn't overwrite an existing driverOverrides.epic.binary on migration, and still drops the deprecated key", async () => {
-    await writeRaw({
-      version: 1,
-      stores: {
-        epic: {
-          libraryCacheFetchedAt: 0,
-          library: {},
-          installed: {},
-          authStatus: "unknown",
-        },
-      },
-      settings: {
-        enabledStores: ["epic"],
-        legendaryBinary: "/opt/legacy-legendary",
-        driverOverrides: { epic: { binary: "/opt/new-legendary" } },
-        scanPaths: [],
-      },
-    });
-    const { loadState } = await import("./state");
-    const state = await loadState();
-    expect(state.settings.driverOverrides?.epic?.binary).toBe(
-      "/opt/new-legendary",
-    );
-    expect(
-      (state.settings as { legendaryBinary?: string }).legendaryBinary,
-    ).toBeUndefined();
-  });
-
   it("updateSettings normalises pinnedVersion (defence in depth)", async () => {
     const { loadState, updateSettings } = await import("./state");
     let state = await loadState();

@@ -263,9 +263,17 @@ class EpicDriverImpl implements StoreDriver {
     // then escalate to SIGKILL if it's still alive. The `runStreaming`
     // await in `install()` returns once `proc.exited` settles.
     try { proc.kill("SIGTERM"); } catch { /* already exited */ }
+    // Clear the 3s grace timer as soon as `proc.exited` settles —
+    // otherwise the setTimeout handle survives until its deadline,
+    // pointlessly keeping the event loop alive past cancellation.
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
-      proc.exited,
-      new Promise((r) => setTimeout(r, 3000)),
+      proc.exited.finally(() => {
+        if (killTimer) clearTimeout(killTimer);
+      }),
+      new Promise<void>((r) => {
+        killTimer = setTimeout(r, 3000);
+      }),
     ]);
     try { proc.kill("SIGKILL"); } catch { /* already exited */ }
     // Now scrub everything legendary may have left on disk:
