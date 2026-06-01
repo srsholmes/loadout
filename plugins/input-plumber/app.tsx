@@ -334,9 +334,22 @@ function WakeButtonSection() {
   const [remaining, setRemaining] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [legacyAck, setLegacyAck] = useState(false);
+
+  // Mounted-ref guard so awaited callbacks don't `setState` after the user
+  // navigates away mid-capture (10s windows are long enough to leave on).
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+  const safeSet = useCallback(<T,>(setter: (v: T) => void, v: T) => {
+    if (mountedRef.current) setter(v);
+  }, []);
 
   const refresh = useCallback(async () => {
-    setWake((await call("getWakeStatus")) as WakeStatus);
+    const s = (await call("getWakeStatus")) as WakeStatus;
+    if (mountedRef.current) setWake(s);
   }, [call]);
 
   useEffect(() => {
@@ -345,7 +358,7 @@ function WakeButtonSection() {
 
   useEvent({
     event: "wake-status",
-    handler: (data) => setWake(data as WakeStatus),
+    handler: (data) => safeSet(setWake, data as WakeStatus),
   });
 
   // Countdown ticker while a capture is in flight.
@@ -358,42 +371,42 @@ function WakeButtonSection() {
   }, [capturing]);
 
   const startCapture = useCallback(async () => {
-    setError(null);
-    setInfo(null);
-    setCapturing(true);
-    setRemaining(Math.ceil(CAPTURE_TIMEOUT_MS / 1000));
+    safeSet(setError, null);
+    safeSet(setInfo, null);
+    safeSet(setCapturing, true);
+    safeSet(setRemaining, Math.ceil(CAPTURE_TIMEOUT_MS / 1000));
     try {
       const r = (await call("captureWakeButton", CAPTURE_TIMEOUT_MS)) as WakeCaptureResult;
       if (r.ok) {
-        setInfo(`Bound: ${r.capturedLabel ?? r.capturedRaw ?? "button"}`);
+        safeSet(setInfo, `Bound: ${r.capturedLabel ?? r.capturedRaw ?? "button"}`);
       } else {
-        setError(r.timedOut ? "No button pressed — try again." : r.error ?? "Capture failed.");
+        safeSet(setError, r.timedOut ? "No button pressed — try again." : r.error ?? "Capture failed.");
       }
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      safeSet(setError, e instanceof Error ? e.message : String(e));
     } finally {
-      setCapturing(false);
-      setRemaining(0);
+      safeSet(setCapturing, false);
+      safeSet(setRemaining, 0);
     }
-  }, [call, refresh]);
+  }, [call, refresh, safeSet]);
 
   const runOp = useCallback(
     async (method: string) => {
-      setBusy(true);
-      setError(null);
-      setInfo(null);
+      safeSet(setBusy, true);
+      safeSet(setError, null);
+      safeSet(setInfo, null);
       try {
         const r = (await call(method)) as WakeOpResult | WakeStatus;
-        if ("ok" in r && !r.ok) setError(r.error ?? "Operation failed.");
+        if ("ok" in r && !r.ok) safeSet(setError, r.error ?? "Operation failed.");
         await refresh();
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        safeSet(setError, e instanceof Error ? e.message : String(e));
       } finally {
-        setBusy(false);
+        safeSet(setBusy, false);
       }
     },
-    [call, refresh],
+    [call, refresh, safeSet],
   );
 
   const cardWrap = (body: React.ReactNode) => (
@@ -467,6 +480,7 @@ function WakeButtonSection() {
   }
 
   const currentLabel = wake.selectedRaw ? labelForRaw(wake.selectedRaw) : null;
+  const needsLegacyAck = wake.hasLegacyProfile && !currentLabel && !legacyAck;
 
   return cardWrap(
     <div className="mt-3 flex flex-col gap-3">
@@ -480,6 +494,31 @@ function WakeButtonSection() {
         <FaCheck className={`w-4 h-4 shrink-0 ${currentLabel ? "text-primary" : "opacity-30"}`} />
       </div>
 
+      {needsLegacyAck && (
+        <div
+          className="text-[12px] rounded-lg p-3"
+          style={{
+            background: "color-mix(in oklch, var(--color-warning) 8%, transparent)",
+            border: "1px solid color-mix(in oklch, var(--color-warning) 30%, transparent)",
+            color: "var(--color-warning, #facc15)",
+          }}
+        >
+          <div className="font-medium mb-1">Heads up — replaces existing IP profile</div>
+          <div className="opacity-80">
+            A legacy <code className="font-mono text-[11px]">default.yaml</code> with custom mappings
+            (paddles, dials, etc.) is installed at
+            <code className="font-mono text-[11px] mx-1">/var/lib/inputplumber/data/inputplumber/profiles/</code>.
+            InputPlumber profiles replace, not merge — capturing a wake button will deactivate those
+            mappings. Acknowledge to continue.
+          </div>
+          <div className="mt-2">
+            <FocusButton onClick={() => setLegacyAck(true)} variant="primary">
+              I understand, continue
+            </FocusButton>
+          </div>
+        </div>
+      )}
+
       {capturing ? (
         <div className="flex items-center gap-3 mt-1">
           <Spinner size={18} />
@@ -492,11 +531,19 @@ function WakeButtonSection() {
         </div>
       ) : (
         <div className="flex flex-wrap gap-2">
-          <FocusButton onClick={() => void startCapture()} disabled={busy} variant="primary">
+          <FocusButton
+            onClick={() => void startCapture()}
+            disabled={busy || capturing || needsLegacyAck}
+            variant="primary"
+          >
             {currentLabel ? "Change button" : "Set wake button"}
           </FocusButton>
           {currentLabel && (
-            <FocusButton onClick={() => void runOp("clearWakeButton")} disabled={busy} variant="ghost">
+            <FocusButton
+              onClick={() => void runOp("clearWakeButton")}
+              disabled={busy || capturing}
+              variant="ghost"
+            >
               <FaPowerOff className="w-3 h-3 mr-1" /> Off
             </FocusButton>
           )}

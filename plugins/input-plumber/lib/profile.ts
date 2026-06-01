@@ -127,7 +127,12 @@ const EXTRA_KEYBOARD_KEYS = new Set([
   "keyhangeul",
   "keyyen",
   "keyro",
-  // Multimedia / system keys.
+  // Multimedia / system keys handhelds map their hardware buttons to.
+  // `KeyRecord` in particular — used by several handhelds for the
+  // QAM-adjacent hardware button (the Apex's `Gamepad:Button:Keyboard`
+  // composite uses Keyboard:KeyRecord on the underlying USB keyboard);
+  // dropping it would push real wake-target buttons off the catch-all.
+  "keyrecord",
   "keymute",
   "keyvolumeup",
   "keyvolumedown",
@@ -142,6 +147,13 @@ const EXTRA_KEYBOARD_KEYS = new Set([
   "keystop",
   "keynext",
   "keyprevious",
+  "keypower",
+  "keysleep",
+  "keywakeup",
+  "keyback",
+  "keyforward",
+  "keyrefresh",
+  "keymicmute",
 ]);
 
 // Things that can't sensibly be a discrete wake button: analog axes, sticks,

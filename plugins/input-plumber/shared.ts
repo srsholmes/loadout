@@ -93,6 +93,11 @@ export interface WakeStatus {
   devices: WakeStatusDevice[];
   /** Raw capability currently bound, or null for none/Off. */
   selectedRaw: string | null;
+  /** True when a legacy /var/lib/inputplumber/.../profiles/default.yaml is
+   *  present with custom mappings. `LoadProfilePath` is replace-not-merge,
+   *  so binding a wake button wipes those mappings — the UI warns the user
+   *  before the first capture so they know what they're trading. */
+  hasLegacyProfile?: boolean;
 }
 
 export interface WakeOpResult {

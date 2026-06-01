@@ -94,11 +94,28 @@ export async function isSteamDeck(): Promise<boolean> {
 
 // ── status ──────────────────────────────────────────────────────────────────
 
+/** Probe for a pre-existing IP profile that has user-relevant mappings.
+ *  Used so the UI can warn before press-to-capture replaces them. Cheap
+ *  probe: existence + at least one `mapping:` entry that isn't `[]`. */
+const LEGACY_DEFAULT_PROFILE = "/var/lib/inputplumber/data/inputplumber/profiles/default.yaml";
+
+export async function hasLegacyProfile(): Promise<boolean> {
+  try {
+    const content = await readFile(LEGACY_DEFAULT_PROFILE, "utf-8");
+    // YAML `mapping: []` (empty) is fine; only flag when there's substantive
+    // content. Look for at least one `- name:` entry under a mapping block.
+    return /\bmapping:\s*\n\s*-\s+name:/.test(content);
+  } catch {
+    return false;
+  }
+}
+
 export async function getWakeStatus(): Promise<WakeStatus> {
-  const [ipActive, isDeck, wake] = await Promise.all([
+  const [ipActive, isDeck, wake, legacy] = await Promise.all([
     inputPlumberAvailable(),
     isSteamDeck(),
     readWake(),
+    hasLegacyProfile(),
   ]);
   let devices: WakeStatusDevice[] = [];
   if (ipActive) {
@@ -113,6 +130,7 @@ export async function getWakeStatus(): Promise<WakeStatus> {
     isDeck,
     devices,
     selectedRaw: wake?.selectedRaw ?? null,
+    hasLegacyProfile: legacy,
   };
 }
 
@@ -249,18 +267,26 @@ const EVENT_BYTES = 24;
 const EV_KEY = 1;
 
 /** Parse /proc/bus/input/devices to find the eventN node for a device by name.
- *  Picks the first match — IP creates only one virtual keyboard per session. */
+ *  Returns the *highest-numbered* match — IP recreates its virtual keyboard
+ *  on every LoadProfilePath, and `/proc/bus/input/devices` doesn't garbage-
+ *  collect the dying entry immediately. The fresh node always has a higher
+ *  eventN, so preferring max() avoids picking a node that's mid-tear-down. */
 export function findEventNode(procContent: string, name: string): string | null {
   const blocks = procContent.split(/\n\n+/);
+  let best: { num: number; path: string } | null = null;
   for (const block of blocks) {
     const nameMatch = block.match(/^N:\s+Name="([^"]+)"/m);
     if (!nameMatch || nameMatch[1] !== name) continue;
     const handlersMatch = block.match(/^H:\s+Handlers=(.*)$/m);
     if (!handlersMatch) continue;
     const ev = handlersMatch[1].split(/\s+/).find((h) => /^event\d+$/.test(h));
-    if (ev) return `/dev/input/${ev}`;
+    if (!ev) continue;
+    const num = parseInt(ev.slice(5), 10);
+    if (best === null || num > best.num) {
+      best = { num, path: `/dev/input/${ev}` };
+    }
   }
-  return null;
+  return best?.path ?? null;
 }
 
 /** Read evdev events until we see a KEY_PRESS for a code in `accept`, or
@@ -300,15 +326,34 @@ async function readNextSentinelKey(
   });
 }
 
+/** Single-flight gate for `captureWakeButton`. A second concurrent call
+ *  while the first is mid-listen would overwrite `PROFILE_PATH` and race
+ *  on `LoadProfilePath`, leaving the catch-all profile loaded and a stale
+ *  evdev listener on a dying virtual-keyboard node. */
+let captureInflight: Promise<WakeCaptureResult> | null = null;
+
 /**
  * Press-to-capture: write a transient profile mapping every recommended
  * button to a unique sentinel key, listen on the IP virtual keyboard for the
  * first sentinel press, then bind that button to F16 for real. On timeout or
  * error, restore the previous binding (or leave Off if there wasn't one).
  *
+ * Concurrent calls are coalesced — the second caller awaits the first's
+ * result rather than racing on `PROFILE_PATH`.
+ *
  * Caller gets `{ ok, capturedRaw?, capturedLabel?, timedOut?, error? }`.
  */
 export async function captureWakeButton(timeoutMs = 10_000): Promise<WakeCaptureResult> {
+  if (captureInflight) return captureInflight;
+  // Clamp the timeout so a buggy caller can't wedge the inflight gate.
+  const ms = Math.max(1000, Math.min(60_000, timeoutMs || 10_000));
+  captureInflight = (async () => captureWakeButtonInner(ms))().finally(() => {
+    captureInflight = null;
+  });
+  return captureInflight;
+}
+
+async function captureWakeButtonInner(timeoutMs: number): Promise<WakeCaptureResult> {
   const prepared = await prepareWake();
   if (!prepared.ok) return prepared;
 
@@ -343,9 +388,11 @@ export async function captureWakeButton(timeoutMs = 10_000): Promise<WakeCapture
   }
 
   // Find IP's virtual keyboard node; IP creates a fresh evdev on every
-  // LoadProfilePath, so re-scan now rather than caching.
+  // LoadProfilePath, so re-scan now rather than caching. Total budget ~6s
+  // because on a Deck cold-boot IP can take 4-6s to publish the keyboard
+  // after `prepareWake` enables the service.
   let kbPath: string | null = null;
-  for (let i = 0; i < 10 && !kbPath; i++) {
+  for (let i = 0; i < 30 && !kbPath; i++) {
     try {
       const proc = await readFile(PROC_INPUT_DEVICES, "utf-8");
       kbPath = findEventNode(proc, "InputPlumber Keyboard");
@@ -407,14 +454,21 @@ async function restorePreviousBinding(
 }
 
 /** Disable the wake binding: load a no-mapping profile (controller keeps
- *  working) and forget the persisted selection. */
+ *  working) and forget the persisted selection. Persistence happens *after*
+ *  a successful live load — if the load fails the persisted state stays
+ *  authoritative so `reloadPersistedProfile` re-syncs on next boot. */
 export async function clearWakeButton(): Promise<WakeOpResult> {
-  await writeWake({ selectedRaw: null, deviceName: null });
-  if (!(await inputPlumberAvailable())) return { ok: true };
+  if (!(await inputPlumberAvailable())) {
+    await writeWake({ selectedRaw: null, deviceName: null });
+    return { ok: true };
+  }
 
   const composites = await listCompositeDevices();
   const device = pickDevice(composites, null, null);
-  if (!device) return { ok: true };
+  if (!device) {
+    await writeWake({ selectedRaw: null, deviceName: null });
+    return { ok: true };
+  }
 
   const targets = await getTargetKinds(device.path);
   await writeFileMkdir(PROFILE_PATH, renderClearedProfile(targets));
@@ -425,6 +479,7 @@ export async function clearWakeButton(): Promise<WakeOpResult> {
       error: `LoadProfilePath failed: ${loaded.stderr.trim() || `exit ${loaded.code}`}`,
     };
   }
+  await writeWake({ selectedRaw: null, deviceName: null });
   return { ok: true };
 }
 

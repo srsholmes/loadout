@@ -263,7 +263,7 @@ describe("input-plumber plugin", () => {
     });
   }
 
-  it("lists pickable buttons and marks the bound one active", async () => {
+  it("shows the currently-bound button label when one is set", async () => {
     rpcWithWake(wakeActive);
     const container = document.createElement("div");
     const { mount } = await import("./app");
@@ -271,39 +271,84 @@ describe("input-plumber plugin", () => {
 
     await waitFor(() => {
       expect(container.textContent).toContain("Overlay wake button");
+      expect(container.textContent).toContain("Currently bound");
+      // The bound capability is RightPaddle1 — show its friendly label.
       expect(container.textContent).toContain("Right Back Paddle (R4)");
-      expect(container.textContent).toContain("Key Record");
-      // Gameplay button is grouped under the "Other buttons" warning header.
-      expect(container.textContent).toContain("Other buttons");
     });
-
-    // The bound button (RightPaddle1) renders as the active (primary) row.
-    const active = Array.from(container.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("Right Back Paddle (R4)"),
-    ) as HTMLButtonElement;
-    expect(active.className).toContain("btn-primary");
+    // Press-to-capture: the picker is a single button now, not a list of
+    // every capability. The old flat list is intentionally gone.
+    expect(container.textContent).not.toContain("Other buttons");
   });
 
-  it("clicking a button binds it via setWakeButton with the raw capability", async () => {
+  it("clicking 'Change button' triggers captureWakeButton with the timeout", async () => {
     rpcWithWake(wakeActive);
     const container = document.createElement("div");
     const { mount } = await import("./app");
     mount(container);
 
     await waitFor(() => {
-      expect(container.textContent).toContain("Key Record");
+      expect(container.textContent).toContain("Change button");
     });
 
-    const kbdBtn = Array.from(container.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("Key Record"),
+    const changeBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.trim() === "Change button",
     )!;
-    fireEvent.click(kbdBtn);
+    fireEvent.click(changeBtn);
 
     await waitFor(() => {
-      expect(callMock).toHaveBeenCalledWith(
-        "setWakeButton",
-        "Keyboard:KeyRecord",
-      );
+      expect(callMock).toHaveBeenCalledWith("captureWakeButton", 10_000);
+    });
+  });
+
+  it("shows 'Set wake button' when nothing is bound yet", async () => {
+    rpcWithWake({
+      ipActive: true,
+      isDeck: false,
+      selectedRaw: null,
+      devices: [{ name: "OrangePi Apex", buttons: [] }],
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Set wake button");
+    });
+  });
+
+  it("warns about a legacy IP profile before allowing capture", async () => {
+    rpcWithWake({
+      ipActive: true,
+      isDeck: false,
+      selectedRaw: null,
+      devices: [{ name: "OrangePi Apex", buttons: [] }],
+      hasLegacyProfile: true,
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("replaces existing IP profile");
+      expect(container.textContent).toContain("I understand, continue");
+    });
+
+    // "Set wake button" should be disabled until the user acknowledges.
+    const setBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.trim() === "Set wake button",
+    ) as HTMLButtonElement;
+    expect(setBtn.disabled).toBe(true);
+
+    const ack = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.trim() === "I understand, continue",
+    )!;
+    fireEvent.click(ack);
+
+    await waitFor(() => {
+      const reSetBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+        b.textContent?.trim() === "Set wake button",
+      ) as HTMLButtonElement;
+      expect(reSetBtn.disabled).toBe(false);
     });
   });
 
@@ -328,7 +373,7 @@ describe("input-plumber plugin", () => {
     fireEvent.click(enable);
 
     await waitFor(() => {
-      expect(callMock).toHaveBeenCalledWith("prepareWake", undefined);
+      expect(callMock).toHaveBeenCalledWith("prepareWake");
     });
   });
 });

@@ -749,6 +749,7 @@ interface WakeStatusLite {
   isDeck: boolean;
   devices: { name: string; buttons: unknown[] }[];
   selectedRaw: string | null;
+  hasLegacyProfile?: boolean;
 }
 
 interface WakeCaptureResultLite {
@@ -791,14 +792,34 @@ function StepWakeButton() {
   const [info, setInfo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [legacyAck, setLegacyAck] = useState(false);
+
+  // Track whether the initial `getWakeStatus` has resolved (success or
+  // error). Separate from `wake === null` because we want to distinguish
+  // "still loading" from "plugin unavailable".
+  const [statusFetched, setStatusFetched] = useState(false);
+
+  // Mounted-ref guard so awaited callbacks don't `setState` after the
+  // user nav's past this step mid-capture.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!ready) return;
     try {
       const s = (await call("getWakeStatus")) as WakeStatusLite;
-      setWake(s);
+      if (mountedRef.current) {
+        setWake(s);
+        setStatusFetched(true);
+      }
     } catch {
-      setWake(null);
+      if (mountedRef.current) {
+        setWake(null);
+        setStatusFetched(true);
+      }
     }
   }, [call, ready]);
 
@@ -806,7 +827,7 @@ function StepWakeButton() {
 
   useEvent({
     event: "wake-status",
-    handler: (data) => setWake(data as WakeStatusLite),
+    handler: (data) => { if (mountedRef.current) setWake(data as WakeStatusLite); },
   });
 
   useEffect(() => {
@@ -818,12 +839,14 @@ function StepWakeButton() {
   }, [capturing]);
 
   const startCapture = useCallback(async () => {
+    if (!mountedRef.current) return;
     setError(null);
     setInfo(null);
     setCapturing(true);
     setRemaining(Math.ceil(WAKE_CAPTURE_TIMEOUT_MS / 1000));
     try {
       const r = (await call("captureWakeButton", WAKE_CAPTURE_TIMEOUT_MS)) as WakeCaptureResultLite;
+      if (!mountedRef.current) return;
       if (r.ok) {
         setInfo(`Bound: ${r.capturedLabel ?? r.capturedRaw ?? "button"}`);
       } else {
@@ -831,27 +854,45 @@ function StepWakeButton() {
       }
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (mountedRef.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setCapturing(false);
-      setRemaining(0);
+      if (mountedRef.current) {
+        setCapturing(false);
+        setRemaining(0);
+      }
     }
   }, [call, refresh]);
 
   const clear = useCallback(async () => {
+    if (!mountedRef.current) return;
     setBusy(true);
     setError(null);
     setInfo(null);
     try {
       await call("clearWakeButton");
       await refresh();
-      setInfo("Wake button disabled.");
+      if (mountedRef.current) setInfo("Wake button disabled.");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (mountedRef.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   }, [call, refresh]);
+
+  // Loading: backend handle ready but first probe not yet resolved.
+  if (ready && !statusFetched) {
+    return (
+      <div className="max-w-xl">
+        <p className="text-[13px] text-base-content/70 mb-4">
+          Pick the physical button on your handheld that opens this overlay
+          in-game.
+        </p>
+        <div className="flex items-center justify-center py-12">
+          <Spinner variant="dots" size="md" />
+        </div>
+      </div>
+    );
+  }
 
   // Plugin not available (disabled / not installed) — surface a friendly note
   // and let the user move on; they can set this later from the plugin panel.
@@ -902,6 +943,7 @@ function StepWakeButton() {
   }
 
   const currentLabel = labelForWakeRaw(wake.selectedRaw);
+  const needsLegacyAck = wake.hasLegacyProfile && !currentLabel && !legacyAck;
 
   return (
     <div className="max-w-xl">
@@ -923,6 +965,37 @@ function StepWakeButton() {
           </div>
         </div>
 
+        {needsLegacyAck && (
+          <div
+            className="text-[12px] rounded-lg p-3 mt-3"
+            style={{
+              background: "color-mix(in oklch, var(--color-warning) 8%, transparent)",
+              border: "1px solid color-mix(in oklch, var(--color-warning) 30%, transparent)",
+              color: "var(--color-warning, #facc15)",
+            }}
+          >
+            <div className="font-medium mb-1">Heads up — replaces existing IP profile</div>
+            <div className="opacity-80">
+              A legacy InputPlumber profile with custom mappings is installed.
+              IP profiles replace rather than merge, so capturing a wake
+              button will deactivate those mappings. Skip this step if you
+              want to keep them.
+            </div>
+            <div className="mt-2">
+              <Focusable focusKey="welcome-wake-ack" onActivate={() => setLegacyAck(true)}>
+                <button
+                  type="button"
+                  onClick={() => setLegacyAck(true)}
+                  tabIndex={-1}
+                  className="btn btn-primary btn-sm"
+                >
+                  I understand, continue
+                </button>
+              </Focusable>
+            </div>
+          </div>
+        )}
+
         {capturing ? (
           <div className="flex items-center gap-3 mt-4">
             <Spinner variant="dots" size="sm" />
@@ -942,7 +1015,7 @@ function StepWakeButton() {
               <button
                 type="button"
                 onClick={() => void startCapture()}
-                disabled={busy}
+                disabled={busy || capturing || needsLegacyAck}
                 tabIndex={-1}
                 className="btn btn-primary btn-sm"
               >
@@ -957,7 +1030,7 @@ function StepWakeButton() {
                 <button
                   type="button"
                   onClick={() => void clear()}
-                  disabled={busy}
+                  disabled={busy || capturing}
                   tabIndex={-1}
                   className="btn btn-ghost btn-sm"
                 >
