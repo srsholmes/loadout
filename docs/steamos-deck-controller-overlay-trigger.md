@@ -105,6 +105,31 @@ system service) does this in `onLoad`: it waits for IP's D-Bus, then calls
 curl loop in `loadout-overlay.service`), the IP keyboard exists before the overlay
 enumerates devices — **no separate systemd one-shot needed**.
 
+## Per-device prerequisites
+
+This feature drives **already-running InputPlumber**. It does not install IP
+itself, nor ship device-recognition YAMLs. Each handheld needs the upstream IP
+package + a matching device file under `/etc/inputplumber/devices.d/` (or
+`/usr/share/inputplumber/devices/`) so IP exposes it as a `CompositeDevice`. The
+picker can only list buttons IP can already see; without a device file the
+picker shows "No controller detected by InputPlumber".
+
+| Handheld | IP daemon | Device YAML | Notes |
+|----------|-----------|-------------|-------|
+| **Steam Deck (SteamOS)** | Ships **disabled** — opt-in via the picker's *Enable & detect buttons* button, which writes `auto_manage: true` to `/etc/inputplumber/devices.d/50-steam_deck.yaml` + `systemctl enable --now inputplumber.service`. Deck profile targets `deck-uhid` to preserve Steam Input chord compatibility. | Bundled with IP upstream. | Steam Input keeps working post-takeover (controller still looks identical to Steam). |
+| **OXP Apex** (Bazzite) | Bazzite ships IP enabled. | **Loadout does not ship this file.** Apex requires `/etc/inputplumber/devices.d/50-onexplayer_apex.yaml` — currently provided out-of-band (legacy steam-loader install, or to-be-migrated `apex-fixes` plugin). | Apex's QAM-adjacent button surfaces as `Gamepad:Button:Keyboard` once the device YAML is in place. |
+| **ROG Ally / Ally X**, **Legion Go**, **AYANEO** | IP packages ship matching device YAMLs upstream. | Bundled. | Works out-of-box once IP is enabled. |
+| **CachyOS / Nobara / ChimeraOS** desktops | IP via package manager; no auto-managed handheld. | None pre-installed. | Picker shows whatever IP enumerates. |
+
+**Pre-existing IP profile collision:** `LoadProfilePath` is replace-not-merge —
+the user's chosen wake profile fully supersedes IP's previously-loaded default
+on that composite device. The picker probes for a legacy
+`/var/lib/inputplumber/data/inputplumber/profiles/default.yaml` with substantive
+mappings and surfaces a one-time *I understand, continue* gate so existing paddle
+/ dial / QAM mappings aren't silently lost. If the user accepts, those mappings
+move from active to dormant (the file is unchanged, just not loaded onto the
+device).
+
 ## Where this lives (all TypeScript)
 
 Everything is in the **`input-plumber` plugin**, because the backend runs as root
