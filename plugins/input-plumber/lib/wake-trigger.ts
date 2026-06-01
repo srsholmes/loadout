@@ -13,6 +13,7 @@
  */
 
 import { mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import { dirname } from "node:path";
 import { runFull } from "@loadout/exec";
 import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
@@ -26,7 +27,9 @@ import {
 import {
   parseCapability,
   buttonOptions,
+  labelFor,
   renderProfile,
+  renderCaptureProfile,
   renderClearedProfile,
   PROFILE_PATH,
   DECK_OVERRIDE_PATH,
@@ -34,9 +37,14 @@ import {
   UACCESS_RULE_PATH,
   UACCESS_RULE,
 } from "./profile";
-import type { WakeStatus, WakeStatusDevice, WakeOpResult } from "../shared";
+import type {
+  WakeStatus,
+  WakeStatusDevice,
+  WakeOpResult,
+  WakeCaptureResult,
+} from "../shared";
 
-export type { WakeStatus, WakeStatusDevice, WakeOpResult };
+export type { WakeStatus, WakeStatusDevice, WakeOpResult, WakeCaptureResult };
 
 const PLUGIN_ID = "input-plumber";
 const EXEC_TIMEOUT_MS = 10_000;
@@ -229,6 +237,173 @@ export async function setWakeButton(raw: string): Promise<WakeOpResult> {
 
   await writeWake({ selectedRaw: raw, deviceName: device.name });
   return { ok: true };
+}
+
+// ── press-to-capture ────────────────────────────────────────────────────────
+
+/** Where /proc/bus/input/devices is — overridable for tests. */
+const PROC_INPUT_DEVICES = "/proc/bus/input/devices";
+
+/** evdev input_event struct on x86_64: u64 sec + u64 usec + u16 type + u16 code + u32 value = 24 bytes. */
+const EVENT_BYTES = 24;
+const EV_KEY = 1;
+
+/** Parse /proc/bus/input/devices to find the eventN node for a device by name.
+ *  Picks the first match — IP creates only one virtual keyboard per session. */
+export function findEventNode(procContent: string, name: string): string | null {
+  const blocks = procContent.split(/\n\n+/);
+  for (const block of blocks) {
+    const nameMatch = block.match(/^N:\s+Name="([^"]+)"/m);
+    if (!nameMatch || nameMatch[1] !== name) continue;
+    const handlersMatch = block.match(/^H:\s+Handlers=(.*)$/m);
+    if (!handlersMatch) continue;
+    const ev = handlersMatch[1].split(/\s+/).find((h) => /^event\d+$/.test(h));
+    if (ev) return `/dev/input/${ev}`;
+  }
+  return null;
+}
+
+/** Read evdev events until we see a KEY_PRESS for a code in `accept`, or
+ *  the deadline passes. Returns the accepted code, or null on timeout. */
+async function readNextSentinelKey(
+  path: string,
+  accept: Set<number>,
+  timeoutMs: number,
+): Promise<number | null> {
+  return new Promise((resolve) => {
+    const stream = createReadStream(path);
+    let buf: Buffer = Buffer.alloc(0);
+    let done = false;
+    const finish = (result: number | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      stream.destroy();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    stream.on("data", (chunk: Buffer) => {
+      buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
+      while (buf.length >= EVENT_BYTES) {
+        const type = buf.readUInt16LE(16);
+        const code = buf.readUInt16LE(18);
+        const value = buf.readInt32LE(20);
+        buf = buf.subarray(EVENT_BYTES);
+        if (type === EV_KEY && value === 1 && accept.has(code)) {
+          finish(code);
+          return;
+        }
+      }
+    });
+    stream.on("error", () => finish(null));
+    stream.on("end", () => finish(null));
+  });
+}
+
+/**
+ * Press-to-capture: write a transient profile mapping every recommended
+ * button to a unique sentinel key, listen on the IP virtual keyboard for the
+ * first sentinel press, then bind that button to F16 for real. On timeout or
+ * error, restore the previous binding (or leave Off if there wasn't one).
+ *
+ * Caller gets `{ ok, capturedRaw?, capturedLabel?, timedOut?, error? }`.
+ */
+export async function captureWakeButton(timeoutMs = 10_000): Promise<WakeCaptureResult> {
+  const prepared = await prepareWake();
+  if (!prepared.ok) return prepared;
+
+  const composites = await listCompositeDevices();
+  const wake = await readWake();
+  const device = pickDevice(composites, null, wake?.deviceName ?? null);
+  if (!device) return { ok: false, error: "No InputPlumber device found." };
+
+  const opts = buttonOptions(device.capabilities);
+  const recommended = opts.filter((o) => o.recommended);
+  if (recommended.length === 0) {
+    return { ok: false, error: "No recommendable buttons on this device." };
+  }
+
+  const targets = await getTargetKinds(device.path);
+  const { yaml, sentinelToRaw } = renderCaptureProfile(opts, targets);
+  await writeFileMkdir(PROFILE_PATH, yaml);
+  // Surface the catch-all mapping so we can diagnose a timeout — if the
+  // user's actual button isn't here, that's the bug, not the evdev read.
+  console.log(
+    `[input-plumber] capture catch-all: ${Array.from(sentinelToRaw.entries())
+      .map(([code, raw]) => `${code}=${raw}`)
+      .join(", ")}`,
+  );
+
+  const loaded = await loadProfilePath(device.path, PROFILE_PATH);
+  if (!loaded.ok) {
+    return {
+      ok: false,
+      error: `LoadProfilePath (capture) failed: ${loaded.stderr.trim() || `exit ${loaded.code}`}`,
+    };
+  }
+
+  // Find IP's virtual keyboard node; IP creates a fresh evdev on every
+  // LoadProfilePath, so re-scan now rather than caching.
+  let kbPath: string | null = null;
+  for (let i = 0; i < 10 && !kbPath; i++) {
+    try {
+      const proc = await readFile(PROC_INPUT_DEVICES, "utf-8");
+      kbPath = findEventNode(proc, "InputPlumber Keyboard");
+    } catch {
+      kbPath = null;
+    }
+    if (!kbPath) await new Promise((r) => setTimeout(r, 200));
+  }
+  if (!kbPath) {
+    await restorePreviousBinding(device, wake);
+    return { ok: false, error: "Could not find InputPlumber virtual keyboard." };
+  }
+  console.log(`[input-plumber] capture listening on ${kbPath} for ${timeoutMs}ms`);
+
+  const accept = new Set<number>(sentinelToRaw.keys());
+  const code = await readNextSentinelKey(kbPath, accept, timeoutMs);
+  if (code === null) {
+    await restorePreviousBinding(device, wake);
+    return { ok: false, timedOut: true, error: "No button pressed within the timeout." };
+  }
+
+  const raw = sentinelToRaw.get(code)!;
+  // Render the real profile binding the captured button → F16.
+  const realYaml = renderProfile(parseCapability(raw), targets);
+  await writeFileMkdir(PROFILE_PATH, realYaml);
+  const reload = await loadProfilePath(device.path, PROFILE_PATH);
+  if (!reload.ok) {
+    await restorePreviousBinding(device, wake);
+    return {
+      ok: false,
+      error: `LoadProfilePath (final) failed: ${reload.stderr.trim() || `exit ${reload.code}`}`,
+    };
+  }
+
+  await writeWake({ selectedRaw: raw, deviceName: device.name });
+  return {
+    ok: true,
+    capturedRaw: raw,
+    capturedLabel: labelFor(parseCapability(raw)),
+  };
+}
+
+/** Best-effort restore of a previous wake binding after a failed/cancelled
+ *  capture. Falls back to a cleared profile if no previous binding existed. */
+async function restorePreviousBinding(
+  device: CompositeDevice,
+  prev: WakeState["wake"] | undefined,
+): Promise<void> {
+  const targets = await getTargetKinds(device.path);
+  const yaml = prev?.selectedRaw
+    ? renderProfile(parseCapability(prev.selectedRaw), targets)
+    : renderClearedProfile(targets);
+  try {
+    await writeFileMkdir(PROFILE_PATH, yaml);
+    await loadProfilePath(device.path, PROFILE_PATH);
+  } catch {
+    // best-effort — surface nothing if restore itself errors.
+  }
 }
 
 /** Disable the wake binding: load a no-mapping profile (controller keeps

@@ -22,9 +22,11 @@ import type {
   InstallStateEvent,
   InstallStatus,
   WakeStatus,
-  WakeButtonOption,
+  WakeCaptureResult,
   WakeOpResult,
 } from "./shared";
+
+const CAPTURE_TIMEOUT_MS = 10_000;
 
 export const icon = FaPlug;
 
@@ -299,52 +301,39 @@ function InputPlumberPanel() {
 // Overlay wake button picker
 // ---------------------------------------------------------------------------
 
-/** One selectable button row — gamepad-focusable, shows a check when active. */
-function WakeOptionRow({
-  label,
-  sublabel,
-  active,
-  disabled,
-  onSelect,
-  icon,
-}: {
-  label: string;
-  sublabel?: string;
-  active: boolean;
-  disabled?: boolean;
-  onSelect: () => void;
-  icon?: React.ReactNode;
-}) {
-  const { ref, focused } = useFocusable({ onEnterPress: onSelect });
-  return (
-    <button
-      ref={ref}
-      onClick={onSelect}
-      disabled={disabled}
-      className={`btn btn-sm justify-start w-full ${
-        active ? "btn-primary" : "btn-ghost"
-      } ${focused ? "ring-2 ring-primary/40" : ""}`}
-    >
-      {active ? (
-        <FaCheck className="w-3 h-3 mr-2 shrink-0" />
-      ) : (
-        <span className="w-3 mr-2 shrink-0 inline-flex justify-center">
-          {icon}
-        </span>
-      )}
-      <span className="truncate">{label}</span>
-      {sublabel && (
-        <span className="ml-auto text-[11px] opacity-60 pl-2">{sublabel}</span>
-      )}
-    </button>
-  );
+/** Human label for a currently-bound capability string. Mirrors the
+ *  backend's `labelFor` heuristic so the UI shows the same friendly name
+ *  the picker produced when binding. */
+function labelForRaw(raw: string): string {
+  const parts = raw.split(":").map((s) => s.trim()).filter(Boolean);
+  const name = parts[parts.length - 1] ?? raw;
+  const known: Record<string, string> = {
+    leftpaddle1: "Left Back Paddle (L4)",
+    leftpaddle2: "Left Back Paddle (L5)",
+    rightpaddle1: "Right Back Paddle (R4)",
+    rightpaddle2: "Right Back Paddle (R5)",
+    lefttop: "Left Extra Button",
+    righttop: "Right Extra Button",
+    keyboard: "Keyboard Button",
+    quickaccess: "Quick Access (QAM) Button",
+    quickaccessmenu: "Quick Access (QAM) Button",
+  };
+  const k = known[name.toLowerCase()];
+  if (k) return k;
+  if (parts[0]?.toLowerCase() === "keyboard") {
+    return name.replace(/^Key/, "Key ").replace(/([a-z])([A-Z])/g, "$1 $2");
+  }
+  return name.replace(/([a-z])([A-Z0-9])/g, "$1 $2");
 }
 
 function WakeButtonSection() {
   const { call, useEvent } = useBackend("input-plumber");
   const [wake, setWake] = useState<WakeStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [capturing, setCapturing] = useState(false);
+  const [remaining, setRemaining] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setWake((await call("getWakeStatus")) as WakeStatus);
@@ -359,12 +348,43 @@ function WakeButtonSection() {
     handler: (data) => setWake(data as WakeStatus),
   });
 
+  // Countdown ticker while a capture is in flight.
+  useEffect(() => {
+    if (!capturing) return;
+    const tick = setInterval(() => {
+      setRemaining((r) => (r > 0 ? r - 1 : 0));
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [capturing]);
+
+  const startCapture = useCallback(async () => {
+    setError(null);
+    setInfo(null);
+    setCapturing(true);
+    setRemaining(Math.ceil(CAPTURE_TIMEOUT_MS / 1000));
+    try {
+      const r = (await call("captureWakeButton", CAPTURE_TIMEOUT_MS)) as WakeCaptureResult;
+      if (r.ok) {
+        setInfo(`Bound: ${r.capturedLabel ?? r.capturedRaw ?? "button"}`);
+      } else {
+        setError(r.timedOut ? "No button pressed — try again." : r.error ?? "Capture failed.");
+      }
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCapturing(false);
+      setRemaining(0);
+    }
+  }, [call, refresh]);
+
   const runOp = useCallback(
-    async (method: string, arg?: string) => {
+    async (method: string) => {
       setBusy(true);
       setError(null);
+      setInfo(null);
       try {
-        const r = (await call(method, arg)) as WakeOpResult | WakeStatus;
+        const r = (await call(method)) as WakeOpResult | WakeStatus;
         if ("ok" in r && !r.ok) setError(r.error ?? "Operation failed.");
         await refresh();
       } catch (e) {
@@ -384,17 +404,21 @@ function WakeButtonSection() {
           <div className="subsection-label mb-0">Overlay wake button</div>
         </div>
         <div className="subsection-desc">
-          Pick the physical button that opens the Loadout overlay in-game. Any
-          handheld InputPlumber supports works — paddles, the Quick Access /
-          keyboard button, or any extra button. The choice is bound to the
-          overlay&apos;s wake key (F16) and takes effect immediately.
+          Pick the physical button that opens the Loadout overlay in-game. Press
+          <span className="font-medium"> Set wake button</span> and then push the
+          button you want on your handheld — paddle, QAM/keyboard button,
+          anything extra. The choice binds live to the overlay&apos;s wake key
+          (F16); core gameplay buttons are skipped so capture won&apos;t hijack
+          play.
         </div>
         {body}
+        {info && (
+          <div className="subsection-desc mt-2" style={{ color: "var(--color-success, #4ade80)" }}>
+            {info}
+          </div>
+        )}
         {error && (
-          <div
-            className="subsection-desc mt-2"
-            style={{ color: "var(--color-error)" }}
-          >
+          <div className="subsection-desc mt-2" style={{ color: "var(--color-error)" }}>
             {error}
           </div>
         )}
@@ -410,21 +434,16 @@ function WakeButtonSection() {
     );
   }
 
-  // InputPlumber not running yet.
   if (!wake.ipActive) {
     if (wake.isDeck) {
       return cardWrap(
         <div className="mt-3">
           <div className="subsection-desc mb-2">
             InputPlumber ships disabled on Steam Deck. Enable it to detect your
-            controller&apos;s buttons (your gamepad keeps working — Loadout just
-            adds a keyboard target for the wake key).
+            controller (your gamepad keeps working — Loadout just adds a
+            keyboard target for the wake key).
           </div>
-          <FocusButton
-            onClick={() => void runOp("prepareWake")}
-            disabled={busy}
-            variant="primary"
-          >
+          <FocusButton onClick={() => void runOp("prepareWake")} disabled={busy} variant="primary">
             {busy ? "Enabling…" : "Enable & detect buttons"}
           </FocusButton>
         </div>,
@@ -447,47 +466,42 @@ function WakeButtonSection() {
     );
   }
 
+  const currentLabel = wake.selectedRaw ? labelForRaw(wake.selectedRaw) : null;
+
   return cardWrap(
     <div className="mt-3 flex flex-col gap-3">
-      {wake.devices.map((device) => {
-        const recommended = device.buttons.filter((b) => b.recommended);
-        const other = device.buttons.filter((b) => !b.recommended);
-        const renderRow = (b: WakeButtonOption) => (
-          <WakeOptionRow
-            key={b.raw}
-            label={b.label}
-            sublabel={b.category === "keyboard" ? "keyboard" : undefined}
-            active={wake.selectedRaw === b.raw}
-            disabled={busy}
-            onSelect={() => void runOp("setWakeButton", b.raw)}
-          />
-        );
-        return (
-          <div key={device.name} className="flex flex-col gap-1.5">
-            {wake.devices.length > 1 && (
-              <div className="subsection-desc text-[11px] uppercase tracking-wide opacity-50">
-                {device.name}
-              </div>
-            )}
-            {recommended.map(renderRow)}
-            {other.length > 0 && (
-              <>
-                <div className="subsection-desc text-[11px] uppercase tracking-wide opacity-40 mt-1">
-                  Other buttons (may interfere with gameplay)
-                </div>
-                {other.map(renderRow)}
-              </>
-            )}
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[12px] uppercase tracking-wide opacity-50">Currently bound</div>
+          <div className="truncate font-medium">
+            {currentLabel ?? <span className="opacity-60">None</span>}
           </div>
-        );
-      })}
-      <WakeOptionRow
-        label="Off — no wake button"
-        active={wake.selectedRaw === null}
-        disabled={busy}
-        onSelect={() => void runOp("clearWakeButton")}
-        icon={<FaPowerOff className="w-3 h-3 opacity-60" />}
-      />
+        </div>
+        <FaCheck className={`w-4 h-4 shrink-0 ${currentLabel ? "text-primary" : "opacity-30"}`} />
+      </div>
+
+      {capturing ? (
+        <div className="flex items-center gap-3 mt-1">
+          <Spinner size={18} />
+          <div className="flex-1">
+            <div className="font-medium">Press a button on your handheld…</div>
+            <div className="text-[12px] opacity-60">
+              Try a back paddle or the QAM/keyboard button. {remaining}s left.
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          <FocusButton onClick={() => void startCapture()} disabled={busy} variant="primary">
+            {currentLabel ? "Change button" : "Set wake button"}
+          </FocusButton>
+          {currentLabel && (
+            <FocusButton onClick={() => void runOp("clearWakeButton")} disabled={busy} variant="ghost">
+              <FaPowerOff className="w-3 h-3 mr-1" /> Off
+            </FocusButton>
+          )}
+        </div>
+      )}
     </div>,
   );
 }

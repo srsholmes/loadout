@@ -20,6 +20,7 @@ import type {
   InstallStartResult,
   WakeStatus,
   WakeOpResult,
+  WakeCaptureResult,
 } from "./shared";
 
 export type { InstallStartResult };
@@ -253,6 +254,14 @@ export default class InputPlumberBackend implements PluginBackend {
       return { ok: false, error: "No button specified." };
     }
     const r = await wake.setWakeButton(raw);
+    this.emit?.({ event: "wake-status", data: await wake.getWakeStatus() });
+    return r;
+  }
+
+  /** Press-to-capture: temporarily map every recommended button to a unique
+   *  sentinel key, wait for the user to press one, then bind it for real. */
+  async captureWakeButton(timeoutMs?: number): Promise<WakeCaptureResult> {
+    const r = await wake.captureWakeButton(typeof timeoutMs === "number" ? timeoutMs : undefined);
     this.emit?.({ event: "wake-status", data: await wake.getWakeStatus() });
     return r;
   }

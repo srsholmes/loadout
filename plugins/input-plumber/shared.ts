@@ -99,3 +99,14 @@ export interface WakeOpResult {
   ok: boolean;
   error?: string;
 }
+
+/** Result of a press-to-capture flow: ok plus the captured button's
+ *  identity if one was detected before the timeout. */
+export interface WakeCaptureResult extends WakeOpResult {
+  /** Raw capability string of the button the user pressed. */
+  capturedRaw?: string;
+  /** Human label for that button (UI confirmation). */
+  capturedLabel?: string;
+  /** True when the capture window expired without a press. */
+  timedOut?: boolean;
+}
