@@ -1,0 +1,59 @@
+{
+  "name": "@loadout/plugin-store-bridge",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-icons": "^5.6.0",
+    "@loadout/ui": "workspace:*",
+    "@loadout/types": "workspace:*",
+    "@loadout/exec": "workspace:*",
+    "@loadout/external-cache": "workspace:*",
+    "@loadout/plugin-storage": "workspace:*",
+    "@loadout/sgdb-art": "workspace:*",
+    "@loadout/steam-cdp": "workspace:*",
+    "@loadout/steam-shortcut": "workspace:*"
+  },
+  "plugin": {
+    "id": "store-bridge",
+    "name": "Store Bridge",
+    "description": "Surface Epic, GOG, Amazon, Ubisoft and xCloud libraries as Steam shortcuts",
+    "permissions": {
+      "network": [
+        "api.github.com",
+        "github.com",
+        "objects.githubusercontent.com",
+        "cdn1.epicgames.com",
+        "cdn2.unrealengine.com",
+        "cdn2.steamgriddb.com",
+        "www.steamgriddb.com",
+        "localhost",
+        "127.0.0.1"
+      ],
+      "filesystem": [
+        "read:~/.local/share/Steam",
+        "write:~/.local/share/Steam/userdata/*/config/grid",
+        "read:~/.config/legendary",
+        "write:~/.config/legendary",
+        "read:~/.config/loadout/steamgriddb",
+        "write:~/.config/loadout/store-bridge",
+        "write:~/.cache/loadout/store-bridge",
+        "write:~/.cache/loadout/store-bridge-epic-info",
+        "write:~/.local/share/loadout/store-bridge",
+        "write:~/Games/store-bridge",
+        "read:~/Games",
+        "read:~/.local/share/Heroic",
+        "read:~/.steam/steam/steamapps",
+        "read:/run/media",
+        "read:/media",
+        "read:/mnt"
+      ],
+      "commands": ["legendary", "gh"]
+    },
+    "category": "Game",
+    "target": { "type": "overlay" },
+    "subtitle": "Epic / GOG / xCloud bridge"
+  }
+}
