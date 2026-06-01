@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { createRoot } from "react-dom/client";
+import { useCallback, useEffect, useState } from "react";
 import {
   FaScrewdriverWrench,
   FaMemory,
@@ -9,10 +8,9 @@ import {
   FaCheck,
   FaCircleExclamation,
   FaArrowsRotate,
-  FaShuffle,
 } from "react-icons/fa6";
 import {
-  PluginProvider,
+  mountComponent,
   Spinner,
   useBackend,
   useFocusable,
@@ -52,42 +50,6 @@ interface RebindResult {
   gamepadPresent: boolean;
   error?: string;
   attempts: number;
-}
-
-// Mirrors src/inputplumber-migrate.ts
-type MigrationStack = "inputplumber" | "hhd" | "mixed" | "none";
-
-interface MigrationStatus {
-  hidOxpLoaded: boolean;
-  hidOxpServiceEnabled: boolean;
-  inputplumberInstalled: boolean;
-  inputplumberActive: boolean;
-  inputplumberEnabled: boolean;
-  hhdActive: boolean;
-  hhdMasked: boolean;
-  scriptsPresent: boolean;
-  prebuiltKoAvailable: boolean;
-  runningKernel: string;
-  stack: MigrationStack;
-  summary: string;
-}
-
-interface MigrationRunResult {
-  success: boolean;
-  exitCode: number;
-  timedOut: boolean;
-  error?: string;
-  durationSeconds: number;
-}
-
-interface MigrationLogEvent {
-  kind: "stdout" | "stderr" | "status";
-  text: string;
-}
-
-interface MigrationStateEvent {
-  running: boolean;
-  result?: MigrationRunResult;
 }
 
 // ---------------------------------------------------------------------------
@@ -248,225 +210,6 @@ function FixCard({ meta, summary, busy, onApply, onRevert, extraAction }: FixCar
             </FocusButton>
           )}
         </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// InputPlumber migration section
-// ---------------------------------------------------------------------------
-
-const MIGRATION_LOG_CAP = 500; // lines — capped so long runs don't grow forever
-
-function stackLabel(stack: MigrationStack): { text: string; tone: "success" | "accent" | "error" | "muted" } {
-  switch (stack) {
-    case "inputplumber":
-      return { text: "InputPlumber", tone: "success" };
-    case "hhd":
-      return { text: "HHD", tone: "accent" };
-    case "mixed":
-      return { text: "Both running", tone: "error" };
-    case "none":
-      return { text: "None", tone: "muted" };
-  }
-}
-
-function MigrationSection() {
-  const { call, useEvent } = useBackend("apex-fixes");
-  const [status, setStatus] = useState<MigrationStatus | null>(null);
-  const [running, setRunning] = useState(false);
-  const [logs, setLogs] = useState<string[]>([]);
-  const [lastResult, setLastResult] = useState<MigrationRunResult | null>(null);
-  const logRef = useRef<HTMLPreElement | null>(null);
-
-  const refresh = useCallback(async () => {
-    const s = (await call("getMigrationStatus")) as MigrationStatus;
-    setStatus(s);
-    const r = (await call("isMigrationRunning")) as { running: boolean };
-    setRunning(r.running);
-  }, [call]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  useEvent({
-    event: "migration-log",
-    handler: (data) => {
-      const ev = data as MigrationLogEvent;
-      setLogs((prev) => {
-        const next = [...prev, ev.text];
-        // Keep only the last MIGRATION_LOG_CAP chunks.
-        if (next.length > MIGRATION_LOG_CAP) {
-          return next.slice(next.length - MIGRATION_LOG_CAP);
-        }
-        return next;
-      });
-      // Auto-scroll the log pane to the bottom as chunks arrive.
-      requestAnimationFrame(() => {
-        const el = logRef.current;
-        if (el) el.scrollTop = el.scrollHeight;
-      });
-    },
-  });
-
-  useEvent({
-    event: "migration-state",
-    handler: (data) => {
-      const ev = data as MigrationStateEvent;
-      setRunning(ev.running);
-      if (!ev.running && ev.result) {
-        setLastResult(ev.result);
-        // Re-probe the status once systemd settles after the run.
-        setTimeout(() => void refresh(), 500);
-      }
-    },
-  });
-
-  const start = useCallback(async () => {
-    setLogs([]);
-    setLastResult(null);
-    setRunning(true); // optimistic — backend will confirm via event
-    const r = (await call("startMigration")) as {
-      started: boolean;
-      error?: string;
-    };
-    if (!r.started) {
-      setRunning(false);
-      setLogs((prev) => [
-        ...prev,
-        `[error] could not start: ${r.error ?? "unknown"}\n`,
-      ]);
-    }
-  }, [call]);
-
-  if (!status) {
-    return (
-      <div className="card">
-        <div className="card-body p-4.5">
-          <div className="flex items-center justify-center h-16">
-            <Spinner size={20} />
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const label = stackLabel(status.stack);
-  const logText = logs.join("");
-  const disabled = running || !status.scriptsPresent;
-  // Card copy switches based on whether the install already ran.
-  // On InputPlumber → label is "Reinstall"; otherwise "Install".
-  const installed = status.stack === "inputplumber";
-  const buttonLabel = running
-    ? installed
-      ? "Reinstalling…"
-      : "Installing…"
-    : installed
-      ? "Reinstall"
-      : "Install InputPlumber";
-
-  return (
-    <div className="card">
-      <div className="card-body p-4.5">
-        <div className="flex items-start justify-between gap-3 mb-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <FaShuffle className="w-4 h-4 shrink-0 text-base-content/60" />
-            <div className="subsection-label mb-0 truncate">
-              InputPlumber Install
-            </div>
-          </div>
-          <span
-            className={
-              "chip " +
-              (label.tone === "success"
-                ? "chip-success"
-                : label.tone === "accent"
-                  ? "chip-accent"
-                  : label.tone === "error"
-                    ? "chip-accent"
-                    : "")
-            }
-          >
-            {label.text}
-          </span>
-        </div>
-        <div className="subsection-desc">
-          Builds the out-of-tree hid-oxp driver, builds and installs
-          InputPlumber from upstream main (the OXP HID driver work landed
-          in mid-2026), masks HHD, and lays down the Apex-specific profile
-          + device config. Lets you drop Decky Loader entirely. Re-run to
-          update the install in place — the script is idempotent.
-        </div>
-        <div className="subsection-desc mt-1.5 text-base-content/50">
-          {status.summary}
-        </div>
-
-        <div className="subsection-desc mono text-[11px] mt-2 text-base-content/40">
-          kernel {status.runningKernel || "unknown"} · prebuilt .ko{" "}
-          {status.prebuiltKoAvailable ? "✓" : "will build on install"} · hid-oxp{" "}
-          {status.hidOxpLoaded ? "loaded" : "not loaded"} · service{" "}
-          {status.hidOxpServiceEnabled ? "enabled" : "not enabled"} ·
-          inputplumber{" "}
-          {status.inputplumberInstalled
-            ? status.inputplumberActive
-              ? "active"
-              : "installed"
-            : "absent"}{" "}
-          · hhd {status.hhdActive ? "active" : status.hhdMasked ? "masked" : "inactive"}
-        </div>
-
-        {!status.scriptsPresent && (
-          <div
-            className="subsection-desc mt-2"
-            style={{ color: "var(--color-error)" }}
-          >
-            Install script missing from plugin directory — reinstall the
-            plugin.
-          </div>
-        )}
-
-        {lastResult && (
-          <div
-            className="subsection-desc mt-2"
-            style={{
-              color: lastResult.success ? undefined : "var(--color-error)",
-            }}
-          >
-            {lastResult.success
-              ? `Last run succeeded in ${lastResult.durationSeconds}s. Reboot for the boot service to pick up hid-oxp cleanly.`
-              : `Last run failed: ${lastResult.error ?? "exit " + lastResult.exitCode}`}
-          </div>
-        )}
-
-        <div className="flex gap-2 mt-3.5 flex-wrap">
-          <FocusButton onClick={() => void start()} disabled={disabled} variant="primary">
-            {buttonLabel}
-          </FocusButton>
-          <FocusButton onClick={() => void refresh()} disabled={running} variant="ghost">
-            <FaArrowsRotate className="w-3 h-3 mr-1" /> Refresh
-          </FocusButton>
-        </div>
-
-        {(logs.length > 0 || running) && (
-          <pre
-            ref={logRef}
-            className="mono text-[11px] mt-3"
-            style={{
-              background: "var(--bg-2, rgba(255,255,255,0.04))",
-              borderRadius: 8,
-              padding: "8px 10px",
-              maxHeight: 260,
-              overflowY: "auto",
-              whiteSpace: "pre-wrap",
-              margin: 0,
-              color: "var(--fg-1, rgba(255,255,255,0.8))",
-            }}
-          >
-            {logText || "waiting for output…"}
-          </pre>
-        )}
       </div>
     </div>
   );
@@ -636,25 +379,12 @@ function ApexFixes() {
             />
           );
         })}
-
-        <MigrationSection />
       </div>
     </div>
   );
 }
 
-export function mount(
-  container: HTMLElement,
-  opts?: { parentFocusKey?: string },
-): () => void {
-  const root = createRoot(container);
-  root.render(
-    <PluginProvider parentFocusKey={opts?.parentFocusKey}>
-      <ApexFixes />
-    </PluginProvider>,
-  );
-  return () => root.unmount();
-}
+export const mount = mountComponent(ApexFixes);
 
 // ---------------------------------------------------------------------------
 // Header (top-bar chrome)
@@ -696,16 +426,5 @@ function Header() {
   );
 }
 
-export function mountHeader(
-  container: HTMLElement,
-  opts?: { parentFocusKey?: string },
-): () => void {
-  const root = createRoot(container);
-  root.render(
-    <PluginProvider parentFocusKey={opts?.parentFocusKey}>
-      <Header />
-    </PluginProvider>,
-  );
-  return () => root.unmount();
-}
+export const mountHeader = mountComponent(Header);
 
