@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, mock, beforeEach } from "bun:test";
+import type { ReactNode } from "react";
 // Captured BEFORE mock.module() runs below, so this holds the real
 // module for the partial-mock spread. (bun's mock.module is not hoisted,
 // unlike vitest's vi.mock — static imports evaluate first.)
@@ -24,10 +25,10 @@ const eventHandlers = new Map<string, (data: unknown) => void>();
 
 mock.module("@loadout/ui", () => ({
   ...actualUi,
-  PluginProvider: ({ children }: any) => children,
+  PluginProvider: ({ children }: { children?: ReactNode }) => children,
   useBackend: () => ({
     call: callMock,
-    useEvent: ({ event, handler }: any) => {
+    useEvent: ({ event, handler }: { event: string; handler: (data: unknown) => void }) => {
       eventHandlers.set(event, handler);
     },
     ready: true,
