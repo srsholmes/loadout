@@ -37,6 +37,7 @@ import {
   UACCESS_RULE_PATH,
   UACCESS_RULE,
 } from "./profile";
+import * as wakeDeck from "./wake-trigger-deck";
 import type {
   WakeStatus,
   WakeStatusDevice,
@@ -111,6 +112,7 @@ export async function hasLegacyProfile(): Promise<boolean> {
 }
 
 export async function getWakeStatus(): Promise<WakeStatus> {
+  if (await isSteamDeck()) return wakeDeck.getWakeStatus();
   const [ipActive, isDeck, wake, legacy] = await Promise.all([
     inputPlumberAvailable(),
     isSteamDeck(),
@@ -216,6 +218,7 @@ function pickDevice(
  * there, so there's nothing to list until this runs).
  */
 export async function prepareWake(): Promise<WakeOpResult> {
+  if (await isSteamDeck()) return wakeDeck.prepareWake();
   if (!(await inputPlumberAvailable())) {
     if (await isSteamDeck()) {
       const managed = await ensureDeckManaged();
@@ -241,6 +244,7 @@ export async function prepareWake(): Promise<WakeOpResult> {
  * Re-callable to change the button (no reboot).
  */
 export async function setWakeButton(raw: string): Promise<WakeOpResult> {
+  if (await isSteamDeck()) return wakeDeck.setWakeButton(raw);
   const prepared = await prepareWake();
   if (!prepared.ok) return prepared;
 
@@ -352,6 +356,7 @@ let captureInflight: Promise<WakeCaptureResult> | null = null;
  * Caller gets `{ ok, capturedRaw?, capturedLabel?, timedOut?, error? }`.
  */
 export async function captureWakeButton(timeoutMs = 10_000): Promise<WakeCaptureResult> {
+  if (await isSteamDeck()) return wakeDeck.captureWakeButton(timeoutMs);
   if (captureInflight) return captureInflight;
   // Clamp the timeout so a buggy caller can't wedge the inflight gate.
   const ms = Math.max(1000, Math.min(60_000, timeoutMs || 10_000));
@@ -472,6 +477,7 @@ async function restorePreviousBinding(
  *  a successful live load — if the load fails the persisted state stays
  *  authoritative so `reloadPersistedProfile` re-syncs on next boot. */
 export async function clearWakeButton(): Promise<WakeOpResult> {
+  if (await isSteamDeck()) return wakeDeck.clearWakeButton();
   if (!(await inputPlumberAvailable())) {
     await writeWake({ selectedRaw: null, deviceName: null });
     return { ok: true };
@@ -503,6 +509,7 @@ export async function clearWakeButton(): Promise<WakeOpResult> {
  * Best-effort and non-throwing — logs via the returned result.
  */
 export async function reloadPersistedProfile(): Promise<WakeOpResult> {
+  if (await isSteamDeck()) return wakeDeck.reloadPersistedProfile();
   const wake = await readWake();
   if (!wake?.selectedRaw) return { ok: true };
 

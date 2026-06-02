@@ -26,6 +26,11 @@ import {
   type InputInterceptHandle,
   type WakeEvent,
 } from "./native/input-intercept";
+import {
+  startDeckHidrawWatcher,
+  type DeckHidrawWatcherHandle,
+} from "./native/deck-hidraw-watcher";
+import { readPluginStorage } from "@loadout/plugin-storage";
 import type { WebviewMessages } from "@loadout/types";
 import {
   findSteamPid,
@@ -127,6 +132,7 @@ const pendingResumeTimer: { current: ReturnType<typeof setTimeout> | null } = {
 // and to the close-path `intercept.current?.release()` inside
 // toggleOverlay.
 const intercept: { current: InputInterceptHandle | null } = { current: null };
+const deckHidraw: { current: DeckHidrawWatcherHandle | null } = { current: null };
 
 // ---- Window -----------------------------------------------------------------
 //
@@ -388,6 +394,47 @@ startInputIntercept({
     console.error("[overlay] input intercept failed to start:", err);
   });
 
+// Steam-Deck-native wake button: read /dev/hidrawN (the controller's
+// gamepad interface) in parallel with Steam Input. Open multiplexes
+// fine — the kernel hid-steam driver allows concurrent readers — and
+// the bound button fires onWake("QamToggle") just like F16 does over
+// evdev. On non-Deck hosts findDeckHidrawPath() returns null and this
+// is a no-op. Binding persists in the input-plumber plugin's storage;
+// we re-read it on a 2s tick so picker changes apply without an
+// overlay restart.
+const DECK_WAKE_REFRESH_MS = 2000;
+async function readDeckWakeBinding(): Promise<string | null> {
+  const s = await readPluginStorage<{ wake?: { selectedRaw: string | null } }>(
+    "input-plumber",
+  );
+  const raw = s.wake?.selectedRaw ?? null;
+  // Raw is either a synthetic "deck:<Button>" string we wrote here, or an
+  // InputPlumber capability string written on a non-Deck host. Only the
+  // deck:* form is meaningful for the watcher.
+  if (raw && raw.startsWith("deck:")) return raw.slice(5);
+  return null;
+}
+readDeckWakeBinding()
+  .then(async (initialButton) => {
+    const handle = await startDeckHidrawWatcher({
+      onWake,
+      initialButton,
+    });
+    if (!handle) return;
+    deckHidraw.current = handle;
+    setInterval(async () => {
+      try {
+        const next = await readDeckWakeBinding();
+        if (next !== handle.getBinding()) handle.setBinding(next);
+      } catch {
+        // Storage read failure is transient — try again next tick.
+      }
+    }, DECK_WAKE_REFRESH_MS);
+  })
+  .catch((err) => {
+    console.error("[overlay] Deck hidraw watcher failed to start:", err);
+  });
+
 // Backup shortcut for desktop dev — works whether or not evdev picks up
 // the QAM button correctly. Useful when we're investigating why F16
 // isn't firing. Override via DECK_OVERLAY_TOGGLE=<accelerator>.
@@ -428,6 +475,7 @@ function runShutdown(): Promise<void> {
     steamPid,
     atoms,
     intercept,
+    deckHidraw,
     globalShortcut: GlobalShortcut,
   });
 }

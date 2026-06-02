@@ -80,6 +80,9 @@ function InputPlumberPanel() {
   const [logs, setLogs] = useState<string[]>([]);
   const [lastResult, setLastResult] = useState<InstallRunResult | null>(null);
   const logRef = useRef<HTMLPreElement | null>(null);
+  // Lazily fetched once — used to swap the install card for a Deck-native
+  // explainer. WakeButtonSection still owns its own wake-status subscription.
+  const [isDeck, setIsDeck] = useState<boolean | null>(null);
 
   const refresh = useCallback(async () => {
     const s = (await call("getStatus")) as InstallStatus;
@@ -90,7 +93,17 @@ function InputPlumberPanel() {
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+    // Probe Deck-ness once; backend caches nothing but the DMI files are
+    // static across a boot so one fetch is enough.
+    void (async () => {
+      try {
+        const w = (await call("getWakeStatus")) as WakeStatus;
+        setIsDeck(w.isDeck);
+      } catch {
+        setIsDeck(false);
+      }
+    })();
+  }, [refresh, call]);
 
   useEvent({
     event: "input-plumber-status",
@@ -188,6 +201,20 @@ function InputPlumberPanel() {
   return (
     <div className="p-7 h-full overflow-y-auto">
       <div className="page-content">
+        {isDeck ? (
+          <div className="card">
+            <div className="card-body p-4.5">
+              <div className="subsection-label mb-1">Steam Deck</div>
+              <div className="subsection-desc">
+                Steam Input is in charge of your Deck's controller — no
+                InputPlumber install needed. Pick a wake button below; we
+                read the controller's HID stream in parallel with Steam
+                Input, so per-game configs, Lizard mode, gyro and Steam
+                button chords keep working.
+              </div>
+            </div>
+          </div>
+        ) : (
         <div className="card">
           <div className="card-body p-4.5">
         <div className="flex items-start justify-between gap-3 mb-2">
@@ -291,6 +318,7 @@ function InputPlumberPanel() {
         )}
         </div>
         </div>
+        )}
 
         <WakeButtonSection />
       </div>
