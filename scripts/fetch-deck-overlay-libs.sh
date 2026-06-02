@@ -188,26 +188,51 @@ EXTRACT_TMP="$(mktemp -d)"
 trap 'rm -rf "$EXTRACT_TMP"' EXIT
 bsdtar -C "$EXTRACT_TMP" -xf "$CACHE_TAR"
 
+# Build the set of .so basenames the Deck already owns. Public sonames
+# (`ldconfig -p`) aren't enough — many libraries the deck has are loaded
+# privately by basename from `/usr/lib/<subdir>/`, e.g.
+# `/usr/lib/pulseaudio/libpulsecommon-17.0.so`. If we ship Fedora's copy
+# of one of those, LD_LIBRARY_PATH=./ means our copy wins, the deck's
+# own loader (libpulse, libcanberra, etc.) gets the WRONG private dep,
+# and the overlay crashes at dlopen time with `undefined symbol:
+# pa_in_valgrind` and the like. Walk the whole `/usr/lib*` tree so we
+# catch those too.
+DECK_LIBS_TMP="$EXTRACT_TMP/deck-libs.txt"
+find /usr/lib /usr/lib64 -name '*.so*' -type f 2>/dev/null \
+    | xargs -n1 basename 2>/dev/null \
+    | sort -u > "$DECK_LIBS_TMP"
+
 # Electrobun's launcher sets LD_LIBRARY_PATH=./ (its bin/ cwd) — it does
 # NOT add `./lib`. So the closure must sit alongside the launcher itself,
 # not in a lib/ subdir. Move every closure entry into $TARGET_DIR — but
-# skip files that already exist (Electrobun's own libEGL.so / libGLESv2.so
-# are kept; webkit's copies stay in the source tree as ignored).
+# - skip files that already exist (Electrobun's own libEGL.so / libGLESv2.so
+#   are kept; we never shadow the bundle).
+# - skip files the deck owns (`/usr/lib*/<basename>` exists). Letting the
+#   deck's loader resolve via system paths preserves CEF/Chromium's
+#   carefully-matched ABI with the deck's libgtk/libcairo/libglib/etc.
 moved=0
-skipped=0
+skipped_existing=0
+skipped_deck=0
 for entry in "$EXTRACT_TMP/lib/"*; do
     [ -e "$entry" ] || continue
     base="$(basename "$entry")"
     if [ -e "$TARGET_DIR/$base" ]; then
-        skipped=$((skipped + 1))
+        skipped_existing=$((skipped_existing + 1))
         continue
     fi
-    # Use cp + rm so we move symlinks correctly (mv -L would dereference).
+    if grep -qxF "$base" "$DECK_LIBS_TMP"; then
+        skipped_deck=$((skipped_deck + 1))
+        continue
+    fi
+    # Use cp -a so we keep symlinks as symlinks (mv -L would dereference).
     cp -a "$entry" "$TARGET_DIR/$base"
     moved=$((moved + 1))
 done
-if [ "$skipped" -gt 0 ]; then
-    echo "[fetch-deck-libs] kept $skipped existing libs (Electrobun's own bundle)"
+if [ "$skipped_existing" -gt 0 ]; then
+    echo "[fetch-deck-libs] kept $skipped_existing existing bundled libs (Electrobun's own)"
+fi
+if [ "$skipped_deck" -gt 0 ]; then
+    echo "[fetch-deck-libs] skipped $skipped_deck libs the deck owns (deck's loader will resolve them)"
 fi
 
 # Final smoke: the three top-level sonames must resolve in the target dir.

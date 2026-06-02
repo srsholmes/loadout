@@ -85,7 +85,12 @@ describe("deck-hidraw-watcher", () => {
     streamSpy.mockRestore();
   });
 
-  it("rebinding with setBinding does not count the new button's held state as a press", async () => {
+  it("rebinding with setBinding does not fire when the new button is already held", async () => {
+    // Regression test for the "press R5 to bind it → overlay immediately
+    // toggles closed" bug: the press-to-capture flow commits on 0→1, but
+    // the user's finger is still down for ~100ms after that, often spanning
+    // the watcher's plugin-storage poll interval. The watcher must NOT
+    // count that residual hold as a fresh press.
     const findSpy = spyOn(deckHid, "findDeckHidrawPath").mockResolvedValue(
       "/dev/hidraw-fake",
     );
@@ -100,22 +105,26 @@ describe("deck-hidraw-watcher", () => {
       initialButton: "Steam",
       log: () => {},
     });
-    // Press and hold QAM (byte 14 bit 2 = 0x04) — Steam isn't bound, so no
-    // fire either way; this just establishes "QAM was held when we rebound".
+    // QAM (byte 14 bit 2 = 0x04) physically pressed; Steam isn't bound,
+    // so nothing fires. Just establishes "QAM is currently held".
     stream.push(frame({ 14: 0x04 }));
     expect(onWake).toHaveBeenCalledTimes(0);
 
-    // Now rebind to QAM. The next frame still has QAM held — without the
-    // reset-on-rebind we'd spuriously fire on that next frame (last=false,
-    // cur=true). With the reset we count it as already-known-held.
+    // User just captured QAM as their wake button — binding flips to QAM
+    // while QAM is still held by the user's finger.
     handle!.setBinding("Qam");
-    // First frame after rebind: QAM still held. The reset zeroes
-    // lastBitValue, so this frame DOES count as a fresh press (0→1 from
-    // the watcher's POV) — this is the documented behaviour: rebinding
-    // arms the bit at "not held", so the immediate next held-frame fires.
-    // We accept that semantics as the lesser evil — alternative would be
-    // to delay until first observed release, which feels surprising for
-    // someone pressing the new button right after picking it.
+
+    // First frame after rebind with QAM still held: the suppress-next-edge
+    // gate consumes the spurious 0→1 (lastBitValue was 0 because we'd
+    // never tracked QAM, cur is 1). No fire.
+    stream.push(frame({ 14: 0x04 }));
+    expect(onWake).toHaveBeenCalledTimes(0);
+
+    // User releases QAM (cur=false). No fire (release transition).
+    stream.push(frame());
+    expect(onWake).toHaveBeenCalledTimes(0);
+
+    // User presses QAM again — a real, fresh 0→1. Fires.
     stream.push(frame({ 14: 0x04 }));
     expect(onWake).toHaveBeenCalledTimes(1);
 

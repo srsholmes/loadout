@@ -90,6 +90,15 @@ export async function startDeckHidrawWatcher(
 
   let bound: DeckButton | null = findButton(opts.initialButton ?? null);
   let lastBitValue = false;
+  /** One-shot: after a (re)bind, ignore the first observed transition so the
+   *  watcher doesn't fire just because the user is still holding the button
+   *  they captured. The press-to-capture flow in wake-trigger-deck commits
+   *  on 0→1, but the user's finger is still down for a hundred-ish
+   *  milliseconds after that — within the watcher's 2s storage poll. Without
+   *  this gate, that residual hold reads as a fresh press → onWake fires
+   *  immediately → the still-open picker dismisses → user reads it as a
+   *  crash. */
+  let suppressNextEdge = true;
   let stopped = false;
   let buf: Buffer = Buffer.alloc(0);
 
@@ -105,10 +114,11 @@ export async function startDeckHidrawWatcher(
       // bit and bail. (Less GC pressure than building a Map every report.)
       if (bound) {
         const cur = (report[bound.byte] & (1 << bound.bit)) !== 0;
-        if (cur && !lastBitValue) {
+        if (cur && !lastBitValue && !suppressNextEdge) {
           opts.onWake("QamToggle");
         }
         lastBitValue = cur;
+        suppressNextEdge = false;
       }
     }
     // Keep only the trailing partial report (rare; defensive).
@@ -139,9 +149,11 @@ export async function startDeckHidrawWatcher(
   return {
     setBinding(name: string | null): void {
       const next = findButton(name);
-      // Reset the edge state so the FIRST frame after a rebind never
-      // counts as a spurious press (would happen if the new button is
-      // already held when rebinding).
+      // Arm the one-shot edge gate: on the next frame, we'll latch the
+      // bit's CURRENT physical state into lastBitValue without firing,
+      // so a button already held at rebind time doesn't trip a spurious
+      // press. Subsequent frames behave normally.
+      suppressNextEdge = true;
       lastBitValue = false;
       bound = next;
       log(`binding → ${next?.name ?? "<none>"}`);
