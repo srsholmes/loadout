@@ -133,6 +133,11 @@ const pendingResumeTimer: { current: ReturnType<typeof setTimeout> | null } = {
 // toggleOverlay.
 const intercept: { current: InputInterceptHandle | null } = { current: null };
 const deckHidraw: { current: DeckHidrawWatcherHandle | null } = { current: null };
+// 2s poll that re-reads the persisted wake binding so picker changes apply
+// without an overlay restart. Tracked so shutdown clears it instead of
+// leaving it ticking against a stopped watcher handle.
+const deckWakeRefreshTimer: { current: ReturnType<typeof setInterval> | null } =
+  { current: null };
 
 // ---- Window -----------------------------------------------------------------
 //
@@ -422,7 +427,7 @@ readDeckWakeBinding()
     });
     if (!handle) return;
     deckHidraw.current = handle;
-    setInterval(async () => {
+    deckWakeRefreshTimer.current = setInterval(async () => {
       try {
         const next = await readDeckWakeBinding();
         if (next !== handle.getBinding()) handle.setBinding(next);
@@ -469,6 +474,10 @@ overlayManagementLoop({
 });
 
 function runShutdown(): Promise<void> {
+  if (deckWakeRefreshTimer.current !== null) {
+    clearInterval(deckWakeRefreshTimer.current);
+    deckWakeRefreshTimer.current = null;
+  }
   return shutdown({
     running: managementLoopRunning,
     pendingResumeTimer,

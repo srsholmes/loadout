@@ -32,6 +32,8 @@ import {
   findDeckHidrawPath,
   findButton,
   splitReports,
+  REPORT_ID_INPUT,
+  REPORT_LEN,
   type DeckButton,
 } from "@loadout/deck-hid";
 import type { WakeEvent } from "./input-intercept";
@@ -109,6 +111,11 @@ export async function startDeckHidrawWatcher(
     // Coalesced reads happen; split into 64-byte frames and decode each.
     buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
     for (const report of splitReports(buf)) {
+      // The hidraw stream interleaves report types; only id 0x01 carries
+      // button state. Skip everything else WITHOUT touching edge state —
+      // reading a non-input frame's bytes would both misfire and corrupt
+      // lastBitValue, desyncing the next real press.
+      if (report[0] !== REPORT_ID_INPUT) continue;
       // We track only the SINGLE bound bit's transitions. Decoding the full
       // button map per frame is unnecessary on the hot path — chase the one
       // bit and bail. (Less GC pressure than building a Map every report.)
@@ -122,8 +129,7 @@ export async function startDeckHidrawWatcher(
       }
     }
     // Keep only the trailing partial report (rare; defensive).
-    const consumed =
-      Math.floor(buf.length / /* REPORT_LEN */ 64) * 64;
+    const consumed = Math.floor(buf.length / REPORT_LEN) * REPORT_LEN;
     buf = consumed === buf.length ? Buffer.alloc(0) : buf.subarray(consumed);
   };
 
@@ -176,14 +182,3 @@ export async function startDeckHidrawWatcher(
     },
   };
 }
-
-/** Re-export the canonical pure helpers so callers (and tests) don't need to
- *  reach across packages. */
-export {
-  DECK_BUTTONS,
-  findDeckHidrawPath,
-  findButton,
-  decodeButtons,
-  splitReports,
-  type DeckButton,
-} from "@loadout/deck-hid";

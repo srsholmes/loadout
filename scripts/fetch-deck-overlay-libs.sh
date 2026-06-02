@@ -155,10 +155,9 @@ done
 # system cache.
 ldconfig -n /out/lib
 
-# Strip out anything the deck definitely already has at a compatible ABI.
-# This list is the second filter — same shape as DENY_REGEX but catches
-# libs that snuck past via SONAME rather than basename.
-SYSTEM_OWNED='^/lib/(libc|libm|libpthread|libdl|librt|libgcc_s|libstdc\+\+|ld-linux-x86-64)\.so'
+# Anything the deck already owns is filtered host-side (the `/usr/lib*`
+# basename walk in the extract step below), not here — the in-container
+# DENY_REGEX above is the only build-time filter.
 
 count=$(find /out/lib -maxdepth 1 -type f | wc -l)
 links=$(find /out/lib -maxdepth 1 -type l | wc -l)

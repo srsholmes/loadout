@@ -452,20 +452,9 @@ function WakeButtonSection() {
   }
 
   if (!wake.ipActive) {
-    if (wake.isDeck) {
-      return cardWrap(
-        <div className="mt-3">
-          <div className="subsection-desc mb-2">
-            InputPlumber ships disabled on Steam Deck. Enable it to detect your
-            controller (your gamepad keeps working — Loadout just adds a
-            keyboard target for the wake key).
-          </div>
-          <FocusButton onClick={() => void runOp("prepareWake")} disabled={busy} variant="primary">
-            {busy ? "Enabling…" : "Enable & detect buttons"}
-          </FocusButton>
-        </div>,
-      );
-    }
+    // Deck hosts always report ipActive:true (the Deck wake path bypasses
+    // InputPlumber), and the IP path only runs on non-Deck hosts — so this
+    // branch is only ever the non-Deck "IP not running" case.
     return cardWrap(
       <div className="subsection-desc mt-3 text-base-content/60">
         InputPlumber isn&apos;t running. Install or start it above, then a
@@ -483,8 +472,17 @@ function WakeButtonSection() {
     );
   }
 
+  // For Deck bindings the synthetic `deck:<Button>` raw isn't an IP
+  // capability, so labelFor/parseCapability would just echo the bare name
+  // ("R5"). Prefer the friendly label the picker already carries for that
+  // raw; fall back to labelFor for the IP path (unchanged).
   const currentLabel = wake.selectedRaw
-    ? labelFor(parseCapability(wake.selectedRaw))
+    ? (wake.selectedRaw.startsWith("deck:")
+        ? (wake.devices
+            .flatMap((d) => d.buttons)
+            .find((b) => b.raw === wake.selectedRaw)?.label ??
+          wake.selectedRaw.slice("deck:".length))
+        : labelFor(parseCapability(wake.selectedRaw)))
     : null;
   const needsLegacyAck = wake.hasLegacyProfile && !currentLabel && !legacyAck;
 

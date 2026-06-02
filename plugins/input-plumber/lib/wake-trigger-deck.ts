@@ -32,6 +32,8 @@ import {
   findButton,
   findDeckHidrawPath,
   splitReports,
+  REPORT_ID_INPUT,
+  REPORT_LEN,
   type DeckButton,
 } from "@loadout/deck-hid";
 import type {
@@ -185,12 +187,13 @@ async function captureInner(timeoutMs: number): Promise<WakeCaptureResult> {
     /** Per-button "previously held" memory so a button that was already
      *  down when capture started doesn't fire on the first frame. */
     const held = new Map<string, boolean>();
-    let done = false;
+    let settled = false;
 
     const finish = (result: WakeCaptureResult): void => {
-      if (done) return;
-      done = true;
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      stream.off("data", onData);
       try {
         stream.destroy();
       } catch {
@@ -199,42 +202,70 @@ async function captureInner(timeoutMs: number): Promise<WakeCaptureResult> {
       resolve(result);
     };
 
-    const timer = setTimeout(async () => {
-      // On timeout, leave the previous binding intact (don't wipe it).
-      finish({
-        ok: false,
-        timedOut: true,
-        error: "No button pressed within the timeout.",
-      });
-      // Best-effort: ensure storage matches what it was before we started.
-      // No-op if prev was already null.
-      if (prev && prev.selectedRaw !== (await readWake())?.selectedRaw) {
-        await writeWake(prev);
-      }
+    const timer = setTimeout(() => {
+      // Restore the previous binding BEFORE resolving, so the single-flight
+      // gate in captureWakeButton stays held until storage is consistent —
+      // otherwise a second capture could start and get clobbered by this
+      // late restore. Best-effort: a write failure must not crash the
+      // overlay backend, so swallow it.
+      void (async () => {
+        try {
+          if (prev && prev.selectedRaw !== (await readWake())?.selectedRaw) {
+            await writeWake(prev);
+          }
+        } catch {
+          /* best-effort restore */
+        } finally {
+          finish({
+            ok: false,
+            timedOut: true,
+            error: "No button pressed within the timeout.",
+          });
+        }
+      })();
     }, timeoutMs);
 
-    stream.on("data", async (chunkRaw: Buffer | string) => {
-      if (done) return;
+    const onData = (chunkRaw: Buffer | string): void => {
+      if (settled) return;
       const chunk =
         typeof chunkRaw === "string" ? Buffer.from(chunkRaw) : chunkRaw;
       buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
+      let pressed: DeckButton | null = null;
       for (const report of splitReports(buf)) {
+        // Only report id 0x01 carries button state; skip interleaved frames.
+        if (report[0] !== REPORT_ID_INPUT) continue;
         for (const b of DECK_BUTTONS) {
           const cur = (report[b.byte] & (1 << b.bit)) !== 0;
           const prevHeld = held.get(b.name) ?? false;
           held.set(b.name, cur);
-          if (cur && !prevHeld) {
-            const raw = buttonToRaw(b);
-            await writeWake({ selectedRaw: raw, deviceName: DECK_DEVICE_NAME });
-            finish({ ok: true, capturedRaw: raw, capturedLabel: b.label });
-            return;
-          }
+          if (cur && !prevHeld && !pressed) pressed = b;
         }
+        if (pressed) break;
       }
       // Trim consumed frames.
-      const consumed = Math.floor(buf.length / 64) * 64;
+      const consumed = Math.floor(buf.length / REPORT_LEN) * REPORT_LEN;
       buf = consumed === buf.length ? Buffer.alloc(0) : buf.subarray(consumed);
-    });
+      if (!pressed) return;
+      // Stop consuming further frames synchronously — detach the listener
+      // before the await so a coalesced follow-up `data` event can't
+      // re-enter and persist a second binding.
+      stream.off("data", onData);
+      const raw = buttonToRaw(pressed);
+      const label = pressed.label;
+      void (async () => {
+        try {
+          await writeWake({ selectedRaw: raw, deviceName: DECK_DEVICE_NAME });
+          finish({ ok: true, capturedRaw: raw, capturedLabel: label });
+        } catch (err) {
+          finish({
+            ok: false,
+            error: `Failed to persist captured button: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      })();
+    };
+
+    stream.on("data", onData);
     stream.on("error", (err: Error) => {
       finish({ ok: false, error: `hidraw read error: ${err.message}` });
     });

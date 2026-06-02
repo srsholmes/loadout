@@ -185,4 +185,46 @@ describe("deck-hidraw-watcher", () => {
     findSpy.mockRestore();
     streamSpy.mockRestore();
   });
+
+  it("ignores non-input report frames even when the bound bit is set", async () => {
+    // The hidraw stream interleaves report types; only report id 0x01 carries
+    // button state. A non-0x01 frame whose byte-9 payload happens to have
+    // bit 5 set must NOT be read as a Steam press — otherwise unrelated
+    // report traffic toggles the overlay open at random.
+    const findSpy = spyOn(deckHid, "findDeckHidrawPath").mockResolvedValue(
+      "/dev/hidraw-fake",
+    );
+    const stream = fakeStream();
+    const streamSpy = spyOn(fs, "createReadStream").mockReturnValue(
+      stream as unknown as ReturnType<typeof fs.createReadStream>,
+    );
+    const onWake = mock(() => {});
+
+    const handle = await startDeckHidrawWatcher({
+      onWake,
+      initialButton: "Steam",
+      log: () => {},
+    });
+
+    // Idle input frame first to consume the startup edge-suppress so this
+    // test isolates the non-input-filter behaviour from that one-shot gate.
+    stream.push(frame());
+    expect(onWake).toHaveBeenCalledTimes(0);
+
+    // A non-input report (id 0x09) with byte 9 bit 5 set — must be skipped
+    // without touching edge state.
+    const nonInput = frame({ 9: 0x20 });
+    nonInput[0] = 0x09;
+    stream.push(nonInput);
+    expect(onWake).toHaveBeenCalledTimes(0);
+
+    // A real input report with the same bit set still fires — the skip must
+    // not have corrupted lastBitValue (0→1 must still register).
+    stream.push(frame({ 9: 0x20 }));
+    expect(onWake).toHaveBeenCalledTimes(1);
+
+    handle!.stop();
+    findSpy.mockRestore();
+    streamSpy.mockRestore();
+  });
 });
