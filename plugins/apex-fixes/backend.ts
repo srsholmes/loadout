@@ -1,7 +1,7 @@
 /**
  * Apex Fixes backend.
  *
- * Thin orchestrator over four per-fix modules in `src/`. Each module
+ * Thin orchestrator over four per-fix modules in `lib/`. Each module
  * owns its own `getStatus() / apply() / revert()` surface. This file
  * wires them into the plugin lifecycle + RPC dispatch:
  *
@@ -23,11 +23,11 @@
  */
 
 import type { PluginBackend, EmitPayload } from "@loadout/types";
-import { isApexDmi, readDmi } from "./src/dmi";
-import * as oxpec from "./src/oxpec";
-import * as lightSleep from "./src/light-sleep";
-import * as sleepEnable from "./src/sleep-enable";
-import * as xhci from "./src/xhci-recovery";
+import { isApexDmi, readDmi } from "./lib/dmi";
+import * as oxpec from "./lib/oxpec";
+import * as lightSleep from "./lib/light-sleep";
+import * as sleepEnable from "./lib/sleep-enable";
+import * as xhci from "./lib/xhci-recovery";
 
 export type FixKey = "oxpec" | "lightSleep" | "sleepEnable" | "xhciRecovery";
 
@@ -68,8 +68,8 @@ const STATUS_INTERVAL_MS = 30_000;
 
 /** TTL for the cached ApexStatus result. ~2x the poll so back-to-back
  *  calls (UI panel opening while a poll is mid-flight) share one
- *  sudo probe pass. Mutation methods (`applyFix`, `revertFix`, the
- *  migrate flow) invalidate explicitly. */
+ *  probe pass. Mutation methods (`applyFix`, `revertFix`) invalidate
+ *  explicitly. */
 const STATUS_CACHE_TTL_MS = 60_000;
 
 export default class ApexFixesBackend implements PluginBackend {
@@ -192,8 +192,8 @@ export default class ApexFixesBackend implements PluginBackend {
   }
 
   /** Drop the cached status so the next getStatus() call re-probes.
-   *  Called by mutation methods (applyFix, revertFix, the migrate
-   *  flow) so the UI sees fresh state immediately after user action. */
+   *  Called by mutation methods (applyFix, revertFix) so the UI sees
+   *  fresh state immediately after user action. */
   private invalidateStatusCache(): void {
     this.statusCache = null;
   }

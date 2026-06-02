@@ -51,9 +51,9 @@ mock.module("node:fs/promises", () => ({
   stat: mockStat,
 }));
 
-import { isApexDmi } from "./src/dmi";
-import { cmdlineContainsKarg, getStatus as lightSleepStatus } from "./src/light-sleep";
-import { getStatus as sleepEnableStatus } from "./src/sleep-enable";
+import { isApexDmi } from "./lib/dmi";
+import { cmdlineContainsKarg, getStatus as lightSleepStatus } from "./lib/light-sleep";
+import { getStatus as sleepEnableStatus } from "./lib/sleep-enable";
 
 function resetMocks(): void {
   mockFiles.clear();
