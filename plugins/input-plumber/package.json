@@ -22,18 +22,13 @@
         "bash",
         "which",
         "systemctl",
+        "busctl",
         "inputplumber",
         "curl",
         "tar",
         "sha256sum",
         "ldconfig",
         "udevadm",
-        "chcon",
-        "chmod",
-        "cp",
-        "mkdir",
-        "rm",
-        "tee",
         "pacman",
         "dnf"
       ],
@@ -44,6 +39,7 @@
       ],
       "filesystem": [
         "/etc/os-release",
+        "/sys/class/dmi/id",
         "/usr/bin",
         "/usr/local/bin",
         "/var/lib/inputplumber",
@@ -52,6 +48,8 @@
         "/etc/polkit-1/rules.d",
         "/etc/systemd/system",
         "/etc/udev/rules.d",
+        "/etc/loadout/inputplumber",
+        "/etc/inputplumber",
         "/usr/share/polkit-1/actions"
       ]
     }
