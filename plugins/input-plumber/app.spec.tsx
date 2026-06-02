@@ -209,4 +209,171 @@ describe("input-plumber plugin", () => {
     expect(installButton).toBeTruthy();
     expect(installButton.disabled).toBe(true);
   });
+
+  // -----------------------------------------------------------------------
+  // Overlay wake button picker
+  // -----------------------------------------------------------------------
+
+  const wakeActive = {
+    ipActive: true,
+    isDeck: false,
+    selectedRaw: "Gamepad:Button:RightPaddle1",
+    devices: [
+      {
+        name: "OrangePi Apex",
+        buttons: [
+          {
+            raw: "Gamepad:Button:RightPaddle1",
+            name: "RightPaddle1",
+            category: "gamepad",
+            label: "Right Back Paddle (R4)",
+            recommended: true,
+          },
+          {
+            raw: "Keyboard:KeyRecord",
+            name: "KeyRecord",
+            category: "keyboard",
+            label: "Key Record",
+            recommended: true,
+          },
+          {
+            raw: "Gamepad:Button:South",
+            name: "South",
+            category: "gamepad",
+            label: "South",
+            recommended: false,
+          },
+        ],
+      },
+    ],
+  };
+
+  /** Wire the install RPCs to `installedActiveStatus` and the wake RPCs to a
+   *  provided wake status, so both cards render. */
+  function rpcWithWake(wake: unknown) {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") return Promise.resolve(installedActiveStatus);
+      if (method === "isInstallRunning")
+        return Promise.resolve({ running: false });
+      if (method === "getWakeStatus") return Promise.resolve(wake);
+      if (method === "setWakeButton") return Promise.resolve({ ok: true });
+      if (method === "clearWakeButton") return Promise.resolve({ ok: true });
+      if (method === "prepareWake") return Promise.resolve(wake);
+      return Promise.resolve(null);
+    });
+  }
+
+  it("shows the currently-bound button label when one is set", async () => {
+    rpcWithWake(wakeActive);
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Overlay wake button");
+      expect(container.textContent).toContain("Currently bound");
+      // The bound capability is RightPaddle1 — show its friendly label.
+      expect(container.textContent).toContain("Right Back Paddle (R4)");
+    });
+    // Press-to-capture: the picker is a single button now, not a list of
+    // every capability. The old flat list is intentionally gone.
+    expect(container.textContent).not.toContain("Other buttons");
+  });
+
+  it("clicking 'Change button' triggers captureWakeButton with the timeout", async () => {
+    rpcWithWake(wakeActive);
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Change button");
+    });
+
+    const changeBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.trim() === "Change button",
+    )!;
+    fireEvent.click(changeBtn);
+
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("captureWakeButton", 10_000);
+    });
+  });
+
+  it("shows 'Set wake button' when nothing is bound yet", async () => {
+    rpcWithWake({
+      ipActive: true,
+      isDeck: false,
+      selectedRaw: null,
+      devices: [{ name: "OrangePi Apex", buttons: [] }],
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Set wake button");
+    });
+  });
+
+  it("warns about a legacy IP profile before allowing capture", async () => {
+    rpcWithWake({
+      ipActive: true,
+      isDeck: false,
+      selectedRaw: null,
+      devices: [{ name: "OrangePi Apex", buttons: [] }],
+      hasLegacyProfile: true,
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("replaces existing IP profile");
+      expect(container.textContent).toContain("I understand, continue");
+    });
+
+    // "Set wake button" should be disabled until the user acknowledges.
+    const setBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.trim() === "Set wake button",
+    ) as HTMLButtonElement;
+    expect(setBtn.disabled).toBe(true);
+
+    const ack = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.trim() === "I understand, continue",
+    )!;
+    fireEvent.click(ack);
+
+    await waitFor(() => {
+      const reSetBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+        b.textContent?.trim() === "Set wake button",
+      ) as HTMLButtonElement;
+      expect(reSetBtn.disabled).toBe(false);
+    });
+  });
+
+  it("on a Deck with IP disabled, offers an enable button that calls prepareWake", async () => {
+    rpcWithWake({
+      ipActive: false,
+      isDeck: true,
+      selectedRaw: null,
+      devices: [],
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Enable & detect buttons");
+    });
+
+    const enable = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Enable & detect buttons"),
+    )!;
+    fireEvent.click(enable);
+
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("prepareWake");
+    });
+  });
 });
