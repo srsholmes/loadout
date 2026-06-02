@@ -12,7 +12,7 @@
  * lives in ./ipdbus. This module wires them to the system.
  */
 
-import { mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { dirname } from "node:path";
 import { runFull } from "@loadout/exec";
@@ -165,7 +165,15 @@ async function ensureDeckManaged(): Promise<{ ok: boolean; err: string }> {
   const enable = await exec(["systemctl", "enable", "--now", "inputplumber.service"]);
   if (!enable.ok) return enable;
   // Give the daemon a moment to claim the controller before we look for it.
-  await waitForIp(8000);
+  // If it doesn't come up surface a clear error rather than silently
+  // returning ok and letting the picker show "No InputPlumber device found"
+  // (which reads like "your controller is unplugged" — wrong root cause).
+  if (!(await waitForIp(8000))) {
+    return {
+      ok: false,
+      err: "InputPlumber service started but did not become reachable on the system bus within 8s.",
+    };
+  }
   return { ok: true, err: "" };
 }
 
@@ -381,6 +389,12 @@ async function captureWakeButtonInner(timeoutMs: number): Promise<WakeCaptureRes
 
   const loaded = await loadProfilePath(device.path, PROFILE_PATH);
   if (!loaded.ok) {
+    // Restore the previous binding so we don't leave the catch-all
+    // sentinel profile loaded — without this the user's already-bound
+    // button stops working in-session and self-heals only on the next
+    // `reloadPersistedProfile`. The other two failure branches below
+    // (timeout, final-load) already restore; this one was the outlier.
+    await restorePreviousBinding(device, wake);
     return {
       ok: false,
       error: `LoadProfilePath (capture) failed: ${loaded.stderr.trim() || `exit ${loaded.code}`}`,
@@ -512,13 +526,4 @@ export async function reloadPersistedProfile(): Promise<WakeOpResult> {
   return loaded.ok
     ? { ok: true }
     : { ok: false, error: `LoadProfilePath failed: exit ${loaded.code}` };
-}
-
-/** Remove all installed wake-trigger artifacts (used by uninstall paths/tests).
- *  Does not disable the IP service — that may be wanted independently. */
-export async function removeWakeArtifacts(): Promise<void> {
-  await rm(PROFILE_PATH, { force: true });
-  await rm(UACCESS_RULE_PATH, { force: true });
-  // Intentionally leave the Deck override in place; harmless and avoids churn
-  // if the user re-enables.
 }

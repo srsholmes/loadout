@@ -369,37 +369,46 @@ function StepHeader({
   enabledCount: number;
   totalPlugins: number;
 }) {
-  const headers = [
-    {
+  // Keyed by stepId rather than position so adding/reordering STEPS
+  // can't silently shift every header forward (we shipped that bug
+  // when the Wake button step landed — every subsequent step's header
+  // was the previous step's title).
+  const headers: Record<StepId, { title: string; sub: string }> = {
+    welcome: {
       title: "Welcome to Loadout",
       sub: "A controller-first overlay for Linux handhelds. We'll get the basics sorted — theme, artwork, plugins — in about a minute.",
     },
-    {
+    input: {
       title: "Input routing",
       sub: "Loadout uses InputPlumber to route a controller button to the overlay when you're in a game — Steam Input owns the controller in big-picture, so we need a daemon layered below it. Required on handhelds; optional on a plain desktop.",
     },
-    {
+    wake: {
+      title: "Wake button",
+      sub: "Pick the physical button that opens the overlay from inside a game. Back paddles and the QAM button are the safest picks because no game binds them. You can change this any time from the InputPlumber plugin.",
+    },
+    appearance: {
       title: "Pick an appearance",
       sub: "Every theme swaps the full token palette — chips, charts and accents follow along. You can switch any time from Settings.",
     },
-    {
+    artwork: {
       title: "Artwork (optional)",
       sub: "A SteamGridDB API key unlocks high-res cover art across the recomp catalog, store-bridge, the SteamGridDB plugin and any homepage tile that doesn't already have art. Skip if you'd rather plain tiles — it's just visuals.",
     },
-    {
+    plugins: {
       title: "Choose your plugins",
       sub: `${totalPlugins} plugins discovered. Enable what you'll use — disabled plugins are hidden from the sidebar and homepage. Re-toggle any time from Settings → Plugins.`,
     },
-    {
+    shortcuts: {
       title: "Controller shortcuts",
       sub: "Hold the Guide button and press a face button to fire an action from any game. Guide + A / Y are reserved by Steam; the remaining pair is rebindable from Settings → Controller.",
     },
-    {
+    done: {
       title: "You're all set",
       sub: "Press Open Loadout to head to your home dashboard. Everything below can be tweaked from the Settings page.",
     },
-  ];
-  const h = headers[stepIndex];
+  };
+  const stepId = STEPS[stepIndex].id;
+  const h = headers[stepId];
   return (
     <div className="px-9 pt-8 pb-4">
       <h2 className="text-2xl font-semibold tracking-tight text-base-content leading-tight">
@@ -408,9 +417,7 @@ function StepHeader({
       <p className="text-sm text-base-content/60 mt-1.5 max-w-2xl leading-relaxed">
         {h.sub}
       </p>
-      {/* Show enabled-count on the Plugins step (index 4 after Input +
-          Artwork insertions). */}
-      {stepIndex === 4 && (
+      {stepId === "plugins" && (
         <div className="text-[12px] font-mono text-base-content/50 mt-3">
           <span className="text-primary font-semibold">{enabledCount}</span>{" "}
           of {totalPlugins} enabled

@@ -29,12 +29,6 @@
         "sha256sum",
         "ldconfig",
         "udevadm",
-        "chcon",
-        "chmod",
-        "cp",
-        "mkdir",
-        "rm",
-        "tee",
         "pacman",
         "dnf"
       ],

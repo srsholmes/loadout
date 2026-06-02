@@ -3,7 +3,6 @@ import {
   parseCapability,
   labelFor,
   buttonOptions,
-  pickDefaultButton,
   ensureKeyboard,
   renderProfile,
   renderCaptureProfile,
@@ -77,26 +76,6 @@ describe("buttonOptions", () => {
   it("orders recommended buttons before gameplay ones", () => {
     const opts = buttonOptions(caps);
     expect(opts[opts.length - 1].name).toBe("South");
-  });
-});
-
-describe("pickDefaultButton", () => {
-  it("prefers a right back paddle", () => {
-    const d = pickDefaultButton([
-      "Gamepad:Button:LeftPaddle1",
-      "Gamepad:Button:RightPaddle2",
-      "Keyboard:KeyRecord",
-    ]);
-    expect(d?.name).toBe("RightPaddle2");
-  });
-
-  it("falls back to a keyboard extra when no paddles exist", () => {
-    const d = pickDefaultButton(["Gamepad:Button:South", "Keyboard:KeyRecord"]);
-    expect(d?.name).toBe("KeyRecord");
-  });
-
-  it("returns null when there are no usable buttons", () => {
-    expect(pickDefaultButton(["Gamepad:Axis:LeftStick"])).toBeNull();
   });
 });
 

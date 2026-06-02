@@ -248,25 +248,6 @@ export function buttonOptions(capabilities: string[]): WakeButtonOption[] {
   return out;
 }
 
-/**
- * Pick a sensible default trigger for first-run: prefer a right back paddle,
- * then any paddle, then a keyboard/QAM-style extra, else the first recommended
- * option, else null (let the user choose explicitly).
- */
-export function pickDefaultButton(capabilities: string[]): WakeButtonOption | null {
-  const opts = buttonOptions(capabilities);
-  if (opts.length === 0) return null;
-  const byName = (re: RegExp) =>
-    opts.find((o) => re.test(o.name.toLowerCase()) && o.recommended) ?? null;
-  return (
-    byName(/^rightpaddle/) ??
-    byName(/paddle/) ??
-    opts.find((o) => o.category === "keyboard" && o.recommended) ??
-    opts.find((o) => o.recommended) ??
-    opts[0]
-  );
-}
-
 // ── Rendered file content ────────────────────────────────────────────────
 
 /**

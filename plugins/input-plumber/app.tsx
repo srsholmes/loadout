@@ -16,6 +16,7 @@ import {
   useBackend,
   useFocusable,
 } from "@loadout/ui";
+import { labelFor, parseCapability } from "./lib/profile";
 import type {
   InstallLogEvent,
   InstallRunResult,
@@ -301,31 +302,6 @@ function InputPlumberPanel() {
 // Overlay wake button picker
 // ---------------------------------------------------------------------------
 
-/** Human label for a currently-bound capability string. Mirrors the
- *  backend's `labelFor` heuristic so the UI shows the same friendly name
- *  the picker produced when binding. */
-function labelForRaw(raw: string): string {
-  const parts = raw.split(":").map((s) => s.trim()).filter(Boolean);
-  const name = parts[parts.length - 1] ?? raw;
-  const known: Record<string, string> = {
-    leftpaddle1: "Left Back Paddle (L4)",
-    leftpaddle2: "Left Back Paddle (L5)",
-    rightpaddle1: "Right Back Paddle (R4)",
-    rightpaddle2: "Right Back Paddle (R5)",
-    lefttop: "Left Extra Button",
-    righttop: "Right Extra Button",
-    keyboard: "Keyboard Button",
-    quickaccess: "Quick Access (QAM) Button",
-    quickaccessmenu: "Quick Access (QAM) Button",
-  };
-  const k = known[name.toLowerCase()];
-  if (k) return k;
-  if (parts[0]?.toLowerCase() === "keyboard") {
-    return name.replace(/^Key/, "Key ").replace(/([a-z])([A-Z])/g, "$1 $2");
-  }
-  return name.replace(/([a-z])([A-Z0-9])/g, "$1 $2");
-}
-
 function WakeButtonSection() {
   const { call, useEvent } = useBackend("input-plumber");
   const [wake, setWake] = useState<WakeStatus | null>(null);
@@ -479,7 +455,9 @@ function WakeButtonSection() {
     );
   }
 
-  const currentLabel = wake.selectedRaw ? labelForRaw(wake.selectedRaw) : null;
+  const currentLabel = wake.selectedRaw
+    ? labelFor(parseCapability(wake.selectedRaw))
+    : null;
   const needsLegacyAck = wake.hasLegacyProfile && !currentLabel && !legacyAck;
 
   return cardWrap(

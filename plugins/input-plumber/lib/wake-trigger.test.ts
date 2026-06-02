@@ -10,7 +10,13 @@
 import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import * as pluginStorage from "@loadout/plugin-storage";
 import * as fsp from "node:fs/promises";
-import { getWakeStatus, setWakeButton, clearWakeButton } from "./wake-trigger";
+import {
+  getWakeStatus,
+  setWakeButton,
+  clearWakeButton,
+  captureWakeButton,
+  reloadPersistedProfile,
+} from "./wake-trigger";
 import { PROFILE_PATH } from "./profile";
 
 const PATH0 = "/org/shadowblip/InputPlumber/CompositeDevice0";
@@ -199,6 +205,105 @@ describe("wake-trigger orchestration", () => {
     };
     expect(persisted.wake?.selectedRaw).toBeNull();
   });
+
+  it("reloadPersistedProfile is a no-op when nothing is bound", async () => {
+    const { stub, calls } = makeSpawnStub(happyPathExpectations());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+
+    const r = await reloadPersistedProfile();
+    expect(r.ok).toBe(true);
+    // No work was done — no busctl calls at all.
+    expect(calls).toHaveLength(0);
+  });
+
+  it("reloadPersistedProfile re-loads the persisted button after a reboot", async () => {
+    const { stub, calls } = makeSpawnStub(happyPathExpectations());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+    storage.set("input-plumber", {
+      wake: {
+        selectedRaw: "Gamepad:Button:RightPaddle1",
+        deviceName: "OrangePi Apex",
+      },
+    });
+
+    const r = await reloadPersistedProfile();
+    expect(r.ok).toBe(true);
+    expect(writtenFiles.get(PROFILE_PATH)).toContain("button: RightPaddle1");
+    expect(calls.find((c) => has(c, "LoadProfilePath"))).toBeDefined();
+  });
+
+  it("captureWakeButton restores the previous binding when the catch-all load fails", async () => {
+    // First LoadProfilePath call (catch-all capture profile) fails; second
+    // call (the restore) succeeds. Without the fix the catch-all stays loaded
+    // and the user's previously bound button silently stops working.
+    let loadCount = 0;
+    const exps: SpawnExpectation[] = [
+      ...happyPathExpectations().filter((e) => !e.match(["busctl", "call", "LoadProfilePath"])),
+      {
+        match: (c) => has(c, "call") && has(c, "LoadProfilePath"),
+        get exitCode() {
+          loadCount += 1;
+          // 1st = capture load (fails). 2nd = restore load (succeeds).
+          return loadCount === 1 ? 1 : 0;
+        },
+        stderr: "synthetic LoadProfilePath failure",
+      },
+    ];
+
+    // Pre-seed a prior binding so restorePreviousBinding has something to
+    // re-render to (rather than the cleared profile).
+    storage.set("input-plumber", {
+      wake: {
+        selectedRaw: "Gamepad:Button:RightPaddle1",
+        deviceName: "OrangePi Apex",
+      },
+    });
+
+    const { stub } = makeSpawnStub(exps);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+
+    const r = await captureWakeButton(1000);
+
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("LoadProfilePath (capture)");
+    // Restore ran (a 2nd LoadProfilePath call) — the test would fail with
+    // loadCount === 1 if the restore branch was skipped.
+    expect(loadCount).toBeGreaterThanOrEqual(2);
+    // Final PROFILE_PATH content is the previous binding, not the catch-all.
+    const final = writtenFiles.get(PROFILE_PATH) ?? "";
+    expect(final).toContain("button: RightPaddle1");
+    expect(final).not.toContain("KeyF13"); // catch-all sentinel keys absent
+  });
+
+  it("setWakeButton on Deck surfaces a clear error when InputPlumber fails to come up", async () => {
+    // DMI = Deck; IP `tree` always fails so waitForIp times out.
+    fsSpies[3].mockImplementation(async (p: unknown) => {
+      if (String(p).includes("product_name")) return "Jupiter";
+      if (String(p).includes("sys_vendor")) return "Valve";
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+    const exps: SpawnExpectation[] = [
+      // tree never succeeds — IP is forever unreachable
+      { match: (c) => c[0] === "busctl" && has(c, "tree"), exitCode: 1 },
+      // systemctl/udevadm succeed so we reach the waitForIp branch
+      { match: (c) => c[0] === "systemctl" || c[0] === "udevadm", exitCode: 0 },
+    ];
+    const { stub } = makeSpawnStub(exps);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+
+    // Short-circuit the 500ms inter-poll sleep so the test doesn't take 8s.
+    // waitForIp uses setTimeout for the gap; bun:test doesn't have fake timers
+    // here, so we accept ~8s real wait or trust the bound is loose enough.
+    // (8s within the test's default 30s timeout is acceptable for one case.)
+    const r = await setWakeButton("Gamepad:Button:RightPaddle1");
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("Failed to enable InputPlumber");
+    expect(r.error).toContain("not become reachable");
+  }, 15_000);
 
   it("on a Steam Deck, an absent IP triggers enable + override write", async () => {
     // DMI now reports a Deck; IP starts unavailable then comes up.
