@@ -15,7 +15,13 @@
 
 import type { PluginBackend, EmitPayload, PluginLogger } from "@loadout/types";
 import * as installer from "./lib/install";
-import type { InstallStartResult } from "./shared";
+import * as wake from "./lib/wake-trigger";
+import type {
+  InstallStartResult,
+  WakeStatus,
+  WakeOpResult,
+  WakeCaptureResult,
+} from "./shared";
 
 export type { InstallStartResult };
 
@@ -59,6 +65,21 @@ export default class InputPlumberBackend implements PluginBackend {
       void this.broadcastStatus();
     }, STATUS_INTERVAL_MS);
     void this.broadcastStatus();
+    // Boot persistence: if the user has a wake button bound, re-load its IP
+    // profile once the daemon is up. Fire-and-forget — the backend signals
+    // `/up` before the overlay user-service starts, and `reloadPersistedProfile`
+    // waits internally for IP, so the keyboard exists before the overlay
+    // enumerates devices. Non-blocking so a slow/absent IP can't stall onLoad.
+    void wake
+      .reloadPersistedProfile()
+      .then((r) => {
+        if (!r.ok && r.error) this.log?.warn(`wake reload: ${r.error}`);
+      })
+      .catch((e) =>
+        this.log?.warn(
+          `wake reload threw: ${e instanceof Error ? e.message : String(e)}`,
+        ),
+      );
     this.log?.info("Plugin loaded");
   }
 
@@ -205,5 +226,50 @@ export default class InputPlumberBackend implements PluginBackend {
     }
     this.installCancel.cancel();
     return { cancelled: true };
+  }
+
+  // -----------------------------------------------------------------------
+  // Overlay wake button
+  // -----------------------------------------------------------------------
+
+  /** Current wake-trigger status: IP availability, whether this is a Deck,
+   *  the connected devices' pickable buttons, and the current binding. */
+  async getWakeStatus(): Promise<WakeStatus> {
+    return wake.getWakeStatus();
+  }
+
+  /** Prepare InputPlumber for wake binding (Deck enable + uaccess rule) so the
+   *  picker can enumerate buttons. No-op-ish on non-Deck hosts where IP is
+   *  already running. */
+  async prepareWake(): Promise<WakeStatus> {
+    const r = await wake.prepareWake();
+    if (!r.ok) this.log?.warn(`prepareWake: ${r.error}`);
+    return wake.getWakeStatus();
+  }
+
+  /** Bind a physical button (raw capability string) to the overlay wake key.
+   *  Idempotent full setup; safe to call again to change the button. */
+  async setWakeButton(raw: string): Promise<WakeOpResult> {
+    if (typeof raw !== "string" || raw.length === 0) {
+      return { ok: false, error: "No button specified." };
+    }
+    const r = await wake.setWakeButton(raw);
+    this.emit?.({ event: "wake-status", data: await wake.getWakeStatus() });
+    return r;
+  }
+
+  /** Press-to-capture: temporarily map every recommended button to a unique
+   *  sentinel key, wait for the user to press one, then bind it for real. */
+  async captureWakeButton(timeoutMs?: number): Promise<WakeCaptureResult> {
+    const r = await wake.captureWakeButton(typeof timeoutMs === "number" ? timeoutMs : undefined);
+    this.emit?.({ event: "wake-status", data: await wake.getWakeStatus() });
+    return r;
+  }
+
+  /** Disable the wake binding (controller keeps working). */
+  async clearWakeButton(): Promise<WakeOpResult> {
+    const r = await wake.clearWakeButton();
+    this.emit?.({ event: "wake-status", data: await wake.getWakeStatus() });
+    return r;
   }
 }
