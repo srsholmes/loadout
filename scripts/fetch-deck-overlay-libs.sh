@@ -30,18 +30,14 @@ if [ -z "$TARGET_DIR" ]; then
     exit 2
 fi
 
-DISTRO_ID=""
-[ -r /etc/os-release ] && DISTRO_ID="$(. /etc/os-release && printf '%s' "${ID:-}")"
-if [ "$DISTRO_ID" != "steamos" ]; then
-    # Non-SteamOS hosts already have webkit2gtk-4.1 from their base image.
-    # `ldconfig -p` cross-checks below would do the same — but skipping
-    # the check entirely on non-Deck distros is cheaper and clearer.
-    echo "[fetch-deck-libs] Not SteamOS (ID=$DISTRO_ID) — overlay libs come from the system. Skipping."
-    exit 0
-fi
-
-# Already-installed bail-out: if a future SteamOS image ships webkit2gtk-4.1
-# we should NOT shadow it with our closure.
+# Capability gate, not distro-ID. Earlier versions of this script checked
+# `ID=steamos` from /etc/os-release and skipped on anything else — that was
+# wrong for Bazzite-Deck, custom Arch-on-Deck, and any future SteamOS variant
+# that drops webkit2gtk-4.1: the overlay would crash with the original
+# DLOPEN error this script is meant to prevent, with no breadcrumb. The
+# actual invariant we care about is "the system already provides
+# libwebkit2gtk-4.1.so.0" — Bazzite/CachyOS/Fedora-ostree ship it and short-
+# circuit here; SteamOS Holo doesn't and falls through to the fetch path.
 if ldconfig -p 2>/dev/null | grep -q "libwebkit2gtk-4.1.so.0"; then
     echo "[fetch-deck-libs] libwebkit2gtk-4.1.so.0 already on system — nothing to do."
     exit 0
@@ -55,21 +51,21 @@ if ! command -v podman >/dev/null 2>&1; then
     exit 1
 fi
 
-# Cache the produced closure tarball — `podman pull` + `dnf install` runs
-# in 60-120s on first call; subsequent installs reuse the tarball for free.
-# Bump CLOSURE_REV when the package list / Fedora version changes so old
-# caches get rebuilt automatically.
-CLOSURE_REV="1"
+# Cache key is a hash over the inputs that actually shape the output —
+# Fedora image tag + the dnf package list. A contributor editing the
+# package list (below) automatically invalidates stale caches; manual
+# CLOSURE_REV bumps that used to be required (and forgettable) are gone.
+# The tag itself is intentionally part of the hash too, so flipping
+# LOADOUT_DECK_FEDORA_IMAGE forces a rebuild on next run.
+FEDORA_IMAGE="${LOADOUT_DECK_FEDORA_IMAGE:-fedora:42}"
+CLOSURE_PACKAGES="webkit2gtk4.1 libayatana-appindicator-gtk3 gstreamer1-plugins-base gstreamer1-plugins-good"
+CLOSURE_INPUTS_HASH="$(printf '%s\n%s\n' "$FEDORA_IMAGE" "$CLOSURE_PACKAGES" | sha256sum | cut -c1-12)"
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/loadout/deck-overlay-libs"
-CACHE_TAR="$CACHE_DIR/closure-rev$CLOSURE_REV.tar.zst"
+CACHE_TAR="$CACHE_DIR/closure-${CLOSURE_INPUTS_HASH}.tar.zst"
 mkdir -p "$CACHE_DIR"
 
 if [ ! -f "$CACHE_TAR" ]; then
     echo "[fetch-deck-libs] Building closure (this runs once — cached at $CACHE_TAR)…"
-    # Use a tag we can pin; `42` resolves to the latest 42 image which is
-    # acceptable churn for now (the closure shape is stable across point
-    # releases). Future hardening: pin a digest.
-    FEDORA_IMAGE="${LOADOUT_DECK_FEDORA_IMAGE:-fedora:42}"
     TMP_DIR="$(mktemp -d)"
     trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -87,11 +83,12 @@ if [ ! -f "$CACHE_TAR" ]; then
     cat > "$TMP_DIR/build-closure.sh" <<'CONTAINER_EOF'
 #!/bin/bash
 set -euo pipefail
-dnf install -y --setopt=install_weak_deps=False --quiet \
-    webkit2gtk4.1 \
-    libayatana-appindicator-gtk3 \
-    gstreamer1-plugins-base \
-    gstreamer1-plugins-good
+# Package list comes in via $1 so it stays the single source of truth that
+# also feeds the cache-key hash on the host side. Without that linkage,
+# editing the list and forgetting to bump CLOSURE_REV used to silently
+# leave every install on the stale closure.
+read -ra PKGS <<<"$1"
+dnf install -y --setopt=install_weak_deps=False --quiet "${PKGS[@]}"
 
 mkdir -p /out/lib
 
@@ -165,11 +162,27 @@ echo "[container] closure: $count files + $links soname symlinks"
 CONTAINER_EOF
     chmod +x "$TMP_DIR/build-closure.sh"
 
+    # The image tag (default `fedora:42`) floats with whatever the registry
+    # publishes — fine for now, but the tag will eventually retire at EOL
+    # and `podman run` then returns "manifest unknown" with no breadcrumb
+    # back to this script. Surface the env-var escape hatch on any failure
+    # so the operator knows where to point at a newer image.
+    PODMAN_RC=0
     podman run --rm \
         -v "$TMP_DIR:/script:Z" \
         -v "$TMP_DIR:/out:Z" \
         "$FEDORA_IMAGE" \
-        bash /script/build-closure.sh
+        bash /script/build-closure.sh "$CLOSURE_PACKAGES" || PODMAN_RC=$?
+    if [ "$PODMAN_RC" -ne 0 ]; then
+        echo "[fetch-deck-libs] ERROR: 'podman run $FEDORA_IMAGE' exited $PODMAN_RC." >&2
+        echo "  Common causes:" >&2
+        echo "  - The image tag '$FEDORA_IMAGE' has been retired from the registry." >&2
+        echo "    Override with LOADOUT_DECK_FEDORA_IMAGE=<a current image>:" >&2
+        echo "      LOADOUT_DECK_FEDORA_IMAGE=quay.io/fedora/fedora:42 bun run install-local" >&2
+        echo "  - Rootless podman storage is misconfigured (\`podman info\` to inspect)." >&2
+        echo "  - The container had no network and couldn't reach the dnf mirrors." >&2
+        exit 1
+    fi
 
     # Tar up the populated lib dir for the cache.
     if [ ! -d "$TMP_DIR/lib" ] || [ -z "$(ls -A "$TMP_DIR/lib")" ]; then
@@ -182,10 +195,24 @@ fi
 
 # Extract into target. Use bsdtar (libarchive) since it handles zstd in
 # one shot; tar+zstd works too but is a two-pipe dance.
+#
+# Cache safety: the tarball lives under the user's writable cache, so a
+# corrupted/replaced tar could in principle ship a path-traversed entry or
+# a symlink pointing outside EXTRACT_TMP. `--no-same-owner` discards owner
+# metadata; `--secure-symlinks` makes bsdtar reject symlinks whose targets
+# escape the extract root. The per-entry sanity check after extraction is
+# the second belt — assert the tree is exactly `lib/` and nothing else.
 mkdir -p "$TARGET_DIR"
 EXTRACT_TMP="$(mktemp -d)"
 trap 'rm -rf "$EXTRACT_TMP"' EXIT
-bsdtar -C "$EXTRACT_TMP" -xf "$CACHE_TAR"
+bsdtar -C "$EXTRACT_TMP" --no-same-owner --secure-symlinks -xf "$CACHE_TAR"
+if [ ! -d "$EXTRACT_TMP/lib" ] || \
+   [ -n "$(find "$EXTRACT_TMP" -maxdepth 1 -mindepth 1 ! -name lib -print -quit)" ]; then
+    echo "[fetch-deck-libs] ERROR: cache tarball has unexpected structure." >&2
+    echo "  Expected exactly $EXTRACT_TMP/lib/, got: $(ls -A "$EXTRACT_TMP")" >&2
+    echo "  Delete $CACHE_TAR and re-run to rebuild from scratch." >&2
+    exit 1
+fi
 
 # Build the set of .so basenames the Deck already owns. Public sonames
 # (`ldconfig -p`) aren't enough — many libraries the deck has are loaded
