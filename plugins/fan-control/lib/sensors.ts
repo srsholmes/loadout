@@ -73,6 +73,18 @@ export function zoneSortWeight(zone: string): number {
   return order[zone] ?? 4;
 }
 
+/**
+ * Within a zone, prefer a real CPU die sensor (k10temp / coretemp / zenpower)
+ * over the `acpitz` ACPI-thermal-zone fallback. On AMD handhelds acpitz is a
+ * slow board/skin sensor that lags the die by tens of degrees, so when a real
+ * die chip is present it must win the "which sensor is the CPU" tiebreak.
+ * Both are classified `cpu` by `classifyTempZone`, so this is the secondary
+ * sort key. Lower = preferred. Pure.
+ */
+export function cpuChipPriority(chipName: string): number {
+  return CPU_TEMP_CHIPS.some((c) => chipName.toLowerCase().includes(c)) ? 0 : 1;
+}
+
 /** Parse a pwm_enable integer into a human-readable mode string. Pure. */
 export function parsePwmMode(value: number): "auto" | "manual" | "full" | "unknown" {
   switch (value) {

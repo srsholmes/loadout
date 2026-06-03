@@ -14,6 +14,7 @@ import type { GlobalShortcut as GlobalShortcutType } from "electrobun/bun";
 import { resumeSteam } from "./native/process-control";
 import type { GamescopeAtoms } from "./native/gamescope-atoms";
 import type { InputInterceptHandle } from "./native/input-intercept";
+import type { DeckHidrawWatcherHandle } from "./native/deck-hidraw-watcher";
 import {
   isActiveTick,
   sweepPendingFlags,
@@ -90,6 +91,10 @@ export interface ShutdownDeps {
   atoms: GamescopeAtoms;
   /** Input interceptor handle — may be null if it failed to start. */
   intercept: Ref<InputInterceptHandle | null>;
+  /** Deck-native hidraw watcher — null on non-Deck hosts and when the open
+   *  failed. Tracked so we close the hidraw fd on shutdown rather than
+   *  relying on process-death cleanup. */
+  deckHidraw: Ref<DeckHidrawWatcherHandle | null>;
   /** Electrobun GlobalShortcut module — we unregister whatever we grabbed. */
   globalShortcut: typeof GlobalShortcutType;
 }
@@ -148,6 +153,7 @@ export async function shutdown(deps: ShutdownDeps): Promise<void> {
     // window where another process can't grab them because we
     // haven't fully exited yet.
     deps.intercept.current?.shutdown();
+    deps.deckHidraw.current?.stop();
     deps.globalShortcut.unregisterAll();
     deps.atoms.shutdown();
   } finally {

@@ -45,6 +45,8 @@
       "name": "@loadout/loadout-overlay",
       "version": "0.1.0",
       "dependencies": {
+        "@loadout/deck-hid": "workspace:*",
+        "@loadout/plugin-storage": "workspace:*",
         "@loadout/steam-paths": "workspace:*",
         "@loadout/types": "workspace:*",
         "@loadout/ui": "workspace:*",
@@ -68,6 +70,10 @@
         "typescript": "^5.7.0",
         "vite": "^6.0.0",
       },
+    },
+    "packages/deck-hid": {
+      "name": "@loadout/deck-hid",
+      "version": "0.0.1",
     },
     "packages/exec": {
       "name": "@loadout/exec",
@@ -228,6 +234,19 @@
         "react-dom": "^18.3.0",
       },
     },
+    "plugins/input-plumber": {
+      "name": "@loadout/plugin-input-plumber",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/deck-hid": "workspace:*",
+        "@loadout/exec": "workspace:*",
+        "@loadout/types": "workspace:*",
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+        "react-icons": "^5.6.0",
+      },
+    },
     "plugins/launch-options": {
       "name": "@loadout/plugin-launch-options",
       "version": "0.0.1",
@@ -302,6 +321,20 @@
         "react-icons": "^5.6.0",
       },
     },
+    "plugins/sound-loader": {
+      "name": "@loadout/plugin-sound-loader",
+      "version": "0.1.0",
+      "dependencies": {
+        "@loadout/exec": "workspace:*",
+        "@loadout/plugin-storage": "workspace:*",
+        "@loadout/steam-cdp": "workspace:*",
+        "@loadout/types": "workspace:*",
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+        "react-icons": "^5.6.0",
+      },
+    },
     "plugins/steam-gamescope-ipc": {
       "name": "@loadout/plugin-steam-gamescope-ipc",
       "version": "0.0.1",
@@ -339,6 +372,23 @@
         "react-dom": "^18.3.0",
       },
     },
+    "plugins/store-bridge": {
+      "name": "@loadout/plugin-store-bridge",
+      "version": "0.1.0",
+      "dependencies": {
+        "@loadout/exec": "workspace:*",
+        "@loadout/external-cache": "workspace:*",
+        "@loadout/plugin-storage": "workspace:*",
+        "@loadout/sgdb-art": "workspace:*",
+        "@loadout/steam-cdp": "workspace:*",
+        "@loadout/steam-shortcut": "workspace:*",
+        "@loadout/types": "workspace:*",
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+        "react-icons": "^5.6.0",
+      },
+    },
     "plugins/tdp-control": {
       "name": "@loadout/plugin-tdp-control",
       "version": "0.0.1",
@@ -351,6 +401,15 @@
         "react": "^18.3.0",
         "react-dom": "^18.3.0",
         "react-icons": "^5.6.0",
+      },
+    },
+    "plugins/theme-loader": {
+      "name": "@loadout/plugin-theme-loader",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
       },
     },
   },
@@ -489,6 +548,8 @@
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
+    "@loadout/deck-hid": ["@loadout/deck-hid@workspace:packages/deck-hid"],
+
     "@loadout/exec": ["@loadout/exec@workspace:packages/exec"],
 
     "@loadout/external-cache": ["@loadout/external-cache@workspace:packages/external-cache"],
@@ -517,6 +578,8 @@
 
     "@loadout/plugin-hltb": ["@loadout/plugin-hltb@workspace:plugins/hltb"],
 
+    "@loadout/plugin-input-plumber": ["@loadout/plugin-input-plumber@workspace:plugins/input-plumber"],
+
     "@loadout/plugin-launch-options": ["@loadout/plugin-launch-options@workspace:plugins/launch-options"],
 
     "@loadout/plugin-network-info": ["@loadout/plugin-network-info@workspace:plugins/network-info"],
@@ -529,6 +592,8 @@
 
     "@loadout/plugin-rgb-control": ["@loadout/plugin-rgb-control@workspace:plugins/rgb-control"],
 
+    "@loadout/plugin-sound-loader": ["@loadout/plugin-sound-loader@workspace:plugins/sound-loader"],
+
     "@loadout/plugin-steam-gamescope-ipc": ["@loadout/plugin-steam-gamescope-ipc@workspace:plugins/steam-gamescope-ipc"],
 
     "@loadout/plugin-steamgriddb": ["@loadout/plugin-steamgriddb@workspace:plugins/steamgriddb"],
@@ -537,7 +602,11 @@
 
     "@loadout/plugin-storage-cleaner": ["@loadout/plugin-storage-cleaner@workspace:plugins/storage-cleaner"],
 
+    "@loadout/plugin-store-bridge": ["@loadout/plugin-store-bridge@workspace:plugins/store-bridge"],
+
     "@loadout/plugin-tdp-control": ["@loadout/plugin-tdp-control@workspace:plugins/tdp-control"],
+
+    "@loadout/plugin-theme-loader": ["@loadout/plugin-theme-loader@workspace:plugins/theme-loader"],
 
     "@loadout/sgdb-art": ["@loadout/sgdb-art@workspace:packages/sgdb-art"],
 

@@ -24,6 +24,7 @@ import {
 } from "./lib/fan-curves";
 import {
   classifyTempZone,
+  cpuChipPriority,
   parsePwmMode,
   zoneSortWeight,
 } from "./lib/sensors";
@@ -752,8 +753,16 @@ export default class FanControlBackend implements PluginBackend {
       console.error("[fan-control] Error scanning temp sensors:", err);
     }
 
-    // Sort so CPU sensors come first, then GPU, then others
-    sensors.sort((a, b) => zoneSortWeight(a.zone) - zoneSortWeight(b.zone));
+    // Sort so CPU sensors come first, then GPU, then others. Within a zone,
+    // prefer a real CPU die sensor (k10temp/coretemp/zenpower) over the
+    // acpitz fallback — otherwise hwmon enumeration order decides, and acpitz
+    // (a slow board sensor that lags the die by tens of degrees) wins on
+    // AMD handhelds where it enumerates before k10temp.
+    sensors.sort((a, b) => {
+      const byZone = zoneSortWeight(a.zone) - zoneSortWeight(b.zone);
+      if (byZone !== 0) return byZone;
+      return cpuChipPriority(a.chipName) - cpuChipPriority(b.chipName);
+    });
 
     return sensors;
   }

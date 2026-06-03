@@ -1,0 +1,44 @@
+Steam Loader — InputPlumber installer plugin
+Copyright (c) 2026 Simon Holmes
+Licensed under BSD-3-Clause (see LICENSE).
+
+
+Upstream daemon (InputPlumber)
+------------------------------
+
+This plugin installs the InputPlumber input-routing daemon on
+distributions that do not ship it natively. InputPlumber itself is an
+independent project owned by ShadowBlip, distributed under
+GPL-3.0-or-later:
+
+  https://github.com/ShadowBlip/InputPlumber
+  Copyright (c) ShadowBlip contributors, GPL-3.0-or-later.
+
+We do not bundle, vendor, or redistribute InputPlumber's source code or
+binaries. The plugin downloads the upstream release tarball directly
+from `https://github.com/ShadowBlip/InputPlumber/releases/latest` (or
+defers to the user's distribution package manager) at install time, on
+the user's machine, at the user's request. The end user therefore
+receives InputPlumber from upstream under its native GPL-3.0 terms;
+this plugin is a thin installer wrapper around that flow.
+
+The plugin's own source code (the install/status backend and React
+panel under `plugins/input-plumber/`) is original work and is not a
+derivative of InputPlumber. It interfaces with InputPlumber only
+through its public, documented surface (the upstream tarball layout
+and the systemd service unit).
+
+
+libiio runtime dependency
+-------------------------
+
+The fallback tarball install path stages `libiio.so.0` next to the
+InputPlumber binary so the daemon is self-contained on
+read-only-/usr distributions (rpm-ostree). `libiio` is BSD-3-Clause:
+
+  https://github.com/analogdevicesinc/libiio
+  Copyright (c) Analog Devices Inc. and contributors, BSD-3-Clause.
+
+We do not modify libiio. The `.so` is copied from the user's existing
+system installation (or downloaded fresh from the user's package
+manager); we do not bundle a libiio binary in this repository.
