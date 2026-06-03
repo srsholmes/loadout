@@ -197,15 +197,16 @@ fi
 # one shot; tar+zstd works too but is a two-pipe dance.
 #
 # Cache safety: the tarball lives under the user's writable cache, so a
-# corrupted/replaced tar could in principle ship a path-traversed entry or
-# a symlink pointing outside EXTRACT_TMP. `--no-same-owner` discards owner
-# metadata; `--secure-symlinks` makes bsdtar reject symlinks whose targets
-# escape the extract root. The per-entry sanity check after extraction is
-# the second belt — assert the tree is exactly `lib/` and nothing else.
+# corrupted/replaced tar could in principle ship a path-traversed entry.
+# bsdtar's default extraction (no -P) already rejects absolute paths and
+# `..` traversal — that's the primary defense. `--no-same-owner` adds the
+# defense-in-depth of discarding owner metadata. The per-entry sanity
+# check after extraction is the third belt: assert the tree is exactly
+# `lib/` and nothing else.
 mkdir -p "$TARGET_DIR"
 EXTRACT_TMP="$(mktemp -d)"
 trap 'rm -rf "$EXTRACT_TMP"' EXIT
-bsdtar -C "$EXTRACT_TMP" --no-same-owner --secure-symlinks -xf "$CACHE_TAR"
+bsdtar -C "$EXTRACT_TMP" --no-same-owner -xf "$CACHE_TAR"
 if [ ! -d "$EXTRACT_TMP/lib" ] || \
    [ -n "$(find "$EXTRACT_TMP" -maxdepth 1 -mindepth 1 ! -name lib -print -quit)" ]; then
     echo "[fetch-deck-libs] ERROR: cache tarball has unexpected structure." >&2
