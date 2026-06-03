@@ -150,6 +150,20 @@ export async function reloadPersistedProfile(): Promise<WakeOpResult> {
 
 // ── Press-to-capture ────────────────────────────────────────────────────────
 
+// Cross-process hidraw caveat: this backend opens /dev/hidrawN here (running
+// as root via loadout.service) while the overlay's own watcher (running as
+// the deck user via loadout-overlay.service) holds a SEPARATE fd on the
+// same node. Both fds see every frame independently — that's by design,
+// the hid-steam driver supports concurrent readers. The watcher uses the
+// PREVIOUSLY bound button during a capture, so if the user picks a new
+// button that wasn't the prior binding (the common case), there's no
+// false fire. The edge case: user holds the SAME button they previously
+// bound during capture → watcher sees the press, fires onWake, and the
+// open picker toggles. Mitigating that would need a backend→overlay
+// "pause-during-capture" event; left as a follow-up because the case is
+// rare (users typically pick a NEW button when re-binding) and the worst
+// outcome is the picker re-opening, not data loss.
+
 /** Single-flight gate matching the IP path's behaviour: a second concurrent
  *  capture coalesces onto the first. Without this two pickers would race
  *  to open the same hidraw and persist different buttons. */
@@ -159,8 +173,21 @@ export async function captureWakeButton(
   timeoutMs = 10_000,
 ): Promise<WakeCaptureResult> {
   if (captureInflight) return captureInflight;
-  const ms = Math.max(1000, Math.min(60_000, timeoutMs || 10_000));
-  captureInflight = (async () => captureInner(ms))().finally(() => {
+  // Build the inflight promise inside an IIFE that swallows any synchronous
+  // throw before `captureInner` starts — without this, a future contributor
+  // adding pre-flight validation between the assignment and the await could
+  // leave `captureInflight` non-null forever, deadlocking the gate.
+  captureInflight = (async () => {
+    try {
+      const ms = Math.max(1000, Math.min(60_000, timeoutMs || 10_000));
+      return await captureInner(ms);
+    } catch (err) {
+      return {
+        ok: false,
+        error: `Capture failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  })().finally(() => {
     captureInflight = null;
   });
   return captureInflight;
@@ -207,14 +234,18 @@ async function captureInner(timeoutMs: number): Promise<WakeCaptureResult> {
       // gate in captureWakeButton stays held until storage is consistent —
       // otherwise a second capture could start and get clobbered by this
       // late restore. Best-effort: a write failure must not crash the
-      // overlay backend, so swallow it.
+      // overlay backend, so we log + swallow rather than reject — but the
+      // journal entry is the only signal that the binding has drifted, so
+      // surface it loudly.
       void (async () => {
         try {
           if (prev && prev.selectedRaw !== (await readWake())?.selectedRaw) {
             await writeWake(prev);
           }
-        } catch {
-          /* best-effort restore */
+        } catch (err) {
+          console.warn(
+            `[input-plumber] wake-binding restore after capture timeout failed; persisted state may be stale: ${err instanceof Error ? err.message : String(err)}`,
+          );
         } finally {
           finish({
             ok: false,
@@ -268,6 +299,16 @@ async function captureInner(timeoutMs: number): Promise<WakeCaptureResult> {
     stream.on("data", onData);
     stream.on("error", (err: Error) => {
       finish({ ok: false, error: `hidraw read error: ${err.message}` });
+    });
+    // If the kernel closes the hidraw mid-capture (controller unplugged,
+    // hid-steam driver reset), data stops arriving and timer-only fallback
+    // would force the user to wait up to 60s for nothing. Resolve early so
+    // the picker can re-issue the call against the freshly enumerated node.
+    stream.on("end", () => {
+      finish({
+        ok: false,
+        error: "hidraw stream closed — controller may have been disconnected.",
+      });
     });
   });
 }

@@ -28,6 +28,7 @@
  */
 
 import { createReadStream, type ReadStream } from "node:fs";
+import { open } from "node:fs/promises";
 import {
   findDeckHidrawPath,
   findButton,
@@ -79,9 +80,19 @@ export async function startDeckHidrawWatcher(
     return null;
   }
 
+  // Pre-flight open via the promise API so permission failures (EACCES on
+  // hosts that haven't pre-granted the deck user rw on /dev/hidrawN, e.g.
+  // a non-SteamOS handheld where the user isn't yet in the `input` group)
+  // surface synchronously here instead of as a deferred 'error' event on a
+  // stream we'd already returned a handle for. Without this the caller
+  // gets a live-looking handle that's silently dead and the F16 evdev
+  // fallback never gets to take over.
   let stream: ReadStream;
   try {
-    stream = createReadStream(path);
+    const fh = await open(path, "r");
+    // createReadStream takes ownership of the fd; on stream end / error it
+    // closes the underlying fd, so we don't double-close.
+    stream = createReadStream(path, { fd: fh.fd, autoClose: true });
   } catch (err) {
     log(
       `open failed for ${path}: ${err instanceof Error ? err.message : String(err)} — ` +
@@ -95,11 +106,11 @@ export async function startDeckHidrawWatcher(
   /** One-shot: after a (re)bind, ignore the first observed transition so the
    *  watcher doesn't fire just because the user is still holding the button
    *  they captured. The press-to-capture flow in wake-trigger-deck commits
-   *  on 0→1, but the user's finger is still down for a hundred-ish
-   *  milliseconds after that — within the watcher's 2s storage poll. Without
-   *  this gate, that residual hold reads as a fresh press → onWake fires
-   *  immediately → the still-open picker dismisses → user reads it as a
-   *  crash. */
+   *  on 0→1, but the user's finger stays down for a hundred-ish milliseconds
+   *  after that — comfortably within the inotify + debounce window from
+   *  storage write to setBinding. Without this gate, that residual hold
+   *  reads as a fresh press → onWake fires immediately → the still-open
+   *  picker dismisses → user reads it as a crash. */
   let suppressNextEdge = true;
   let stopped = false;
   let buf: Buffer = Buffer.alloc(0);

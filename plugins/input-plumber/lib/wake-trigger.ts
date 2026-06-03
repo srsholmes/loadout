@@ -32,8 +32,6 @@ import {
   renderCaptureProfile,
   renderClearedProfile,
   PROFILE_PATH,
-  DECK_OVERRIDE_PATH,
-  DECK_OVERRIDE_YAML,
   UACCESS_RULE_PATH,
   UACCESS_RULE,
 } from "./profile";
@@ -113,9 +111,10 @@ export async function hasLegacyProfile(): Promise<boolean> {
 
 export async function getWakeStatus(): Promise<WakeStatus> {
   if (await isSteamDeck()) return wakeDeck.getWakeStatus();
-  const [ipActive, isDeck, wake, legacy] = await Promise.all([
+  // Non-Deck only past this point — isDeck is always false here, drop the
+  // redundant isSteamDeck() probe from the parallel fan-out.
+  const [ipActive, wake, legacy] = await Promise.all([
     inputPlumberAvailable(),
-    isSteamDeck(),
     readWake(),
     hasLegacyProfile(),
   ]);
@@ -129,7 +128,7 @@ export async function getWakeStatus(): Promise<WakeStatus> {
   }
   return {
     ipActive,
-    isDeck,
+    isDeck: false,
     devices,
     selectedRaw: wake?.selectedRaw ?? null,
     hasLegacyProfile: legacy,
@@ -158,25 +157,6 @@ async function ensureUaccessRule(): Promise<void> {
   await writeFileMkdir(UACCESS_RULE_PATH, UACCESS_RULE);
   await exec(["udevadm", "control", "--reload"]);
   await exec(["udevadm", "trigger", "--subsystem-match=input"]);
-}
-
-/** Steam Deck only: write the auto_manage override and enable the IP service
- *  (SteamOS ships it disabled). No-op shape on other handhelds. */
-async function ensureDeckManaged(): Promise<{ ok: boolean; err: string }> {
-  await writeFileMkdir(DECK_OVERRIDE_PATH, DECK_OVERRIDE_YAML);
-  const enable = await exec(["systemctl", "enable", "--now", "inputplumber.service"]);
-  if (!enable.ok) return enable;
-  // Give the daemon a moment to claim the controller before we look for it.
-  // If it doesn't come up surface a clear error rather than silently
-  // returning ok and letting the picker show "No InputPlumber device found"
-  // (which reads like "your controller is unplugged" — wrong root cause).
-  if (!(await waitForIp(8000))) {
-    return {
-      ok: false,
-      err: "InputPlumber service started but did not become reachable on the system bus within 8s.",
-    };
-  }
-  return { ok: true, err: "" };
 }
 
 async function waitForIp(timeoutMs: number): Promise<boolean> {
@@ -219,19 +199,11 @@ function pickDevice(
  */
 export async function prepareWake(): Promise<WakeOpResult> {
   if (await isSteamDeck()) return wakeDeck.prepareWake();
+  // Non-Deck only past this point. The ensureDeckManaged / Deck-override
+  // branches that used to live here are unreachable now — the Deck path
+  // owns its own prepareWake in wake-trigger-deck.ts.
   if (!(await inputPlumberAvailable())) {
-    if (await isSteamDeck()) {
-      const managed = await ensureDeckManaged();
-      if (!managed.ok) {
-        return { ok: false, error: `Failed to enable InputPlumber: ${managed.err}` };
-      }
-    } else {
-      return { ok: false, error: "InputPlumber is not running." };
-    }
-  } else if (await isSteamDeck()) {
-    // IP already up, but keep the Deck override in place so the pad stays
-    // managed across reboots.
-    await writeFileMkdir(DECK_OVERRIDE_PATH, DECK_OVERRIDE_YAML);
+    return { ok: false, error: "InputPlumber is not running." };
   }
   await ensureUaccessRule();
   return { ok: true };
@@ -513,7 +485,8 @@ export async function reloadPersistedProfile(): Promise<WakeOpResult> {
   const wake = await readWake();
   if (!wake?.selectedRaw) return { ok: true };
 
-  // On a Deck the service may be enabled but still starting; give it a window.
+  // The IP service may have just started; give it a window to come up
+  // before we conclude it's broken. 15s covers cold boot on slower handhelds.
   if (!(await waitForIp(15_000))) {
     return { ok: false, error: "InputPlumber did not come up; wake button not reloaded." };
   }
