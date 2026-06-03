@@ -65,6 +65,26 @@ export default class InputPlumberBackend implements PluginBackend {
       void this.broadcastStatus();
     }, STATUS_INTERVAL_MS);
     void this.broadcastStatus();
+    // On Deck hardware, install the hidraw uaccess udev rule BEFORE the
+    // overlay user-service starts and opens /dev/hidrawN. SteamOS ships an
+    // equivalent rule via steam-jupiter-stable, but Bazzite-Deck and
+    // vanilla-Arch-Deck installs don't have that — without this our
+    // overlay's first read EACCES'es and the user gets no wake button
+    // until they `usermod -aG input` and re-login. The backend runs as
+    // root via loadout.service so this is the right place to drop a
+    // privileged-write side effect. Fire-and-forget; failures log to the
+    // journal and the watcher's EACCES guard is the user-visible
+    // fallback. Gated on isSteamDeck() so non-Deck hosts don't churn
+    // udev pointlessly.
+    void (async () => {
+      try {
+        if (await wake.isSteamDeck()) await wake.ensureDeckHidrawUaccess();
+      } catch (e) {
+        this.log?.warn(
+          `Deck hidraw uaccess setup threw: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    })();
     // Boot persistence: if the user has a wake button bound, re-load its IP
     // profile once the daemon is up. Fire-and-forget — the backend signals
     // `/up` before the overlay user-service starts, and `reloadPersistedProfile`

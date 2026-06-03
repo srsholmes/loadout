@@ -13,8 +13,14 @@ import * as deckHid from "@loadout/deck-hid";
 import { REPORT_ID_INPUT, REPORT_LEN } from "@loadout/deck-hid";
 import * as storage from "@loadout/plugin-storage";
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
+import * as exec from "@loadout/exec";
 import { EventEmitter } from "node:events";
-import { captureWakeButton } from "./wake-trigger-deck";
+import { captureWakeButton, ensureDeckHidrawUaccess } from "./wake-trigger-deck";
+import {
+  DECK_HIDRAW_UACCESS_RULE,
+  DECK_HIDRAW_UACCESS_RULE_PATH,
+} from "./profile";
 
 /** Deck input report (id 0x01, REPORT_LEN bytes) with optional byte overrides. */
 function frame(overrides: Record<number, number> = {}): Buffer {
@@ -195,5 +201,81 @@ describe("captureWakeButton (Deck)", () => {
     const r = await p;
     expect(r.ok).toBe(false);
     expect(r.error).toContain("stream closed");
+  });
+});
+
+describe("ensureDeckHidrawUaccess", () => {
+  // Stub the privileged side effects so the test works as a regular user
+  // and we can assert exactly what the function would do as root.
+  function stubFsAndExec(opts: {
+    existingContent?: string | null;
+    writeFails?: boolean;
+  } = {}) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const writeCalls: Array<{ path: string; content: string }> = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const execCalls: string[][] = [];
+    const spies = [
+      spyOn(fsp, "mkdir").mockResolvedValue(undefined),
+      spyOn(fsp, "readFile").mockImplementation(async () => {
+        if (opts.existingContent === undefined || opts.existingContent === null) {
+          throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        }
+        return opts.existingContent;
+      }),
+      spyOn(fsp, "writeFile").mockImplementation(async (p: unknown, c: unknown) => {
+        if (opts.writeFails) {
+          throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+        }
+        writeCalls.push({ path: String(p), content: String(c) });
+      }),
+      spyOn(exec, "runFull").mockImplementation(async (cmd: readonly string[]) => {
+        execCalls.push([...cmd]);
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }),
+    ];
+    return { writeCalls, execCalls, spies };
+  }
+
+  it("writes the rule + reloads + triggers udev when no rule is present", async () => {
+    const { writeCalls, execCalls, spies } = stubFsAndExec();
+    await ensureDeckHidrawUaccess();
+    expect(writeCalls).toHaveLength(1);
+    expect(writeCalls[0].path).toBe(DECK_HIDRAW_UACCESS_RULE_PATH);
+    expect(writeCalls[0].content).toBe(DECK_HIDRAW_UACCESS_RULE);
+    expect(execCalls.find((c) => c.includes("--reload"))).toBeDefined();
+    const trigger = execCalls.find((c) => c.includes("trigger"));
+    expect(trigger).toBeDefined();
+    expect(trigger).toContain("--subsystem-match=hidraw");
+    for (const s of spies) s.mockRestore();
+  });
+
+  it("is a no-op when the rule file already matches the expected content", async () => {
+    const { writeCalls, execCalls, spies } = stubFsAndExec({
+      existingContent: DECK_HIDRAW_UACCESS_RULE,
+    });
+    await ensureDeckHidrawUaccess();
+    expect(writeCalls).toHaveLength(0);
+    // No reload/trigger either — the whole work is skipped on the early return.
+    expect(execCalls).toHaveLength(0);
+    for (const s of spies) s.mockRestore();
+  });
+
+  it("rewrites the rule when on-disk content differs from expected", async () => {
+    const { writeCalls, spies } = stubFsAndExec({
+      existingContent: "# stale, pre-CLOSURE_REV bump content\n",
+    });
+    await ensureDeckHidrawUaccess();
+    expect(writeCalls).toHaveLength(1);
+    expect(writeCalls[0].content).toBe(DECK_HIDRAW_UACCESS_RULE);
+    for (const s of spies) s.mockRestore();
+  });
+
+  it("swallows write failures (best-effort — watcher's EACCES guard is the fallback)", async () => {
+    const { spies } = stubFsAndExec({ writeFails: true });
+    // Must not throw — onLoad fires this and a throw would crash plugin
+    // load on local-dev runs (where the user isn't root).
+    await expect(ensureDeckHidrawUaccess()).resolves.toBeUndefined();
+    for (const s of spies) s.mockRestore();
   });
 });

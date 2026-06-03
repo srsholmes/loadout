@@ -26,6 +26,9 @@
  */
 
 import { createReadStream } from "node:fs";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { dirname } from "node:path";
+import { runFull } from "@loadout/exec";
 import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
 import {
   DECK_BUTTONS,
@@ -36,6 +39,10 @@ import {
   REPORT_LEN,
   type DeckButton,
 } from "@loadout/deck-hid";
+import {
+  DECK_HIDRAW_UACCESS_RULE,
+  DECK_HIDRAW_UACCESS_RULE_PATH,
+} from "./profile";
 import type {
   WakeStatus,
   WakeStatusDevice,
@@ -118,9 +125,66 @@ export async function getWakeStatus(): Promise<WakeStatus> {
   };
 }
 
-/** No setup needed on Deck — the overlay watcher owns the hidraw fd and
- *  picks up bindings from plugin-storage directly. */
+/** Idempotently install the udev rule that grants the active-session user
+ *  rw ACL on /dev/hidraw{0,1,2} for the Deck's controller (Jupiter / Galileo).
+ *  SteamOS already ships an equivalent via the steam-jupiter-stable package;
+ *  this is what makes the wake button work out of the box on Bazzite-Deck
+ *  or vanilla-Arch-Deck installs where Steam's own rule may be missing.
+ *
+ *  Best-effort, non-throwing — udev failures (rare) shouldn't crash plugin
+ *  load. If write/reload/trigger fails the caller treats it as "ACL may
+ *  already be in place from another source"; the watcher's EACCES guard
+ *  is the safety net.
+ *
+ *  Exported so backend.ts onLoad can call it directly: writing on plugin
+ *  load (not just on prepareWake) means the rule is installed BEFORE the
+ *  overlay's hidraw open, avoiding a race where the overlay starts before
+ *  the user touches the picker. */
+export async function ensureDeckHidrawUaccess(): Promise<void> {
+  try {
+    // Skip the write when the rule file already exists with identical
+    // content — avoids a needless udevadm reload/trigger on every plugin
+    // load (which is fine but logs noise).
+    let existing: string | null = null;
+    try {
+      existing = await readFile(DECK_HIDRAW_UACCESS_RULE_PATH, "utf-8");
+    } catch {
+      /* not present yet */
+    }
+    if (existing === DECK_HIDRAW_UACCESS_RULE) return;
+
+    await mkdir(dirname(DECK_HIDRAW_UACCESS_RULE_PATH), { recursive: true });
+    await writeFile(
+      DECK_HIDRAW_UACCESS_RULE_PATH,
+      DECK_HIDRAW_UACCESS_RULE,
+      "utf-8",
+    );
+    // Reload the rule database, then apply to existing /dev/hidraw* nodes
+    // so the ACL change takes effect without a replug. `--subsystem-match`
+    // narrows the scope so we don't pointlessly re-process every udev rule.
+    await runFull(["udevadm", "control", "--reload"], { timeoutMs: 5_000 });
+    await runFull(
+      ["udevadm", "trigger", "--subsystem-match=hidraw", "--action=change"],
+      { timeoutMs: 5_000 },
+    );
+  } catch (err) {
+    // Best-effort. The most likely failure is "not running as root" in
+    // local dev — production backend is the root system service. Log so
+    // it shows up in the journal if Bazzite-Deck wake-button mysteriously
+    // doesn't work; the watcher's EACCES path is the user-visible
+    // fallback.
+    console.warn(
+      `[input-plumber] ensureDeckHidrawUaccess failed (wake button may need a manual 'sudo usermod -aG input \\$USER' on this host): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/** Install the hidraw uaccess rule so the overlay can read the controller
+ *  without being in the input group. SteamOS already ships an equivalent
+ *  rule; on Bazzite-Deck and similar non-SteamOS-on-Deck installs this is
+ *  what makes the wake button work out of the box. */
 export async function prepareWake(): Promise<WakeOpResult> {
+  await ensureDeckHidrawUaccess();
   return { ok: true };
 }
 

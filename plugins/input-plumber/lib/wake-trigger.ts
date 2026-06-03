@@ -45,6 +45,13 @@ import type {
 
 export type { WakeStatus, WakeStatusDevice, WakeOpResult, WakeCaptureResult };
 
+/** Re-exported so backend.ts can run it from onLoad without reaching into
+ *  the Deck-specific submodule. No-ops cleanly on non-Deck because it just
+ *  writes a udev rule scoped to Valve Deck VID/PIDs — harmless where no
+ *  matching device exists, but you should still gate the call on
+ *  isSteamDeck() to avoid pointless udev reloads on non-Deck hosts. */
+export { ensureDeckHidrawUaccess } from "./wake-trigger-deck";
+
 const PLUGIN_ID = "input-plumber";
 const EXEC_TIMEOUT_MS = 10_000;
 
