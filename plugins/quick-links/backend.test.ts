@@ -417,10 +417,36 @@ describe("per-game mutations", () => {
     expect(state.perGame["12345678"].pinnedTemplateIds).toEqual([]);
   });
 
+  it("addCustomLink rejects URLs that aren't http(s)", async () => {
+    const b = new QuickLinksBackend();
+    await b.onLoad();
+    await expect(
+      b.addCustomLink("620", { name: "XSS", url: "javascript:alert(1)" }),
+    ).rejects.toThrow();
+    await expect(
+      b.addCustomLink("620", { name: "Data", url: "data:text/html,<h1>x" }),
+    ).rejects.toThrow();
+    await expect(
+      b.addCustomLink("620", { name: "NoScheme", url: "example.com" }),
+    ).rejects.toThrow();
+    // Nothing persisted from the rejected calls.
+    const state = await b.getState();
+    expect(state.perGame["620"]?.customLinks ?? []).toHaveLength(0);
+  });
+
+  it("addCustomLink accepts http and https URLs", async () => {
+    const b = new QuickLinksBackend();
+    await b.onLoad();
+    await b.addCustomLink("620", { name: "Sec", url: "https://example.com/x" });
+    await b.addCustomLink("620", { name: "Plain", url: "http://example.com" });
+    const state = await b.getState();
+    expect(state.perGame["620"].customLinks).toHaveLength(2);
+  });
+
   it("removeCustomLink is a no-op for an out-of-range index", async () => {
     const b = new QuickLinksBackend();
     await b.onLoad();
-    await b.addCustomLink("1", { name: "A", url: "u" });
+    await b.addCustomLink("1", { name: "A", url: "https://a/" });
     await b.removeCustomLink("1", 99);
     const state = await b.getState();
     expect(state.perGame["1"].customLinks).toHaveLength(1);
@@ -936,6 +962,46 @@ describe("launchUrl", () => {
     const result = await b.launchUrl("https://x");
     expect(result.launched).toBe(false);
     expect((result as { reason: string }).reason).toBe("steam-unreachable");
+  });
+
+  it("returns launched:false (does not throw) when the fast-path direct exec fails", async () => {
+    storageByPlugin["quick-links"] = {
+      version: 1,
+      templates: [],
+      suffixes: {},
+      perGame: {},
+      hidden: [],
+      installedBrowsers: [
+        {
+          browserId: "firefox-native",
+          name: "Firefox",
+          kind: "native",
+          appId: 1,
+          gameId64: "1",
+          exe: "/usr/bin/firefox",
+          launchOptionsBase: "--new-tab {url}",
+        },
+      ],
+    };
+    // Fast path: the browser is already running (pgrep exits 0)...
+    mockRun.mockImplementation((cmd: string[]) =>
+      Promise.resolve({
+        stdout: "",
+        stderr: "",
+        exitCode: cmd[0] === "pgrep" ? 0 : 1,
+      }),
+    );
+    // ...but the direct exec fails.
+    mockSpawn.mockImplementation(() => {
+      throw new Error("spawn ENOENT");
+    });
+    const b = new QuickLinksBackend();
+    await b.onLoad();
+    const result = await b.launchUrl("https://x");
+    expect(result.launched).toBe(false);
+    expect((result as { reason: string }).reason).toBe("launch-failed");
+    // Must NOT fall through to the Steam slow path on a fast-path failure.
+    expect(mockSetShortcutLaunchOptions).not.toHaveBeenCalled();
   });
 });
 

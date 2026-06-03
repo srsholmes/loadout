@@ -280,9 +280,9 @@ function QuickLinksHomeWidget() {
   const launch = useLinkLauncher(storage?.selectedBrowserId);
 
   useEffect(() => {
-    void call("getState").then((s) =>
-      setStorage(s as QuickLinksStorage),
-    );
+    void call("getState")
+      .then((s) => setStorage(s as QuickLinksStorage))
+      .catch(() => {});
   }, [call]);
 
   useEvent({
@@ -1160,10 +1160,12 @@ function QuickLinksPanel() {
   });
 
   useEffect(() => {
-    void call("getState").then((s) =>
-      setStorage(s as QuickLinksStorage),
-    );
-    void call("isGamingMode").then((v) => setInGamingMode(v === true));
+    void call("getState")
+      .then((s) => setStorage(s as QuickLinksStorage))
+      .catch(() => {});
+    void call("isGamingMode")
+      .then((v) => setInGamingMode(v === true))
+      .catch(() => {});
   }, [call]);
 
   useEvent({
@@ -1363,7 +1365,9 @@ function QuickLinksPanel() {
           <BrowserShortcutCard
             storage={storage}
             startExpanded={installerStartExpanded}
-            onChangeSelected={(id) => void call("setSelectedBrowserId", id)}
+            onChangeSelected={(id) =>
+              void call("setSelectedBrowserId", id).catch(() => {})
+            }
             onInstall={installBrowser}
             onUninstall={uninstallBrowser}
           />
@@ -1379,7 +1383,7 @@ function QuickLinksPanel() {
               </div>
               <FocusButton
                 className="btn btn-sm btn-ghost"
-                onClick={() => void call("resetToDefaults")}
+                onClick={() => void call("resetToDefaults").catch(() => {})}
                 title="Reset all templates and suffixes"
               >
                 Reset

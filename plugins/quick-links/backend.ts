@@ -796,6 +796,21 @@ export default class QuickLinksBackend implements PluginBackend {
     if (!link.name || !link.url) {
       throw new Error("addCustomLink: name and url are required");
     }
+    // Custom links are dispatched through the browser shortcut, so the
+    // URL must be a real web address. Reject schemes like javascript:
+    // and data: that could execute in the browser context, and
+    // scheme-less strings that `new URL` can't parse.
+    let parsed: URL;
+    try {
+      parsed = new URL(link.url);
+    } catch {
+      throw new Error(`addCustomLink: invalid URL: ${link.url}`);
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error(
+        `addCustomLink: only http(s) URLs are allowed (got ${parsed.protocol})`,
+      );
+    }
     const prev = this.state.perGame[appId] ?? {
       pinnedTemplateIds: [],
       customLinks: [],
@@ -1079,7 +1094,11 @@ export default class QuickLinksBackend implements PluginBackend {
     browserId?: string,
   ): Promise<
     | { launched: true }
-    | { launched: false; reason: "not-installed" | "steam-unreachable"; message: string }
+    | {
+        launched: false;
+        reason: "not-installed" | "steam-unreachable" | "launch-failed";
+        message: string;
+      }
   > {
     if (typeof url !== "string" || url.length === 0) {
       throw new Error("launchUrl: url must be a non-empty string");
@@ -1160,7 +1179,14 @@ export default class QuickLinksBackend implements PluginBackend {
           this.log?.error(
             `[quick-links] launchUrl: direct exec failed: ${err instanceof Error ? err.message : String(err)}`,
           );
-          throw err;
+          // Mirror the slow-path contract (documented above): report
+          // failure via the result object instead of throwing, so every
+          // caller handles one shape.
+          return {
+            launched: false,
+            reason: "launch-failed",
+            message: `Couldn't launch the browser: ${err instanceof Error ? err.message : String(err)}`,
+          };
         }
 
         // Best-effort focus: prepend the browser's appId to

@@ -144,6 +144,34 @@ describe("quick-links landing page (default mount)", () => {
     expect(openSettings).toBeTruthy();
   });
 
+  it("a getState rejection on mount does not surface as an unhandled rejection", async () => {
+    currentGameRef.value = {
+      appId: 620,
+      gameName: "Portal 2",
+      startTime: Date.now(),
+    };
+    const rejections: unknown[] = [];
+    const handler = (e: unknown) => rejections.push(e);
+    process.on("unhandledRejection", handler);
+    try {
+      callMock.mockImplementation((method: string) =>
+        method === "getState"
+          ? Promise.reject(new Error("rpc down"))
+          : Promise.resolve(method === "isGamingMode" ? false : baseState),
+      );
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const { mount } = await import("./app");
+      mount(container);
+      // Let the rejected getState microtask settle and the
+      // unhandledRejection event (fires a tick later) flush.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(rejections).toHaveLength(0);
+    } finally {
+      process.off("unhandledRejection", handler);
+    }
+  });
+
   it("renders one card per visible template (suffix-expanded) with the URL host visible, when a game is running", async () => {
     currentGameRef.value = {
       appId: 620,
