@@ -10,15 +10,16 @@
 
 import { describe, it, expect, spyOn, afterEach } from "bun:test";
 import * as deckHid from "@loadout/deck-hid";
+import { REPORT_ID_INPUT, REPORT_LEN } from "@loadout/deck-hid";
 import * as storage from "@loadout/plugin-storage";
 import * as fs from "node:fs";
 import { EventEmitter } from "node:events";
 import { captureWakeButton } from "./wake-trigger-deck";
 
-/** 64-byte Deck input report (id 0x01) with optional byte overrides. */
+/** Deck input report (id 0x01, REPORT_LEN bytes) with optional byte overrides. */
 function frame(overrides: Record<number, number> = {}): Buffer {
-  const b = Buffer.alloc(64);
-  b[0] = 0x01;
+  const b = Buffer.alloc(REPORT_LEN);
+  b[0] = REPORT_ID_INPUT;
   for (const [k, v] of Object.entries(overrides)) b[parseInt(k, 10)] = v;
   return b;
 }
@@ -121,5 +122,78 @@ describe("captureWakeButton (Deck)", () => {
     const r = await p;
     expect(r.timedOut).toBe(true);
     expect(store["input-plumber"].wake.selectedRaw).toBe("deck:R5");
+  });
+
+  it("fails cleanly when no Deck hidraw node is present", async () => {
+    // Stub the discovery to return null — non-Deck host, controller
+    // unplugged, or kernel without hid-steam. captureInner must surface a
+    // friendly error instead of hanging or throwing.
+    spies = [
+      spyOn(deckHid, "findDeckHidrawPath").mockResolvedValue(null),
+      spyOn(storage, "readPluginStorage").mockResolvedValue({}),
+      spyOn(storage, "writePluginStorage").mockResolvedValue(),
+    ];
+    const r = await captureWakeButton(5000);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("hidraw node");
+    // Should not have tried to write storage when nothing was captured.
+    expect(storage.writePluginStorage).toHaveBeenCalledTimes(0);
+  });
+
+  it("single-flight: concurrent captures coalesce onto one result", async () => {
+    // Two pickers calling captureWakeButton in parallel should resolve to
+    // the same WakeCaptureResult, and only ONE write should land. Without
+    // the captureInflight gate they'd race and the second open would
+    // clobber the first's storage write.
+    const stream = fakeStream();
+    setup(stream);
+    const p1 = captureWakeButton(5000);
+    const p2 = captureWakeButton(5000);
+    await tick();
+    stream.push(frame()); // idle baseline
+    stream.push(frame({ 9: 0x20 })); // Steam press
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1.ok).toBe(true);
+    expect(r1.capturedRaw).toBe("deck:Steam");
+    // Both callers see the same result envelope (same object reference,
+    // since the inner Promise is shared via the gate).
+    expect(r2).toBe(r1);
+    expect(storage.writePluginStorage).toHaveBeenCalledTimes(1);
+  });
+
+  it("on timeout, restores the previous binding even if a concurrent writer mutated it", async () => {
+    // The timeout-restore branch reads current storage, compares to the
+    // snapshot taken at capture start, and writes the snapshot back if
+    // they've diverged. This test simulates a concurrent writer changing
+    // the binding mid-capture and asserts the restore reverts it — the
+    // documented behaviour from the prior review's race-fix commit.
+    const stream = fakeStream();
+    setup(stream);
+    store["input-plumber"] = {
+      wake: { selectedRaw: "deck:R5", deviceName: "Steam Deck Controller" },
+    };
+    const p = captureWakeButton(1000);
+    await tick();
+    // Mid-flight: pretend another writer changed the binding.
+    store["input-plumber"] = {
+      wake: { selectedRaw: "deck:A", deviceName: "Steam Deck Controller" },
+    };
+    const r = await p;
+    expect(r.timedOut).toBe(true);
+    // Restore wrote the snapshot back over the concurrent value.
+    expect(store["input-plumber"].wake.selectedRaw).toBe("deck:R5");
+  });
+
+  it("resolves with an error when the hidraw stream closes mid-capture", async () => {
+    // Controller unplug / hid-steam reset emits 'end' on the stream. Without
+    // an end handler the Promise hangs to the full timeout (up to 60s).
+    const stream = fakeStream();
+    setup(stream);
+    const p = captureWakeButton(60_000);
+    await tick();
+    stream.emit("end");
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("stream closed");
   });
 });

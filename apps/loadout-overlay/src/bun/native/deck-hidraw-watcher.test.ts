@@ -11,14 +11,26 @@
 
 import { describe, it, expect, spyOn, mock } from "bun:test";
 import * as deckHid from "@loadout/deck-hid";
+import { REPORT_ID_INPUT, REPORT_LEN } from "@loadout/deck-hid";
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import { EventEmitter } from "node:events";
 import { startDeckHidrawWatcher } from "./deck-hidraw-watcher";
 
-/** Build a 64-byte Deck input report with optional byte overrides. */
+/** The watcher pre-flights with fs.promises.open before constructing a
+ *  stream from the resulting fd — that's how it surfaces EACCES sync.
+ *  Tests don't want a real fd, so we hand back a stub FileHandle. */
+function stubOpenOk() {
+  return spyOn(fsp, "open").mockResolvedValue({
+    fd: 999, // any number — createReadStream is stubbed below
+    close: async () => undefined,
+  } as unknown as fsp.FileHandle);
+}
+
+/** Build a Deck input report (REPORT_LEN bytes) with optional byte overrides. */
 function frame(overrides: Record<number, number> = {}): Buffer {
-  const b = Buffer.alloc(64);
-  b[0] = 0x01;
+  const b = Buffer.alloc(REPORT_LEN);
+  b[0] = REPORT_ID_INPUT;
   for (const [k, v] of Object.entries(overrides)) b[parseInt(k, 10)] = v;
   return b;
 }
@@ -44,11 +56,35 @@ describe("deck-hidraw-watcher", () => {
     findSpy.mockRestore();
   });
 
+  it("returns null and logs when open fails (EACCES on non-SteamOS handhelds)", async () => {
+    // Pre-flight open is what surfaces permission failures synchronously.
+    // Before this guard, createReadStream succeeded against the path but
+    // the first read fired an async 'error' event, so the caller had a
+    // live-looking handle that was silently dead.
+    const findSpy = spyOn(deckHid, "findDeckHidrawPath").mockResolvedValue(
+      "/dev/hidraw-fake",
+    );
+    const openSpy = spyOn(fsp, "open").mockRejectedValue(
+      Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }),
+    );
+    const logs: string[] = [];
+    const handle = await startDeckHidrawWatcher({
+      onWake: () => {},
+      log: (msg) => logs.push(msg),
+    });
+    expect(handle).toBeNull();
+    expect(logs.some((m) => m.includes("EACCES"))).toBe(true);
+    expect(logs.some((m) => m.includes("F16 evdev"))).toBe(true);
+    findSpy.mockRestore();
+    openSpy.mockRestore();
+  });
+
   it("fires onWake once on 0→1 of the bound button and not on hold", async () => {
     const findSpy = spyOn(deckHid, "findDeckHidrawPath").mockResolvedValue(
       "/dev/hidraw-fake",
     );
     const stream = fakeStream();
+    const openSpy = stubOpenOk();
     const streamSpy = spyOn(fs, "createReadStream").mockReturnValue(
       stream as unknown as ReturnType<typeof fs.createReadStream>,
     );
@@ -83,6 +119,7 @@ describe("deck-hidraw-watcher", () => {
     handle!.stop();
     findSpy.mockRestore();
     streamSpy.mockRestore();
+    openSpy.mockRestore();
   });
 
   it("rebinding with setBinding does not fire when the new button is already held", async () => {
@@ -95,6 +132,7 @@ describe("deck-hidraw-watcher", () => {
       "/dev/hidraw-fake",
     );
     const stream = fakeStream();
+    const openSpy = stubOpenOk();
     const streamSpy = spyOn(fs, "createReadStream").mockReturnValue(
       stream as unknown as ReturnType<typeof fs.createReadStream>,
     );
@@ -131,6 +169,7 @@ describe("deck-hidraw-watcher", () => {
     handle!.stop();
     findSpy.mockRestore();
     streamSpy.mockRestore();
+    openSpy.mockRestore();
   });
 
   it("stop() halts further fires", async () => {
@@ -138,6 +177,7 @@ describe("deck-hidraw-watcher", () => {
       "/dev/hidraw-fake",
     );
     const stream = fakeStream();
+    const openSpy = stubOpenOk();
     const streamSpy = spyOn(fs, "createReadStream").mockReturnValue(
       stream as unknown as ReturnType<typeof fs.createReadStream>,
     );
@@ -155,6 +195,7 @@ describe("deck-hidraw-watcher", () => {
 
     findSpy.mockRestore();
     streamSpy.mockRestore();
+    openSpy.mockRestore();
   });
 
   it("setBinding(null) disables fires until the next setBinding(name)", async () => {
@@ -162,6 +203,7 @@ describe("deck-hidraw-watcher", () => {
       "/dev/hidraw-fake",
     );
     const stream = fakeStream();
+    const openSpy = stubOpenOk();
     const streamSpy = spyOn(fs, "createReadStream").mockReturnValue(
       stream as unknown as ReturnType<typeof fs.createReadStream>,
     );
@@ -184,6 +226,7 @@ describe("deck-hidraw-watcher", () => {
     handle!.stop();
     findSpy.mockRestore();
     streamSpy.mockRestore();
+    openSpy.mockRestore();
   });
 
   it("ignores non-input report frames even when the bound bit is set", async () => {
@@ -195,6 +238,7 @@ describe("deck-hidraw-watcher", () => {
       "/dev/hidraw-fake",
     );
     const stream = fakeStream();
+    const openSpy = stubOpenOk();
     const streamSpy = spyOn(fs, "createReadStream").mockReturnValue(
       stream as unknown as ReturnType<typeof fs.createReadStream>,
     );
@@ -226,5 +270,6 @@ describe("deck-hidraw-watcher", () => {
     handle!.stop();
     findSpy.mockRestore();
     streamSpy.mockRestore();
+    openSpy.mockRestore();
   });
 });

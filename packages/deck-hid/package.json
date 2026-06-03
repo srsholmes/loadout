@@ -1,6 +1,7 @@
 {
   "name": "@loadout/deck-hid",
   "version": "0.0.1",
+  "description": "Pure HID protocol helpers for the Steam Deck controller — uevent parsing, hidraw discovery, and frame decoding. Used by the overlay's wake-button watcher and the input-plumber plugin's press-to-capture path.",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
