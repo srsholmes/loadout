@@ -140,6 +140,12 @@ else
     exit 1
 fi
 
+# SteamOS lacks libwebkit2gtk-4.1 (and the JSC + appindicator deps Electrobun's
+# native wrapper dlopens at startup). Fetch the closure from a Fedora container
+# the first time and cache the tarball; subsequent installs reuse it. No-op on
+# Bazzite/CachyOS/Fedora — those ship the libs in the base image.
+sh "$SCRIPT_DIR/fetch-deck-overlay-libs.sh" "$OVERLAY_INSTALL_DIR/bin"
+
 # --- Backend: root system service ---
 # The backend runs as root so plugins can write hardware sysfs / run
 # privileged tools without per-op sudo prompts at runtime (HHD/Decky

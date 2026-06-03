@@ -352,28 +352,9 @@ describe("input-plumber plugin", () => {
     });
   });
 
-  it("on a Deck with IP disabled, offers an enable button that calls prepareWake", async () => {
-    rpcWithWake({
-      ipActive: false,
-      isDeck: true,
-      selectedRaw: null,
-      devices: [],
-    });
-    const container = document.createElement("div");
-    const { mount } = await import("./app");
-    mount(container);
-
-    await waitFor(() => {
-      expect(container.textContent).toContain("Enable & detect buttons");
-    });
-
-    const enable = Array.from(container.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("Enable & detect buttons"),
-    )!;
-    fireEvent.click(enable);
-
-    await waitFor(() => {
-      expect(callMock).toHaveBeenCalledWith("prepareWake");
-    });
-  });
+  // Note: the former "Deck with IP disabled → enable button" case was removed
+  // along with that UI branch — it's an unreachable state. On a Deck
+  // getWakeStatus always reports ipActive:true (the Deck wake path bypasses
+  // InputPlumber), and the IP path only runs on non-Deck hosts (isDeck:false),
+  // so isDeck:true + ipActive:false can never occur.
 });
