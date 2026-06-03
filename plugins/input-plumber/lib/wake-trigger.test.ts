@@ -278,67 +278,87 @@ describe("wake-trigger orchestration", () => {
     expect(final).not.toContain("KeyF13"); // catch-all sentinel keys absent
   });
 
-  it("setWakeButton on Deck surfaces a clear error when InputPlumber fails to come up", async () => {
-    // DMI = Deck; IP `tree` always fails so waitForIp times out.
+  // ── Deck branch ───────────────────────────────────────────────────────
+  // On Deck the IP path is bypassed entirely in favour of the hidraw
+  // watcher (see issue #86). These tests cover the Deck-side public API:
+  // status reports a synthetic device with the hardcoded button list,
+  // setWakeButton accepts deck:* identifiers and persists them via
+  // plugin-storage, no busctl / fs side effects happen.
+
+  function deckDmi(): void {
     fsSpies[3].mockImplementation(async (p: unknown) => {
       if (String(p).includes("product_name")) return "Jupiter";
       if (String(p).includes("sys_vendor")) return "Valve";
       throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
     });
-    const exps: SpawnExpectation[] = [
-      // tree never succeeds — IP is forever unreachable
-      { match: (c) => c[0] === "busctl" && has(c, "tree"), exitCode: 1 },
-      // systemctl/udevadm succeed so we reach the waitForIp branch
-      { match: (c) => c[0] === "systemctl" || c[0] === "udevadm", exitCode: 0 },
-    ];
-    const { stub } = makeSpawnStub(exps);
+  }
+
+  it("getWakeStatus on Deck reports a synthetic device with the hardcoded button list", async () => {
+    deckDmi();
+    const { stub, calls } = makeSpawnStub([]);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
 
-    // Short-circuit the 500ms inter-poll sleep so the test doesn't take 8s.
-    // waitForIp uses setTimeout for the gap; bun:test doesn't have fake timers
-    // here, so we accept ~8s real wait or trust the bound is loose enough.
-    // (8s within the test's default 30s timeout is acceptable for one case.)
+    const status = await getWakeStatus();
+    expect(status.isDeck).toBe(true);
+    expect(status.ipActive).toBe(true); // semantic = "picker can act"
+    expect(status.devices).toHaveLength(1);
+    expect(status.devices[0].name).toBe("Steam Deck Controller");
+    const names = status.devices[0].buttons.map((b) => b.name).sort();
+    expect(names).toContain("Steam");
+    expect(names).toContain("Qam");
+    expect(names).toContain("L4");
+    // All buttons are flagged as recommended on Deck.
+    expect(status.devices[0].buttons.every((b) => b.recommended)).toBe(true);
+    // No busctl/systemctl/udevadm — the Deck path is pure.
+    expect(calls).toHaveLength(0);
+  });
+
+  it("setWakeButton on Deck persists a deck:* binding without touching IP", async () => {
+    deckDmi();
+    const { stub, calls } = makeSpawnStub([]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+
+    const r = await setWakeButton("deck:Steam");
+    expect(r.ok).toBe(true);
+
+    const persisted = storage.get("input-plumber") as {
+      wake?: { selectedRaw?: string; deviceName?: string };
+    };
+    expect(persisted.wake?.selectedRaw).toBe("deck:Steam");
+    expect(persisted.wake?.deviceName).toBe("Steam Deck Controller");
+    // No profile file written, no busctl/systemctl/udevadm.
+    expect(writtenFiles.size).toBe(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("setWakeButton on Deck rejects unknown identifiers", async () => {
+    deckDmi();
+    const { stub } = makeSpawnStub([]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+
     const r = await setWakeButton("Gamepad:Button:RightPaddle1");
     expect(r.ok).toBe(false);
-    expect(r.error).toContain("Failed to enable InputPlumber");
-    expect(r.error).toContain("not become reachable");
-  }, 15_000);
+    expect(r.error).toContain("Unknown Deck button identifier");
+  });
 
-  it("on a Steam Deck, an absent IP triggers enable + override write", async () => {
-    // DMI now reports a Deck; IP starts unavailable then comes up.
-    fsSpies[3].mockImplementation(async (p: unknown) => {
-      if (String(p).includes("product_name")) return "Jupiter";
-      if (String(p).includes("sys_vendor")) return "Valve";
-      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+  it("clearWakeButton on Deck wipes the persisted binding (no IP calls)", async () => {
+    deckDmi();
+    storage.set("input-plumber", {
+      wake: { selectedRaw: "deck:Steam", deviceName: "Steam Deck Controller" },
     });
-
-    let treeCalls = 0;
-    const exps = happyPathExpectations();
-    // Override the tree matcher: first probe fails (IP down), later succeed.
-    exps[0] = {
-      match: (c) => c[0] === "busctl" && has(c, "tree"),
-      // bun's stub reads exitCode synchronously per call; emulate "comes up"
-      // by counting invocations via a getter-like closure.
-      get exitCode() {
-        treeCalls += 1;
-        return treeCalls <= 1 ? 1 : 0;
-      },
-      stdout: `${PATH0}\n`,
-    } as SpawnExpectation;
-
-    const { stub, calls } = makeSpawnStub(exps);
+    const { stub, calls } = makeSpawnStub([]);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
 
-    const r = await setWakeButton("Gamepad:Button:RightPaddle1");
+    const r = await clearWakeButton();
     expect(r.ok).toBe(true);
-    // Enabled the service and wrote the Deck override.
-    expect(
-      calls.find((c) => c[0] === "systemctl" && has(c, "enable") && has(c, "inputplumber.service")),
-    ).toBeDefined();
-    expect(writtenFiles.get("/etc/inputplumber/devices.d/50-steam_deck.yaml")).toContain(
-      "auto_manage: true",
-    );
+    const persisted = storage.get("input-plumber") as {
+      wake?: { selectedRaw: string | null };
+    };
+    expect(persisted.wake?.selectedRaw).toBeNull();
+    expect(calls).toHaveLength(0);
   });
 });

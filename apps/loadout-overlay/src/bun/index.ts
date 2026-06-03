@@ -26,6 +26,16 @@ import {
   type InputInterceptHandle,
   type WakeEvent,
 } from "./native/input-intercept";
+import {
+  startDeckHidrawWatcher,
+  type DeckHidrawWatcherHandle,
+} from "./native/deck-hidraw-watcher";
+import {
+  readPluginStorage,
+  pluginStoragePath,
+} from "@loadout/plugin-storage";
+import { watch as fsWatch, type FSWatcher } from "node:fs";
+import { dirname, basename } from "node:path";
 import type { WebviewMessages } from "@loadout/types";
 import {
   findSteamPid,
@@ -127,6 +137,17 @@ const pendingResumeTimer: { current: ReturnType<typeof setTimeout> | null } = {
 // and to the close-path `intercept.current?.release()` inside
 // toggleOverlay.
 const intercept: { current: InputInterceptHandle | null } = { current: null };
+const deckHidraw: { current: DeckHidrawWatcherHandle | null } = { current: null };
+// Picker changes flow back to the watcher via two mechanisms: (1) fs.watch
+// on the plugin-storage directory fires within ~10ms of the atomic rename,
+// so a user who picks a button and immediately presses it sees the new
+// binding take effect; (2) a 30s heartbeat poll catches the rare case
+// inotify silently misses (NFS-mounted home, container layers, etc.).
+// Both handles are tracked so shutdown closes them rather than leaving them
+// ticking against a stopped watcher.
+const deckWakeStorageWatcher: { current: FSWatcher | null } = { current: null };
+const deckWakeRefreshTimer: { current: ReturnType<typeof setInterval> | null } =
+  { current: null };
 
 // ---- Window -----------------------------------------------------------------
 //
@@ -388,6 +409,93 @@ startInputIntercept({
     console.error("[overlay] input intercept failed to start:", err);
   });
 
+// Steam-Deck-native wake button: read /dev/hidrawN (the controller's
+// gamepad interface) in parallel with Steam Input. Open multiplexes
+// fine — the kernel hid-steam driver allows concurrent readers — and
+// the bound button fires onWake("QamToggle") just like F16 does over
+// evdev. On non-Deck hosts findDeckHidrawPath() returns null and this
+// is a no-op.
+const STORAGE_PATH = pluginStoragePath("input-plumber");
+const STORAGE_DIR = dirname(STORAGE_PATH);
+const STORAGE_FILENAME = basename(STORAGE_PATH);
+/** Heartbeat cadence: rare safety net for inotify-silent filesystems
+ *  (NFS, overlayfs corner cases). Real updates flow via fs.watch. */
+const DECK_WAKE_HEARTBEAT_MS = 30_000;
+/** Coalesce write-tmp + rename into a single re-read. The plugin-storage
+ *  layer does atomic writes — write to `${path}.<uuid>.tmp`, then rename —
+ *  which fires two inotify events; debouncing prevents the watcher seeing
+ *  partial state. 50ms is comfortably above filesystem write latency. */
+const DECK_WAKE_DEBOUNCE_MS = 50;
+
+async function readDeckWakeBinding(): Promise<string | null> {
+  const s = await readPluginStorage<{ wake?: { selectedRaw: string | null } }>(
+    "input-plumber",
+  );
+  const raw = s.wake?.selectedRaw ?? null;
+  // Raw is either a synthetic "deck:<Button>" string we wrote here, or an
+  // InputPlumber capability string written on a non-Deck host. Only the
+  // deck:* form is meaningful for the watcher.
+  if (raw && raw.startsWith("deck:")) return raw.slice(5);
+  return null;
+}
+
+readDeckWakeBinding()
+  .then(async (initialButton) => {
+    const handle = await startDeckHidrawWatcher({
+      onWake,
+      initialButton,
+    });
+    if (!handle) return;
+    deckHidraw.current = handle;
+
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const refresh = async (): Promise<void> => {
+      try {
+        const next = await readDeckWakeBinding();
+        if (next !== handle.getBinding()) handle.setBinding(next);
+      } catch {
+        // Storage read failure is transient — try again next tick / event.
+      }
+    };
+    const scheduleRefresh = (): void => {
+      if (debounceTimer) return;
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        void refresh();
+      }, DECK_WAKE_DEBOUNCE_MS);
+    };
+
+    // fs.watch on the parent dir (not the file itself — atomic rename
+    // invalidates a file-scoped watcher). Filter for any filename that
+    // matches our storage or its `<storage>.<uuid>.tmp` siblings.
+    try {
+      deckWakeStorageWatcher.current = fsWatch(
+        STORAGE_DIR,
+        (_event, filename) => {
+          if (!filename) return;
+          if (filename === STORAGE_FILENAME || filename.startsWith(STORAGE_FILENAME + ".")) {
+            scheduleRefresh();
+          }
+        },
+      );
+    } catch (err) {
+      // Storage dir might not exist on first boot if no plugin has written
+      // yet — heartbeat picks it up. Log so the journal records why fs.watch
+      // didn't arm.
+      console.warn(
+        `[overlay] Deck wake-binding fs.watch failed (${err instanceof Error ? err.message : String(err)}); falling back to heartbeat only.`,
+      );
+    }
+
+    // Heartbeat: covers inotify-silent filesystems (NFS, some container
+    // overlays). 30s is long enough that the cost is negligible and short
+    // enough that a stuck watcher self-heals within the typical session.
+    deckWakeRefreshTimer.current = setInterval(refresh, DECK_WAKE_HEARTBEAT_MS);
+  })
+  .catch((err) => {
+    console.error("[overlay] Deck hidraw watcher failed to start:", err);
+  });
+
 // Backup shortcut for desktop dev — works whether or not evdev picks up
 // the QAM button correctly. Useful when we're investigating why F16
 // isn't firing. Override via DECK_OVERLAY_TOGGLE=<accelerator>.
@@ -422,12 +530,25 @@ overlayManagementLoop({
 });
 
 function runShutdown(): Promise<void> {
+  if (deckWakeRefreshTimer.current !== null) {
+    clearInterval(deckWakeRefreshTimer.current);
+    deckWakeRefreshTimer.current = null;
+  }
+  if (deckWakeStorageWatcher.current !== null) {
+    try {
+      deckWakeStorageWatcher.current.close();
+    } catch {
+      /* swallow — best-effort on shutdown */
+    }
+    deckWakeStorageWatcher.current = null;
+  }
   return shutdown({
     running: managementLoopRunning,
     pendingResumeTimer,
     steamPid,
     atoms,
     intercept,
+    deckHidraw,
     globalShortcut: GlobalShortcut,
   });
 }

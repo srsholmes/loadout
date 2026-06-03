@@ -85,9 +85,18 @@ export interface WakeStatusDevice {
 }
 
 export interface WakeStatus {
-  /** Is the IP service answering on the bus right now? */
+  /** "Picker is operable" hint, NOT a literal probe of the InputPlumber
+   *  daemon. On non-Deck hosts (`isDeck:false`) it mirrors the actual IP
+   *  bus state — the picker can't bind a button without IP up. On Deck
+   *  (`isDeck:true`) it's hardcoded `true`: the Deck path doesn't talk
+   *  to IP at all (it reads /dev/hidrawN directly), so the picker is
+   *  always operable when the controller is connected. UI uses this
+   *  field to decide whether to show the "Enable & detect" branch. */
   ipActive: boolean;
-  /** Is this a Steam Deck (needs the enable + auto_manage step)? */
+  /** Is this a Steam Deck? On Deck the backend routes to the hidraw-based
+   *  wake path (no IP daemon involvement); on non-Deck it routes through
+   *  the IP profile flow. The UI uses this to swap the install card for
+   *  the "Steam Input handles your Deck" explainer. */
   isDeck: boolean;
   /** Connected composite devices with their pickable buttons. */
   devices: WakeStatusDevice[];
