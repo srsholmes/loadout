@@ -11,7 +11,7 @@ import { call, subscribe } from "@loadout/ui/ws-client";
  * values it has.
  */
 export interface StatusMetrics {
-  cpuTemp: number | null;      // °C — from fan-control `fanUpdate` / `getFanInfo`
+  cpuTemp: number | null;      // °C — from fan-control `fan-update` / `getFanInfo` (`cpuTempC`)
   fanRpm: number | null;       // RPM — same source
   batteryPct: number | null;   // % — from battery-tracker `batteryUpdate` / `getBatteryInfo`
   charging: boolean | null;
@@ -39,12 +39,12 @@ export function useStatusMetrics(): StatusMetrics {
           plugin: "fan-control",
           method: "getFanInfo",
           args: [],
-        })) as { fans?: { rpm?: number }[]; cpuTemp?: number } | null;
+        })) as { fans?: { rpm?: number }[]; cpuTempC?: number } | null;
         if (!info) return;
         const rpm = info.fans?.[0]?.rpm;
         update({
           fanRpm: typeof rpm === "number" ? rpm : null,
-          cpuTemp: typeof info.cpuTemp === "number" ? info.cpuTemp : null,
+          cpuTemp: typeof info.cpuTempC === "number" ? info.cpuTempC : null,
         });
       } catch {
         /* plugin not installed or not ready — metric stays null */
@@ -73,13 +73,13 @@ export function useStatusMetrics(): StatusMetrics {
     // Event subscriptions — backends broadcast on their own cadence.
     const unsubFan = subscribe({
       plugin: "fan-control",
-      event: "fanUpdate",
+      event: "fan-update",
       handler: (data: unknown) => {
-        const d = data as { fans?: { rpm?: number }[]; cpuTemp?: number };
+        const d = data as { fans?: { rpm?: number }[]; cpuTempC?: number };
         const rpm = d?.fans?.[0]?.rpm;
         update({
           fanRpm: typeof rpm === "number" ? rpm : null,
-          cpuTemp: typeof d?.cpuTemp === "number" ? d.cpuTemp : null,
+          cpuTemp: typeof d?.cpuTempC === "number" ? d.cpuTempC : null,
         });
       },
     });
