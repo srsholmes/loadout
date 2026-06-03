@@ -80,6 +80,9 @@ function InputPlumberPanel() {
   const [logs, setLogs] = useState<string[]>([]);
   const [lastResult, setLastResult] = useState<InstallRunResult | null>(null);
   const logRef = useRef<HTMLPreElement | null>(null);
+  // Lazily fetched once — used to swap the install card for a Deck-native
+  // explainer. WakeButtonSection still owns its own wake-status subscription.
+  const [isDeck, setIsDeck] = useState<boolean | null>(null);
 
   const refresh = useCallback(async () => {
     const s = (await call("getStatus")) as InstallStatus;
@@ -90,7 +93,17 @@ function InputPlumberPanel() {
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+    // Probe Deck-ness once; backend caches nothing but the DMI files are
+    // static across a boot so one fetch is enough.
+    void (async () => {
+      try {
+        const w = (await call("getWakeStatus")) as WakeStatus;
+        setIsDeck(w.isDeck);
+      } catch {
+        setIsDeck(false);
+      }
+    })();
+  }, [refresh, call]);
 
   useEvent({
     event: "input-plumber-status",
@@ -188,6 +201,20 @@ function InputPlumberPanel() {
   return (
     <div className="p-7 h-full overflow-y-auto">
       <div className="page-content">
+        {isDeck ? (
+          <div className="card">
+            <div className="card-body p-4.5">
+              <div className="subsection-label mb-1">Steam Deck</div>
+              <div className="subsection-desc">
+                Steam Input is in charge of your Deck's controller — no
+                InputPlumber install needed. Pick a wake button below; we
+                read the controller's HID stream in parallel with Steam
+                Input, so per-game configs, Lizard mode, gyro and Steam
+                button chords keep working.
+              </div>
+            </div>
+          </div>
+        ) : (
         <div className="card">
           <div className="card-body p-4.5">
         <div className="flex items-start justify-between gap-3 mb-2">
@@ -291,6 +318,7 @@ function InputPlumberPanel() {
         )}
         </div>
         </div>
+        )}
 
         <WakeButtonSection />
       </div>
@@ -424,20 +452,9 @@ function WakeButtonSection() {
   }
 
   if (!wake.ipActive) {
-    if (wake.isDeck) {
-      return cardWrap(
-        <div className="mt-3">
-          <div className="subsection-desc mb-2">
-            InputPlumber ships disabled on Steam Deck. Enable it to detect your
-            controller (your gamepad keeps working — Loadout just adds a
-            keyboard target for the wake key).
-          </div>
-          <FocusButton onClick={() => void runOp("prepareWake")} disabled={busy} variant="primary">
-            {busy ? "Enabling…" : "Enable & detect buttons"}
-          </FocusButton>
-        </div>,
-      );
-    }
+    // Deck hosts always report ipActive:true (the Deck wake path bypasses
+    // InputPlumber), and the IP path only runs on non-Deck hosts — so this
+    // branch is only ever the non-Deck "IP not running" case.
     return cardWrap(
       <div className="subsection-desc mt-3 text-base-content/60">
         InputPlumber isn&apos;t running. Install or start it above, then a
@@ -455,8 +472,17 @@ function WakeButtonSection() {
     );
   }
 
+  // For Deck bindings the synthetic `deck:<Button>` raw isn't an IP
+  // capability, so labelFor/parseCapability would just echo the bare name
+  // ("R5"). Prefer the friendly label the picker already carries for that
+  // raw; fall back to labelFor for the IP path (unchanged).
   const currentLabel = wake.selectedRaw
-    ? labelFor(parseCapability(wake.selectedRaw))
+    ? (wake.selectedRaw.startsWith("deck:")
+        ? (wake.devices
+            .flatMap((d) => d.buttons)
+            .find((b) => b.raw === wake.selectedRaw)?.label ??
+          wake.selectedRaw.slice("deck:".length))
+        : labelFor(parseCapability(wake.selectedRaw)))
     : null;
   const needsLegacyAck = wake.hasLegacyProfile && !currentLabel && !legacyAck;
 
