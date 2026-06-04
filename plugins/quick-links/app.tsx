@@ -721,6 +721,172 @@ function BrowserRadio({
 }
 
 /**
+ * Unified browser control: pick which detected browser opens links
+ * (the checked radio == selectedBrowserId) and register it as a
+ * non-Steam shortcut if it isn't one yet. Self-contained — drives the
+ * RPCs directly so it can be dropped into both the settings page and
+ * the landing first-run state. Live storage (installedBrowsers /
+ * selectedBrowserId) arrives via the parent's stateChanged
+ * subscription, so install/uninstall/select reflect without a manual
+ * refetch.
+ */
+function BrowserPicker({ storage }: { storage: QuickLinksStorage }) {
+  const { call } = useBackend("quick-links");
+  const [candidates, setCandidates] = useState<BrowserCandidate[] | null>(null);
+  const [steamReachable, setSteamReachable] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const installed = storage.installedBrowsers;
+  const installedIds = useMemo(
+    () => new Set(installed.map((s) => s.browserId)),
+    [installed],
+  );
+
+  const refresh = useCallback(async () => {
+    const [list, reachable] = await Promise.all([
+      call("detectBrowsers") as Promise<BrowserCandidate[]>,
+      call("isSteamReachable") as Promise<boolean>,
+    ]);
+    setCandidates(list);
+    setSteamReachable(reachable);
+  }, [call]);
+
+  useEffect(() => {
+    void refresh().catch(() => {});
+  }, [refresh]);
+
+  // Effective selection: the explicit selectedBrowserId, else the
+  // most-recently-installed browser (what launchUrl falls back to),
+  // else nothing. Drives which radio is checked and which browser the
+  // Install / Uninstall button targets.
+  const effectiveSelectedId =
+    storage.selectedBrowserId ??
+    installed[installed.length - 1]?.browserId ??
+    null;
+  const selectedInstalled =
+    effectiveSelectedId != null && installedIds.has(effectiveSelectedId);
+
+  const select = useCallback(
+    (id: string) => {
+      void call("setSelectedBrowserId", id).catch(() => {});
+    },
+    [call],
+  );
+
+  const install = useCallback(async () => {
+    if (!effectiveSelectedId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await call("installBrowserShortcut", effectiveSelectedId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }, [call, effectiveSelectedId]);
+
+  const uninstall = useCallback(
+    (id: string) => {
+      void call("uninstallBrowserShortcut", id).catch(() => {});
+    },
+    [call],
+  );
+
+  return (
+    <div className="card">
+      <div className="card-body p-4.5">
+        <div className="flex items-center gap-2 mb-2">
+          <FaGlobe className="w-4 h-4 shrink-0 text-base-content/60" />
+          <div className="subsection-label mb-0">Open links in</div>
+        </div>
+        <div className="subsection-desc mb-3">
+          Quick Links opens URLs through a non-Steam game shortcut so your
+          browser inherits Gaming Mode's session (Steam Input, overlay,
+          library entry). Pick a browser; if it isn't registered yet,
+          install it as a non-Steam game.
+        </div>
+
+        {candidates === null ? (
+          <div className="flex items-center justify-center h-10">
+            <Spinner size={16} />
+          </div>
+        ) : candidates.length === 0 ? (
+          <div className="subsection-desc mt-1 italic text-base-content/60">
+            No supported browsers detected. Install Firefox, Chrome, Brave,
+            Chromium, Edge, or Vivaldi — either as a native package or as a
+            Flatpak.
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-col gap-2">
+              {candidates.map((c) => (
+                <BrowserRadio
+                  key={c.id}
+                  candidate={c}
+                  checked={c.id === effectiveSelectedId}
+                  installed={installedIds.has(c.id)}
+                  onSelect={() => select(c.id)}
+                />
+              ))}
+            </div>
+
+            {steamReachable === false && (
+              <div
+                className="subsection-desc mt-3"
+                style={{ color: "var(--color-error)" }}
+              >
+                <FaCircleExclamation className="inline w-3 h-3 mr-1" />
+                Steam isn't responding on its debug port. Start Steam (Big
+                Picture or Gaming Mode), then click Refresh.
+              </div>
+            )}
+
+            {error && (
+              <div
+                className="subsection-desc mt-3"
+                style={{ color: "var(--color-error)" }}
+              >
+                {error}
+              </div>
+            )}
+
+            <div className="flex gap-2 mt-3 flex-wrap">
+              {effectiveSelectedId && !selectedInstalled && (
+                <FocusButton
+                  onClick={() => void install()}
+                  disabled={busy || steamReachable === false}
+                  className="btn btn-sm btn-primary"
+                >
+                  {busy ? "Working…" : "Install as non-Steam game"}
+                </FocusButton>
+              )}
+              {effectiveSelectedId && selectedInstalled && (
+                <FocusButton
+                  onClick={() => uninstall(effectiveSelectedId)}
+                  disabled={busy}
+                  className="btn btn-sm btn-ghost"
+                >
+                  <FaTrash className="mr-1" /> Uninstall shortcut
+                </FocusButton>
+              )}
+              <FocusButton
+                onClick={() => void refresh().catch(() => {})}
+                disabled={busy}
+                className="btn btn-sm btn-ghost"
+              >
+                Refresh
+              </FocusButton>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * Combined card: pick which installed shortcut Quick Links uses to
  * open URLs (the original BrowserPickerCard), plus the
  * detect-and-install flow that used to live in its own plugin
@@ -1357,27 +1523,12 @@ function QuickLinksPanel() {
     );
   }
 
-  // Settings view — auto-open the browser installer card when the
-  // user has no shortcut installed AND we're in Gaming Mode, so the
-  // landing-page banner's "Open settings" CTA lands them on the
-  // action they need rather than a collapsed Add button.
-  const hasInstalled = storage.installedBrowsers.length > 0;
-  const installerStartExpanded = !hasInstalled;
-
   return (
     <>
       {header}
       <div className="p-7 h-full overflow-y-auto">
         <div className="page-content space-y-4">
-          <BrowserShortcutCard
-            storage={storage}
-            startExpanded={installerStartExpanded}
-            onChangeSelected={(id) =>
-              void call("setSelectedBrowserId", id).catch(() => {})
-            }
-            onInstall={installBrowser}
-            onUninstall={uninstallBrowser}
-          />
+          <BrowserPicker storage={storage} />
 
         <div className="card">
           <div className="card-body p-4.5">

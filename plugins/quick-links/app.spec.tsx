@@ -582,3 +582,97 @@ describe("quick-links home widget", () => {
     expect(container.textContent).not.toContain("ProtonDB");
   });
 });
+
+describe("BrowserPicker (settings)", () => {
+  beforeEach(() => {
+    callMock.mockReset();
+    eventHandlers.clear();
+    currentGameRef.value = null;
+  });
+
+  const TWO_CANDIDATES = [
+    { id: "firefox-native", name: "Firefox", kind: "native", exe: "/usr/bin/firefox", launchOptionsBase: "--new-tab {url}" },
+    { id: "chrome-native", name: "Chrome", kind: "native", exe: "/usr/bin/chrome", launchOptionsBase: "{url}" },
+  ];
+
+  function rpcWith(state: unknown) {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getState") return Promise.resolve(state);
+      if (method === "isGamingMode") return Promise.resolve(false);
+      if (method === "detectBrowsers") return Promise.resolve(TWO_CANDIDATES);
+      if (method === "isSteamReachable") return Promise.resolve(true);
+      return Promise.resolve(state);
+    });
+  }
+
+  async function gotoSettings(container: HTMLElement) {
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => {
+      const cog = Array.from(container.querySelectorAll("button")).find(
+        (b) => b.getAttribute("aria-label") === "Quick Links settings",
+      );
+      expect(cog).toBeTruthy();
+    });
+    const cog = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.getAttribute("aria-label") === "Quick Links settings",
+    ) as HTMLButtonElement;
+    fireEvent.click(cog);
+  }
+
+  it("renders one radio per detected browser and no <select> dropdown", async () => {
+    rpcWith({ ...baseState, installedBrowsers: [] });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    await gotoSettings(container);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Firefox");
+      expect(container.textContent).toContain("Chrome");
+    });
+    expect(container.querySelector("select")).toBeNull();
+  });
+
+  it("selecting a browser radio calls setSelectedBrowserId with its id", async () => {
+    rpcWith({ ...baseState, installedBrowsers: [] });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    await gotoSettings(container);
+    await waitFor(() => expect(container.textContent).toContain("Chrome"));
+    const chromeRadio = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent?.includes("Chrome"),
+    ) as HTMLButtonElement;
+    fireEvent.click(chromeRadio);
+    expect(callMock).toHaveBeenCalledWith("setSelectedBrowserId", "chrome-native");
+  });
+
+  it("shows Install button when the selected browser has no shortcut", async () => {
+    rpcWith({ ...baseState, installedBrowsers: [], selectedBrowserId: "firefox-native" });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    await gotoSettings(container);
+    await waitFor(() => {
+      const btn = Array.from(container.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Install as non-Steam game"),
+      );
+      expect(btn).toBeTruthy();
+    });
+  });
+
+  it("hides Install button when the selected browser is already installed", async () => {
+    rpcWith({
+      ...baseState,
+      selectedBrowserId: "firefox-native",
+      installedBrowsers: [
+        { browserId: "firefox-native", name: "Firefox", kind: "native", appId: 1, gameId64: "1", exe: "/usr/bin/firefox", launchOptionsBase: "--new-tab {url}" },
+      ],
+    });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    await gotoSettings(container);
+    await waitFor(() => expect(container.textContent).toContain("Firefox"));
+    const installBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Install as non-Steam game"),
+    );
+    expect(installBtn).toBeUndefined();
+  });
+});
