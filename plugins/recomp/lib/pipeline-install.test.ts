@@ -47,6 +47,10 @@ mock.module("./github", () => ({
     onProgress?.(100, 100);
   },
   githubToken: async () => undefined,
+  // pipeline.ts imports githubFetch (FIX 1) for release lookups; these
+  // install tests drive prebuilt URLs and never hit it, but the import
+  // must still resolve under the whole-module mock.
+  githubFetch: async (url: string, init: RequestInit) => fetch(url, init),
 }));
 
 // Drive the extract step: by default it fails so we can exercise the

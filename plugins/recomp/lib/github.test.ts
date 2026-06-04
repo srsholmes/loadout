@@ -157,3 +157,95 @@ describe("downloadFile — FIX 3: truncation / size-mismatch guard", () => {
     expect(await readFile(dest, "utf-8")).toBe("bytes");
   });
 });
+
+describe("githubFetch — FIX 1: status classification + bounded retry", () => {
+  it("404 throws a not-found error and does NOT retry", async () => {
+    let calls = 0;
+    (globalThis as { fetch: typeof fetch }).fetch = (async () => {
+      calls++;
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch;
+    const { githubFetch, GitHubNotFoundError } = await import("./github");
+    await expect(
+      githubFetch("https://api.github.com/repos/x/y/releases", {}, { retries: 3 }),
+    ).rejects.toBeInstanceOf(GitHubNotFoundError);
+    expect(calls).toBe(1);
+  });
+
+  it("403 with rate-limit headers throws a distinct rate-limit error (no retry)", async () => {
+    let calls = 0;
+    const reset = Math.floor(Date.now() / 1000) + 1800;
+    (globalThis as { fetch: typeof fetch }).fetch = (async () => {
+      calls++;
+      return new Response("rate limited", {
+        status: 403,
+        headers: {
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": String(reset),
+        },
+      });
+    }) as unknown as typeof fetch;
+    const { githubFetch, GitHubRateLimitError } = await import("./github");
+    const err = await githubFetch(
+      "https://api.github.com/repos/x/y/releases",
+      {},
+      { retries: 3 },
+    ).catch((e) => e);
+    expect(err).toBeInstanceOf(GitHubRateLimitError);
+    // Surfaces the reset time so the user knows when to retry.
+    expect((err as Error).message).toMatch(/rate limit/i);
+    expect(calls).toBe(1);
+  });
+
+  it("retries a transient 5xx then succeeds", async () => {
+    let calls = 0;
+    (globalThis as { fetch: typeof fetch }).fetch = (async () => {
+      calls++;
+      if (calls === 1) return new Response("boom", { status: 503 });
+      return new Response("ok", { status: 200 });
+    }) as unknown as typeof fetch;
+    const { githubFetch } = await import("./github");
+    const res = await githubFetch(
+      "https://api.github.com/repos/x/y/releases",
+      {},
+      { retries: 3, backoffMs: () => 0 },
+    );
+    expect(res.status).toBe(200);
+    expect(calls).toBe(2);
+  });
+
+  it("retries a network error (fetch rejects) then succeeds", async () => {
+    let calls = 0;
+    (globalThis as { fetch: typeof fetch }).fetch = (async () => {
+      calls++;
+      if (calls === 1) throw new TypeError("network down");
+      return new Response("ok", { status: 200 });
+    }) as unknown as typeof fetch;
+    const { githubFetch } = await import("./github");
+    const res = await githubFetch(
+      "https://api.github.com/repos/x/y/releases",
+      {},
+      { retries: 3, backoffMs: () => 0 },
+    );
+    expect(res.status).toBe(200);
+    expect(calls).toBe(2);
+  });
+
+  it("exhausts retries on persistent 5xx and throws transient", async () => {
+    let calls = 0;
+    (globalThis as { fetch: typeof fetch }).fetch = (async () => {
+      calls++;
+      return new Response("boom", { status: 502 });
+    }) as unknown as typeof fetch;
+    const { githubFetch, GitHubTransientError } = await import("./github");
+    await expect(
+      githubFetch(
+        "https://api.github.com/repos/x/y/releases",
+        {},
+        { retries: 2, backoffMs: () => 0 },
+      ),
+    ).rejects.toBeInstanceOf(GitHubTransientError);
+    // 1 initial attempt + 2 retries = 3 calls.
+    expect(calls).toBe(3);
+  });
+});

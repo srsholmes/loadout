@@ -20,7 +20,7 @@ import { updateInstalledGame, removeInstalledGame } from "./state";
 import { addToSteam, removeFromSteam } from "./steam-shortcut";
 import { applyArtwork } from "./artwork";
 import { extractArchive } from "./pipeline-archive";
-import { downloadFile, githubToken } from "./github";
+import { downloadFile, githubToken, githubFetch } from "./github";
 import { runSetupScript } from "./installer-host";
 import { setupScriptPathFor } from "./registry";
 
@@ -91,12 +91,12 @@ export async function fetchReleases(repo: string): Promise<GitHubRelease[]> {
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const res = await fetch(url, { headers });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`GitHub API ${res.status} for ${repo}: ${body}`);
-  }
-
+  // githubFetch classifies the failure modes (404 not-found, 403
+  // rate-limit, 5xx/network transient) and retries only the transient
+  // ones with backoff — so a momentary GitHub hiccup no longer turns a
+  // release lookup into a permanent install failure. 404/403 throw
+  // immediately (retrying them is pointless / counterproductive).
+  const res = await githubFetch(url, { headers });
   return (await res.json()) as GitHubRelease[];
 }
 

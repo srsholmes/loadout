@@ -282,7 +282,11 @@ describe("fetchReleases", () => {
     });
 
     const { fetchReleases } = await import("./pipeline");
-    await expect(fetchReleases("test/repo")).rejects.toThrow("GitHub API 403");
+    // A plain 403 (no `x-ratelimit-remaining: 0` header) isn't a rate
+    // limit — it surfaces verbatim with its status (FIX 1: status
+    // classification routes a rate-limited 403 to a distinct message;
+    // see github.test.ts for that path).
+    await expect(fetchReleases("test/repo")).rejects.toThrow("HTTP 403");
   });
 
   it("uses GITHUB_TOKEN when available", async () => {
