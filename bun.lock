@@ -294,6 +294,21 @@
         "react-icons": "^5.5.0",
       },
     },
+    "plugins/quick-links": {
+      "name": "@loadout/plugin-quick-links",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/exec": "workspace:*",
+        "@loadout/plugin-storage": "workspace:*",
+        "@loadout/steam-cdp": "workspace:*",
+        "@loadout/steam-paths": "workspace:*",
+        "@loadout/types": "workspace:*",
+        "@loadout/ui": "workspace:*",
+        "@loadout/vdf": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+      },
+    },
     "plugins/rgb-control": {
       "name": "@loadout/plugin-rgb-control",
       "version": "0.0.1",
@@ -572,6 +587,8 @@
     "@loadout/plugin-playtime": ["@loadout/plugin-playtime@workspace:plugins/playtime"],
 
     "@loadout/plugin-protondb-badges": ["@loadout/plugin-protondb-badges@workspace:plugins/protondb-badges"],
+
+    "@loadout/plugin-quick-links": ["@loadout/plugin-quick-links@workspace:plugins/quick-links"],
 
     "@loadout/plugin-rgb-control": ["@loadout/plugin-rgb-control@workspace:plugins/rgb-control"],
 
