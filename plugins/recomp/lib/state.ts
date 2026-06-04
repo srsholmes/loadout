@@ -151,13 +151,25 @@ export async function updateInstalledGame(
   }));
 }
 
+/**
+ * Remove a game's install record. Also drops the game's saved
+ * `romPaths` entry so a later reinstall doesn't silently reuse a
+ * stale ROM path the user never re-confirmed. The game's
+ * `installedMods` live inside the `games[gameId]` entry, so deleting
+ * that entry already clears them — no separate step needed.
+ */
 export async function removeInstalledGame(
   state: PersistedState,
   gameId: string,
 ): Promise<PersistedState> {
   return mutateState((current) => {
     const { [gameId]: _, ...rest } = current.games;
-    return { ...current, games: rest };
+    const next: PersistedState = { ...current, games: rest };
+    if (current.romPaths && gameId in current.romPaths) {
+      const { [gameId]: _rom, ...restRoms } = current.romPaths;
+      next.romPaths = restRoms;
+    }
+    return next;
   });
 }
 

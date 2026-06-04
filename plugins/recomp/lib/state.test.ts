@@ -223,6 +223,44 @@ describe("state module", () => {
       expect(after.games.ghost).toBeUndefined();
     });
 
+    it("removeInstalledGame clears the saved romPaths entry (FIX 2: no orphan ROM path on uninstall)", async () => {
+      const { updateInstalledGame, setRomPath, removeInstalledGame, loadState } =
+        await import("./state");
+      let state = makeDefaultState();
+      state = await setRomPath(state, "alba", "/roms/tp.iso");
+      state = await updateInstalledGame(
+        state,
+        "alba",
+        makeInstalledGame({ romPath: "/roms/tp.iso" }),
+      );
+      // Sanity: both present before uninstall.
+      let persisted = await loadState();
+      expect(persisted.games.alba).toBeDefined();
+      expect(persisted.romPaths?.alba).toBe("/roms/tp.iso");
+
+      state = await removeInstalledGame(state, "alba");
+
+      persisted = await loadState();
+      expect(persisted.games.alba).toBeUndefined();
+      // The stale ROM path must be gone so a later reinstall doesn't
+      // silently reuse it without the user re-confirming.
+      expect(persisted.romPaths?.alba).toBeUndefined();
+    });
+
+    it("removeInstalledGame leaves OTHER games' romPaths intact", async () => {
+      const { updateInstalledGame, setRomPath, removeInstalledGame, loadState } =
+        await import("./state");
+      let state = makeDefaultState();
+      state = await setRomPath(state, "alba", "/roms/tp.iso");
+      state = await setRomPath(state, "soh", "/roms/oot.z64");
+      state = await updateInstalledGame(state, "alba", makeInstalledGame());
+      state = await removeInstalledGame(state, "alba");
+
+      const persisted = await loadState();
+      expect(persisted.romPaths?.alba).toBeUndefined();
+      expect(persisted.romPaths?.soh).toBe("/roms/oot.z64");
+    });
+
     it("removeInstalledMod drops the entry without touching siblings", async () => {
       const {
         updateInstalledGame,
