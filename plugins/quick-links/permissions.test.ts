@@ -50,6 +50,17 @@ async function loadAllowedCommands(): Promise<string[]> {
   return pkg.plugin.permissions.commands;
 }
 
+async function loadAllowedNetwork(): Promise<string[]> {
+  const raw = await readFile(join(import.meta.dir, "package.json"), "utf-8");
+  const pkg = JSON.parse(raw) as {
+    plugin: { permissions: { network?: string[] } };
+  };
+  return pkg.plugin.permissions.network ?? [];
+}
+
+// The loopback aliases the loader's sandboxed fetch treats as equivalent.
+const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "::1"];
+
 /**
  * Mirrors `NATIVE_BROWSERS` from `backend.ts`. Hard-coded here (not
  * imported) so that adding a new browser to backend.ts without
@@ -179,5 +190,19 @@ describe("withCommandPolicy permits the fast-path spawn", () => {
 
     // Use `basename` so the lint suite doesn't flag an unused import.
     expect(basename("/usr/bin/opera")).toBe("opera");
+  });
+});
+
+describe("manifest declares the Steam CDP network host", () => {
+  it("permissions.network includes a loopback host", async () => {
+    const network = await loadAllowedNetwork();
+    // @loadout/steam-cdp's listCefTabs does
+    // fetch("http://localhost:8080/json"), which the loader routes
+    // through the per-plugin sandboxed fetch. Without a loopback host in
+    // the allow-list, EVERY Steam-driving call (launchUrl slow path,
+    // isSteamReachable, AddShortcut / RemoveShortcut) is rejected and the
+    // UI shows "Steam isn't responding on its debug port." Regression for
+    // that PR-#69 migration miss.
+    expect(network.some((h) => LOOPBACK_HOSTS.includes(h))).toBe(true);
   });
 });

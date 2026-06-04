@@ -43,7 +43,8 @@
       "filesystem": [
         "/sys/class/drm",
         "~/.local/share/Steam/userdata"
-      ]
+      ],
+      "network": ["localhost", "127.0.0.1"]
     }
   }
 }
