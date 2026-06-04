@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { writeFile, rm } from "node:fs/promises";
 import { spawn } from "@loadout/exec";
 
 /**
@@ -94,6 +94,20 @@ export async function downloadFile(
   }
 
   const totalLength = chunks.reduce((sum, c) => sum + c.byteLength, 0);
+
+  // Truncation guard: when the server declared a Content-Length, a
+  // body that ended short means the connection dropped mid-transfer.
+  // Fail fast — never hand a truncated file to the extractor (which
+  // would otherwise produce a half-extracted, corrupt install). We
+  // check before writing so no partial file is left on disk; also
+  // remove any stale file at `dest` from a previous attempt.
+  if (totalSize > 0 && totalLength !== totalSize) {
+    try { await rm(dest, { force: true }); } catch { /* ignore */ }
+    throw new Error(
+      `Download incomplete: expected ${totalSize} bytes but received ${totalLength} (size mismatch — the transfer was likely truncated).`,
+    );
+  }
+
   const result = new Uint8Array(totalLength);
   let offset = 0;
   for (const chunk of chunks) {

@@ -93,3 +93,67 @@ describe("downloadFile — allowedHosts post-redirect guard", () => {
     ).rejects.toThrow(/HTTP 404/);
   });
 });
+
+describe("downloadFile — FIX 3: truncation / size-mismatch guard", () => {
+  it("throws when fewer bytes arrive than Content-Length declares", async () => {
+    // Body is 5 bytes but the header claims 999 — a mid-write
+    // interruption. The downloader must fail fast, not hand a truncated
+    // file to the extractor.
+    (globalThis as { fetch: typeof fetch }).fetch = (async () => {
+      const res = new Response("bytes", {
+        status: 200,
+        headers: { "content-length": "999" },
+      });
+      Object.defineProperty(res, "url", { value: "https://example.com/file.zip" });
+      return res;
+    }) as unknown as typeof fetch;
+    const { downloadFile } = await import("./github");
+    const dest = join(sandboxRoot, "trunc.bin");
+    await expect(
+      downloadFile("https://example.com/file.zip", dest),
+    ).rejects.toThrow(/size|truncat|incomplete|mismatch/i);
+  });
+
+  it("removes the partial file on a size mismatch", async () => {
+    (globalThis as { fetch: typeof fetch }).fetch = (async () => {
+      const res = new Response("bytes", {
+        status: 200,
+        headers: { "content-length": "999" },
+      });
+      Object.defineProperty(res, "url", { value: "https://example.com/file.zip" });
+      return res;
+    }) as unknown as typeof fetch;
+    const { downloadFile } = await import("./github");
+    const dest = join(sandboxRoot, "trunc2.bin");
+    await downloadFile("https://example.com/file.zip", dest).catch(() => {});
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(dest)).toBe(false);
+  });
+
+  it("succeeds when byte count matches Content-Length", async () => {
+    (globalThis as { fetch: typeof fetch }).fetch = (async () => {
+      const res = new Response("bytes", {
+        status: 200,
+        headers: { "content-length": "5" },
+      });
+      Object.defineProperty(res, "url", { value: "https://example.com/file.zip" });
+      return res;
+    }) as unknown as typeof fetch;
+    const { downloadFile } = await import("./github");
+    const dest = join(sandboxRoot, "ok.bin");
+    await downloadFile("https://example.com/file.zip", dest);
+    expect(await readFile(dest, "utf-8")).toBe("bytes");
+  });
+
+  it("succeeds when Content-Length is absent (no expectation to check)", async () => {
+    (globalThis as { fetch: typeof fetch }).fetch = (async () => {
+      const res = new Response("bytes", { status: 200 });
+      Object.defineProperty(res, "url", { value: "https://example.com/file.zip" });
+      return res;
+    }) as unknown as typeof fetch;
+    const { downloadFile } = await import("./github");
+    const dest = join(sandboxRoot, "nolen.bin");
+    await downloadFile("https://example.com/file.zip", dest);
+    expect(await readFile(dest, "utf-8")).toBe("bytes");
+  });
+});
