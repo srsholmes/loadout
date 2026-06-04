@@ -35,7 +35,6 @@ import {
   HeaderBackButton,
   IconButton,
   PluginHeader,
-  Select,
   Spinner,
   TextInput,
   Toggle,
@@ -886,297 +885,6 @@ function BrowserPicker({ storage }: { storage: QuickLinksStorage }) {
   );
 }
 
-/**
- * Combined card: pick which installed shortcut Quick Links uses to
- * open URLs (the original BrowserPickerCard), plus the
- * detect-and-install flow that used to live in its own plugin
- * (gaming-mode-browser). The install flow only shows up after the
- * user clicks "Add another browser" so the common case (already have
- * one installed, just want to pick which one) stays uncluttered.
- */
-function BrowserShortcutCard({
-  storage,
-  startExpanded,
-  onChangeSelected,
-  onInstall,
-  onUninstall,
-}: {
-  storage: QuickLinksStorage;
-  startExpanded: boolean;
-  onChangeSelected: (browserId: string | null) => void;
-  onInstall: (browserId: string) => Promise<void>;
-  onUninstall: (browserId: string) => Promise<void>;
-}) {
-  const { call } = useBackend("quick-links");
-  const [candidates, setCandidates] = useState<BrowserCandidate[] | null>(null);
-  const [steamReachable, setSteamReachable] = useState<boolean | null>(null);
-  const [pick, setPick] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [installerOpen, setInstallerOpen] = useState(startExpanded);
-
-  const installed = storage.installedBrowsers;
-  const installedIds = useMemo(
-    () => new Set(installed.map((s) => s.browserId)),
-    [installed],
-  );
-
-  const refresh = useCallback(async () => {
-    const [list, reachable] = await Promise.all([
-      call("detectBrowsers") as Promise<BrowserCandidate[]>,
-      call("isSteamReachable") as Promise<boolean>,
-    ]);
-    setCandidates(list);
-    setSteamReachable(reachable);
-    setPick((prev) => {
-      // Prefer to default the picker to a not-yet-installed candidate
-      // so "Install" actually adds a new entry rather than re-installing
-      // the same one.
-      if (prev && list.some((c) => c.id === prev)) return prev;
-      const unused = list.find((c) => !installedIds.has(c.id));
-      if (unused) return unused.id;
-      return list[0]?.id ?? null;
-    });
-  }, [call, installedIds]);
-
-  useEffect(() => {
-    if (!installerOpen) return;
-    void refresh();
-  }, [installerOpen, refresh]);
-
-  const install = useCallback(async () => {
-    if (!pick) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await onInstall(pick);
-      // Successful install → collapse the installer back into the
-      // compact state so the user lands on the picker again.
-      setInstallerOpen(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }, [onInstall, pick]);
-
-  const pickerOptions = useMemo(() => {
-    const opts: Array<{ value: string; label: string }> = [
-      { value: "__default__", label: "Default (most-recent install)" },
-    ];
-    for (const b of installed) {
-      opts.push({ value: b.browserId, label: b.name });
-    }
-    return opts;
-  }, [installed]);
-
-  const selectValue = storage.selectedBrowserId ?? "__default__";
-
-  return (
-    <div className="card">
-      <div className="card-body p-4.5">
-        <div className="flex items-center gap-2 mb-2">
-          <FaGlobe className="w-4 h-4 shrink-0 text-base-content/60" />
-          <div className="subsection-label mb-0">Browser shortcut</div>
-        </div>
-        <div className="subsection-desc mb-3">
-          Quick Links opens URLs through a non-Steam game shortcut —
-          that's what lets your browser inherit Gaming Mode's BPM
-          session (Steam Input, overlay, library entry). Pick which
-          browser is the default for new clicks, or add another.
-        </div>
-
-        {installed.length > 0 && (
-          <>
-            <div className="flex flex-col gap-1.5 mb-3">
-              {installed.map((s) => (
-                <div
-                  key={s.browserId}
-                  className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-base-200"
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <FaCheck className="w-3 h-3 shrink-0 text-success" />
-                      <div className="text-sm font-medium truncate">
-                        {s.name}
-                      </div>
-                    </div>
-                    <div className="text-[11px] text-base-content/55 mono truncate">
-                      appid {s.appId}
-                      {s.kind === "flatpak" ? " · flatpak" : ""}
-                    </div>
-                  </div>
-                  <FocusButton
-                    className="btn btn-xs btn-ghost"
-                    onClick={() => void onUninstall(s.browserId)}
-                    title={`Uninstall ${s.name}`}
-                    ariaLabel={`Uninstall ${s.name}`}
-                  >
-                    <FaTrash />
-                  </FocusButton>
-                </div>
-              ))}
-            </div>
-
-            <div className="text-[11px] uppercase tracking-wider text-base-content/45 mb-1.5">
-              Open links in
-            </div>
-            <Select
-              value={selectValue}
-              options={pickerOptions}
-              onChange={(v) =>
-                onChangeSelected(v === "__default__" ? null : v)
-              }
-            />
-          </>
-        )}
-
-        {!installerOpen ? (
-          <div className="mt-3.5">
-            <FocusButton
-              className="btn btn-sm"
-              onClick={() => setInstallerOpen(true)}
-            >
-              <FaPlus className="mr-1" />{" "}
-              {installed.length === 0 ? "Install a browser" : "Add another browser"}
-            </FocusButton>
-          </div>
-        ) : (
-          <div className="border-t border-base-300/40 mt-4 pt-3">
-            <div className="text-sm font-medium mb-1.5">
-              Register a desktop browser as a non-Steam game
-            </div>
-            <div className="subsection-desc mb-2">
-              The picked browser shows up in your Steam library so
-              Gaming Mode can launch it. Used by Quick Links to open
-              wiki / ProtonDB / YouTube searches for the running game.
-            </div>
-
-            {steamReachable === false && (
-              <div
-                className="subsection-desc mt-2"
-                style={{ color: "var(--color-error)" }}
-              >
-                <FaCircleExclamation className="inline w-3 h-3 mr-1" />
-                Steam isn't responding on its debug port. Start Steam
-                (Big Picture or Gaming Mode), then click Refresh.
-              </div>
-            )}
-
-            {candidates === null ? (
-              <div className="flex items-center justify-center h-10">
-                <Spinner size={16} />
-              </div>
-            ) : candidates.length === 0 ? (
-              <div className="subsection-desc mt-2 italic text-base-content/60">
-                No supported browsers detected. Install Firefox, Chrome,
-                Brave, Chromium, Edge, or Vivaldi — either as a native
-                package or as a Flatpak.
-              </div>
-            ) : (
-              <div className="flex flex-col gap-2 mt-2">
-                {candidates.map((c) => (
-                  <BrowserRadio
-                    key={c.id}
-                    candidate={c}
-                    checked={pick === c.id}
-                    onSelect={() => setPick(c.id)}
-                  />
-                ))}
-              </div>
-            )}
-
-            {error && (
-              <div
-                className="subsection-desc mt-2"
-                style={{ color: "var(--color-error)" }}
-              >
-                {error}
-              </div>
-            )}
-
-            <div className="flex gap-2 mt-3 flex-wrap">
-              <FocusButton
-                onClick={() => void install()}
-                disabled={
-                  busy ||
-                  !pick ||
-                  steamReachable === false ||
-                  (candidates ?? []).length === 0
-                }
-                className="btn btn-sm btn-primary"
-              >
-                {busy
-                  ? "Working…"
-                  : pick && installedIds.has(pick)
-                    ? "Reinstall shortcut"
-                    : "Install as non-Steam game"}
-              </FocusButton>
-              <FocusButton
-                onClick={() => void refresh()}
-                disabled={busy}
-                className="btn btn-sm btn-ghost"
-              >
-                Refresh
-              </FocusButton>
-              <FocusButton
-                onClick={() => setInstallerOpen(false)}
-                disabled={busy}
-                className="btn btn-sm btn-ghost"
-              >
-                Cancel
-              </FocusButton>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/**
- * Gaming-mode warning banner. Shows on the landing view when:
- *   - we're running under gamescope (Gaming Mode), AND
- *   - no Chrome/Firefox shortcut is currently registered.
- *
- * "Switch to settings" is the only useful action — that's where the
- * BrowserShortcutCard lives. Outside Gaming Mode the banner stays
- * hidden because the user can just open URLs in their desktop
- * browser; the registered-shortcut path is only really needed inside
- * BPM where there's no xdg-open chain you can rely on.
- */
-function NoBrowserBanner({ onOpenSettings }: { onOpenSettings: () => void }) {
-  const { ref, focused } = useFocusable({ onEnterPress: onOpenSettings });
-  return (
-    <div
-      className="p-3.5 mb-4 flex items-center gap-3 border-b border-base-content/10"
-      role="alert"
-    >
-      <FaCircleExclamation className="w-5 h-5 shrink-0 text-warning" />
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium mb-0.5">
-          No browser shortcut registered
-        </div>
-        <div className="text-[12px] text-base-content/75 leading-snug">
-          In Gaming Mode, Quick Links needs a Chrome or Firefox shortcut
-          registered with Steam to open links. Add one in settings.
-        </div>
-      </div>
-      <button
-        ref={ref}
-        type="button"
-        onClick={onOpenSettings}
-        className={
-          "btn btn-sm btn-primary shrink-0 " +
-          (focused ? "ring-2 ring-primary/60" : "")
-        }
-      >
-        Open settings
-      </button>
-    </div>
-  );
-}
-
 // ─── Landing page (default view) ─────────────────────────────────────
 
 /**
@@ -1325,7 +1033,6 @@ function QuickLinksPanel() {
   const currentGame = useCurrentGame();
   const [storage, setStorage] = useState<QuickLinksStorage | null>(null);
   const [view, setView] = useState<"landing" | "settings">("landing");
-  const [inGamingMode, setInGamingMode] = useState(false);
   const [newTpl, setNewTpl] = useState({
     name: "",
     urlTemplate: "",
@@ -1334,9 +1041,6 @@ function QuickLinksPanel() {
   useEffect(() => {
     void call("getState")
       .then((s) => setStorage(s as QuickLinksStorage))
-      .catch(() => {});
-    void call("isGamingMode")
-      .then((v) => setInGamingMode(v === true))
       .catch(() => {});
   }, [call]);
 
@@ -1394,20 +1098,6 @@ function QuickLinksPanel() {
     [call],
   );
 
-  const installBrowser = useCallback(
-    async (browserId: string) => {
-      await call("installBrowserShortcut", browserId);
-    },
-    [call],
-  );
-
-  const uninstallBrowser = useCallback(
-    async (browserId: string) => {
-      await call("uninstallBrowserShortcut", browserId);
-    },
-    [call],
-  );
-
   const addCustom = useCallback(async () => {
     if (!newTpl.name.trim() || !newTpl.urlTemplate.trim()) return;
     await call("addCustomTemplate", {
@@ -1435,23 +1125,6 @@ function QuickLinksPanel() {
         : [],
     [storage],
   );
-
-  // Banner gating: only nag in Gaming Mode, only when no
-  // Chrome/Firefox shortcut is registered. Keeps the banner out of
-  // the way for the much larger group of users who use Quick Links
-  // in desktop mode.
-  const hasChromeOrFirefox = useMemo(
-    () =>
-      (storage?.installedBrowsers ?? []).some(
-        (s) =>
-          s.browserId.includes("firefox") ||
-          s.browserId.includes("librewolf") ||
-          s.browserId.includes("chrome"),
-      ),
-    [storage],
-  );
-  const showBanner =
-    storage !== null && inGamingMode && !hasChromeOrFirefox && view === "landing";
 
   // Shared header: title + dynamic running-game subtitle, cog on
   // landing, HeaderBackButton on settings. Mirrors the convention
