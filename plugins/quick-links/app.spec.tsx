@@ -17,6 +17,7 @@ import { fireEvent, waitFor } from "../../test/render";
 const callMock = mock(
   (_method: string, ..._args: unknown[]) => Promise.resolve(null as unknown),
 );
+const hideOverlayMock = mock(() => Promise.resolve());
 const eventHandlers = new Map<string, (data: unknown) => void>();
 const currentGameRef: {
   value: { appId: number; gameName: string; startTime: number } | null;
@@ -70,6 +71,7 @@ mock.module("@loadout/ui", () => ({
   useCurrentGame: () => currentGameRef.value,
   useFocusable: () => ({ ref: () => {}, focused: false }),
   notify: () => {},
+  hideOverlay: hideOverlayMock,
 }));
 
 const baseState = {
@@ -664,5 +666,63 @@ describe("BrowserPicker on the landing page", () => {
     // Landing chips render (templates from baseState), but the picker does not.
     await waitFor(() => expect(container.textContent).toContain("ProtonDB"));
     expect(container.textContent).not.toContain("Open links in");
+  });
+});
+
+describe("closes the overlay on successful link launch", () => {
+  const ONE_BROWSER = [
+    { browserId: "firefox-native", name: "Firefox", kind: "native", appId: 1, gameId64: "1", exe: "/usr/bin/firefox", launchOptionsBase: "--new-tab {url}" },
+  ];
+
+  beforeEach(() => {
+    callMock.mockReset();
+    hideOverlayMock.mockReset();
+    eventHandlers.clear();
+    currentGameRef.value = { appId: 620, gameName: "Portal 2", startTime: Date.now() };
+  });
+
+  function mountWith(launchResult: unknown) {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getState")
+        return Promise.resolve({ ...baseState, installedBrowsers: ONE_BROWSER });
+      if (method === "isGamingMode") return Promise.resolve(false);
+      if (method === "launchUrl") return Promise.resolve(launchResult);
+      if (method === "detectBrowsers") return Promise.resolve([]);
+      if (method === "isSteamReachable") return Promise.resolve(true);
+      return Promise.resolve({ ...baseState, installedBrowsers: ONE_BROWSER });
+    });
+  }
+
+  async function clickFirstOpen(container: HTMLElement) {
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => {
+      const open = Array.from(container.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Open"),
+      );
+      expect(open).toBeTruthy();
+    });
+    const open = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Open"),
+    ) as HTMLButtonElement;
+    fireEvent.click(open);
+  }
+
+  it("hides the overlay after a launch returns launched:true", async () => {
+    mountWith({ launched: true });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    await clickFirstOpen(container);
+    await waitFor(() => expect(hideOverlayMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("does NOT hide the overlay when a launch fails", async () => {
+    mountWith({ launched: false, reason: "not-installed", message: "no browser" });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    await clickFirstOpen(container);
+    // Give the launch promise a tick to settle.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(hideOverlayMock).not.toHaveBeenCalled();
   });
 });

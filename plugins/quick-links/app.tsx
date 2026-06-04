@@ -33,6 +33,7 @@ import {
 } from "react-icons/fa6";
 import {
   HeaderBackButton,
+  hideOverlay,
   IconButton,
   PluginHeader,
   Spinner,
@@ -170,6 +171,9 @@ function useLinkLauncher(
           | { launched: true }
           | { launched: false; reason: string; message: string };
         if (result.launched) {
+          // Link is on its way to the browser — get the overlay out of
+          // the way. Fire-and-forget; a missing host transport no-ops.
+          void hideOverlay().catch(() => {});
           return;
         }
         if (result.reason === "not-installed") {
