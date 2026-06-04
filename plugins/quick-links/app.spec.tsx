@@ -231,126 +231,6 @@ describe("quick-links landing page (default mount)", () => {
   });
 });
 
-describe("quick-links gaming-mode banner", () => {
-  beforeEach(() => {
-    callMock.mockReset();
-    eventHandlers.clear();
-    currentGameRef.value = null;
-  });
-
-  it("does NOT show the banner outside gaming mode, even with no browser installed", async () => {
-    rpcFor(baseState, { isGamingMode: false });
-    const container = document.createElement("div");
-    document.body.appendChild(container);
-    const { mount } = await import("./app");
-    mount(container);
-
-    await waitFor(() => {
-      expect(container.textContent).toContain("No game running");
-    });
-    expect(container.textContent).not.toContain(
-      "No browser shortcut registered",
-    );
-  });
-
-  it("shows the banner in gaming mode when no Chrome/Firefox shortcut is installed", async () => {
-    rpcFor(baseState, { isGamingMode: true });
-    const container = document.createElement("div");
-    document.body.appendChild(container);
-    const { mount } = await import("./app");
-    mount(container);
-
-    await waitFor(() => {
-      expect(container.textContent).toContain(
-        "No browser shortcut registered",
-      );
-    });
-  });
-
-  it("hides the banner when Chrome/Firefox is installed (even in gaming mode)", async () => {
-    const stateWithFirefox = {
-      ...baseState,
-      installedBrowsers: [
-        {
-          browserId: "firefox-native",
-          name: "Firefox",
-          kind: "native",
-          appId: 1,
-          gameId64: "1",
-          exe: "/usr/bin/firefox",
-          launchOptionsBase: "--new-tab {url}",
-        },
-      ],
-    };
-    rpcFor(stateWithFirefox, { isGamingMode: true });
-    const container = document.createElement("div");
-    document.body.appendChild(container);
-    const { mount } = await import("./app");
-    mount(container);
-
-    await waitFor(() => {
-      // Make sure the state has loaded.
-      expect(container.textContent).toContain("No game running");
-    });
-    expect(container.textContent).not.toContain(
-      "No browser shortcut registered",
-    );
-  });
-
-  it("still shows the banner when Brave (not Chrome/Firefox) is installed in gaming mode", async () => {
-    const stateWithBrave = {
-      ...baseState,
-      installedBrowsers: [
-        {
-          browserId: "brave-native",
-          name: "Brave",
-          kind: "native",
-          appId: 1,
-          gameId64: "1",
-          exe: "/usr/bin/brave",
-          launchOptionsBase: "{url}",
-        },
-      ],
-    };
-    rpcFor(stateWithBrave, { isGamingMode: true });
-    const container = document.createElement("div");
-    document.body.appendChild(container);
-    const { mount } = await import("./app");
-    mount(container);
-
-    await waitFor(() => {
-      expect(container.textContent).toContain(
-        "No browser shortcut registered",
-      );
-    });
-  });
-
-  it("banner's 'Open settings' CTA navigates to the settings view", async () => {
-    rpcFor(baseState, { isGamingMode: true });
-    const container = document.createElement("div");
-    document.body.appendChild(container);
-    const { mount } = await import("./app");
-    mount(container);
-
-    await waitFor(() => {
-      expect(container.textContent).toContain(
-        "No browser shortcut registered",
-      );
-    });
-
-    const cta = Array.from(container.querySelectorAll("button")).find(
-      (b) => b.textContent?.trim() === "Open settings",
-    ) as HTMLButtonElement | undefined;
-    expect(cta).toBeTruthy();
-    fireEvent.click(cta!);
-
-    await waitFor(() => {
-      // Settings view shows the Templates section heading.
-      expect(container.textContent).toContain("Templates");
-    });
-  });
-});
-
 describe("quick-links settings sub-page (cog flips to it)", () => {
   beforeEach(() => {
     callMock.mockReset();
@@ -392,7 +272,9 @@ describe("quick-links settings sub-page (cog flips to it)", () => {
     await mountAndOpenSettings(container);
 
     await waitFor(() => {
-      expect(container.textContent).toContain("Browser shortcut");
+      // Settings now renders the unified BrowserPicker titled "Open
+      // links in" instead of the old "Browser shortcut" card.
+      expect(container.textContent).toContain("Open links in");
     });
   });
 
@@ -439,21 +321,7 @@ describe("quick-links settings sub-page (cog flips to it)", () => {
     });
   });
 
-  it("'Install a browser' button shows the installer when no shortcut is registered", async () => {
-    rpcFor(baseState);
-    const container = document.createElement("div");
-    document.body.appendChild(container);
-    await mountAndOpenSettings(container);
-
-    // installer auto-opens because installedBrowsers is empty
-    await waitFor(() => {
-      expect(container.textContent).toContain(
-        "Register a desktop browser as a non-Steam game",
-      );
-    });
-  });
-
-  it("clicking Install in the installer dispatches installBrowserShortcut", async () => {
+  it("clicking Install in the picker dispatches installBrowserShortcut", async () => {
     const firefoxCandidate = {
       id: "firefox-native",
       name: "Firefox",
@@ -461,8 +329,15 @@ describe("quick-links settings sub-page (cog flips to it)", () => {
       exe: "/usr/bin/firefox",
       launchOptionsBase: "--new-tab {url}",
     };
+    // Empty installedBrowsers, one detectable candidate, and an
+    // explicit selection so the picker's Install button renders.
     callMock.mockImplementation((method: string) => {
-      if (method === "getState") return Promise.resolve(baseState);
+      if (method === "getState")
+        return Promise.resolve({
+          ...baseState,
+          installedBrowsers: [],
+          selectedBrowserId: "firefox-native",
+        });
       if (method === "isGamingMode") return Promise.resolve(false);
       if (method === "detectBrowsers")
         return Promise.resolve([firefoxCandidate]);
@@ -475,11 +350,23 @@ describe("quick-links settings sub-page (cog flips to it)", () => {
     document.body.appendChild(container);
     await mountAndOpenSettings(container);
 
+    // Radios always show — pick the candidate so it's the selection.
     await waitFor(() => {
       expect(container.textContent).toContain("Firefox");
+    });
+    const firefoxRadio = Array.from(
+      container.querySelectorAll("button"),
+    ).find((b) => b.textContent?.includes("Firefox")) as HTMLButtonElement;
+    expect(firefoxRadio).toBeTruthy();
+    fireEvent.click(firefoxRadio);
+    expect(callMock).toHaveBeenCalledWith(
+      "setSelectedBrowserId",
+      "firefox-native",
+    );
+
+    await waitFor(() => {
       expect(container.textContent).toContain("Install as non-Steam game");
     });
-
     const installBtn = Array.from(container.querySelectorAll("button")).find(
       (b) => b.textContent?.includes("Install as non-Steam game"),
     ) as HTMLButtonElement;
