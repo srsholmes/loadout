@@ -675,10 +675,12 @@ function PerGameCard({
 function BrowserRadio({
   candidate,
   checked,
+  installed,
   onSelect,
 }: {
   candidate: BrowserCandidate;
   checked: boolean;
+  installed: boolean;
   onSelect: () => void;
 }) {
   const { ref, focused } = useFocusable({ onEnterPress: onSelect });
@@ -694,7 +696,12 @@ function BrowserRadio({
       }
     >
       <div className="min-w-0">
-        <div className="text-sm font-medium truncate">{candidate.name}</div>
+        <div className="flex items-center gap-2 min-w-0">
+          {installed && (
+            <FaCheck className="w-3 h-3 shrink-0 text-success" />
+          )}
+          <div className="text-sm font-medium truncate">{candidate.name}</div>
+        </div>
         <div className="text-[11px] text-base-content/55 mono truncate">
           {candidate.kind === "flatpak"
             ? `flatpak · ${candidate.flatpakAppId}`
