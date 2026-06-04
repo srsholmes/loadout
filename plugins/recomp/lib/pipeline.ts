@@ -102,7 +102,7 @@ export async function fetchReleases(repo: string): Promise<GitHubRelease[]> {
 
 export async function resolveAssetUrl(
   entry: GameEntry,
-): Promise<{ url: string; version: string; platform: PlatformName }> {
+): Promise<{ url: string; version: string; platform: PlatformName; sha256?: string }> {
   // `getEffectivePlatformValue` returns Linux pattern first; if there
   // isn't one and we're on Linux, falls back to the Windows pattern
   // with `platform: "windows"` so the install pipeline knows to set
@@ -114,6 +114,11 @@ export async function resolveAssetUrl(
     );
   }
   const { value: pattern, platform } = resolved;
+
+  // Expected SHA-256 for the resolved platform, when the manifest
+  // pinned one. Threaded back to the install pipeline so it can verify
+  // the downloaded bytes before extraction.
+  const sha256 = entry.releaseSha256?.[platform];
 
   // Fast path: pre-resolved URLs from registry. Only use the
   // pre-resolved URL if it's for the SAME platform we ended up
@@ -129,6 +134,7 @@ export async function resolveAssetUrl(
         url: preResolved,
         version: entry.latestVersion ?? "unknown",
         platform,
+        sha256,
       };
     }
   }
@@ -149,7 +155,52 @@ export async function resolveAssetUrl(
     );
   }
 
-  return { url: asset.browser_download_url, version: release.tag_name, platform };
+  return { url: asset.browser_download_url, version: release.tag_name, platform, sha256 };
+}
+
+/**
+ * Verify a freshly downloaded file against an expected SHA-256
+ * (FIX 4 — checksum pinning).
+ *
+ *   - `expected` present: compute the file's SHA-256 and throw
+ *     (removing the file first) on mismatch. The expected digest may
+ *     carry a `sha256:` prefix and is compared case-insensitively.
+ *   - `expected` absent: emit a one-line "unverified download" notice
+ *     via `log` and return (existing games carry no checksum yet, so
+ *     this must NOT block them).
+ *
+ * Streams the file through Bun's incremental hasher so a multi-GB
+ * release asset isn't buffered into memory just to hash it.
+ */
+export async function verifyDownloadChecksum(
+  filePath: string,
+  expected: string | undefined,
+  log: (message: string) => void,
+): Promise<void> {
+  if (!expected || expected.trim() === "") {
+    log(
+      `Unverified download: no sha256 pinned for ${basename(filePath)} — proceeding without integrity check.`,
+    );
+    return;
+  }
+
+  const want = expected.trim().replace(/^sha256:/i, "").toLowerCase();
+
+  const hasher = new Bun.CryptoHasher("sha256");
+  const stream = Bun.file(filePath).stream();
+  for await (const chunk of stream) {
+    hasher.update(chunk);
+  }
+  const got = hasher.digest("hex").toLowerCase();
+
+  if (got !== want) {
+    try { await rm(filePath, { force: true }); } catch { /* ignore */ }
+    throw new Error(
+      `Checksum mismatch for ${basename(filePath)}: expected sha256 ${want}, got ${got}. ` +
+        `The download was rejected and removed.`,
+    );
+  }
+  log(`Checksum verified (sha256 ${got}) for ${basename(filePath)}.`);
 }
 
 // ── Set Executable Permissions ───────────────────────────────────────
@@ -296,6 +347,7 @@ export async function installGame(
       version = resolved.version;
       resolvedPlatform = resolved.platform;
       const assetUrl = resolved.url;
+      const expectedSha256 = resolved.sha256;
 
     // Download
     const filename = assetUrl.split("/").pop() ?? "download";
@@ -315,6 +367,21 @@ export async function installGame(
         percent, message: `${mbDown} / ${mbTotal} MB`,
       });
     });
+
+    // Checksum gate (FIX 4): if the manifest pinned an expected
+    // sha256 for this platform, verify the downloaded bytes BEFORE
+    // extraction and abort (the helper removes the file) on mismatch.
+    // Absent ⇒ a one-line "unverified" notice, then proceed — existing
+    // games carry no checksums yet.
+    onEvent({
+      type: "progress", gameId, stage: "verifying",
+      percent: 0, message: "Verifying download...",
+    });
+    await verifyDownloadChecksum(downloadPath, expectedSha256, (m) =>
+      onEvent({
+        type: "progress", gameId, stage: "verifying", percent: 100, message: m,
+      }),
+    );
 
     // Stage extraction in `${installDir}.partial`. On success we
     // atomically `rename(partialDir, installDir)` at the end of the

@@ -98,6 +98,15 @@ export interface Manifest {
   /** Files preserved across re-installs (configs, saves). */
   preservePaths?: string[];
   /**
+   * Optional expected SHA-256 of the downloadable release asset,
+   * per platform. When set for the resolved platform, the install
+   * pipeline aborts (and cleans up) if the downloaded file's hash
+   * doesn't match — pinning the exact bytes a manifest expects. Hex
+   * digest, optionally prefixed `sha256:`; matched case-insensitively.
+   * Absent ⇒ download proceeds with an "unverified" notice.
+   */
+  releaseSha256?: PlatformAssets;
+  /**
    * The directory the game's engine reads its per-user data from on
    * Linux (config / saves / texture replacements). Declared once
    * here so individual mod entries don't repeat it — they reference
@@ -244,6 +253,16 @@ export interface GameEntry {
   versionPattern?: string;
   preservePaths?: string[];
   releaseChecksums?: Record<string, string>;
+  /**
+   * Optional expected SHA-256 of the release asset, per platform.
+   * When present for the resolved platform, the download pipeline
+   * verifies the downloaded file's hash before extraction and aborts
+   * on mismatch. Hex digest, optionally `sha256:`-prefixed, matched
+   * case-insensitively. Sourced from `Manifest.releaseSha256` for
+   * directory-scanned entries; bundled `games.json` entries leave it
+   * unset until a real checksum is recorded.
+   */
+  releaseSha256?: PlatformAssets;
   status?: string;
   latestVersion?: string;
   latestAssetUrl?: PlatformAssets;

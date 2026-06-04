@@ -310,6 +310,114 @@ describe("fetchReleases", () => {
   });
 });
 
+// ── FIX 4: checksum pinning ──────────────────────────────────────────
+
+describe("resolveAssetUrl — sha256 threading", () => {
+  let mockFetch: ReturnType<typeof mock>;
+
+  beforeEach(() => {
+    mockFetch = mock();
+    globalThis.fetch = mockFetch as unknown as typeof fetch;
+    delete process.env.GITHUB_TOKEN;
+  });
+
+  it("returns the pinned sha256 for the resolved platform (pre-resolved path)", async () => {
+    const { resolveAssetUrl } = await import("./pipeline");
+    const entry = makeGameEntry({
+      latestVersion: "v1.0.0",
+      latestAssetUrl: {
+        linux: "https://example.com/test-linux.zip",
+      },
+      releaseSha256: {
+        linux: "a".repeat(64),
+      },
+    });
+    const result = await resolveAssetUrl(entry);
+    expect(result.sha256).toBe("a".repeat(64));
+  });
+
+  it("returns undefined sha256 when none is pinned", async () => {
+    const { resolveAssetUrl } = await import("./pipeline");
+    const entry = makeGameEntry({
+      latestVersion: "v1.0.0",
+      latestAssetUrl: { linux: "https://example.com/test-linux.zip" },
+    });
+    const result = await resolveAssetUrl(entry);
+    expect(result.sha256).toBeUndefined();
+  });
+});
+
+describe("verifyDownloadChecksum — FIX 4", () => {
+  it("passes when the file's sha256 matches the expected value", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "recomp-cksum-"));
+    const file = join(dir, "asset.zip");
+    const data = "the quick brown fox";
+    await writeFile(file, data);
+    // Known sha256 of the data computed via Bun's hasher.
+    const expected = new Bun.CryptoHasher("sha256").update(data).digest("hex");
+
+    const { verifyDownloadChecksum } = await import("./pipeline");
+    const events: string[] = [];
+    await verifyDownloadChecksum(file, expected, (m) => events.push(m));
+    // No throw == pass.
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("throws AND removes the file when the sha256 mismatches", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { existsSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "recomp-cksum-"));
+    const file = join(dir, "asset.zip");
+    await writeFile(file, "tampered bytes");
+
+    const { verifyDownloadChecksum } = await import("./pipeline");
+    await expect(
+      verifyDownloadChecksum(file, "b".repeat(64), () => {}),
+    ).rejects.toThrow(/checksum|sha256|mismatch/i);
+    expect(existsSync(file)).toBe(false);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("proceeds with an 'unverified download' notice when no checksum is pinned", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { existsSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "recomp-cksum-"));
+    const file = join(dir, "asset.zip");
+    await writeFile(file, "some bytes");
+
+    const { verifyDownloadChecksum } = await import("./pipeline");
+    const notices: string[] = [];
+    await verifyDownloadChecksum(file, undefined, (m) => notices.push(m));
+    // File untouched, and a one-line unverified notice was emitted.
+    expect(existsSync(file)).toBe(true);
+    expect(notices.some((n) => /unverified/i.test(n))).toBe(true);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("matches case-insensitively / ignores a leading sha256: prefix", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "recomp-cksum-"));
+    const file = join(dir, "asset.zip");
+    const data = "hello world";
+    await writeFile(file, data);
+    const hex = new Bun.CryptoHasher("sha256").update(data).digest("hex");
+
+    const { verifyDownloadChecksum } = await import("./pipeline");
+    // Uppercased + prefixed should still validate.
+    await verifyDownloadChecksum(file, `sha256:${hex.toUpperCase()}`, () => {});
+    await rm(dir, { recursive: true, force: true });
+  });
+});
+
 // ── Pipeline event structure ─────────────────────────────────────────
 
 describe("PipelineEvent structure", () => {

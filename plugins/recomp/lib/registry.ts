@@ -262,6 +262,7 @@ function manifestToGameEntry(m: Manifest): GameEntry {
     website: m.website,
     steamGridDbId: m.steamGridDbId,
     preservePaths: m.preservePaths,
+    releaseSha256: m.releaseSha256,
     userDataDir: m.userDataDir,
     mods: m.mods,
   };
