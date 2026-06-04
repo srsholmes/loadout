@@ -17,7 +17,7 @@ import type {
   GitHubRelease,
 } from "./types";
 import { updateInstalledGame, removeInstalledGame } from "./state";
-import { addToSteam } from "./steam-shortcut";
+import { addToSteam, removeFromSteam } from "./steam-shortcut";
 import { applyArtwork } from "./artwork";
 import { extractArchive } from "./pipeline-archive";
 import { downloadFile, githubToken } from "./github";
@@ -256,6 +256,12 @@ export async function installGame(
   try { await rm(tmpGameDir, { recursive: true, force: true }); } catch { /* ok */ }
   try { await rm(partialDir, { recursive: true, force: true }); } catch { /* ok */ }
   await mkdir(tmpGameDir, { recursive: true });
+
+  // Steam shortcut appId for THIS install, recorded the moment the
+  // shortcut is written so the catch block can tear it down if a
+  // later step throws. Without this a mid-pipeline failure after the
+  // shortcut write would orphan a shortcut that launches nothing.
+  let createdShortcutAppId: number | undefined;
 
   try {
     let version: string;
@@ -499,6 +505,7 @@ export async function installGame(
         percent: 0, message: "Adding to Steam...",
       });
       const shortcut = await addToSteam(entry, installed);
+      createdShortcutAppId = shortcut.appId;
       installed = {
         ...installed,
         addedToSteam: true,
@@ -541,6 +548,19 @@ export async function installGame(
     return newState;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // Roll back partial artifacts so a failed install never leaves a
+    // half-populated install dir, an orphaned Steam shortcut, or a
+    // half-install state record behind:
+    //   - the staged `.partial` tree (never promoted on failure, but
+    //     a crash mid-extract leaves it on disk),
+    //   - any pre-promotion `installDir` from a prior attempt is NOT
+    //     touched here — we only own what THIS attempt created,
+    //   - the Steam shortcut, if we got far enough to write one before
+    //     a later step (e.g. the state persist) threw.
+    try { await rm(partialDir, { recursive: true, force: true }); } catch { /* ok */ }
+    if (createdShortcutAppId != null) {
+      try { await removeFromSteam(createdShortcutAppId); } catch { /* ok */ }
+    }
     onEvent({ type: "error", gameId, message });
     throw err;
   } finally {

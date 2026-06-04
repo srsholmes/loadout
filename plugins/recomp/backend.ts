@@ -238,14 +238,7 @@ export default class RecompBackend implements PluginBackend {
   }
 
   async pickRomFile(extensions?: string[]): Promise<string | null> {
-    console.log(
-      `[recomp] pickRomFile RPC called with extensions=${JSON.stringify(extensions)}`,
-    );
-    const picked = await pickRomFile(extensions);
-    console.log(
-      `[recomp] pickRomFile returning: ${picked === null ? "null" : JSON.stringify(picked)}`,
-    );
-    return picked;
+    return await pickRomFile(extensions);
   }
 
   /**
