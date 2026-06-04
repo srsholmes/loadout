@@ -562,6 +562,58 @@ describe("BrowserPicker (settings)", () => {
     );
     expect(installBtn).toBeUndefined();
   });
+
+  it("disables the Install button and shows the Steam-unreachable message when Steam is unreachable", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getState")
+        return Promise.resolve({
+          ...baseState,
+          installedBrowsers: [],
+          selectedBrowserId: "firefox-native",
+        });
+      if (method === "isGamingMode") return Promise.resolve(false);
+      if (method === "detectBrowsers") return Promise.resolve(TWO_CANDIDATES);
+      if (method === "isSteamReachable") return Promise.resolve(false);
+      return Promise.resolve(baseState);
+    });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    await gotoSettings(container);
+    await waitFor(() => {
+      const btn = Array.from(container.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Install as non-Steam game"),
+      );
+      expect(btn).toBeTruthy();
+    });
+    expect(container.textContent).toContain(
+      "Steam isn't responding on its debug port",
+    );
+    const installBtn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent?.includes("Install as non-Steam game"),
+    ) as HTMLButtonElement;
+    expect(installBtn.disabled).toBe(true);
+  });
+
+  it("shows the no-browsers-detected message and no Install button when no candidates are detected", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getState")
+        return Promise.resolve({ ...baseState, installedBrowsers: [] });
+      if (method === "isGamingMode") return Promise.resolve(false);
+      if (method === "detectBrowsers") return Promise.resolve([]);
+      if (method === "isSteamReachable") return Promise.resolve(true);
+      return Promise.resolve(baseState);
+    });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    await gotoSettings(container);
+    await waitFor(() => {
+      expect(container.textContent).toContain("No supported browsers detected");
+    });
+    const installBtn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent?.includes("Install as non-Steam game"),
+    );
+    expect(installBtn).toBeUndefined();
+  });
 });
 
 describe("BrowserPicker on the landing page", () => {
