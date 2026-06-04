@@ -1267,21 +1267,20 @@ function LandingCardGrid({
 
 function QuickLinksLandingPage({
   storage,
-  showBanner,
   onOpenSettings,
 }: {
   storage: QuickLinksStorage;
-  showBanner: boolean;
   onOpenSettings: () => void;
 }) {
   const currentGame = useCurrentGame();
   const launch = useLinkLauncher(storage.selectedBrowserId);
+  const needsBrowser = storage.installedBrowsers.length === 0;
 
   if (!currentGame) {
     return (
       <div className="p-7 h-full overflow-y-auto">
-        <div className="page-content">
-          {showBanner && <NoBrowserBanner onOpenSettings={onOpenSettings} />}
+        <div className="page-content space-y-4">
+          {needsBrowser && <BrowserPicker storage={storage} />}
           <div className="card">
             <div className="card-body p-6 flex flex-col items-center text-center gap-3">
               <FaLink className="w-6 h-6 text-base-content/40" />
@@ -1306,8 +1305,8 @@ function QuickLinksLandingPage({
   const gameName = currentGame.gameName || `App ${appId}`;
   return (
     <div className="p-7 h-full overflow-y-auto">
-      <div className="page-content">
-        {showBanner && <NoBrowserBanner onOpenSettings={onOpenSettings} />}
+      <div className="page-content space-y-4">
+        {needsBrowser && <BrowserPicker storage={storage} />}
         <LandingCardGrid
           storage={storage}
           appId={appId}
@@ -1516,7 +1515,6 @@ function QuickLinksPanel() {
         {header}
         <QuickLinksLandingPage
           storage={storage}
-          showBanner={showBanner}
           onOpenSettings={() => setView("settings")}
         />
       </>

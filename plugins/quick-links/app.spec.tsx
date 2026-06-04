@@ -676,3 +676,54 @@ describe("BrowserPicker (settings)", () => {
     expect(installBtn).toBeUndefined();
   });
 });
+
+describe("BrowserPicker on the landing page", () => {
+  beforeEach(() => {
+    callMock.mockReset();
+    eventHandlers.clear();
+    currentGameRef.value = null;
+  });
+
+  function rpcWith(state: unknown) {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getState") return Promise.resolve(state);
+      if (method === "isGamingMode") return Promise.resolve(false);
+      if (method === "detectBrowsers")
+        return Promise.resolve([
+          { id: "firefox-native", name: "Firefox", kind: "native", exe: "/usr/bin/firefox", launchOptionsBase: "--new-tab {url}" },
+        ]);
+      if (method === "isSteamReachable") return Promise.resolve(true);
+      return Promise.resolve(state);
+    });
+  }
+
+  it("shows the picker on the landing page when no browser is installed", async () => {
+    currentGameRef.value = { appId: 620, gameName: "Portal 2", startTime: Date.now() };
+    rpcWith({ ...baseState, installedBrowsers: [] });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Open links in");
+      expect(container.textContent).toContain("Firefox");
+    });
+  });
+
+  it("hides the picker on the landing page once a browser is installed", async () => {
+    currentGameRef.value = { appId: 620, gameName: "Portal 2", startTime: Date.now() };
+    rpcWith({
+      ...baseState,
+      installedBrowsers: [
+        { browserId: "firefox-native", name: "Firefox", kind: "native", appId: 1, gameId64: "1", exe: "/usr/bin/firefox", launchOptionsBase: "--new-tab {url}" },
+      ],
+    });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const { mount } = await import("./app");
+    mount(container);
+    // Landing chips render (templates from baseState), but the picker does not.
+    await waitFor(() => expect(container.textContent).toContain("ProtonDB"));
+    expect(container.textContent).not.toContain("Open links in");
+  });
+});
