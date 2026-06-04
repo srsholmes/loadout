@@ -15,20 +15,33 @@ export interface GameInfo {
   name: string;
   /** Size on disk in bytes (manifest-reported; 0 for shortcuts). */
   sizeOnDisk: number;
-  /** Header artwork URL — local `/api/steam-grid/*` when the user has
-   *  applied custom art (file exists in `userdata/<id>/config/grid/`),
-   *  Steam CDN otherwise for real games. Shortcuts always use local. */
+  /** Header artwork URL — points at the loader's local
+   *  `/api/steam-grid/<stem>/<userId>/header` route. That route's
+   *  handler probes the user's `userdata/<id>/config/grid/` first
+   *  (custom SGDB art wins), falls back to Steam's downloaded
+   *  appcache, and only 302-redirects to the public CDN as a last
+   *  resort. With its `Cache-Control: no-cache` + mtime-derived ETag
+   *  the browser revalidates on every reload, so freshly-applied
+   *  custom art shows up the next time a plugin grid mounts. */
   headerUrl: string;
   /** Capsule artwork URL — same scheme as `headerUrl`. */
   capsuleUrl: string;
-  /** Forced local-endpoint URL for the header — always points at the
-   *  loader's `/api/steam-grid/<stem>/<userId>/header` route regardless
-   *  of whether a file exists right now. Consumers that just wrote
-   *  custom art use this with a cache-busting query string to refresh
-   *  the tile without waiting for the public `Cache-Control: max-age`. */
+  /** Local-endpoint URL for the header — always points at the loader's
+   *  `/api/steam-grid/<stem>/<userId>/header` route. Now identical to
+   *  `headerUrl` for both Steam apps and shortcuts; the field stays
+   *  for backwards-compat and for the rare consumer that wants to
+   *  append its own cache-busting query string after a write. */
   localHeaderUrl: string;
-  /** Forced local-endpoint URL for the capsule. See `localHeaderUrl`. */
+  /** Local-endpoint URL for the capsule. See `localHeaderUrl`. */
   localCapsuleUrl: string;
+  /** Steam CDN URL for the header — only set for Steam apps (shortcuts
+   *  have no CDN counterpart). Plugins that explicitly want the public,
+   *  longer-cacheable CDN variant (skipping local custom art) can read
+   *  this. Most plugins should prefer `headerUrl` so user customisation
+   *  is respected. */
+  cdnHeaderUrl?: string;
+  /** Steam CDN URL for the capsule. See `cdnHeaderUrl`. */
+  cdnCapsuleUrl?: string;
   /** Where the entry came from. */
   source: GameSource;
   /** Steam categories / collections this game belongs to (collection ids

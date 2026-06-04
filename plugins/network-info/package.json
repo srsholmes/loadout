@@ -1,0 +1,34 @@
+{
+  "name": "@loadout/plugin-network-info",
+  "version": "0.0.1",
+  "type": "module",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@loadout/ui": "workspace:*"
+  },
+  "plugin": {
+    "id": "network-info",
+    "name": "Network Info",
+    "description": "Network information, WiFi details, and Cloudflare speed test",
+    "permissions": {
+      "network": [
+        "speed.cloudflare.com"
+      ],
+      "filesystem": [
+        "/sys/class/net",
+        "/proc/net/wireless"
+      ],
+      "commands": [
+        "ip",
+        "nmcli",
+        "iwconfig"
+      ]
+    },
+    "category": "Device",
+    "subtitle": "Network interfaces + speed test",
+    "target": {
+      "type": "overlay"
+    }
+  }
+}

@@ -1,6 +1,6 @@
 ## Overlay architecture
 
-The overlay is an Electrobun (CEF) app at `packages/overlay-electrobun/`:
+The overlay is an Electrobun (CEF) app at `apps/loadout-overlay/`:
 
 - `src/bun/` — the main process (Bun + libc FFI). Owns the evdev read
   loop, EVIOCGRAB / EVIOCSMASK, Gamescope atoms, NavController, the
@@ -10,10 +10,11 @@ The overlay is an Electrobun (CEF) app at `packages/overlay-electrobun/`:
   `rpc.send("overlay-action", …)` → synthetic KeyboardEvents for
   norigin-spatial-navigation.
 
-The shared React tree lives at `packages/overlay/`. The host-RPC shim
-sits at `packages/overlay/src/lib/host.ts`; every callsite imports
-from `@overlay/lib/host`. Its counterpart inside the Electrobun
-webview is `packages/overlay-electrobun/src/webview/lib/electrobun.ts`.
+The shared React tree lives at `apps/loadout-overlay/src/overlay/`. The
+host-RPC shim sits at `apps/loadout-overlay/src/overlay/lib/host.ts`;
+every callsite imports from `@overlay/lib/host`. Its counterpart inside
+the Electrobun webview is
+`apps/loadout-overlay/src/webview/lib/electrobun.ts`.
 
 CEF's DevTools live on `http://localhost:9222` in dev (baked in via
 `electrobun.config.ts` → `build.linux.chromiumFlags`). Attach Chromium
