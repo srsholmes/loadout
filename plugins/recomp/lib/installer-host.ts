@@ -289,11 +289,23 @@ function buildRuntime(
     run: async (command, opts = {}) => {
       const cwd = opts.cwd ?? ctx.installDir;
       const stage = opts.stage ?? "building";
+      const timeoutMs = opts.timeoutMs ?? 60 * 60 * 1000;
       const r = await env.run(command, cwd, {
         onLine: (line) => recordLine(line, stage),
-        timeoutMs: opts.timeoutMs ?? 60 * 60 * 1000,
+        timeoutMs,
       });
       if (r.exitCode !== 0) {
+        // exitCode -1 is the exec layer's timeout sentinel (the process
+        // was killed for exceeding `timeoutMs`). Make a build timeout
+        // read distinctly from a build that ran and failed — the
+        // broken-container case is recovered upstream in
+        // ensureRecompContainer, so a -1 here means the build itself hung.
+        if (r.exitCode === -1) {
+          throw new Error(
+            `Build step timed out after ${Math.round(timeoutMs / 60000)} min ` +
+              `(the build hung, not a container/setup problem): ${command}`,
+          );
+        }
         throw new Error(`Command failed (exit ${r.exitCode}): ${command}`);
       }
     },

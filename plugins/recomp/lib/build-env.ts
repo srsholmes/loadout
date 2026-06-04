@@ -133,7 +133,12 @@ function distroboxEnv(name: string): BuildEnv {
           "--",
           "bash",
           "-lc",
-          `cd ${shellQuote(cwd)} && ${command}`,
+          // `cd -- <quoted>` so the cwd is one shell token no matter what
+          // metacharacters it carries, and `--` stops a cwd beginning
+          // with `-` being parsed as a `cd` option. `command` is a shell
+          // snippet by contract (recipes pass `make -j$(nproc)` etc.) so
+          // it stays evaluated — but it can never split the `cd` off.
+          `cd -- ${shellQuote(cwd)} && ${command}`,
         ],
         { onLine: opts.onLine, timeoutMs: opts.timeoutMs, env: enterEnv },
       ),
@@ -187,15 +192,35 @@ export async function ensureRecompContainer(
       { timeoutMs: 10_000 },
     );
     if (probe.exitCode === 0) return;
-    // Auto-recreate would surprise the user with a 30-60s image pull
-    // and could mask a deeper podman issue. Surface a clear, actionable
-    // error instead.
-    throw new Error(
-      `Recomp build container '${RECOMP_CONTAINER}' exists but isn't usable ` +
-        `(distrobox enter exited ${probe.exitCode}). This usually means a ` +
-        `previous create was interrupted or podman storage is corrupted. ` +
-        `Recover with: distrobox rm -f ${RECOMP_CONTAINER} && retry the install.`,
+    // The container is wedged (broken / half-created). Previously we
+    // bailed and asked the user to run `distrobox rm -f` by hand —
+    // which left every install stuck until they did. Recover
+    // automatically instead: force-remove the bad container so the
+    // create below provisions a fresh one. Best-effort + well-logged so
+    // the user can see what happened (and so a recover that itself fails
+    // surfaces clearly rather than silently). `enter exit -1` is the
+    // exec layer's timeout signal (a hung enter), still a broken
+    // container as far as recovery is concerned.
+    const why = probe.exitCode === -1 ? "timed out (hung)" : `exited ${probe.exitCode}`;
+    onLine(
+      `Recomp build container '${RECOMP_CONTAINER}' is broken (distrobox enter ${why}); ` +
+        `removing it so it can be recreated…`,
     );
+    const removed = await runFull(
+      ["distrobox", "rm", "-f", RECOMP_CONTAINER],
+      { timeoutMs: 60_000 },
+    );
+    if (removed.exitCode !== 0) {
+      throw new Error(
+        `Recomp build container '${RECOMP_CONTAINER}' is broken and could not be ` +
+          `auto-removed (distrobox rm -f exited ${removed.exitCode}). This is a ` +
+          `container/podman setup problem, not a build failure. Recover manually ` +
+          `with: distrobox rm -f ${RECOMP_CONTAINER} (you may also need ` +
+          `\`podman system reset\` if storage is corrupted), then retry the install.`,
+      );
+    }
+    onLine(`Removed broken container '${RECOMP_CONTAINER}'.`);
+    // fall through to recreate
   }
   onLine(`Creating distrobox container '${RECOMP_CONTAINER}' from ${RECOMP_IMAGE}…`);
   const create = await runStreaming(
@@ -211,10 +236,19 @@ export async function ensureRecompContainer(
     { onLine, timeoutMs: 15 * 60 * 1000 },
   );
   if (create.exitCode !== 0) {
+    // -1 is the exec layer's timeout sentinel. Distinguish "container
+    // setup couldn't finish in time" from a build that ran but timed
+    // out — the user needs to know which knob to turn.
+    const detail =
+      create.exitCode === -1
+        ? `the image pull / container creation timed out (this is container setup, ` +
+          `NOT a build timeout). On a slow network the first run can exceed the ` +
+          `15-minute setup window — retry, ideally on a faster connection.`
+        : `If this is the first run on a slow network, the image pull may have ` +
+          `timed out — try again.`;
     throw new Error(
-      `Failed to create distrobox container (exit ${create.exitCode}). ` +
-        `If this is the first run on a slow network, the image pull may ` +
-        `have timed out — try again.`,
+      `Failed to set up the recomp build container (distrobox create exit ` +
+        `${create.exitCode}). ${detail}`,
     );
   }
 }
