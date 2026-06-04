@@ -164,4 +164,59 @@ describe("recomp plugin app", () => {
     });
     unmount();
   });
+
+  // FIX 4: the pipelineEvent handler reloads detail via loadDetail()
+  // from a synchronous event callback. A rejected reload must not escape
+  // as an unhandled rejection.
+  it("does not raise an unhandled rejection when a reload after a pipeline event fails", async () => {
+    // Navigate into the detail view, then make the *detail* fetch reject
+    // so the reload triggered by the pipeline event would reject too.
+    callMock.mockImplementation((method: string) => {
+      if (method === "getGames") return Promise.resolve(mockGames);
+      if (method === "getSettings") return Promise.resolve(mockSettings);
+      if (method === "getCatalogArt") return Promise.resolve(null);
+      if (method === "checkBuildEnv")
+        return Promise.resolve({ ok: true, label: "host", missing: [], hasRecipe: true });
+      if (method === "getGameDetail")
+        return Promise.reject(new Error("backend exploded"));
+      return Promise.resolve(null);
+    });
+
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on("unhandledRejection", onRejection);
+
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    const unmount = mount(container);
+
+    // Drive to the detail page for the first game.
+    await waitFor(() => {
+      expect(container.textContent).toContain("Super Mario 64");
+    });
+    const card = Array.from(container.querySelectorAll<HTMLElement>("*")).find(
+      (el) => el.textContent?.includes("Super Mario 64") && el.onclick,
+    );
+    // Fall back to clicking the element that carries the game name if the
+    // exact onclick host isn't found via the property.
+    (card ?? container.querySelector("*"))?.click();
+
+    await waitFor(() => {
+      expect(eventHandlers.has("pipelineEvent")).toBe(true);
+    });
+
+    // Fire a fatal pipeline error for the game on the detail page; the
+    // handler calls loadDetail(), whose getGameDetail now rejects.
+    const handler = eventHandlers.get("pipelineEvent")!;
+    expect(() =>
+      handler({ type: "error", gameId: "sm64-decomp", message: "boom" }),
+    ).not.toThrow();
+
+    // Give any rejected microtask a tick to surface.
+    await new Promise((r) => setTimeout(r, 50));
+    process.off("unhandledRejection", onRejection);
+    unmount();
+
+    expect(rejections).toEqual([]);
+  });
 });

@@ -1111,7 +1111,11 @@ function GameDetailPage({ gameId }: { gameId: string }) {
       if (ev.type === "complete") {
         setProgress(null);
         setBusy(false);
-        loadDetail();
+        // Fire-and-forget reload from a sync event handler. loadDetail
+        // swallows its own backend errors today, but guard explicitly so
+        // a future refactor that lets it reject can't surface here as an
+        // unhandled promise rejection.
+        loadDetail().catch(() => {});
       } else if (ev.type === "error") {
         // Stage-scoped errors (steam/artwork) are non-fatal — keep
         // busy true so the artwork stage still renders. The pipeline
@@ -1123,7 +1127,7 @@ function GameDetailPage({ gameId }: { gameId: string }) {
           setBusy(false);
           setError(ev.message ?? "An error occurred");
         }
-        loadDetail();
+        loadDetail().catch(() => {});
       } else if (ev.type === "rom_required") {
         setProgress(null);
         setBusy(false);
