@@ -282,5 +282,43 @@ describe("state module", () => {
         expect(parsed.games[id]).toBeDefined();
       }
     });
+
+    it("persists two concurrent updates for DIFFERENT games from the same snapshot (no lost write)", async () => {
+      const { updateInstalledGame } = await import("./state");
+
+      // Both callers start from the same empty snapshot and update
+      // distinct game ids concurrently. Under a naive read-modify-write
+      // (mutate the passed-in `state` arg), the second write's snapshot
+      // lacks the first game → its entry is lost. An atomic RMW must
+      // persist BOTH.
+      const base: PersistedState = makeDefaultState();
+
+      await Promise.all([
+        updateInstalledGame(base, "game-a", makeInstalledGame({ installDir: "/tmp/game-a" })),
+        updateInstalledGame(base, "game-b", makeInstalledGame({ installDir: "/tmp/game-b" })),
+      ]);
+
+      const raw = await readFile(sandboxedStatePath(), "utf-8");
+      const parsed = JSON.parse(raw) as PersistedState;
+      expect(parsed.games["game-a"]).toBeDefined();
+      expect(parsed.games["game-b"]).toBeDefined();
+    });
+
+    it("propagates write failures instead of silently swallowing them", async () => {
+      const { saveState } = await import("./state");
+
+      // Point the config dir at a path that can't be created (a file
+      // exists where the dir should be), forcing mkdir/write to throw.
+      // The rejection must surface to the caller, not be swallowed.
+      const clash = join(tempConfigDir, "not-a-dir");
+      await Bun.write(clash, "x");
+      const prev = sandboxConfigDir;
+      sandboxConfigDir = join(clash, "nested");
+      try {
+        await expect(saveState(makeDefaultState())).rejects.toThrow();
+      } finally {
+        sandboxConfigDir = prev;
+      }
+    });
   });
 });

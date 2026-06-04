@@ -11,7 +11,7 @@ import { shellQuote } from "./shell";
 import { downloadFile, extractArchive } from "./pipeline-archive";
 import { tempDir, type PlatformName } from "./platform";
 import type { PipelineEvent } from "./types";
-import type { RecompSDK, RecompEnv, Platform } from "./sdk";
+import type { RecompSDK, RecompEnv, Platform, RecompRuntime } from "./sdk";
 
 type EventCallback = (event: PipelineEvent) => void;
 
@@ -40,34 +40,6 @@ export interface SetupResult {
 }
 
 /**
- * Module-level serialization gate for `runSetupScript`.
- *
- * The SDK reads its install context from `globalThis.__recomp_runtime`,
- * a single slot. The backend's `operations: Set<string>` blocks
- * re-entry on the same gameId but DOES NOT prevent two different
- * games from installing concurrently — at which point install B
- * overwrites the global slot mid-install of A, and A's subsequent
- * `sdk.placeRom()` etc. read B's runtime, copying A's ROM into B's
- * installDir.
- *
- * Cheapest correct fix: chain `runSetupScript` calls behind a single
- * Promise, so the global slot is held for the duration of exactly one
- * install at any moment. Installs queue rather than running in
- * parallel. This is fine in practice: build_from_source recipes are
- * heavily CPU-bound (cross-compile, vkd3d-proton build) and running
- * two on the same box at once would already thrash; prebuilt installs
- * are I/O-bound and short. Users very rarely click Install twice in a
- * row before the first finishes, but when they do we now serialize
- * silently instead of corrupting state.
- *
- * Alternative considered: drop the global slot, have recipes export
- * a default async function that takes `sdk` as a parameter. That's
- * the right long-term design but a meaningful breaking change to
- * every recipe; doing it as a follow-up.
- */
-let installChain: Promise<unknown> = Promise.resolve();
-
-/**
  * Run a per-game `setup.ts` recipe and bridge its `@recomp/sdk`
  * calls into the host's BuildEnv.
  *
@@ -82,26 +54,53 @@ let installChain: Promise<unknown> = Promise.resolve();
  *   - Recipes are trusted code we ship in the plugin bundle; they
  *     don't need process-level isolation.
  *
- * The SDK module reads its install context + dispatcher from a
+ * The SDK module reads its install context + dispatcher from a single
  * `globalThis.__recomp_runtime` slot we install before the import
  * starts; see `lib/sdk/index.ts` for the consumer side.
+ *
+ * CONCURRENCY: that slot is process-wide, so two installs of DIFFERENT
+ * games must not run at once — install B would overwrite the slot while
+ * A is parked on an await, and A's resumed `sdk.placeRom()` would read
+ * B's runtime and copy A's ROM into B's installDir. The backend's
+ * per-gameId `operations` set does NOT prevent this (it only blocks
+ * re-entry on the SAME game).
+ *
+ * We serialize ALL installs behind `installChain` (see
+ * `runSetupScript`) so exactly one install owns the slot at any moment.
+ *
+ * Why a global lock rather than a per-install context: the obvious
+ * "thread the runtime per-install via AsyncLocalStorage" approach does
+ * NOT work under Bun, because Bun runs a dynamically-`import()`ed
+ * module's top-level code on a FRESH async context — the ALS store set
+ * around the `await import(...)` is not visible inside the recipe's
+ * top-level `await sdk.placeRom()` (verified empirically). And recipes
+ * are written as top-level scripts (`await sdk.ready; …`), not as an
+ * exported `default (sdk) => {}`, so we can't pass the context as a
+ * parameter without a breaking change to every shipped recipe. The
+ * global lock is the correct, non-invasive fix; build_from_source
+ * recipes are CPU-bound and prebuilt installs are short, so serializing
+ * costs little in practice. Converting recipes to take `sdk` as a
+ * parameter (enabling true parallel installs) is a future follow-up.
  *
  * Cache-busting via `?t=<now>` so two consecutive installs of the
  * same game both run their setup.ts top-to-bottom (otherwise the
  * second import would be a no-op against the cached module).
  */
+let installChain: Promise<unknown> = Promise.resolve();
+
 export async function runSetupScript(
   scriptPath: string,
   ctx: SetupContext,
   onEvent: EventCallback,
 ): Promise<SetupResult> {
-  // Chain behind any in-flight install. We always await the previous
-  // chain link (even if it rejected) — installs are independent, one
-  // failing shouldn't poison the queue.
-  const myTurn = installChain.catch(() => undefined).then(() =>
-    runSetupScriptInner(scriptPath, ctx, onEvent),
-  );
-  installChain = myTurn;
+  // Chain behind any in-flight install (regardless of gameId) so the
+  // shared runtime slot is held by exactly one install at a time. We
+  // always await the previous link even if it rejected — installs are
+  // independent; one failing must not poison the queue.
+  const myTurn = installChain
+    .catch(() => undefined)
+    .then(() => runSetupScriptInner(scriptPath, ctx, onEvent));
+  installChain = myTurn.catch(() => undefined);
   return myTurn;
 }
 
@@ -253,16 +252,6 @@ interface SetupAccumulator {
   launchCommand?: string;
   version?: string;
   targetPlatform?: "linux" | "windows" | "macos";
-}
-
-/**
- * Public-but-internal contract between `lib/sdk/index.ts` and the
- * installer-host. `globalThis.__recomp_runtime` is set to one of
- * these for the duration of an install; the SDK module's getters /
- * methods route through it.
- */
-export interface RecompRuntime {
-  readonly sdk: RecompSDK;
 }
 
 function buildRuntime(

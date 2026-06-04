@@ -55,50 +55,89 @@ export async function setRomPath(
   gameId: string,
   path: string | null,
 ): Promise<PersistedState> {
-  const next: PersistedState = {
-    ...state,
-    romPaths: { ...(state.romPaths ?? {}) },
-  };
-  if (!path) {
-    delete next.romPaths![gameId];
-  } else {
-    next.romPaths![gameId] = path;
-  }
-  await saveState(next);
-  return next;
+  return mutateState((current) => {
+    const next: PersistedState = {
+      ...current,
+      romPaths: { ...(current.romPaths ?? {}) },
+    };
+    if (!path) {
+      delete next.romPaths![gameId];
+    } else {
+      next.romPaths![gameId] = path;
+    }
+    return next;
+  });
 }
 
 /**
- * Module-level FIFO queue that serializes `saveState` writes so two
- * concurrent callers can't interleave their atomic-write-and-rename
- * sequences and produce a torn / corrupt `state.json`.
+ * Module-level FIFO queue that serializes state mutations end-to-end.
  *
- * IMPORTANT: this only protects the *file write*. The read-modify-
- * write helpers below (`updateInstalledGame`, `removeInstalledGame`,
- * `updateSettings`, `setRomPath`) still operate on the `state`
- * argument they were given, so if two callers start from the same
- * snapshot and update different games concurrently, the second
- * write's snapshot will overwrite the first's game entry — i.e.
- * last-write-wins per call, not per game. Fixing that logical race
- * requires either a single-writer actor over `state` or a deeper
- * merge in each helper; the queue alone is not enough.
+ * Two separate hazards motivate this:
  *
- * `.catch(() => {})` on the chain ensures a failed write doesn't
- * poison the queue and block all future writes.
+ *   1. Torn writes: two callers interleaving their atomic-write-and-
+ *      rename sequences could produce a corrupt `state.json`.
+ *   2. Lost updates (read-modify-write race): two callers that start
+ *      from the SAME in-memory snapshot and update DIFFERENT games
+ *      concurrently. With the old design each helper merged into the
+ *      caller's stale `state` arg and wrote it, so the second write's
+ *      snapshot lacked the first caller's change → that game entry was
+ *      silently lost (last-write-wins per call rather than per game).
+ *
+ * Fix: route every mutation through `mutateState`, which queues the
+ * WHOLE read-modify-write cycle. Inside the queued critical section it
+ * re-reads the latest persisted state from disk and applies the
+ * caller's `mutator` to THAT, so concurrent updates to different keys
+ * merge instead of clobbering. Only one RMW runs at a time, so the
+ * snapshot a mutator sees always reflects every prior committed write.
+ *
+ * Write failures are NOT swallowed for the caller: `mutateState`
+ * returns the real promise (which rejects on failure). The queue link
+ * (`writeQueue`) is the only thing that gets `.catch(() => {})`, purely
+ * so one failed write can't poison the chain and wedge all future
+ * writes — it never hides the error from the caller who initiated it.
  */
-let writeQueue: Promise<void> = Promise.resolve();
+let writeQueue: Promise<unknown> = Promise.resolve();
 
-export async function saveState(state: PersistedState): Promise<void> {
-  const next = writeQueue.then(async () => {
-    const dir = configDir();
-    await mkdir(dir, { recursive: true });
-    const path = join(dir, STATE_FILE);
-    const tmpPath = path + ".tmp";
-    await writeFile(tmpPath, JSON.stringify(state, null, 2));
-    await rename(tmpPath, path);
+async function writeStateFile(state: PersistedState): Promise<void> {
+  const dir = configDir();
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, STATE_FILE);
+  const tmpPath = path + ".tmp";
+  await writeFile(tmpPath, JSON.stringify(state, null, 2));
+  await rename(tmpPath, path);
+}
+
+/**
+ * Atomic read-modify-write. Serialized behind `writeQueue` so the
+ * `current` snapshot the `mutator` receives is always the latest
+ * committed on-disk state, never a stale in-memory one held by a
+ * concurrent caller. Returns the persisted state. Rejects (does not
+ * swallow) if the read, mutate, or write throws.
+ */
+async function mutateState(
+  mutator: (current: PersistedState) => PersistedState | Promise<PersistedState>,
+): Promise<PersistedState> {
+  const run = writeQueue.catch(() => undefined).then(async () => {
+    const current = await loadState();
+    const next = await mutator(current);
+    await writeStateFile(next);
+    return next;
   });
-  writeQueue = next.catch(() => {});
-  return next;
+  writeQueue = run.catch(() => {});
+  return run;
+}
+
+/**
+ * Persist a full state object. Kept for callers that have already
+ * computed the complete next state. Serialized behind the same queue
+ * as `mutateState` to avoid torn / interleaved writes. Note this
+ * still does a blind whole-object write — prefer the targeted helpers
+ * (`updateInstalledGame` etc.) for concurrent-safe per-key updates.
+ */
+export async function saveState(state: PersistedState): Promise<void> {
+  const run = writeQueue.catch(() => undefined).then(() => writeStateFile(state));
+  writeQueue = run.catch(() => {});
+  return run;
 }
 
 export async function updateInstalledGame(
@@ -106,34 +145,30 @@ export async function updateInstalledGame(
   gameId: string,
   game: InstalledGame,
 ): Promise<PersistedState> {
-  const updated = {
-    ...state,
-    games: { ...state.games, [gameId]: game },
-  };
-  await saveState(updated);
-  return updated;
+  return mutateState((current) => ({
+    ...current,
+    games: { ...current.games, [gameId]: game },
+  }));
 }
 
 export async function removeInstalledGame(
   state: PersistedState,
   gameId: string,
 ): Promise<PersistedState> {
-  const { [gameId]: _, ...rest } = state.games;
-  const updated = { ...state, games: rest };
-  await saveState(updated);
-  return updated;
+  return mutateState((current) => {
+    const { [gameId]: _, ...rest } = current.games;
+    return { ...current, games: rest };
+  });
 }
 
 export async function updateSettings(
   state: PersistedState,
   settings: Partial<Settings>,
 ): Promise<PersistedState> {
-  const updated = {
-    ...state,
-    settings: { ...state.settings, ...settings },
-  };
-  await saveState(updated);
-  return updated;
+  return mutateState((current) => ({
+    ...current,
+    settings: { ...current.settings, ...settings },
+  }));
 }
 
 /**
@@ -151,18 +186,18 @@ export async function recordInstalledMod(
   modId: string,
   entry: InstalledModEntry,
 ): Promise<PersistedState> {
-  const game = state.games[gameId];
-  if (!game) return state;
-  const updatedGame: InstalledGame = {
-    ...game,
-    installedMods: { ...(game.installedMods ?? {}), [modId]: entry },
-  };
-  const updated = {
-    ...state,
-    games: { ...state.games, [gameId]: updatedGame },
-  };
-  await saveState(updated);
-  return updated;
+  return mutateState((current) => {
+    const game = current.games[gameId];
+    if (!game) return current;
+    const updatedGame: InstalledGame = {
+      ...game,
+      installedMods: { ...(game.installedMods ?? {}), [modId]: entry },
+    };
+    return {
+      ...current,
+      games: { ...current.games, [gameId]: updatedGame },
+    };
+  });
 }
 
 /**
@@ -177,19 +212,19 @@ export async function removeInstalledMod(
   gameId: string,
   modId: string,
 ): Promise<PersistedState> {
-  const game = state.games[gameId];
-  if (!game?.installedMods?.[modId]) return state;
-  const { [modId]: _, ...rest } = game.installedMods;
-  const updatedGame: InstalledGame = {
-    ...game,
-    installedMods: rest,
-  };
-  const updated = {
-    ...state,
-    games: { ...state.games, [gameId]: updatedGame },
-  };
-  await saveState(updated);
-  return updated;
+  return mutateState((current) => {
+    const game = current.games[gameId];
+    if (!game?.installedMods?.[modId]) return current;
+    const { [modId]: _, ...rest } = game.installedMods;
+    const updatedGame: InstalledGame = {
+      ...game,
+      installedMods: rest,
+    };
+    return {
+      ...current,
+      games: { ...current.games, [gameId]: updatedGame },
+    };
+  });
 }
 
 /**
