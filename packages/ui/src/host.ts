@@ -5,7 +5,6 @@
 // overlay (standalone dev, unit tests) it is a safe no-op.
 
 declare global {
-  // eslint-disable-next-line no-var
   var __electroview:
     | {
         rpc?: {
