@@ -1,15 +1,16 @@
-// Programmatic Steam Quick Access Menu (QAM) dismissal via Chrome
-// DevTools Protocol.
+// Programmatic Steam menu dismissal via Chrome DevTools Protocol.
 //
-// Why this exists: when the user has Steam's QAM open in BPM home with
-// a game alive in baselayer, opening our overlay reliably wedges
-// gamescope's compositor → device-wide input freeze. The QAM is NOT a
-// separate X window — it's a CEF browser_view popup INSIDE Steam BPM's
-// X window (page title "QuickAccess_uid2" in Steam's CDP target list).
-// We can't manipulate the QAM via X11 atoms because there's nothing on
-// the X tree to manipulate. But Steam's CEF instance exposes CDP on
+// Why this exists: when the user has one of Steam's BPM menus open —
+// the Quick Access Menu (QAM, the "…" side panel) or the main menu
+// (the Steam-button menu) — with a game alive in baselayer, opening our
+// overlay reliably wedges gamescope's compositor → device-wide input
+// freeze. Neither menu is a separate X window — each is a CEF
+// browser_view popup INSIDE Steam BPM's X window (page titles
+// "QuickAccess_uid2" / "MainMenu_uid2" in Steam's CDP target list). We
+// can't manipulate them via X11 atoms because there's nothing on the X
+// tree to manipulate. But Steam's CEF instance exposes CDP on
 // localhost:8080, and dispatching Input.dispatchKeyEvent(Escape) into
-// the QAM's page reliably closes it (verified empirically).
+// the open menu's page reliably closes it (verified empirically).
 //
 // We only call into this from gamescope-atoms.ts during show() when
 // we detect the trigger scenario. Failure / timeout / Steam not having
@@ -20,9 +21,14 @@ import { trace } from "./trace";
 /** Steam's CEF DevTools port. Hard-coded by Steam. */
 const STEAM_CDP_PORT = 8080;
 
-/** Page title Steam gives its QAM browser_view. Stable since Big Picture
- *  Mode launched (each popup gets a `_uid2` suffix on a stable name). */
-const QAM_PAGE_TITLE = "QuickAccess_uid2";
+/** Page titles Steam gives its BPM menu browser_views. Both wedge
+ *  gamescope the same way when our overlay opens over them, and both
+ *  dismiss via the same CDP Escape. Stable since Big Picture Mode
+ *  launched (each popup gets a `_uid2` suffix on a stable name). */
+const STEAM_MENU_PAGE_TITLES = [
+  "QuickAccess_uid2",
+  "MainMenu_uid2",
+] as const;
 
 /** Cap any single CDP fetch / WebSocket round-trip. Prevents a stalled
  *  Steam CEF from hanging our show() hot path. */
@@ -78,24 +84,22 @@ async function withTimeout<T>(
   });
 }
 
-/** Find the QAM target via Steam's CDP HTTP introspection endpoint. */
-async function findQamTarget(deps: CdpDeps): Promise<CdpTarget | null> {
-  return withTimeout(
-    "findQamTarget",
+/** Enumerate Steam's CDP page targets via its HTTP introspection
+ *  endpoint. Returns [] on any failure / timeout so callers can treat
+ *  "Steam CDP unreachable" identically to "no menus open". */
+async function listCdpTargets(deps: CdpDeps): Promise<CdpTarget[]> {
+  const targets = await withTimeout(
+    "listCdpTargets",
     async () => {
       const res = await deps.fetch(
         `http://localhost:${STEAM_CDP_PORT}/json/list`,
       );
       if (!res.ok) return null;
-      const targets = (await res.json()) as CdpTarget[];
-      return (
-        targets.find(
-          (t) => t.type === "page" && t.title === QAM_PAGE_TITLE,
-        ) ?? null
-      );
+      return (await res.json()) as CdpTarget[];
     },
     CDP_OP_TIMEOUT_MS,
   );
+  return targets ?? [];
 }
 
 /** Open a single CDP WebSocket session, run the given operations, and
@@ -150,20 +154,15 @@ async function withCdpSession<T>(
 }
 
 /**
- * If Steam's QAM is currently visible, send Escape into its CEF page
- * via CDP to dismiss it. Returns true if dismissal was sent (the QAM
- * was open and we got a CDP session); false otherwise.
- *
- * Best-effort: a non-existent / unreachable Steam CDP, a timeout on
- * the WebSocket, or a steady-state hidden QAM all return false without
- * error. Callers should not block on this — failure to dismiss falls
- * back to whatever behaviour `show()` would have had anyway.
+ * If the given Steam menu CEF page is currently visible, send Escape
+ * into it via CDP to dismiss it. Returns true if dismissal was sent
+ * (the page was open and we got a CDP session); false otherwise.
  */
-export async function dismissSteamQuickAccessIfOpen(
-  deps: CdpDeps = realDeps,
+async function dismissTargetIfVisible(
+  deps: CdpDeps,
+  target: CdpTarget,
 ): Promise<boolean> {
-  const target = await findQamTarget(deps);
-  if (!target?.webSocketDebuggerUrl) return false;
+  if (!target.webSocketDebuggerUrl) return false;
   const dismissed = await withCdpSession(
     deps,
     target.webSocketDebuggerUrl,
@@ -182,8 +181,8 @@ export async function dismissSteamQuickAccessIfOpen(
       const visible = probe.result?.result?.value === true;
       if (!visible) return false;
 
-      // Synthesize Escape keyDown + keyUp on the QAM page. Steam's UI
-      // listens for Escape on the QAM and treats it as "close menu".
+      // Synthesize Escape keyDown + keyUp on the menu page. Steam's UI
+      // listens for Escape on its menus and treats it as "close menu".
       send({
         method: "Input.dispatchKeyEvent",
         params: {
@@ -209,8 +208,36 @@ export async function dismissSteamQuickAccessIfOpen(
       return true;
     },
   );
-  if (dismissed) {
-    trace(`[steam-cdp] QAM was open — dispatched Escape via CDP`);
-  }
   return dismissed === true;
+}
+
+/**
+ * If any of Steam's BPM menus (QAM or main menu) is currently visible,
+ * send Escape into its CEF page via CDP to dismiss it. Returns true if
+ * at least one menu was dismissed; false otherwise.
+ *
+ * One CDP target-list fetch, then a per-menu visibility probe — only
+ * the menu(s) actually open get an Escape. A hidden menu is a no-op.
+ *
+ * Best-effort: a non-existent / unreachable Steam CDP, a timeout on
+ * the WebSocket, or steady-state hidden menus all return false without
+ * error. Callers should not block on this — failure to dismiss falls
+ * back to whatever behaviour `show()` would have had anyway.
+ */
+export async function dismissSteamMenusIfOpen(
+  deps: CdpDeps = realDeps,
+): Promise<boolean> {
+  const targets = await listCdpTargets(deps);
+  let dismissedAny = false;
+  for (const title of STEAM_MENU_PAGE_TITLES) {
+    const target = targets.find(
+      (t) => t.type === "page" && t.title === title,
+    );
+    if (!target) continue;
+    if (await dismissTargetIfVisible(deps, target)) {
+      dismissedAny = true;
+      trace(`[steam-cdp] ${title} was open — dispatched Escape via CDP`);
+    }
+  }
+  return dismissedAny;
 }
