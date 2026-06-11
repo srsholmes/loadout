@@ -355,11 +355,40 @@ export function renderClearedProfile(targetDevices: string[]): string {
   );
 }
 
+/** InputPlumber controller emulations the overlay cannot EVIOCGRAB. Both route
+ *  the physical pad through Steam's `hid-steam` driver (deck-uhid is a uhid
+ *  device; `deck` presents a Steam Controller hidraw IP hides) rather than
+ *  exposing a plain gamepad evdev. On an IP-managed handheld in gaming mode
+ *  that leaves the overlay with no controller node to grab, so Steam BPM keeps
+ *  receiving the D-pad behind the open overlay. Verified on a OneXPlayer APEX
+ *  (SteamOS): `deck-uhid` → 0 controllers grabbed; `xbox-elite` → grab works.
+ *  Deck-only path is unaffected — a real Steam Deck uses wake-trigger-deck.ts,
+ *  which never renders an IP profile. */
+export const NON_GRABBABLE_TARGETS: readonly string[] = ["deck-uhid", "deck"];
+
+/** Grabbable replacement emulation. A standard evdev Xbox Elite pad: the
+ *  overlay can EVIOCGRAB it, and it exposes 4 paddles (these handhelds have
+ *  back paddles; `xb360` would drop them). Matches the Apex's upstream IP
+ *  default target (`50-onexplayer_apex.yaml`). */
+export const GRABBABLE_REPLACEMENT = "xbox-elite";
+
+/** Swap any non-grabbable controller emulation for a grabbable one so the
+ *  overlay's EVIOCGRAB can take controller input away from Steam in gaming
+ *  mode. Already-grabbable / non-controller targets pass through unchanged. */
+export function preferGrabbableGamepad(targetDevices: string[]): string[] {
+  return targetDevices.map((t) =>
+    NON_GRABBABLE_TARGETS.includes(t) ? GRABBABLE_REPLACEMENT : t,
+  );
+}
+
 /** Return targetDevices with `keyboard` guaranteed present (deduped, order
- *  preserved). If the device reported no targets we still emit a usable pair
- *  so the controller keeps working and a keyboard exists for F16. */
+ *  preserved) and any non-grabbable controller emulation swapped for one the
+ *  overlay can grab. If the device reported no targets we still emit a usable
+ *  pair so the controller keeps working and a keyboard exists for F16. */
 export function ensureKeyboard(targetDevices: string[]): string[] {
-  const base = targetDevices.filter((t) => t && t !== "null");
+  const base = preferGrabbableGamepad(
+    targetDevices.filter((t) => t && t !== "null"),
+  );
   const seed = base.length > 0 ? base : ["gamepad"];
   const out: string[] = [];
   for (const t of [...seed, "keyboard"]) {

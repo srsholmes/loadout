@@ -4,6 +4,7 @@ import {
   labelFor,
   buttonOptions,
   ensureKeyboard,
+  preferGrabbableGamepad,
   renderProfile,
   renderCaptureProfile,
   SENTINEL_KEYS,
@@ -80,8 +81,25 @@ describe("buttonOptions", () => {
 });
 
 describe("ensureKeyboard", () => {
-  it("appends keyboard, preserving existing controller targets", () => {
-    expect(ensureKeyboard(["deck-uhid"])).toEqual(["deck-uhid", "keyboard"]);
+  it("appends keyboard, preserving existing grabbable controller targets", () => {
+    expect(ensureKeyboard(["xb360"])).toEqual(["xb360", "keyboard"]);
+  });
+  it("swaps non-grabbable deck-uhid for a grabbable xbox-elite", () => {
+    // deck-uhid routes the pad through hid-steam, so the overlay can't
+    // EVIOCGRAB it in gaming mode — swap for a grabbable emulation.
+    expect(ensureKeyboard(["deck-uhid"])).toEqual(["xbox-elite", "keyboard"]);
+  });
+  it("swaps the HID-based deck target too", () => {
+    expect(ensureKeyboard(["deck", "mouse"])).toEqual([
+      "xbox-elite",
+      "mouse",
+      "keyboard",
+    ]);
+  });
+  it("leaves already-grabbable targets untouched", () => {
+    for (const t of ["xb360", "xbox-series", "xbox-elite", "ds5"]) {
+      expect(ensureKeyboard([t])).toEqual([t, "keyboard"]);
+    }
   });
   it("drops null sinks and seeds a gamepad when empty", () => {
     expect(ensureKeyboard(["null"])).toEqual(["gamepad", "keyboard"]);
@@ -92,11 +110,27 @@ describe("ensureKeyboard", () => {
   });
 });
 
+describe("preferGrabbableGamepad", () => {
+  it("maps deck-uhid and deck to xbox-elite, preserves the rest", () => {
+    expect(preferGrabbableGamepad(["deck-uhid", "keyboard"])).toEqual([
+      "xbox-elite",
+      "keyboard",
+    ]);
+    expect(preferGrabbableGamepad(["deck", "mouse"])).toEqual([
+      "xbox-elite",
+      "mouse",
+    ]);
+    expect(preferGrabbableGamepad(["xbox-series"])).toEqual(["xbox-series"]);
+  });
+});
+
 describe("renderProfile", () => {
   it("renders a gamepad-button → F16 mapping with preserved targets", () => {
     const yaml = renderProfile(parseCapability("Gamepad:Button:RightPaddle1"), ["deck-uhid"]);
     expect(yaml).toContain("kind: DefaultProfile");
-    expect(yaml).toContain("- deck-uhid");
+    // deck-uhid is swapped for a grabbable target so the overlay can grab it.
+    expect(yaml).toContain("- xbox-elite");
+    expect(yaml).not.toContain("- deck-uhid");
     expect(yaml).toContain("- keyboard");
     expect(yaml).toContain("gamepad:");
     expect(yaml).toContain("button: RightPaddle1");
@@ -144,7 +178,7 @@ describe("renderCaptureProfile", () => {
       "Gamepad:Button:Keyboard",
       "Keyboard:KeyRecord",
     ]);
-    const { yaml, sentinelToRaw } = renderCaptureProfile(opts, ["deck-uhid"]);
+    const { yaml, sentinelToRaw } = renderCaptureProfile(opts, ["xb360"]);
     // The sentinelToRaw map keys are Linux keycodes (numbers).
     const codes = Array.from(sentinelToRaw.keys());
     expect(codes.length).toBe(4);
@@ -161,7 +195,7 @@ describe("renderCaptureProfile", () => {
     const mappingCount = (yaml.match(/^\s*- name:/gm) || []).length;
     expect(mappingCount).toBe(4);
     expect(yaml).toContain("kind: DefaultProfile");
-    expect(yaml).toContain("- deck-uhid");
+    expect(yaml).toContain("- xb360");
     expect(yaml).toContain("- keyboard");
   });
 

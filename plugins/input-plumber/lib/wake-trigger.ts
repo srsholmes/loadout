@@ -506,7 +506,10 @@ export async function reloadPersistedProfile(): Promise<WakeOpResult> {
 
   // Re-render from the live targets in case the device's emulation changed,
   // then load. (The file may already exist from a prior boot, but re-rendering
-  // keeps it correct if targets shifted.)
+  // keeps it correct if targets shifted.) This also auto-upgrades an older
+  // persisted profile whose target was a non-grabbable emulation: renderProfile
+  // → ensureKeyboard swaps deck-uhid/deck for xbox-elite so the overlay can
+  // grab the pad in gaming mode (see preferGrabbableGamepad in profile.ts).
   const targets = await getTargetKinds(device.path);
   await writeFileMkdir(PROFILE_PATH, renderProfile(parseCapability(wake.selectedRaw), targets));
   const loaded = await loadProfilePath(device.path, PROFILE_PATH);
