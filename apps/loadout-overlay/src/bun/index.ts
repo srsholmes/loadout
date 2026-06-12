@@ -287,9 +287,15 @@ function broadcastOverlayVisibility(): void {
 // it's kept behind an env flag as a fallback for hosts where IP can't manage a
 // pad. The watchdog + startup-resume below stay wired so the flag is safe.
 //
-// Enable with DECK_OVERLAY_SUSPEND_STEAM=1.
+// EXTERNAL-PAD FIX (under test): Steam reads external pads directly via hidraw
+// (outside gamescope's focus routing), so neither the evdev grab nor the focus
+// atoms stop Steam BPM navigating behind the overlay from an external pad. HHD
+// hits the same wall and solves it by freezing Steam ("to avoid HID device dual
+// input"). So freeze is now ON by default; disable with DECK_OVERLAY_SUSPEND_STEAM=0.
+// The resume-burst is mitigated by the deferred SIGCONT + (TODO) the virtual-pad
+// grab held across resume to absorb replayed input.
 const SUSPEND_STEAM_ENABLED =
-  process.env.DECK_OVERLAY_SUSPEND_STEAM === "1";
+  process.env.DECK_OVERLAY_SUSPEND_STEAM !== "0";
 
 // Startup safety net for the frozen-Steam risk: a previous overlay instance
 // that crashed or was SIGKILLed *while open* could have left Steam SIGSTOPped

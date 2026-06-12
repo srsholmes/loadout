@@ -20,10 +20,20 @@
 // events reaching ANY userspace process. Belt-and-braces under
 // Gamescope, where atom-only routing has been flaky.
 //
+// Steam Input's VIRTUAL Xbox 360 pad (vendor 28de / product 11ff) is a
+// special "grab-only" case: while the overlay is open we EVIOCGRAB it but
+// never read it for nav. A running GAME under the overlay reads its input
+// from this virtual pad (Steam Input aggregates every physical pad into one
+// virtual pad per controller), so grabbing it at the kernel input_dev level
+// (blocks evdev AND joydev readers) stops the game receiving input — with NO
+// resume-burst, unlike a process-freeze: grabbed events are never delivered,
+// so nothing queues to replay on release. Overlay nav is unaffected (it comes
+// from the PHYSICAL pads below, not this mirror). Steam BPM is unaffected too —
+// it reads the physical pad via hidraw, not this virtual pad (verified
+// on-device), so the menu keeps working and BPM yielding stays the focus
+// atoms' job (gamescope-atoms.ts).
+//
 // What we intentionally do NOT grab:
-//   - Steam Input's VIRTUAL Xbox 360 pad (vendor 28de / product 11ff).
-//     Grabbing it would cut CEF's Gamepad API (overlay webview reads
-//     it too) and break Steam BPM when the overlay closes.
 //   - Physical keyboards. The user might want to type into the overlay
 //     UI or use external shortcuts while it's open.
 //   - The InputPlumber virtual keyboard for F16 — handled separately
@@ -490,6 +500,10 @@ interface TrackedDevice {
   path: string;
   dev: InputDevice;
   grabbed: boolean;
+  /** Steam Input virtual pad: EVIOCGRAB it while intercepting to silence the
+   *  game underneath, but never read it for nav/wake (the physical pads drive
+   *  nav; this mirrors them). See the file header. */
+  grabOnly: boolean;
   combo: ComboState;
   shortcut: ShortcutState;
   cal: Map<number, AxisCal>;
@@ -526,8 +540,11 @@ export interface InputInterceptHandle {
 export async function startInputIntercept(
   opts: InputInterceptOptions,
 ): Promise<InputInterceptHandle> {
+  // isController matches BOTH physical pads (read for nav) and Steam Input's
+  // virtual pads (grab-only — see file header). isSteamVirtual disambiguates
+  // them in openAndTrack via `grabOnly`.
   const devices = (await enumerateDevices()).filter(
-    (d) => (d.flags.isController && !d.isSteamVirtual) ||
+    (d) => d.flags.isController ||
            d.flags.isKeyboard ||
            d.flags.isQam,
   );
@@ -543,20 +560,29 @@ export async function startInputIntercept(
       );
       return null;
     }
-    applyIdleMasks(fd, dev);
-    const cal = dev.flags.isController ? readAxisCalibration(fd) : new Map();
+    const grabOnly = dev.isSteamVirtual;
+    // Grab-only virtual pads are never read for nav, so masks + axis
+    // calibration are irrelevant — skip them.
+    if (!grabOnly) applyIdleMasks(fd, dev);
+    const cal =
+      dev.flags.isController && !grabOnly ? readAxisCalibration(fd) : new Map();
     const t: TrackedDevice = {
       fd,
       path: dev.eventPath,
       dev,
       grabbed: false,
+      grabOnly,
       combo: newComboState(),
       shortcut: newShortcutState(),
       cal,
     };
     tracked.push(t);
     const kinds = [
-      dev.flags.isController ? "controller" : null,
+      grabOnly
+        ? "virtual(grab-only)"
+        : dev.flags.isController
+          ? "controller"
+          : null,
       dev.flags.isKeyboard ? "keyboard" : null,
       dev.flags.isQam ? "qam" : null,
     ].filter(Boolean).join("+");
@@ -571,7 +597,8 @@ export async function startInputIntercept(
   }
 
   opts.onReady?.({
-    controllers: tracked.filter((t) => t.dev.flags.isController).length,
+    controllers: tracked.filter((t) => t.dev.flags.isController && !t.grabOnly)
+      .length,
     keyboards: tracked.filter((t) => t.dev.flags.isKeyboard).length,
     qam: tracked.filter((t) => t.dev.flags.isQam).length,
   });
@@ -601,6 +628,14 @@ export async function startInputIntercept(
 
     for (const t of tracked) {
       const events = readRawEvents(t.fd, buf, view);
+
+      // Steam Input virtual pads are grab-only: while intercepting we hold
+      // EVIOCGRAB so the game underneath gets nothing. We never feed their
+      // events to NavController (the physical pads already drive overlay nav;
+      // this mirrors them, so processing both would double every input) and
+      // never run wake detection on them. readRawEvents above already drained
+      // the fd so its buffer can't back up — just skip the rest.
+      if (t.grabOnly) continue;
 
       // Wake detection runs in every mode on every device.
       for (const e of events) {
@@ -656,13 +691,15 @@ export async function startInputIntercept(
     nav.reset();
     for (const t of tracked) {
       if (!t.dev.flags.isController) continue;
-      applyInterceptMasks(t.fd);
+      if (!t.grabOnly) applyInterceptMasks(t.fd);
       if (!t.grabbed) {
         const intBuf = new Int32Array([1]);
         const rc = libc.symbols.ioctl(t.fd, EVIOCGRAB, ptr(intBuf));
         if (rc === 0) {
           t.grabbed = true;
-          console.log(`[input-intercept] grabbed ${t.path} '${t.dev.name}'`);
+          console.log(
+            `[input-intercept] grabbed ${t.path} '${t.dev.name}'${t.grabOnly ? " (virtual, grab-only)" : ""}`,
+          );
         } else {
           // EBUSY is normal if another app (old overlay instance,
           // steamcompmgr) has it — log and move on.
@@ -690,7 +727,7 @@ export async function startInputIntercept(
         libc.symbols.ioctl(t.fd, EVIOCGRAB, null);
         t.grabbed = false;
       }
-      applyIdleMasks(t.fd, t.dev);
+      if (!t.grabOnly) applyIdleMasks(t.fd, t.dev);
     }
     nav.reset();
     console.log(
@@ -723,7 +760,7 @@ export async function startInputIntercept(
     }
     if (!fresh) return;
     const eligible =
-      (fresh.flags.isController && !fresh.isSteamVirtual) ||
+      fresh.flags.isController ||
       fresh.flags.isKeyboard ||
       fresh.flags.isQam;
     if (!eligible) return;
@@ -731,15 +768,17 @@ export async function startInputIntercept(
     if (!t) return;
     // If the overlay is open, the new controller has to participate in
     // the intercept the same way the boot-time controllers do:
-    // broaden masks + EVIOCGRAB. Keyboards / qam don't get grabbed.
+    // broaden masks + EVIOCGRAB (grab-only virtual pads just get the grab,
+    // so a pad's Steam Input virtual node created on connect is silenced too).
+    // Keyboards / qam don't get grabbed.
     if (intercepting && t.dev.flags.isController) {
-      applyInterceptMasks(t.fd);
+      if (!t.grabOnly) applyInterceptMasks(t.fd);
       const intBuf = new Int32Array([1]);
       const rc = libc.symbols.ioctl(t.fd, EVIOCGRAB, ptr(intBuf));
       if (rc === 0) {
         t.grabbed = true;
         console.log(
-          `[input-intercept] hotplug grabbed ${t.path} '${t.dev.name}'`,
+          `[input-intercept] hotplug grabbed ${t.path} '${t.dev.name}'${t.grabOnly ? " (virtual, grab-only)" : ""}`,
         );
       } else {
         console.warn(
@@ -802,7 +841,7 @@ export async function startInputIntercept(
     for (const dev of all) {
       if (trackedPaths.has(dev.eventPath)) continue;
       const eligible =
-        (dev.flags.isController && !dev.isSteamVirtual) ||
+        dev.flags.isController ||
         dev.flags.isKeyboard ||
         dev.flags.isQam;
       if (!eligible) continue;
@@ -811,13 +850,13 @@ export async function startInputIntercept(
       );
       const t = openAndTrack(dev);
       if (t && intercepting && t.dev.flags.isController) {
-        applyInterceptMasks(t.fd);
+        if (!t.grabOnly) applyInterceptMasks(t.fd);
         const intBuf = new Int32Array([1]);
         const rc = libc.symbols.ioctl(t.fd, EVIOCGRAB, ptr(intBuf));
         if (rc === 0) {
           t.grabbed = true;
           console.log(
-            `[input-intercept] reconcile grabbed ${t.path} '${t.dev.name}'`,
+            `[input-intercept] reconcile grabbed ${t.path} '${t.dev.name}'${t.grabOnly ? " (virtual, grab-only)" : ""}`,
           );
         }
       }
