@@ -291,11 +291,15 @@ function broadcastOverlayVisibility(): void {
 // (outside gamescope's focus routing), so neither the evdev grab nor the focus
 // atoms stop Steam BPM navigating behind the overlay from an external pad. HHD
 // hits the same wall and solves it by freezing Steam ("to avoid HID device dual
-// input"). So freeze is now ON by default; disable with DECK_OVERLAY_SUSPEND_STEAM=0.
-// The resume-burst is mitigated by the deferred SIGCONT + (TODO) the virtual-pad
-// grab held across resume to absorb replayed input.
+// input"). Freezing Steam blocks that — but on the Steam Deck it ALSO kills the
+// built-in controls inside the overlay: the Deck's built-in pad navigates via
+// Steam Input's virtual pad (read by CEF's Web Gamepad API), and a frozen Steam
+// stops emitting on it. So freeze is OPT-IN (off by default); enable with
+// DECK_OVERLAY_SUSPEND_STEAM=1 on hosts where blocking external-pad BPM nav
+// matters more than built-in-pad overlay nav. The resume-burst is mitigated by
+// the deferred SIGCONT + (TODO) the virtual-pad grab held across resume.
 const SUSPEND_STEAM_ENABLED =
-  process.env.DECK_OVERLAY_SUSPEND_STEAM !== "0";
+  process.env.DECK_OVERLAY_SUSPEND_STEAM === "1";
 
 // Startup safety net for the frozen-Steam risk: a previous overlay instance
 // that crashed or was SIGKILLed *while open* could have left Steam SIGSTOPped
@@ -499,57 +503,69 @@ function onWake(event: WakeEvent): void {
   }
 }
 
-startInputIntercept({
-  onWake,
-  onAction: (action) => {
-    // Bridge to the webview. onOverlayAction() in main.tsx turns these
-    // into synthetic KeyboardEvents (ArrowUp/Down/Enter/Escape/...) so
-    // norigin-spatial-navigation picks them up unchanged.
-    sendToWebview("overlay-action", { action });
-  },
-  onAxis: (axis, value) => {
-    // Right-stick analog values — webview drives smooth scroll of the
-    // main content area with its own rAF + momentum loop.
-    sendToWebview("overlay-scroll", { axis, value });
-  },
-  onReady: (c) =>
-    console.log(
-      `[overlay] input intercept ready — ${c.controllers} controller(s), ${c.keyboards} keyboard(s), ${c.qam} qam device(s)`,
-    ),
-})
-  .then((handle) => {
-    intercept.current = handle;
-  })
-  .catch((err) => {
-    console.error("[overlay] input intercept failed to start:", err);
-  });
-
-// InputPlumber intercept-mode path. Discovers IP composite devices and, when
-// present, drives focus via InterceptMode + the DBus ui_* signal stream
-// instead of (the ineffective, on deck-uhid) EVIOCGRAB. Nav/wake events flow
-// to the exact same webview surface as the evdev path. No-op when IP is absent.
-startIpIntercept({
-  onAction: (action) => {
-    sendToWebview("overlay-action", { action });
-  },
-  onAxis: (axis, value) => {
-    sendToWebview("overlay-scroll", { axis, value });
-  },
-  onWake,
-  onReady: (info) =>
-    console.log(
-      `[overlay] ip intercept ready — ${info.composites} composite device(s)`,
-    ),
-})
-  .then((handle) => {
-    ipIntercept.current = handle;
-    if (handle.available) {
+// Start the two input paths. ORDER MATTERS: the InputPlumber intercept-mode
+// path discovers IP composite devices first, then the evdev interceptor starts
+// with `readVirtualPadsForNav` set from whether any IP composites exist.
+//
+// Why: on the Steam Deck, when a game/app is running Steam Input exposes the
+// BUILT-IN controller only as the virtual Xbox 360 pad (28de:11ff). With no IP
+// composite to drive nav over DBus, that virtual pad is the Deck's sole nav
+// source, so the evdev path must READ it (not exclude/grab-only it). When an
+// external IP-managed pad IS present, IP's DBus stream drives nav and the
+// virtual pad is a mirror we only grab — so we DON'T read it (would double).
+void (async () => {
+  let ipHandle: IpInterceptHandle | null = null;
+  try {
+    ipHandle = await startIpIntercept({
+      onAction: (action) => {
+        sendToWebview("overlay-action", { action });
+      },
+      onAxis: (axis, value) => {
+        sendToWebview("overlay-scroll", { axis, value });
+      },
+      onWake,
+      onReady: (info) =>
+        console.log(
+          `[overlay] ip intercept ready — ${info.composites} composite device(s)`,
+        ),
+    });
+    ipIntercept.current = ipHandle;
+    if (ipHandle.available) {
       console.log("[overlay] ip intercept ACTIVE — using InterceptMode + DBus nav");
     }
-  })
-  .catch((err) => {
+  } catch (err) {
     console.error("[overlay] ip intercept failed to start:", err);
-  });
+  }
+
+  // No IP composites (Deck alone, or no external IP-managed pad) → the virtual
+  // pad is the Deck's built-in controls; read it for nav.
+  const readVirtualPadsForNav = !ipHandle?.available;
+
+  try {
+    const handle = await startInputIntercept({
+      readVirtualPadsForNav,
+      onWake,
+      onAction: (action) => {
+        // Bridge to the webview. onOverlayAction() in main.tsx turns these
+        // into synthetic KeyboardEvents (ArrowUp/Down/Enter/Escape/...) so
+        // norigin-spatial-navigation picks them up unchanged.
+        sendToWebview("overlay-action", { action });
+      },
+      onAxis: (axis, value) => {
+        // Right-stick analog values — webview drives smooth scroll of the
+        // main content area with its own rAF + momentum loop.
+        sendToWebview("overlay-scroll", { axis, value });
+      },
+      onReady: (c) =>
+        console.log(
+          `[overlay] input intercept ready — ${c.controllers} controller(s), ${c.keyboards} keyboard(s), ${c.qam} qam device(s) (readVirtualPadsForNav=${readVirtualPadsForNav})`,
+        ),
+    });
+    intercept.current = handle;
+  } catch (err) {
+    console.error("[overlay] input intercept failed to start:", err);
+  }
+})();
 
 // Steam-Deck-native wake button: read /dev/hidrawN (the controller's
 // gamepad interface) in parallel with Steam Input. Open multiplexes
