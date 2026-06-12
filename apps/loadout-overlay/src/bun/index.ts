@@ -27,6 +27,10 @@ import {
   type WakeEvent,
 } from "./native/input-intercept";
 import {
+  startIpIntercept,
+  type IpInterceptHandle,
+} from "./native/ip-intercept";
+import {
   startDeckHidrawWatcher,
   type DeckHidrawWatcherHandle,
 } from "./native/deck-hidraw-watcher";
@@ -137,6 +141,12 @@ const pendingResumeTimer: { current: ReturnType<typeof setTimeout> | null } = {
 // and to the close-path `intercept.current?.release()` inside
 // toggleOverlay.
 const intercept: { current: InputInterceptHandle | null } = { current: null };
+// InputPlumber intercept-mode path — runs alongside the evdev interceptor on
+// IP-managed handhelds (deck-uhid target, no grabbable evdev). On grab it sets
+// InterceptMode=2 so Steam BPM is starved and nav arrives over D-Bus; on hosts
+// without IP it's an inert no-op and the evdev grab above does the work. See
+// native/ip-intercept.ts.
+const ipIntercept: { current: IpInterceptHandle | null } = { current: null };
 const deckHidraw: { current: DeckHidrawWatcherHandle | null } = { current: null };
 // Picker changes flow back to the watcher via two mechanisms: (1) fs.watch
 // on the plugin-storage directory fires within ~10ms of the atomic rename,
@@ -299,6 +309,7 @@ function toggleOverlay(source: string) {
     overlay.minimize();
     atoms.hide().catch((e) => console.warn("[overlay] atoms.hide:", e));
     intercept.current?.release();
+    ipIntercept.current?.release();
     // Always SIGCONT Steam on close, even when SUSPEND_STEAM_ENABLED is
     // off. Users have reported Steam appearing frozen after the overlay
     // closes (menu visible but inputs ignored) — if anything left Steam
@@ -328,6 +339,7 @@ function toggleOverlay(source: string) {
       if (steamPid.current !== null) suspendSteam(steamPid.current);
     }
     intercept.current?.grab();
+    ipIntercept.current?.grab();
     overlay.show();
     atoms.show().catch((e) => console.warn("[overlay] atoms.show:", e));
     state.isOpen = true;
@@ -407,6 +419,33 @@ startInputIntercept({
   })
   .catch((err) => {
     console.error("[overlay] input intercept failed to start:", err);
+  });
+
+// InputPlumber intercept-mode path. Discovers IP composite devices and, when
+// present, drives focus via InterceptMode + the DBus ui_* signal stream
+// instead of (the ineffective, on deck-uhid) EVIOCGRAB. Nav/wake events flow
+// to the exact same webview surface as the evdev path. No-op when IP is absent.
+startIpIntercept({
+  onAction: (action) => {
+    sendToWebview("overlay-action", { action });
+  },
+  onAxis: (axis, value) => {
+    sendToWebview("overlay-scroll", { axis, value });
+  },
+  onWake,
+  onReady: (info) =>
+    console.log(
+      `[overlay] ip intercept ready — ${info.composites} composite device(s)`,
+    ),
+})
+  .then((handle) => {
+    ipIntercept.current = handle;
+    if (handle.available) {
+      console.log("[overlay] ip intercept ACTIVE — using InterceptMode + DBus nav");
+    }
+  })
+  .catch((err) => {
+    console.error("[overlay] ip intercept failed to start:", err);
   });
 
 // Steam-Deck-native wake button: read /dev/hidrawN (the controller's
@@ -548,6 +587,7 @@ function runShutdown(): Promise<void> {
     steamPid,
     atoms,
     intercept,
+    ipIntercept,
     deckHidraw,
     globalShortcut: GlobalShortcut,
   });
