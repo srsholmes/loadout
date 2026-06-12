@@ -206,7 +206,7 @@ describe("startInputIntercept — device selection", () => {
     h.shutdown();
   });
 
-  it("skips the Steam Input virtual pad (vendor 28de / product 11ff)", async () => {
+  it("grab-only tracks the Steam Input virtual pad (28de:11ff): opened, and EVIOCGRAB'd alongside the physical pad on intercept", async () => {
     devicesOnSystem = [
       mkDevice("/dev/input/event5", "Microsoft X-Box 360 pad", { isController: true }, {
         isSteamVirtual: true,
@@ -216,9 +216,21 @@ describe("startInputIntercept — device selection", () => {
       mkDevice("/dev/input/event6", "Xbox Wireless Controller", { isController: true }),
     ];
     const h = await startInputIntercept({ onWake: () => {}, onAction: () => {} });
+    // Both the virtual pad and the physical pad are opened/tracked now —
+    // the virtual one so we can grab it to silence the game underneath.
     const opens = ffiCalls.filter((c) => c.kind === "open");
-    expect(opens).toHaveLength(1);
-    expect((opens[0] as { path: string }).path).toBe("/dev/input/event6");
+    expect(opens.map((c) => (c as { path: string }).path).sort()).toEqual([
+      "/dev/input/event5",
+      "/dev/input/event6",
+    ]);
+    // On intercept, BOTH get EVIOCGRAB'd (physical for nav, virtual grab-only).
+    expect(
+      ffiCalls.filter((c) => c.kind === "ioctl" && c.request === 0x40044590n),
+    ).toHaveLength(0);
+    h.grab();
+    expect(
+      ffiCalls.filter((c) => c.kind === "ioctl" && c.request === 0x40044590n),
+    ).toHaveLength(2);
     h.shutdown();
   });
 

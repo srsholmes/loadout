@@ -19,7 +19,7 @@ import { useEnabledPlugins } from "./hooks/useEnabledPlugins";
 import { useConfigValue, getConfigValue, setConfigValue } from "./lib/userConfig";
 import { GamepadNavProvider, useFocusable, Focusable, FocusContext, setFocus, getCurrentFocusKey } from "./components/GamepadNav";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { hideOverlay, isGamescopeMode, getControllerShortcuts, setControllerShortcuts } from "./lib/host";
+import { hideOverlay, isGamescopeMode, getControllerShortcuts, setControllerShortcuts, sendOverlayHeartbeat } from "./lib/host";
 import { OverlayKeyboard } from "./components/OverlayKeyboard";
 import { useOverlayKeyboard } from "@loadout/ui";
 import { isTextLike, rememberLastInput } from "./lib/keystrokeDispatcher";
@@ -115,6 +115,16 @@ export function App() {
     } else {
       hideOverlay().catch(() => {});
     }
+  }, []);
+
+  // Liveness heartbeat for the bun-side freeze watchdog. Runs whenever the
+  // webview is mounted (the window is minimized, never destroyed, on close).
+  // If this renderer wedges, the pings stop and bun thaws Steam + force-closes
+  // rather than leaving Steam SIGSTOPped. Cheap (one RPC/s).
+  useEffect(() => {
+    sendOverlayHeartbeat();
+    const id = setInterval(sendOverlayHeartbeat, 1000);
+    return () => clearInterval(id);
   }, []);
 
   // Plugin → shell toast bridge. Plugins call `notify(...)` from
