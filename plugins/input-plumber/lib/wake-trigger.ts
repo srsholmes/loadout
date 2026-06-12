@@ -514,3 +514,38 @@ export async function reloadPersistedProfile(): Promise<WakeOpResult> {
     ? { ok: true }
     : { ok: false, error: `LoadProfilePath failed: exit ${loaded.code}` };
 }
+
+const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * User-triggered recovery: restart the InputPlumber daemon, then re-load the
+ * wake profile onto the freshly-recreated composite device.
+ *
+ * Rebuilding all composite devices + emulated targets from scratch is the
+ * reliable fix for the class of stuck states we can't always recover from in
+ * place — a controller stops presenting to Steam, the `deck-uhid` emulation
+ * gets confused after heavy device churn, or the boot-time wake reload lost its
+ * race. Exposed as a "Restart InputPlumber" button in the plugin UI.
+ *
+ * Best-effort and non-throwing. The retry loop covers the window where IP is
+ * back up but hasn't finished re-enumerating the controller's capabilities yet
+ * (the same race `reloadPersistedProfile` can hit at boot) — without it the
+ * wake button would silently fail to reload right after the restart.
+ */
+export async function restartInputPlumber(): Promise<WakeOpResult> {
+  const r = await exec(["systemctl", "restart", "inputplumber"]);
+  if (!r.ok) {
+    return { ok: false, error: `Failed to restart InputPlumber: ${r.err || "unknown error"}` };
+  }
+  // reloadPersistedProfile() already waits for IP to come up; retry it a few
+  // times so a not-yet-enumerated composite (transient post-restart) resolves
+  // rather than leaving the wake button unbound. No-op (ok) when no wake button
+  // is bound, so this returns quickly on those setups.
+  let last: WakeOpResult = { ok: true };
+  for (let attempt = 0; attempt < 5; attempt++) {
+    last = await reloadPersistedProfile();
+    if (last.ok) break;
+    await delay(1000);
+  }
+  return last;
+}

@@ -133,6 +133,14 @@ const pendingResumeTimer: { current: ReturnType<typeof setTimeout> | null } = {
   current: null,
 };
 
+// Freeze watchdog state. The webview pings `overlayHeartbeat` ~1×/s; we stamp
+// the time here. If pings stop while Steam is frozen (overlay hung) — or the
+// freeze exceeds a hard cap — the watchdog force-closes the overlay and thaws
+// Steam, so a hung/degraded overlay can never strand Steam. (A SIGKILL→restart
+// is already covered by the startup SIGCONT; this covers a HANG, where the bun
+// process is alive but the CEF renderer is wedged.)
+const lastHeartbeat: { current: number } = { current: 0 };
+
 // Input interceptor — opens every controller + keyboard + QAM device
 // up-front and toggles EVIOCGRAB on the controllers when the overlay
 // shows/hides. Also emits wake events (F16 / Guide+B / Ctrl+4) that
@@ -186,6 +194,7 @@ const rpc = BrowserView.defineRPC({
     gamescopeMode,
     cachedSteamSoundsPath,
     steamPid,
+    lastHeartbeat,
   }),
 });
 
@@ -266,13 +275,97 @@ function broadcastOverlayVisibility(): void {
   sendToWebview("overlay-visibility", { isOpen: state.isOpen });
 }
 
-// Suspending Steam is off by default now that the input interceptor
-// reads physical controllers directly + dispatches synthetic keyboard
-// events into the webview (matches the Tauri behavior). SIGSTOP is
-// kept as an optional belt-and-braces mechanism behind an env flag in
-// case hardware surfaces a path we missed.
+// Freeze Steam (SIGSTOP) while the overlay is open — OPT-IN (off by default).
+//
+// We tried this ON by default to block EXTERNAL pads + games, but freezing
+// Steam buffers the pad's hidraw input while it's stopped and Steam REPLAYS the
+// backlog on SIGCONT → BPM jumps after close (the "resume-burst"; the pad
+// reports on-change so the buffer can't be flushed with neutral). The clean fix
+// is to have IP MANAGE the external pad (the backend enables ManageAllDevices)
+// so the overlay's InterceptMode DIVERTS its input before Steam ever reads it —
+// nothing buffers, nothing replays. So the freeze is no longer the mechanism;
+// it's kept behind an env flag as a fallback for hosts where IP can't manage a
+// pad. The watchdog + startup-resume below stay wired so the flag is safe.
+//
+// Enable with DECK_OVERLAY_SUSPEND_STEAM=1.
 const SUSPEND_STEAM_ENABLED =
   process.env.DECK_OVERLAY_SUSPEND_STEAM === "1";
+
+// Startup safety net for the frozen-Steam risk: a previous overlay instance
+// that crashed or was SIGKILLed *while open* could have left Steam SIGSTOPped
+// (whole UI frozen, only fixable by reboot otherwise). On every startup,
+// unconditionally SIGCONT Steam once. SIGCONT on a running process is a kernel
+// no-op, so this is free; combined with systemd's auto-restart it bounds any
+// stuck-frozen window to a single overlay restart. (HHD does NOT do this — it's
+// our crash-recovery edge.)
+if (SUSPEND_STEAM_ENABLED) {
+  const bootSteamPid = findSteamPid();
+  if (bootSteamPid !== null) {
+    resumeSteam(bootSteamPid);
+    trace("[overlay] startup: SIGCONT Steam (thaw any stale freeze)");
+  }
+}
+
+// ---- Freeze watchdog -------------------------------------------------------
+//
+// Guarantees Steam is never left SIGSTOPped by a hung overlay. While Steam is
+// frozen we poll once a second: if the webview stopped sending
+// `overlayHeartbeat` pings (renderer wedged) OR the freeze has run past a hard
+// cap, we emergency-close the overlay and thaw Steam. A SIGKILL→restart is
+// handled by the startup SIGCONT above; this handles the HANG case (bun alive,
+// CEF renderer wedged) the startup path can't see.
+const FREEZE_HEARTBEAT_TIMEOUT_MS = 5_000; // no ping this long while frozen → hung
+const FREEZE_HARD_CAP_MS = 30_000; // absolute ceiling on a single freeze
+let freezeWatchTimer: ReturnType<typeof setInterval> | null = null;
+let frozenAt = 0;
+
+function stopFreezeWatchdog(): void {
+  if (freezeWatchTimer) clearInterval(freezeWatchTimer);
+  freezeWatchTimer = null;
+}
+
+function startFreezeWatchdog(): void {
+  frozenAt = Date.now();
+  lastHeartbeat.current = Date.now(); // assume alive at open; webview keeps it fresh
+  stopFreezeWatchdog();
+  freezeWatchTimer = setInterval(() => {
+    if (!state.isOpen) {
+      stopFreezeWatchdog();
+      return;
+    }
+    const now = Date.now();
+    const sinceBeat = now - lastHeartbeat.current;
+    const frozenFor = now - frozenAt;
+    if (sinceBeat > FREEZE_HEARTBEAT_TIMEOUT_MS || frozenFor > FREEZE_HARD_CAP_MS) {
+      forceCloseOverlay(`unresponsive (sinceBeat=${sinceBeat}ms frozenFor=${frozenFor}ms)`);
+    }
+  }, 1_000);
+}
+
+// Emergency teardown when the watchdog fires: thaw Steam IMMEDIATELY, drop the
+// grabs/intercept, hide the window and mark closed. Mirrors the close path but
+// skips the debounce/deferred-resume so a wedged overlay self-heals.
+function forceCloseOverlay(reason: string): void {
+  console.warn(`[freeze-watchdog] ${reason} — emergency close + thaw Steam`);
+  trace(`[freeze-watchdog] ${reason} — emergency close`);
+  stopFreezeWatchdog();
+  if (pendingResumeTimer.current !== null) {
+    clearTimeout(pendingResumeTimer.current);
+    pendingResumeTimer.current = null;
+  }
+  if (steamPid.current === null) steamPid.current = findSteamPid();
+  if (steamPid.current !== null) resumeSteam(steamPid.current);
+  intercept.current?.release();
+  ipIntercept.current?.release();
+  atoms.hide().catch((e) => console.warn("[freeze-watchdog] atoms.hide:", e));
+  try {
+    overlay.minimize();
+  } catch (e) {
+    console.warn("[freeze-watchdog] minimize:", e);
+  }
+  state.isOpen = false;
+  broadcastOverlayVisibility();
+}
 
 // Minimum gap between toggleOverlay() calls. On the OXP Apex, InputPlumber
 // emits F16 on several evdev nodes simultaneously when the user presses
@@ -306,6 +399,7 @@ function toggleOverlay(source: string) {
     // matches input_interceptor.rs::close_overlay — atoms go down
     // before the grab releases so Gamescope re-focuses the game
     // before any queued controller events slip through.
+    stopFreezeWatchdog();
     overlay.minimize();
     atoms.hide().catch((e) => console.warn("[overlay] atoms.hide:", e));
     intercept.current?.release();
@@ -336,7 +430,10 @@ function toggleOverlay(source: string) {
     // raise the window, set atoms. Also matches open_overlay().
     if (SUSPEND_STEAM_ENABLED) {
       if (steamPid.current === null) steamPid.current = findSteamPid();
-      if (steamPid.current !== null) suspendSteam(steamPid.current);
+      if (steamPid.current !== null) {
+        suspendSteam(steamPid.current);
+        startFreezeWatchdog();
+      }
     }
     intercept.current?.grab();
     ipIntercept.current?.grab();

@@ -292,4 +292,15 @@ export default class InputPlumberBackend implements PluginBackend {
     this.emit?.({ event: "wake-status", data: await wake.getWakeStatus() });
     return r;
   }
+
+  /** Recovery: restart the InputPlumber daemon and re-load the wake profile.
+   *  Rebuilds composite devices from scratch to fix stuck states (a controller
+   *  not presenting to Steam, deck-uhid emulation confused after churn). */
+  async restartInputPlumber(): Promise<WakeOpResult> {
+    this.log?.info("Restarting InputPlumber (user-requested recovery)…");
+    const r = await wake.restartInputPlumber();
+    if (!r.ok) this.log?.warn(`restartInputPlumber: ${r.error}`);
+    this.emit?.({ event: "wake-status", data: await wake.getWakeStatus() });
+    return r;
+  }
 }
