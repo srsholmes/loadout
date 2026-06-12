@@ -21,6 +21,13 @@ async function rpcInvoke(
   return await fn(args);
 }
 
+/** Liveness ping for the bun-side freeze watchdog. Fire-and-forget — if the
+ *  renderer wedges and these stop arriving while Steam is frozen, bun thaws
+ *  Steam and force-closes. No-op outside Electrobun. */
+export function sendOverlayHeartbeat(): void {
+  void rpcInvoke("overlayHeartbeat");
+}
+
 export async function showOverlay() {
   return rpcInvoke("show");
 }
