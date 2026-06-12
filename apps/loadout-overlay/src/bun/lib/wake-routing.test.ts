@@ -10,8 +10,8 @@ import type { ControllerShortcuts } from "../../webview/lib/electrobun";
 
 const DEFAULT_SHORTCUTS: ControllerShortcuts = {
   guide_a: { type: "None" },
-  guide_b: { type: "None" },
-  guide_x: { type: "ToggleOverlay" },
+  guide_b: { type: "ToggleOverlay" },
+  guide_x: { type: "None" },
   guide_y: { type: "None" },
 };
 
@@ -79,18 +79,21 @@ describe("routeWake — Steam-reserved Guide combos", () => {
 
 describe("routeWake — configurable Guide combos", () => {
   it("GuideB → None: ignore", () => {
-    expect(routeWake("GuideB", DEFAULT_SHORTCUTS)).toEqual({
+    const shortcuts: ControllerShortcuts = {
+      ...DEFAULT_SHORTCUTS,
+      guide_b: { type: "None" },
+    };
+    expect(routeWake("GuideB", shortcuts)).toEqual({
       kind: "ignore",
       reason: "unknown-action",
     });
   });
 
-  it("GuideB → ToggleOverlay: toggle", () => {
-    const shortcuts: ControllerShortcuts = {
-      ...DEFAULT_SHORTCUTS,
-      guide_b: { type: "ToggleOverlay" },
-    };
-    expect(routeWake("GuideB", shortcuts)).toEqual({
+  it("GuideB → ToggleOverlay (default): toggle", () => {
+    // Locks in the default behavior — Guide+B is the only Guide combo
+    // that defaults to ToggleOverlay out of the box (see initial
+    // shortcuts in index.ts).
+    expect(routeWake("GuideB", DEFAULT_SHORTCUTS)).toEqual({
       kind: "toggle",
       reason: "GuideB",
     });
@@ -108,11 +111,19 @@ describe("routeWake — configurable Guide combos", () => {
     });
   });
 
-  it("GuideX → ToggleOverlay (default): toggle", () => {
-    // Locks in the default behavior — Guide+X is the only Guide combo
-    // that defaults to ToggleOverlay out of the box (see initial
-    // shortcuts in index.ts).
+  it("GuideX → None (default): ignore", () => {
     expect(routeWake("GuideX", DEFAULT_SHORTCUTS)).toEqual({
+      kind: "ignore",
+      reason: "unknown-action",
+    });
+  });
+
+  it("GuideX → ToggleOverlay: toggle", () => {
+    const shortcuts: ControllerShortcuts = {
+      ...DEFAULT_SHORTCUTS,
+      guide_x: { type: "ToggleOverlay" },
+    };
+    expect(routeWake("GuideX", shortcuts)).toEqual({
       kind: "toggle",
       reason: "GuideX",
     });
