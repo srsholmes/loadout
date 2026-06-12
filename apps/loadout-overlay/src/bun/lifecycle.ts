@@ -86,6 +86,10 @@ export interface ShutdownDeps {
    * exit and the helper logs spurious "process exited" noise.
    */
   pendingResumeTimer: Ref<ReturnType<typeof setTimeout> | null>;
+  /** Close-path virtual-pad burst-absorption release timer. Held so shutdown
+   *  can cancel it (same reason as pendingResumeTimer — avoid a post-exit
+   *  fire). The grabs themselves are dropped by intercept.shutdown(). */
+  pendingVirtualReleaseTimer: Ref<ReturnType<typeof setTimeout> | null>;
   /** Cached Steam PID — null if we never opened the overlay this session. */
   steamPid: Ref<number | null>;
   /** Gamescope X11 atoms object; .hide() zeroes STEAM_OVERLAY=1. */
@@ -123,6 +127,10 @@ export async function shutdown(deps: ShutdownDeps): Promise<void> {
   if (deps.pendingResumeTimer.current !== null) {
     clearTimeout(deps.pendingResumeTimer.current);
     deps.pendingResumeTimer.current = null;
+  }
+  if (deps.pendingVirtualReleaseTimer.current !== null) {
+    clearTimeout(deps.pendingVirtualReleaseTimer.current);
+    deps.pendingVirtualReleaseTimer.current = null;
   }
   try {
     // Critical #1: RESUME STEAM. If we exit with Steam still in
