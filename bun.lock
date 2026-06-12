@@ -46,6 +46,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@loadout/deck-hid": "workspace:*",
+        "@loadout/exec": "workspace:*",
         "@loadout/plugin-storage": "workspace:*",
         "@loadout/steam-paths": "workspace:*",
         "@loadout/types": "workspace:*",
