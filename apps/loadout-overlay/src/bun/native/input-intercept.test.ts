@@ -234,6 +234,46 @@ describe("startInputIntercept — device selection", () => {
     h.shutdown();
   });
 
+  it("release() keeps the virtual pad grabbed (burst-absorption); releaseVirtual() drops it", async () => {
+    devicesOnSystem = [
+      mkDevice("/dev/input/event5", "Microsoft X-Box 360 pad", { isController: true }, {
+        isSteamVirtual: true,
+        vendor: "28de",
+        product: "11ff",
+      }),
+      mkDevice("/dev/input/event6", "Xbox Wireless Controller", { isController: true }),
+    ];
+    const h = await startInputIntercept({ onWake: () => {}, onAction: () => {} });
+    const opens = ffiCalls.filter((c) => c.kind === "open") as {
+      path: string;
+      rc: number;
+    }[];
+    const virtFd = opens.find((c) => c.path === "/dev/input/event5")!.rc;
+    const physFd = opens.find((c) => c.path === "/dev/input/event6")!.rc;
+    // EVIOCGRAB release calls (argKind "null") on a given fd.
+    const releasesOn = (fd: number) =>
+      ffiCalls.filter(
+        (c) =>
+          c.kind === "ioctl" &&
+          c.request === 0x40044590n &&
+          c.fd === fd &&
+          c.argKind === "null",
+      ).length;
+
+    h.grab();
+    // release() drops the PHYSICAL grab but NOT the virtual one.
+    h.release();
+    expect(releasesOn(physFd)).toBe(1);
+    expect(releasesOn(virtFd)).toBe(0); // virtual still held for absorption
+    // releaseVirtual() finally drops the virtual grab.
+    h.releaseVirtual();
+    expect(releasesOn(virtFd)).toBe(1);
+    // Idempotent — a second call is a no-op (no extra release ioctl).
+    h.releaseVirtual();
+    expect(releasesOn(virtFd)).toBe(1);
+    h.shutdown();
+  });
+
   it("continues when one device's open() fails", async () => {
     devicesOnSystem = [
       mkDevice("/dev/input/event5", "Pad A", { isController: true }),

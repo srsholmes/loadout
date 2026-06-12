@@ -133,6 +133,17 @@ const pendingResumeTimer: { current: ReturnType<typeof setTimeout> | null } = {
   current: null,
 };
 
+// Burst-absorption: when Steam was frozen, its buffered external-pad input
+// replays on SIGCONT. We hold the grab-only virtual pads across the resume so
+// the replay is swallowed by our grab instead of reaching the game, then drop
+// them this long AFTER the SIGCONT (enough for Steam to finish draining its
+// hidraw queue). Held in a ref so the open path can cancel a stale release if
+// the overlay is reopened mid-drain.
+const VIRTUAL_DRAIN_MS = 300;
+const pendingVirtualReleaseTimer: {
+  current: ReturnType<typeof setTimeout> | null;
+} = { current: null };
+
 // Freeze watchdog state. The webview pings `overlayHeartbeat` ~1×/s; we stamp
 // the time here. If pings stop while Steam is frozen (overlay hung) — or the
 // freeze exceeds a hard cap — the watchdog force-closes the overlay and thaws
@@ -359,9 +370,14 @@ function forceCloseOverlay(reason: string): void {
     clearTimeout(pendingResumeTimer.current);
     pendingResumeTimer.current = null;
   }
+  if (pendingVirtualReleaseTimer.current !== null) {
+    clearTimeout(pendingVirtualReleaseTimer.current);
+    pendingVirtualReleaseTimer.current = null;
+  }
   if (steamPid.current === null) steamPid.current = findSteamPid();
   if (steamPid.current !== null) resumeSteam(steamPid.current);
   intercept.current?.release();
+  intercept.current?.releaseVirtual();
   ipIntercept.current?.release();
   atoms.hide().catch((e) => console.warn("[freeze-watchdog] atoms.hide:", e));
   try {
@@ -408,6 +424,8 @@ function toggleOverlay(source: string) {
     stopFreezeWatchdog();
     overlay.minimize();
     atoms.hide().catch((e) => console.warn("[overlay] atoms.hide:", e));
+    // Releases the PHYSICAL pad grabs; the grab-only virtual pads stay grabbed
+    // so we can hold them across the SIGCONT to absorb the resume-burst below.
     intercept.current?.release();
     ipIntercept.current?.release();
     // Always SIGCONT Steam on close, even when SUSPEND_STEAM_ENABLED is
@@ -417,8 +435,12 @@ function toggleOverlay(source: string) {
     // suspend, etc.) the only recovery without this is a reboot. SIGCONT
     // on a running process is a kernel no-op, so this is free.
     if (steamPid.current === null) steamPid.current = findSteamPid();
-    if (steamPid.current !== null) {
-      const pid = steamPid.current;
+    if (pendingVirtualReleaseTimer.current !== null) {
+      clearTimeout(pendingVirtualReleaseTimer.current);
+      pendingVirtualReleaseTimer.current = null;
+    }
+    const pid = steamPid.current;
+    if (pid !== null) {
       // Audit B-027: track the handle so shutdown() can cancel a
       // pending resume; otherwise the deferred SIGCONT fires post-exit
       // and logs spurious "process exited" noise from the helper.
@@ -426,7 +448,23 @@ function toggleOverlay(source: string) {
       pendingResumeTimer.current = setTimeout(() => {
         pendingResumeTimer.current = null;
         resumeSteam(pid);
+        // Burst-absorption: only meaningful when we actually froze Steam (so
+        // there's a buffered replay). Steam now replays the queued external-pad
+        // input into its virtual pad on resume — hold the grab a moment past
+        // the SIGCONT so our grab swallows it, then release.
+        if (SUSPEND_STEAM_ENABLED) {
+          pendingVirtualReleaseTimer.current = setTimeout(() => {
+            pendingVirtualReleaseTimer.current = null;
+            intercept.current?.releaseVirtual();
+          }, VIRTUAL_DRAIN_MS);
+        }
       }, 250);
+    }
+    // No freeze this session (flag off, or no Steam process) → no burst to
+    // absorb, so drop the virtual-pad grab now and let the game take input
+    // again immediately rather than waiting on the SIGCONT timer.
+    if (!SUSPEND_STEAM_ENABLED || pid === null) {
+      intercept.current?.releaseVirtual();
     }
     state.isOpen = false;
     broadcastOverlayVisibility();
@@ -434,6 +472,18 @@ function toggleOverlay(source: string) {
   } else {
     // --- Open path: suspend Steam (if enabled), grab controllers,
     // raise the window, set atoms. Also matches open_overlay().
+    // Cancel any in-flight close-path timers from a rapid reopen — a stale
+    // virtual-release would drop the grab mid-overlay (game starts receiving
+    // the pad again), and a stale SIGCONT could thaw a Steam we're about to
+    // re-freeze. grab() below re-grabs any already-released virtual pads.
+    if (pendingVirtualReleaseTimer.current !== null) {
+      clearTimeout(pendingVirtualReleaseTimer.current);
+      pendingVirtualReleaseTimer.current = null;
+    }
+    if (pendingResumeTimer.current !== null) {
+      clearTimeout(pendingResumeTimer.current);
+      pendingResumeTimer.current = null;
+    }
     if (SUSPEND_STEAM_ENABLED) {
       if (steamPid.current === null) steamPid.current = findSteamPid();
       if (steamPid.current !== null) {
@@ -687,6 +737,7 @@ function runShutdown(): Promise<void> {
   return shutdown({
     running: managementLoopRunning,
     pendingResumeTimer,
+    pendingVirtualReleaseTimer,
     steamPid,
     atoms,
     intercept,

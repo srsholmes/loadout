@@ -529,8 +529,16 @@ export interface InputInterceptHandle {
   /** Start intercept — EVIOCGRAB physical controllers, broaden their
    *  event masks, reset NavController state. Safe to call multiple times. */
   grab(): void;
-  /** Stop intercept — release grabs, narrow masks back to idle. */
+  /** Stop intercept — release the PHYSICAL controller grabs + narrow masks
+   *  back to idle. The grab-only Steam Input virtual pads stay grabbed so the
+   *  caller can hold them across a Steam SIGCONT to absorb the resume-burst;
+   *  release them with releaseVirtual() once the replay has drained. */
   release(): void;
+  /** Release the grab-only Steam Input virtual pad(s). Call this AFTER the
+   *  deferred SIGCONT on close — while held across the resume, the burst Steam
+   *  replays into its virtual pad is swallowed by our grab instead of reaching
+   *  the game. Safe to call when nothing is grabbed (no-op). */
+  releaseVirtual(): void;
   /** Close all FDs, release any outstanding grabs. Call from shutdown. */
   shutdown(): void;
   /** For diagnostic logs. */
@@ -717,6 +725,10 @@ export async function startInputIntercept(
     intercepting = false;
     for (const t of tracked) {
       if (!t.dev.flags.isController) continue;
+      // Grab-only virtual pads stay grabbed past release() so the caller can
+      // hold them across the Steam SIGCONT (burst absorption). releaseVirtual()
+      // drops them once the resume-replay has drained.
+      if (t.grabOnly) continue;
       if (t.grabbed) {
         // Kernel semantics (drivers/input/evdev.c): EVIOCGRAB treats the
         // ioctl arg as a pointer and only checks null-vs-non-null — any
@@ -727,13 +739,27 @@ export async function startInputIntercept(
         libc.symbols.ioctl(t.fd, EVIOCGRAB, null);
         t.grabbed = false;
       }
-      if (!t.grabOnly) applyIdleMasks(t.fd, t.dev);
+      applyIdleMasks(t.fd, t.dev);
     }
     nav.reset();
     console.log(
-      `[input-intercept] released ${tracked.filter((t) => t.dev.flags.isController).length} controller(s)`,
+      `[input-intercept] released ${tracked.filter((t) => t.dev.flags.isController && !t.grabOnly).length} controller(s) (virtual pads held for burst-absorption)`,
     );
     startTimer();
+  }
+
+  /** Release the grab-only virtual pads. Called after the deferred SIGCONT so
+   *  the resume-burst gets absorbed by the held grab rather than hitting the
+   *  game. Idempotent — skips pads that aren't grabbed. */
+  function releaseVirtual(): void {
+    let n = 0;
+    for (const t of tracked) {
+      if (!t.grabOnly || !t.grabbed) continue;
+      libc.symbols.ioctl(t.fd, EVIOCGRAB, null);
+      t.grabbed = false;
+      n += 1;
+    }
+    if (n > 0) console.log(`[input-intercept] released ${n} virtual pad(s)`);
   }
 
   // ---- Hot-plug -----------------------------------------------------------
@@ -871,6 +897,7 @@ export async function startInputIntercept(
   return {
     grab: doGrab,
     release: doRelease,
+    releaseVirtual,
     shutdown: () => {
       if (timer) clearInterval(timer);
       timer = null;
@@ -878,6 +905,7 @@ export async function startInputIntercept(
       reconcileTimer = null;
       hotplug?.shutdown();
       if (intercepting) doRelease();
+      releaseVirtual();
       for (const t of tracked) libc.symbols.close(t.fd);
       tracked.length = 0;
     },
