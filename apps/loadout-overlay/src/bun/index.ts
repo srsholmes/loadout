@@ -77,8 +77,8 @@ const state = createOverlayState(DESKTOP_SMOKE_TEST);
 const shortcuts: { current: ControllerShortcuts } = {
   current: {
     guide_a: { type: "None" },
-    guide_b: { type: "None" },
-    guide_x: { type: "ToggleOverlay" },
+    guide_b: { type: "ToggleOverlay" },
+    guide_x: { type: "None" },
     guide_y: { type: "None" },
   },
 };

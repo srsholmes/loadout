@@ -67,8 +67,8 @@ describe("lib/host — config-file fallback (no host bridge)", () => {
     const shortcuts = await lib.getControllerShortcuts();
     expect(shortcuts).toEqual({
       guide_a: { type: "None" },
-      guide_b: { type: "None" },
-      guide_x: { type: "ToggleOverlay" },
+      guide_b: { type: "ToggleOverlay" },
+      guide_x: { type: "None" },
       guide_y: { type: "None" },
     });
   });
