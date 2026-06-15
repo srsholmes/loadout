@@ -89,6 +89,102 @@ function cmdHasSubstring(cmd: readonly string[], needle: string): boolean {
   return cmd.some((s) => s.includes(needle));
 }
 
+/** Precise `busctl get-property` matcher: the property name is the last
+ *  argument, the object path is matched by substring. */
+function isGetProp(
+  cmd: readonly string[],
+  pathNeedle: string,
+  prop: string,
+): boolean {
+  return (
+    isBusctl(cmd, "get-property") &&
+    cmd[cmd.length - 1] === prop &&
+    cmd.some((s) => s.includes(pathNeedle))
+  );
+}
+
+const D0 = "/org/shadowblip/InputPlumber/CompositeDevice0";
+const D1 = "/org/shadowblip/InputPlumber/CompositeDevice1";
+
+/**
+ * Standard two-device topology for the auto-disable tests:
+ *  - CompositeDevice0 "Steam Deck Controller" — internal-bus (I2C) gamepad
+ *    -> built-in.
+ *  - CompositeDevice1 "Xbox Wireless Controller" — USB gamepad -> external.
+ */
+function twoDeviceExpectations({
+  device0TargetsLive = true,
+}: { device0TargetsLive?: boolean } = {}): SpawnExpectation[] {
+  return [
+    {
+      match: (c) => isBusctl(c, "tree", "--list"),
+      stdout: `${D0}\n${D1}`,
+    },
+    // Composite names
+    {
+      match: (c) => isGetProp(c, "/CompositeDevice0", "Name"),
+      stdout: 's "Steam Deck Controller"',
+    },
+    {
+      match: (c) => isGetProp(c, "/CompositeDevice1", "Name"),
+      stdout: 's "Xbox Wireless Controller"',
+    },
+    // Source device paths
+    {
+      match: (c) => isGetProp(c, "/CompositeDevice0", "SourceDevicePaths"),
+      stdout: 'as 1 "/org/shadowblip/InputPlumber/devices/source/event0"',
+    },
+    {
+      match: (c) => isGetProp(c, "/CompositeDevice1", "SourceDevicePaths"),
+      stdout: 'as 1 "/org/shadowblip/InputPlumber/devices/source/event1"',
+    },
+    // Capabilities
+    {
+      match: (c) => isGetProp(c, "/CompositeDevice0", "Capabilities"),
+      stdout: 'as 1 "Gamepad:Button:South"',
+    },
+    {
+      match: (c) => isGetProp(c, "/CompositeDevice1", "Capabilities"),
+      stdout: 'as 1 "Gamepad:Button:South"',
+    },
+    // Source facts: event0 = internal-bus Steam Deck pad
+    { match: (c) => isGetProp(c, "/source/event0", "IdBustype"), stdout: 's "0x18"' },
+    { match: (c) => isGetProp(c, "/source/event0", "DeviceClass"), stdout: 's "gamepad"' },
+    { match: (c) => isGetProp(c, "/source/event0", "IdVendor"), stdout: 's "28de"' },
+    { match: (c) => isGetProp(c, "/source/event0", "IdProduct"), stdout: 's "1205"' },
+    // Source facts: event1 = USB Xbox pad
+    { match: (c) => isGetProp(c, "/source/event1", "IdBustype"), stdout: 's "usb"' },
+    { match: (c) => isGetProp(c, "/source/event1", "DeviceClass"), stdout: 's "gamepad"' },
+    { match: (c) => isGetProp(c, "/source/event1", "IdVendor"), stdout: 's "045e"' },
+    { match: (c) => isGetProp(c, "/source/event1", "IdProduct"), stdout: 's "028e"' },
+    // Targets for the built-in (so silence snapshots a real kind list)
+    {
+      match: (c) => isGetProp(c, "/CompositeDevice0", "TargetDevices"),
+      stdout: device0TargetsLive
+        ? 'ao 1 "/org/shadowblip/InputPlumber/devices/target/xb3600"'
+        : "ao 0",
+    },
+    {
+      match: (c) => isGetProp(c, "/devices/target/xb3600", "DeviceType"),
+      stdout: 's "xb360"',
+    },
+    // Any SetTargetDevices call succeeds
+    {
+      match: (c) => isBusctl(c, "call") && cmdHasSubstring(c, "SetTargetDevices"),
+      exitCode: 0,
+    },
+  ];
+}
+
+function setTargetCalls(calls: string[][], pathNeedle: string): string[][] {
+  return calls.filter(
+    (c) =>
+      isBusctl(c, "call") &&
+      cmdHasSubstring(c, "SetTargetDevices") &&
+      cmdHasSubstring(c, pathNeedle),
+  );
+}
+
 /** djb2 — must match the implementation in backend.ts so the test can
  *  pre-seed cache entries by name and have them survive the bus walk. */
 function djb2(str: string): number {
@@ -440,6 +536,215 @@ describe("DisableControllerInputBackend", () => {
       const res = await backend.forgetController(99999);
       expect(res.ok).toBe(false);
       expect(res.error).toBeDefined();
+    });
+  });
+
+  // -----------------------------------------------------------------
+  // Auto-disable: silence the built-in pad while an external is present
+  // -----------------------------------------------------------------
+
+  describe("auto-disable", () => {
+    it("silences the built-in pad when an external controller is present", async () => {
+      const { stub, calls } = makeSpawnStub(twoDeviceExpectations());
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spawn stub shape
+      spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+
+      await backend.onLoad();
+      const res = await backend.setAutoDisable(true);
+      expect(res.ok).toBe(true);
+
+      // Built-in (CompositeDevice0) silenced with ["null"]; external untouched.
+      const d0 = setTargetCalls(calls, "/CompositeDevice0");
+      expect(d0).toHaveLength(1);
+      expect(d0[0].slice(-3)).toEqual(["as", "1", "null"]);
+      expect(setTargetCalls(calls, "/CompositeDevice1")).toHaveLength(0);
+
+      const list = await backend.listControllers();
+      const builtin = list.controllers.find(
+        (c) => c.name === "Steam Deck Controller",
+      )!;
+      const external = list.controllers.find(
+        (c) => c.name === "Xbox Wireless Controller",
+      )!;
+      expect(builtin.autoSilenced).toBe(true);
+      expect(external.autoSilenced).toBe(false);
+
+      await backend.onUnload();
+    });
+
+    it("restores the built-in when the external is removed", async () => {
+      const name = "Steam Deck Controller";
+      const hash = djb2(name);
+      storageBuckets.set("disable-controller-input", {
+        version: 1,
+        autoDisable: true,
+        devices: [
+          {
+            hash,
+            name,
+            lastDbusPath: D0,
+            lastSeenMs: 0,
+            disabled: false,
+            autoSilenced: true,
+            savedKinds: ["xb360"],
+          },
+        ],
+      });
+      // Only the built-in is on the bus now (external unplugged).
+      const { stub, calls } = makeSpawnStub([
+        { match: (c) => isBusctl(c, "tree", "--list"), stdout: D0 },
+        ...twoDeviceExpectations({ device0TargetsLive: false }),
+      ]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spawn stub shape
+      spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+
+      // onLoad reconciles: external gone -> restore the auto-silenced pad.
+      await backend.onLoad();
+
+      const d0 = setTargetCalls(calls, "/CompositeDevice0");
+      expect(d0).toHaveLength(1);
+      expect(d0[0].slice(-3)).toEqual(["as", "1", "xb360"]);
+
+      const list = await backend.listControllers();
+      expect(list.controllers[0].autoSilenced).toBe(false);
+
+      await backend.onUnload();
+    });
+
+    it("restores auto-silenced pads when the setting is turned off", async () => {
+      const name = "Steam Deck Controller";
+      const hash = djb2(name);
+      storageBuckets.set("disable-controller-input", {
+        version: 1,
+        autoDisable: true,
+        devices: [
+          {
+            hash,
+            name,
+            lastDbusPath: D0,
+            lastSeenMs: 0,
+            disabled: false,
+            autoSilenced: true,
+            savedKinds: ["xb360"],
+          },
+        ],
+      });
+      // Both devices present (external still connected); built-in already
+      // silenced (null targets) so onLoad issues no write.
+      const { stub, calls } = makeSpawnStub(
+        twoDeviceExpectations({ device0TargetsLive: false }),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spawn stub shape
+      spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+
+      await backend.onLoad();
+      const before = setTargetCalls(calls, "/CompositeDevice0").length;
+      expect(before).toBe(0); // already silenced -> no redundant write
+
+      const res = await backend.setAutoDisable(false);
+      expect(res.ok).toBe(true);
+
+      const after = setTargetCalls(calls, "/CompositeDevice0");
+      expect(after).toHaveLength(1);
+      expect(after[0].slice(-3)).toEqual(["as", "1", "xb360"]);
+
+      await backend.onUnload();
+    });
+
+    it("leaves a manually-disabled device to the manual path", async () => {
+      const name = "Steam Deck Controller";
+      const hash = djb2(name);
+      storageBuckets.set("disable-controller-input", {
+        version: 1,
+        autoDisable: false,
+        devices: [
+          {
+            hash,
+            name,
+            lastDbusPath: D0,
+            lastSeenMs: 0,
+            disabled: true, // manual intent
+            autoSilenced: false,
+            savedKinds: ["xb360"],
+          },
+        ],
+      });
+      // Built-in already silenced (null targets) so the manual re-assert
+      // issues no write either; external present.
+      const { stub, calls } = makeSpawnStub(
+        twoDeviceExpectations({ device0TargetsLive: false }),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spawn stub shape
+      spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+
+      await backend.onLoad();
+      const res = await backend.setAutoDisable(true);
+      expect(res.ok).toBe(true);
+
+      // Auto path must not touch the manually-disabled device.
+      expect(setTargetCalls(calls, "/CompositeDevice0")).toHaveLength(0);
+      const list = await backend.listControllers();
+      const builtin = list.controllers.find((c) => c.name === name)!;
+      expect(builtin.disabled).toBe(true);
+      expect(builtin.autoSilenced).toBe(false);
+
+      await backend.onUnload();
+    });
+
+    it("does not re-issue SetTargetDevices across ticks once auto-silenced", async () => {
+      const name = "Steam Deck Controller";
+      const hash = djb2(name);
+      storageBuckets.set("disable-controller-input", {
+        version: 1,
+        autoDisable: true,
+        devices: [
+          {
+            hash,
+            name,
+            lastDbusPath: D0,
+            lastSeenMs: 0,
+            disabled: false,
+            autoSilenced: true,
+            savedKinds: ["xb360"],
+          },
+        ],
+      });
+      // External present + built-in already silenced (null targets).
+      const { stub, calls } = makeSpawnStub(
+        twoDeviceExpectations({ device0TargetsLive: false }),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spawn stub shape
+      spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+
+      await backend.onLoad(); // tick 1
+      await backend.refreshControllers(); // tick 2
+
+      // No writes — the desired state already holds on both ticks.
+      expect(setTargetCalls(calls, "/CompositeDevice0")).toHaveLength(0);
+
+      await backend.onUnload();
+    });
+
+    it("persists the autoDisable setting and re-hydrates it", async () => {
+      const { stub } = makeSpawnStub(twoDeviceExpectations());
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spawn stub shape
+      spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+
+      await backend.onLoad();
+      await backend.setAutoDisable(true);
+
+      const stored = storageBuckets.get("disable-controller-input") as {
+        autoDisable?: boolean;
+      };
+      expect(stored.autoDisable).toBe(true);
+      await backend.onUnload();
+
+      // A fresh backend hydrates the setting from storage.
+      const fresh = new DisableControllerInputBackend();
+      fresh.emit = () => {};
+      await fresh.onLoad();
+      expect((await fresh.getSettings()).autoDisable).toBe(true);
+      await fresh.onUnload();
     });
   });
 

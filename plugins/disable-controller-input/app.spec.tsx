@@ -45,6 +45,7 @@ const okList = {
       name: "Steam Deck Controller",
       connected: true,
       disabled: false,
+      autoSilenced: true,
       savedKinds: [],
     },
     {
@@ -52,6 +53,7 @@ const okList = {
       name: "Xbox Wireless",
       connected: true,
       disabled: false,
+      autoSilenced: false,
       savedKinds: ["xb360"],
     },
   ],
@@ -64,6 +66,7 @@ describe("disable-controller-input plugin", () => {
     callMock.mockImplementation((method: string) => {
       if (method === "listControllers") return Promise.resolve(okList);
       if (method === "refreshControllers") return Promise.resolve(okList);
+      if (method === "getSettings") return Promise.resolve({ autoDisable: false });
       return Promise.resolve({ ok: true });
     });
   });
@@ -95,6 +98,27 @@ describe("disable-controller-input plugin", () => {
     await waitFor(() => {
       expect(container.textContent).toContain("Steam Deck Controller");
       expect(container.textContent).toContain("Xbox Wireless");
+    });
+  });
+
+  it("renders the auto-disable toggle card and fetches settings", async () => {
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => {
+      expect(container.textContent).toContain(
+        "Auto-disable built-in controller",
+      );
+      expect(callMock).toHaveBeenCalledWith("getSettings");
+    });
+  });
+
+  it("shows the Auto-silenced chip for an auto-silenced controller", async () => {
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Auto-silenced");
     });
   });
 

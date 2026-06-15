@@ -10,7 +10,7 @@
   "plugin": {
     "id": "disable-controller-input",
     "name": "Disable Controller Input",
-    "description": "Silence individual controllers by telling InputPlumber to drop their virtual targets — useful for handhelds where the built-in pad is hogging player 1",
+    "description": "Silence individual controllers by telling InputPlumber to drop their virtual targets — useful for handhelds where the built-in pad is hogging player 1. Can also auto-disable the built-in pad whenever an external controller is connected.",
     "permissions": {
       "commands": ["busctl"]
     },
