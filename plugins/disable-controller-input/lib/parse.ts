@@ -45,6 +45,25 @@ export function parseObjectPathArrayProp(stdout: string): string[] | null {
   return paths;
 }
 
+/** Parse a busctl string-or-object-path array line for EITHER `as N …`
+ *  or `ao N …`. The rendered value form is identical for both signatures
+ *  (`<sig> <count> "item" "item"`), so this is the right helper for
+ *  CompositeDevice properties typed `as` — `SourceDevicePaths` and
+ *  `Capabilities`. Returns null if neither signature matches; `[]` for
+ *  count 0. */
+export function parseStringArrayProp(stdout: string): string[] | null {
+  const trimmed = stdout.trim();
+  const m = trimmed.match(/^a[so]\s+(\d+)((?:\s+"[^"]*")*)$/);
+  if (!m) return null;
+  const count = parseInt(m[1], 10);
+  if (count === 0) return [];
+  const items: string[] = [];
+  const re = /"([^"]*)"/g;
+  let p: RegExpExecArray | null;
+  while ((p = re.exec(m[2])) !== null) items.push(p[1]);
+  return items;
+}
+
 /** Match exactly `/org/shadowblip/InputPlumber/CompositeDevice<digits>`
  *  (ignoring child paths and the Manager / devices subtrees). Used to
  *  pluck the composite-device paths out of `busctl tree --list` output. */

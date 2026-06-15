@@ -3,6 +3,7 @@ import {
   djb2,
   parseStringProp,
   parseObjectPathArrayProp,
+  parseStringArrayProp,
   pickCompositePaths,
 } from "./parse";
 
@@ -81,6 +82,35 @@ describe("parseObjectPathArrayProp", () => {
 
   it("returns null for malformed input", () => {
     expect(parseObjectPathArrayProp("garbage")).toBeNull();
+  });
+});
+
+describe("parseStringArrayProp", () => {
+  it("returns [] for an empty `as` array", () => {
+    expect(parseStringArrayProp("as 0")).toEqual([]);
+  });
+
+  it("parses a multi-element `as` array", () => {
+    expect(
+      parseStringArrayProp(
+        'as 2 "/org/shadowblip/InputPlumber/devices/source/event3" "/org/shadowblip/InputPlumber/devices/source/hidraw0"',
+      ),
+    ).toEqual([
+      "/org/shadowblip/InputPlumber/devices/source/event3",
+      "/org/shadowblip/InputPlumber/devices/source/hidraw0",
+    ]);
+  });
+
+  it("also accepts the `ao` signature", () => {
+    expect(parseStringArrayProp('ao 1 "/x"')).toEqual(["/x"]);
+  });
+
+  it("returns null for a scalar string signature", () => {
+    expect(parseStringArrayProp('s "gamepad"')).toBeNull();
+  });
+
+  it("returns null for malformed input", () => {
+    expect(parseStringArrayProp("garbage")).toBeNull();
   });
 });
 

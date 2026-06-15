@@ -17,6 +17,7 @@ interface ControllerRow {
   name: string;
   connected: boolean;
   disabled: boolean;
+  autoSilenced: boolean;
   savedKinds: string[];
 }
 
@@ -29,18 +30,44 @@ function DisableControllerInput() {
   const { call, useEvent } = useBackend("disable-controller-input");
 
   const [data, setData] = useState<ListResult | null>(null);
+  const [autoDisable, setAutoDisable] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyHash, setBusyHash] = useState<number | null>(null);
+  const [autoBusy, setAutoBusy] = useState(false);
 
   const refresh = useCallback(async () => {
-    const r = (await call("listControllers")) as ListResult;
+    const [r, s] = (await Promise.all([
+      call("listControllers"),
+      call("getSettings"),
+    ])) as [ListResult, { autoDisable: boolean }];
     setData(r);
+    setAutoDisable(s.autoDisable);
   }, [call]);
 
   const hardRefresh = useCallback(async () => {
     const r = (await call("refreshControllers")) as ListResult;
     setData(r);
   }, [call]);
+
+  const handleAutoToggle = useCallback(async () => {
+    const next = !autoDisable;
+    setAutoBusy(true);
+    setAutoDisable(next); // optimistic
+    setError(null);
+    try {
+      const res = (await call("setAutoDisable", next)) as {
+        ok: boolean;
+        error?: string;
+      };
+      if (!res.ok) {
+        setAutoDisable(!next); // revert
+        setError(res.error ?? "Failed to update setting");
+      }
+      await refresh();
+    } finally {
+      setAutoBusy(false);
+    }
+  }, [autoDisable, call, refresh]);
 
   useEvent({
     event: "controllersChanged",
@@ -141,6 +168,28 @@ function DisableControllerInput() {
       <div className="page-content">
         <div className="card">
           <div className="card-body p-6">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-base-content">
+                  Auto-disable built-in controller
+                </div>
+                <div className="text-sm text-base-content/70 mt-1 leading-relaxed">
+                  When an external controller is connected, your handheld's
+                  built-in pad is silenced automatically so the external one
+                  takes player 1. Removing the external restores it.
+                </div>
+              </div>
+              <Toggle
+                checked={autoDisable}
+                onChange={() => !autoBusy && handleAutoToggle()}
+                disabled={autoBusy}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-body p-6">
             <div className="text-sm text-base-content/80 leading-relaxed">
               Disabled controllers stay hidden from Steam, this overlay,
               and any running game by telling InputPlumber to drop their
@@ -238,6 +287,17 @@ function ControllerRowItem({
               }}
             >
               Silenced
+            </span>
+          )}
+          {row.autoSilenced && !row.disabled && (
+            <span
+              className="chip"
+              style={{
+                borderColor: "var(--color-info)",
+                color: "var(--color-info)",
+              }}
+            >
+              Auto-silenced
             </span>
           )}
         </div>

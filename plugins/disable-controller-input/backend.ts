@@ -8,8 +8,13 @@ import {
   djb2,
   parseStringProp,
   parseObjectPathArrayProp,
+  parseStringArrayProp,
   pickCompositePaths,
 } from "./lib/parse";
+import {
+  classifyComposite,
+  type SourceFacts,
+} from "./lib/classify";
 
 /**
  * Disable Controller Input — silences a controller by asking InputPlumber
@@ -33,6 +38,10 @@ const PLUGIN_ID = "disable-controller-input";
 const SERVICE = "org.shadowblip.InputPlumber";
 const COMPOSITE_IFACE = "org.shadowblip.Input.CompositeDevice";
 const TARGET_IFACE = "org.shadowblip.Input.Target";
+// Source-device interfaces, queried to classify a composite device as the
+// built-in handheld pad vs an external controller (auto-disable feature).
+const SRC_EVENT_IFACE = "org.shadowblip.Input.Source.EventDevice";
+const SRC_UDEV_IFACE = "org.shadowblip.Input.Source.UdevDevice";
 
 const RECONCILE_INTERVAL_MS = 2_000;
 
@@ -64,11 +73,28 @@ interface KnownDevice {
    *  user's prior config instead of guessing. Empty if we disabled
    *  before ever seeing the device on the bus. */
   savedKinds: string[];
+  /** Set when the *auto-disable* feature silenced this built-in pad
+   *  because an external controller was present — distinct from the
+   *  manual `disabled` intent above. Persisted so a loader restart while
+   *  an external is still plugged keeps the "we silenced this, not the
+   *  user" bookkeeping coherent. */
+  autoSilenced?: boolean;
+  // --- transient classification cache (not meaningful across reloads) ---
+  /** Whether the device's sources look like a gamepad. */
+  isGamepad?: boolean;
+  /** Whether the device is classified as an external controller. */
+  isExternal?: boolean;
+  /** Signature of the source-device path set last classified, so we only
+   *  re-introspect when the source topology actually changes. */
+  sourceSig?: string;
 }
 
 interface State {
   version: 1;
   devices: KnownDevice[];
+  /** Global setting: auto-silence built-in pad(s) whenever an external
+   *  controller is connected. Absent/false by default. */
+  autoDisable?: boolean;
 }
 
 /** What `listControllers` returns to the UI. */
@@ -77,6 +103,9 @@ interface ControllerRow {
   name: string;
   connected: boolean;
   disabled: boolean;
+  /** True when the auto-disable feature (not the user) silenced this
+   *  built-in pad. */
+  autoSilenced: boolean;
   savedKinds: string[];
 }
 
@@ -204,6 +233,64 @@ async function setTargetKinds(
   return busctl(args);
 }
 
+/** Read a composite device's `Capabilities` (as) — gamepad-ish strings
+ *  are the cheap primary signal for "is this a gamepad". */
+async function getCapabilities(compositePath: string): Promise<string[]> {
+  const r = await busctl([
+    "get-property",
+    SERVICE,
+    compositePath,
+    COMPOSITE_IFACE,
+    "Capabilities",
+  ]);
+  if (!r.ok) return [];
+  return parseStringArrayProp(r.stdout) ?? [];
+}
+
+/** Read the DBus object paths of a composite device's physical source
+ *  devices. */
+async function getSourceDevicePaths(compositePath: string): Promise<string[]> {
+  const r = await busctl([
+    "get-property",
+    SERVICE,
+    compositePath,
+    COMPOSITE_IFACE,
+    "SourceDevicePaths",
+  ]);
+  if (!r.ok) return [];
+  return parseStringArrayProp(r.stdout) ?? [];
+}
+
+async function getSourceStringProp(
+  sourcePath: string,
+  iface: string,
+  prop: string,
+): Promise<string | null> {
+  const r = await busctl(["get-property", SERVICE, sourcePath, iface, prop]);
+  if (!r.ok) return null;
+  return parseStringProp(r.stdout);
+}
+
+/** Introspect one source device for the facts the classifier needs.
+ *  Tries the EventDevice interface first (it carries DeviceClass); if the
+ *  source doesn't implement it, falls back to UdevDevice. Returns null
+ *  only when neither interface answers (e.g. an IMU / LED source). */
+async function getSourceFacts(sourcePath: string): Promise<SourceFacts | null> {
+  let iface = SRC_EVENT_IFACE;
+  let idBustype = await getSourceStringProp(sourcePath, iface, "IdBustype");
+  let deviceClass: string | null = null;
+  if (idBustype !== null) {
+    deviceClass = await getSourceStringProp(sourcePath, iface, "DeviceClass");
+  } else {
+    iface = SRC_UDEV_IFACE;
+    idBustype = await getSourceStringProp(sourcePath, iface, "IdBustype");
+    if (idBustype === null) return null; // not a classifiable source
+  }
+  const idVendor = await getSourceStringProp(sourcePath, iface, "IdVendor");
+  const idProduct = await getSourceStringProp(sourcePath, iface, "IdProduct");
+  return { idBustype, idVendor, idProduct, deviceClass };
+}
+
 // ---------- backend ----------
 
 export default class DisableControllerInputBackend implements PluginBackend {
@@ -235,7 +322,18 @@ export default class DisableControllerInputBackend implements PluginBackend {
 
     const stored = await readPluginStorage<State>(PLUGIN_ID);
     if (stored.version === 1 && Array.isArray(stored.devices)) {
-      this.state = { version: 1, devices: stored.devices };
+      this.state = {
+        version: 1,
+        devices: stored.devices.map((d) => ({
+          ...d,
+          autoSilenced: d.autoSilenced === true,
+          // Transient classification — recomputed on the next walk.
+          isGamepad: undefined,
+          isExternal: undefined,
+          sourceSig: undefined,
+        })),
+        autoDisable: stored.autoDisable === true,
+      };
     }
 
     this.unavailable = !(await inputPlumberAvailable());
@@ -273,6 +371,7 @@ export default class DisableControllerInputBackend implements PluginBackend {
           name: d.name,
           connected: false,
           disabled: d.disabled,
+          autoSilenced: d.autoSilenced === true,
           savedKinds: d.savedKinds,
         })),
       };
@@ -287,6 +386,7 @@ export default class DisableControllerInputBackend implements PluginBackend {
         // within the last two ticks. Avoids a per-call bus walk.
         connected: Date.now() - d.lastSeenMs < RECONCILE_INTERVAL_MS * 2,
         disabled: d.disabled,
+        autoSilenced: d.autoSilenced === true,
         savedKinds: d.savedKinds,
       })),
     };
@@ -295,6 +395,30 @@ export default class DisableControllerInputBackend implements PluginBackend {
   async refreshControllers(): Promise<ListResult> {
     if (!this.unavailable) await this._reconcile();
     return this.listControllers();
+  }
+
+  async getSettings(): Promise<{ autoDisable: boolean }> {
+    return { autoDisable: this.state.autoDisable === true };
+  }
+
+  /** Toggle the "auto-disable built-in when an external controller is
+   *  connected" feature. Persists intent and applies it immediately
+   *  (silence/restore) so the UI doesn't wait up to a reconcile interval. */
+  async setAutoDisable(
+    enabled: boolean,
+  ): Promise<{ ok: boolean; error?: string }> {
+    return this._serialize(async () => {
+      this.state.autoDisable = enabled;
+      if (!this.unavailable) {
+        // Re-classify connected devices and silence/restore in one pass
+        // so the effect is immediate rather than waiting a reconcile tick.
+        if (enabled) await this._classifyConnected();
+        await this._applyAutoDisable();
+      }
+      await this._persist();
+      this.emit?.({ event: "controllersChanged", data: undefined });
+      return { ok: true };
+    });
   }
 
   async setDisabled(
@@ -380,6 +504,116 @@ export default class DisableControllerInputBackend implements PluginBackend {
 
   private async _persist(): Promise<void> {
     await writePluginStorage<State>(PLUGIN_ID, this.state);
+  }
+
+  /** A device counts as connected if reconcile observed it within the
+   *  last two ticks. Same heuristic the UI projection uses. */
+  private _isConnected(dev: KnownDevice): boolean {
+    return Date.now() - dev.lastSeenMs < RECONCILE_INTERVAL_MS * 2;
+  }
+
+  /** Introspect a connected device's source devices and cache its
+   *  built-in/external classification. Skips the per-source bus work when
+   *  the source topology is unchanged since the last classification. */
+  private async _classifyDevice(dev: KnownDevice): Promise<void> {
+    const sourcePaths = await getSourceDevicePaths(dev.lastDbusPath);
+    const sig = [...sourcePaths].sort().join("|");
+    if (sig === dev.sourceSig && dev.isGamepad !== undefined) return;
+
+    const caps = await getCapabilities(dev.lastDbusPath);
+    const facts: SourceFacts[] = [];
+    for (const sp of sourcePaths) {
+      const f = await getSourceFacts(sp);
+      if (f) facts.push(f);
+    }
+    const { isGamepad, isExternal } = classifyComposite(facts, caps);
+    dev.isGamepad = isGamepad;
+    dev.isExternal = isExternal;
+    dev.sourceSig = sig;
+  }
+
+  /** Classify every currently-connected device. Used when toggling the
+   *  setting on, where we haven't just walked the bus. */
+  private async _classifyConnected(): Promise<void> {
+    for (const dev of this.state.devices) {
+      if (this._isConnected(dev)) await this._classifyDevice(dev);
+    }
+  }
+
+  /**
+   * Auto-disable pass: while an external controller is connected, silence
+   * the built-in gamepad(s); otherwise restore them. Operates on the
+   * cached classification + connectivity and only issues a busctl write on
+   * a state transition (anti-thrash). Manually `disabled` devices are left
+   * entirely to the manual re-assert path. Returns true if it mutated
+   * persistent state.
+   */
+  private async _applyAutoDisable(): Promise<boolean> {
+    const auto = this.state.autoDisable === true;
+    let changed = false;
+
+    const connected = this.state.devices.filter((d) => this._isConnected(d));
+    const externalPresent =
+      auto && connected.some((d) => d.isExternal === true);
+
+    for (const dev of connected) {
+      // Manual intent owns this device — never let auto touch it.
+      if (dev.disabled) {
+        if (dev.autoSilenced) {
+          dev.autoSilenced = false;
+          changed = true;
+        }
+        continue;
+      }
+
+      const isBuiltinGamepad =
+        dev.isGamepad === true && dev.isExternal === false;
+      const shouldSilence = auto && externalPresent && isBuiltinGamepad;
+
+      if (shouldSilence) {
+        // Snapshot any live (non-null) targets first, then silence. This
+        // covers both the initial silence and a daemon restart that
+        // restored defaults under us. When targets are already null we
+        // issue no write — just mark intent if we hadn't.
+        const currentTargets = await getTargetPaths(dev.lastDbusPath);
+        const liveKinds: string[] = [];
+        for (const tp of currentTargets) {
+          const kind = await getTargetKind(tp);
+          if (kind && kind !== "null") liveKinds.push(kind);
+        }
+        if (liveKinds.length > 0) {
+          dev.savedKinds = liveKinds;
+          const r = await setTargetKinds(dev.lastDbusPath, NULL_KINDS);
+          if (r.ok) {
+            dev.autoSilenced = true;
+            changed = true;
+          } else {
+            console.warn(
+              `[disable-controller-input] auto-silence failed for ${dev.name}: ${r.stderr.trim() || r.code}`,
+            );
+          }
+        } else if (!dev.autoSilenced) {
+          dev.autoSilenced = true;
+          changed = true;
+        }
+      } else if (dev.autoSilenced) {
+        // Restore: auto turned off, external removed, or this is no longer
+        // classified as a built-in gamepad.
+        const kinds =
+          dev.savedKinds.length > 0 ? dev.savedKinds : DEFAULT_KINDS;
+        const r = await setTargetKinds(dev.lastDbusPath, kinds);
+        if (r.ok) {
+          dev.autoSilenced = false;
+          changed = true;
+        } else {
+          console.warn(
+            `[disable-controller-input] auto-restore failed for ${dev.name}: ${r.stderr.trim() || r.code}`,
+          );
+        }
+      }
+    }
+
+    return changed;
   }
 
   /**
@@ -496,6 +730,13 @@ export default class DisableControllerInputBackend implements PluginBackend {
           topologyChanged = true;
         }
       }
+
+      // Auto-disable feature: classify connected devices (only when the
+      // setting is on — keeps the loop byte-for-byte identical to before
+      // when off) then silence/restore built-in pads. The restore path
+      // runs even when off, to clean up anything we previously silenced.
+      if (this.state.autoDisable) await this._classifyConnected();
+      if (await this._applyAutoDisable()) dirty = true;
 
       if (dirty) await this._persist();
       if (topologyChanged) {
