@@ -316,14 +316,19 @@ if (SUSPEND_STEAM_ENABLED) {
 //
 // Guarantees Steam is never left SIGSTOPped by a hung overlay. While Steam is
 // frozen we poll once a second: if the webview stopped sending
-// `overlayHeartbeat` pings (renderer wedged) OR the freeze has run past a hard
-// cap, we emergency-close the overlay and thaw Steam. A SIGKILL→restart is
-// handled by the startup SIGCONT above; this handles the HANG case (bun alive,
-// CEF renderer wedged) the startup path can't see.
+// `overlayHeartbeat` pings (renderer wedged) we emergency-close the overlay and
+// thaw Steam. A SIGKILL→restart is handled by the startup SIGCONT above; this
+// handles the HANG case (bun alive, CEF renderer wedged) the startup path can't
+// see.
+//
+// NOTE: there is deliberately NO time-since-open hard cap. Steam stays frozen
+// the whole time the overlay is open, so any fixed ceiling would force-close a
+// perfectly healthy overlay that the user is actively using (issue #102 — "the
+// overlay keeps closing automatically" was a 30s cap firing on every open).
+// A genuinely wedged renderer stops the heartbeat, which the staleness check
+// below catches within FREEZE_HEARTBEAT_TIMEOUT_MS — that is the real safety net.
 const FREEZE_HEARTBEAT_TIMEOUT_MS = 5_000; // no ping this long while frozen → hung
-const FREEZE_HARD_CAP_MS = 30_000; // absolute ceiling on a single freeze
 let freezeWatchTimer: ReturnType<typeof setInterval> | null = null;
-let frozenAt = 0;
 
 function stopFreezeWatchdog(): void {
   if (freezeWatchTimer) clearInterval(freezeWatchTimer);
@@ -331,7 +336,6 @@ function stopFreezeWatchdog(): void {
 }
 
 function startFreezeWatchdog(): void {
-  frozenAt = Date.now();
   lastHeartbeat.current = Date.now(); // assume alive at open; webview keeps it fresh
   stopFreezeWatchdog();
   freezeWatchTimer = setInterval(() => {
@@ -339,11 +343,12 @@ function startFreezeWatchdog(): void {
       stopFreezeWatchdog();
       return;
     }
-    const now = Date.now();
-    const sinceBeat = now - lastHeartbeat.current;
-    const frozenFor = now - frozenAt;
-    if (sinceBeat > FREEZE_HEARTBEAT_TIMEOUT_MS || frozenFor > FREEZE_HARD_CAP_MS) {
-      forceCloseOverlay(`unresponsive (sinceBeat=${sinceBeat}ms frozenFor=${frozenFor}ms)`);
+    const sinceBeat = Date.now() - lastHeartbeat.current;
+    // Only force-close when the renderer has actually gone quiet — a
+    // healthy overlay keeps the heartbeat fresh and stays open as long as
+    // the user wants (no time-since-open cap; see note above).
+    if (sinceBeat > FREEZE_HEARTBEAT_TIMEOUT_MS) {
+      forceCloseOverlay(`unresponsive (sinceBeat=${sinceBeat}ms)`);
     }
   }, 1_000);
 }
