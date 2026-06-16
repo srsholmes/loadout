@@ -517,7 +517,7 @@ export default class LsfgVkBackend implements PluginBackend {
     this._progress(`Downloading lsfg-vk ${tag}…`);
     const zipPath = await this._downloadAsset(downloadUrl);
     const extractDir = await this._extractZip(zipPath);
-    return { extractDir, version: `v${tag}`, zipPath };
+    return { extractDir, version: tag, zipPath };
   }
 
   /** Find a nested `lsfg-vk*.zip` inside an extracted bundle tree. */
@@ -560,20 +560,22 @@ export default class LsfgVkBackend implements PluginBackend {
     }
     return {
       downloadUrl: asset.browser_download_url,
-      version: release.tag_name.replace(/^v/, ""),
+      // Use tag_name verbatim (already `v…`) — no strip-then-re-add.
+      version: release.tag_name,
     };
   }
 
   private async _downloadAsset(url: string): Promise<string> {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Download ${res.status} ${res.statusText}`);
-    const zipPath = join(tmpdir(), `lsfg-vk-${Date.now()}.zip`);
+    // Random suffix (not a timestamp) so concurrent installs can't collide.
+    const zipPath = join(tmpdir(), `lsfg-vk-${crypto.randomUUID()}.zip`);
     await Bun.write(zipPath, await res.arrayBuffer());
     return zipPath;
   }
 
   private async _extractZip(zipPath: string): Promise<string> {
-    const extractDir = join(tmpdir(), `lsfg-vk-extract-${Date.now()}`);
+    const extractDir = join(tmpdir(), `lsfg-vk-extract-${crypto.randomUUID()}`);
     await mkdir(extractDir, { recursive: true });
     await this._extractZipInto(zipPath, extractDir);
     return extractDir;

@@ -116,7 +116,7 @@ export function InstallCard({
                 label: o.label,
               }))}
               onChange={(v) => {
-                if (!installing) onSelectLayerVersion(v as LayerVersion);
+                if (!installing) onSelectLayerVersion(v);
               }}
             />
           </div>
