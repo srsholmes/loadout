@@ -46,14 +46,16 @@ await sdk.env.ensurePackages([
 // package, so we fetch the official mingw devel tarball from
 // libsdl-org/SDL into the install dir.
 //
-// The bundled `sdl2-config` script has a known bug: `--cflags` and
-// `--libs` echo hardcoded `/tmp/tardir/...` paths from the SDL
-// build host, ignoring its own `prefix` autodetection AND the
-// `--prefix=` arg. We sed-patch the four offending lines to use
-// the autodetected `${prefix}` / `${libdir}` instead (same fix as
-// the sm64rt-linux-guide installer). After patching, SDLCONFIG can
-// point at the bundled script directly — no wrapper needed.
+// The bundled `sdl2-config` bakes the SDL build host's `/tmp/tardir/…`
+// paths into its `--cflags`/`--libs` output. Patching those lines with
+// sed to use the script's `${prefix}` was fragile — the `${prefix}` got
+// eaten by an intermediate shell layer and resolved to empty (`-I/include`),
+// so the cross-compile failed with "SDL2/SDL.h: No such file or directory".
+// Instead, replace sdl2-config outright with a tiny stub that echoes the
+// ABSOLUTE install paths (baked in here), immune to any shell/SDL-version
+// quirks.
 const SDL2_VER = "2.30.10";
+const SDL2_MINGW = `${sdk.installDir}/_deps/sdl2/SDL2-${SDL2_VER}/x86_64-w64-mingw32`;
 sdk.progress(`Fetching SDL2 ${SDL2_VER} mingw devel…`);
 await sdk.env.run(
   [
@@ -65,18 +67,20 @@ await sdk.env.run(
     `  tar -xzf sdl2.tar.gz`,
     `  rm sdl2.tar.gz`,
     "fi",
-    `SDL_CFG=SDL2-${SDL2_VER}/x86_64-w64-mingw32/bin/sdl2-config`,
-    // Replace the hardcoded /tmp/tardir libdir with the
-    // script-relative ${prefix}/lib so it tracks wherever the
-    // extracted tree lives now.
-    `sed -i 's|^libdir=/tmp/tardir.*|libdir=\${prefix}/lib|' "$SDL_CFG"`,
-    // Rewrite --cflags / --libs / --static-libs -L to use the
-    // resolved ${prefix} / ${libdir} variables instead of the
-    // baked-in build paths. Quoting the sed scripts in double
-    // quotes so we can interpolate $libdir literally — the script
-    // itself substitutes it at runtime.
-    `sed -i 's|echo -I/tmp/tardir.*include/SDL2 .*|echo -I\${prefix}/include -I\${prefix}/include/SDL2 -Dmain=SDL_main|' "$SDL_CFG"`,
-    `sed -i 's|echo -L/tmp/tardir[^ ]* |echo -L\${libdir} |g' "$SDL_CFG"`,
+    // Quoted heredoc — `$P`/`$a`/`$@` stay literal for sdl2-config's own
+    // runtime; the absolute prefix is interpolated in by the recipe.
+    `cat > SDL2-${SDL2_VER}/x86_64-w64-mingw32/bin/sdl2-config <<'SDLCFG'`,
+    `#!/bin/sh`,
+    `P="${SDL2_MINGW}"`,
+    `for a in "$@"; do case "$a" in`,
+    `  --prefix) echo "$P";;`,
+    `  --cflags) echo "-I$P/include -I$P/include/SDL2 -Dmain=SDL_main";;`,
+    `  --libs) echo "-L$P/lib -lmingw32 -lSDL2main -lSDL2 -mwindows";;`,
+    `  --static-libs) echo "-L$P/lib -lmingw32 -lSDL2main -lSDL2 -mwindows";;`,
+    `  --version) echo "${SDL2_VER}";;`,
+    `esac; done`,
+    `SDLCFG`,
+    `chmod +x SDL2-${SDL2_VER}/x86_64-w64-mingw32/bin/sdl2-config`,
   ].join("\n"),
   { cwd: sdk.installDir, stage: "installing-deps" },
 );
