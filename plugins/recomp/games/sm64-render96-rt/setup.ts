@@ -94,12 +94,18 @@ await sdk.placeRom("baserom.us.z64");
 // them as Windows .exe's which can't run during our Linux build.
 // The main make assumes they're pre-built and dies with
 // `FileNotFoundError: ./tools/mio0` otherwise.
+// Build the audiofile static lib FIRST: `tabledesign` links `-laudiofile`
+// but the tools Makefile doesn't declare that dependency, so a parallel
+// `make -j -C tools` races and fails with "cannot find -laudiofile".
 sdk.progress("Building host-side asset tools…");
-await sdk.env.run("make -j$(nproc) -C tools", {
-  cwd: sdk.installDir,
-  stage: "building",
-  timeoutMs: 5 * 60_000,
-});
+await sdk.env.run(
+  "make -j$(nproc) -C tools/audiofile && make -j$(nproc) -C tools",
+  {
+    cwd: sdk.installDir,
+    stage: "building",
+    timeoutMs: 5 * 60_000,
+  },
+);
 
 // Two patch sets:
 //
