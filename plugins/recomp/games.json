@@ -181,16 +181,14 @@
       "name": "Mario Kart 64",
       "project": "Mario Kart 64: Recompiled",
       "platform": "n64",
-      "repo": "sonicdcer/MarioKart64Recomp",
+      "repo": "pkgforge-dev/MarioKart64Recomp-AppImage",
       "description": "Native PC port of Mario Kart 64 via static recompilation. Widescreen, higher framerates, and mod support.",
       "installType": "prebuilt",
       "releaseAssets": {
-        "windows": "MarioKart64Recompiled-*-Windows-*.zip",
-        "linux": "MarioKart64Recompiled-*-Linux-X64-*.zip"
+        "linux": "MarioKart_64_Recompiled-*-anylinux-x86_64.AppImage"
       },
       "launchCommand": {
-        "windows": "{installDir}/MarioKart64Recompiled.exe",
-        "linux": "{installDir}/MarioKart64Recompiled"
+        "linux": "{installDir}/MarioKart64Recompiled.appimage"
       },
       "tags": [
         "mario",
@@ -254,18 +252,14 @@
       "name": "Star Fox 64",
       "project": "Star Fox 64: Recompiled",
       "platform": "n64",
-      "repo": "sonicdcer/Starfox64Recomp",
+      "repo": "pkgforge-dev/Starfox64Recomp-AppImage",
       "description": "Native PC port of Star Fox 64 via static recompilation. Widescreen, higher framerates, and mod support.",
       "installType": "prebuilt",
       "releaseAssets": {
-        "windows": "Starfox64Recompiled-*-Windows-*.zip",
-        "linux": "Starfox64Recompiled-*-Linux-X64-*.zip",
-        "macos": "Starfox64Recompiled-*-macOS-*.zip"
+        "linux": "Starfox_64_Recompiled-*-anylinux-x86_64.AppImage"
       },
       "launchCommand": {
-        "windows": "{installDir}/Starfox64Recompiled.exe",
-        "linux": "{installDir}/Starfox64Recompiled",
-        "macos": "{installDir}/Starfox64Recompiled.app/Contents/MacOS/Starfox64Recompiled"
+        "linux": "{installDir}/Starfox64Recompiled.appimage"
       },
       "tags": [
         "starfox",
@@ -281,18 +275,14 @@
       "name": "Duke Nukem: Zero Hour",
       "project": "DNZH Recompiled",
       "platform": "n64",
-      "repo": "sonicdcer/DNZHRecomp",
+      "repo": "pkgforge-dev/DNZHRecomp-AppImage",
       "description": "Native PC port of Duke Nukem: Zero Hour via static recompilation.",
       "installType": "prebuilt",
       "releaseAssets": {
-        "windows": "DNZHRecompiled-*-Windows-*.zip",
-        "linux": "DNZHRecompiled-*-Linux-X64-*.zip",
-        "macos": "DNZHRecompiled-*-macOS-*.zip"
+        "linux": "DNZH_Recompiled-*-anylinux-x86_64.AppImage"
       },
       "launchCommand": {
-        "windows": "{installDir}/DNZHRecompiled.exe",
-        "linux": "{installDir}/DNZHRecompiled",
-        "macos": "{installDir}/DNZHRecompiled.app/Contents/MacOS/DNZHRecompiled"
+        "linux": "{installDir}/DNZHRecompiled.appimage"
       },
       "tags": [
         "duke-nukem",
@@ -367,12 +357,9 @@
       "project": "Starship",
       "platform": "n64",
       "repo": "harbourMasters/Starship",
-      "description": "Native PC port of Star Fox 64 via reverse engineering (HarbourMasters engine). Enhanced with modern features. First launch processes your ROM into game assets (~30s).",
+      "description": "Native PC port of Star Fox 64 via reverse engineering (HarbourMasters engine). Enhanced with modern features. First launch processes your ROM into game assets (~30s). No GitHub release binaries are published yet.",
       "installType": "rom_extract",
-      "releaseAssets": {
-        "windows": "Starship-*-Windows.zip",
-        "linux": "Starship-*-Linux.zip"
-      },
+      "releaseAssets": {},
       "romInfo": {
         "description": "Provide your legally owned Star Fox 64 ROM (US v1.0 or v1.1)",
         "validChecksums": [],
@@ -390,7 +377,9 @@
         "3d"
       ],
       "latestVersion": "v2.0.0",
-      "steamGridDbId": 36615
+      "steamGridDbId": 36615,
+      "status": "in_progress",
+      "_reason": "harbourMasters/Starship publishes no GitHub release assets (only git tags); binaries distributed off-GitHub. Star Fox 64 is installable via the 'starfox64-recomp' entry instead."
     },
     {
       "id": "opengoal-jak2",
@@ -439,12 +428,12 @@
       "description": "Open-source reimplementation of Tomb Raider I with modern enhancements. Widescreen, 60fps, quality-of-life improvements.",
       "installType": "prebuilt",
       "releaseAssets": {
-        "windows": "TRX-*-Windows-tr1.zip",
-        "linux": "TRX-*-Linux-tr1.zip",
-        "macos": "TRX-*-Mac-tr1.dmg"
+        "windows": "TRX-*-Windows.zip",
+        "linux": "TRX-*-Linux.zip",
+        "macos": "TRX-*-Mac.dmg"
       },
       "launchCommand": {
-        "windows": "{installDir}/TR1X.exe",
+        "windows": "{installDir}/TRX.exe",
         "linux": "{installDir}/TRX"
       },
       "tags": [
@@ -1208,13 +1197,9 @@
       "project": "Decompilation of Barnyard the video game and TOSHI 2.0 game engine developed by Blue Tongue Entertai",
       "platform": "ps2",
       "repo": "InfiniteC0re/OpenBarnyard",
-      "description": "WIP open-source reimplementation of Barnyard (2006). Nightly builds for Windows.",
+      "description": "WIP open-source reimplementation of Barnyard (2006). Only an unstable nightly prerelease (Windows) is published; no stable release yet.",
       "installType": "rom_extract",
-      "releaseAssets": {
-        "windows": "OpenBarnyard.exe",
-        "linux": null,
-        "macos": null
-      },
+      "releaseAssets": {},
       "launchCommand": {
         "windows": "{installDir}/OpenBarnyard.exe",
         "linux": null,
@@ -1236,7 +1221,8 @@
         "extensions": null
       },
       "steamGridDbId": 29875,
-      "status": "in_progress"
+      "status": "in_progress",
+      "_reason": "only an unstable 'nightly' prerelease is published; no stable release with a runnable binary yet"
     },
     {
       "id": "final-fantasy-vii",
