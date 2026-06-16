@@ -261,6 +261,20 @@
         "react-dom": "^18.3.0",
       },
     },
+    "plugins/lsfg-vk": {
+      "name": "@loadout/plugin-lsfg-vk",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/exec": "workspace:*",
+        "@loadout/plugin-storage": "workspace:*",
+        "@loadout/types": "workspace:*",
+        "@loadout/ui": "workspace:*",
+        "@loadout/vdf": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+        "react-icons": "^5.6.0",
+      },
+    },
     "plugins/network-info": {
       "name": "@loadout/plugin-network-info",
       "version": "0.0.1",
@@ -583,6 +597,8 @@
     "@loadout/plugin-input-plumber": ["@loadout/plugin-input-plumber@workspace:plugins/input-plumber"],
 
     "@loadout/plugin-launch-options": ["@loadout/plugin-launch-options@workspace:plugins/launch-options"],
+
+    "@loadout/plugin-lsfg-vk": ["@loadout/plugin-lsfg-vk@workspace:plugins/lsfg-vk"],
 
     "@loadout/plugin-network-info": ["@loadout/plugin-network-info@workspace:plugins/network-info"],
 

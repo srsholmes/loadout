@@ -1,0 +1,47 @@
+LSFG-VK plugin
+Copyright (c) 2026 Simon Holmes
+Licensed under BSD-3-Clause (see LICENSE).
+
+This plugin has two upstream dependencies, with different licensing
+relationships to this repository.
+
+## 1. Decky plugin (ported from)
+
+  https://github.com/xXJSONDeruloXx/decky-lsfg-vk
+  Copyright (c) 2025 Kurt Himebauch (JSON Derulo) (BSD-3-Clause)
+  Original Copyright (c) 2022-2024 Steam Deck Homebrew (BSD-3-Clause)
+
+The install / configure / wrapper flow in this plugin's `backend.ts` is
+ported from `decky-lsfg-vk` — specifically the GitHub-release download,
+zip extraction into `~/.local/{lib,share/vulkan/implicit_layer.d}/`,
+`library_path` rewrite in the layer JSON, `~/.config/lsfg-vk/conf.toml`
+serialization, and the executable `~/lsfg` wrapper script that exports
+`LSFG_PROCESS` and execs the game. UI surface, per-Steam-appId override
+shape, and the rest of our plugin scaffold are original. Both ports
+and originals ship under the BSD-3-Clause; the upstream copyright
+notice and BSD-3-Clause disclaimer are preserved in
+`THIRD_PARTY_LICENSES.md` per BSD-3 §1 and §2.
+
+## 2. Frame-generation runtime (downloaded at runtime, not bundled)
+
+  https://github.com/PancakeTAS/lsfg-vk
+  License: GPL-3.0 (see https://github.com/PancakeTAS/lsfg-vk/blob/develop/LICENSE.md)
+
+This plugin downloads `lsfg-vk_noui.zip` from PancakeTAS/lsfg-vk's
+GitHub Releases at user request (see `RELEASES_API` in `backend.ts`)
+and extracts `liblsfg-vk.so` + the layer JSON into the user's home
+directory. **The `lsfg-vk` runtime is not redistributed by this
+repository or its release artifacts.** The user fetches it directly
+from the upstream's official distribution, and the GPL-3.0 governs
+the on-disk artifact on the user's machine — not this plugin's source.
+
+This is the same orchestration pattern used by `plugins/deck-dictation`
+for Handy. Distribution of the runtime is upstream's responsibility;
+this plugin is only an installer + UI + config writer.
+
+The frame-generation feature itself depends on the user owning a
+copy of "Lossless Scaling" (the proprietary Windows application);
+this plugin detects `Lossless.dll` at the default Steam library path
+and accepts a custom override. Lossless Scaling is third-party
+proprietary software and is not affiliated with or licensed by this
+project.
