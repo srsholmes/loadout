@@ -20,6 +20,13 @@ await sdk.env.ensurePackages([
   "git",
   "python3",
   "p7zip",
+  // Native toolchain for the host-side asset tools (`make -C tools`
+  // builds n64graphics/skyconv/mio0/… with the container's own gcc, not
+  // mingw). Without these the tools build dies with "Error 127" (gcc not
+  // found); n64graphics also links libpng, so libpng-devel is required.
+  "gcc",
+  "gcc-c++",
+  "libpng-devel",
   "mingw64-gcc",
   "mingw64-gcc-c++",
   "mingw64-binutils",

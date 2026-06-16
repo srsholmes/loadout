@@ -377,6 +377,11 @@ function buildRuntime(
           "extracting",
         );
       });
+      // This download+extract runs in the (root) backend, so the cloned
+      // tree is root-owned. The build runs AS the user, so hand the whole
+      // tree over or the build can't write its outputs into the source
+      // subdirs ("Permission denied" on e.g. tools/audiofile/*.o).
+      await chownInstallDirToUser(ctx.installDir);
     },
     placeRom: async (destRel) => {
       if (!ctx.romPath) {
@@ -388,6 +393,9 @@ function buildRuntime(
       const dest = join(ctx.installDir, destRel);
       await mkdir(join(dest, ".."), { recursive: true });
       await copyFile(ctx.romPath, dest);
+      // Copied by the (root) backend → hand to the user so the build can
+      // read/overwrite it.
+      await chownInstallDirToUser(ctx.installDir);
     },
     declareOutput: (binRelPath) => {
       acc.outputBinary = binRelPath;
