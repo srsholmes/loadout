@@ -81,6 +81,17 @@ async function asUserCmd(cmd: string[]): Promise<string[]> {
     "--quiet",
     "--wait",
     "--collect",
+    // The user's session leaks Steam's LD_PRELOAD (gameoverlayrenderer.so,
+    // which NEEDs libGL.so.1) and LD_LIBRARY_PATH into the unit → into the
+    // container, where every binary (even bash/env) then dies with
+    // "libGL.so.1: cannot open shared object file". dnf steps survived
+    // only because they go via sudo (which scrubs LD_*). Clear them here,
+    // BEFORE distrobox enter, since clearing inside the container is too
+    // late (the first binary is already preloaded). systemd-run --user
+    // takes the unit's env from the user manager, not our spawn env, so
+    // this must be done with --setenv (not the enterEnv below).
+    "--setenv=LD_PRELOAD=",
+    "--setenv=LD_LIBRARY_PATH=",
     ...cmd,
   ];
 }
@@ -409,6 +420,12 @@ function stripBashFuncs(env: NodeJS.ProcessEnv): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(env)) {
     if (k.startsWith("BASH_FUNC_")) continue;
+    // Don't leak the host's Steam overlay LD_PRELOAD / LD_LIBRARY_PATH
+    // into the container — gameoverlayrenderer.so NEEDs libGL.so.1 which
+    // the Fedora container doesn't have, breaking every binary. (Matters
+    // for the direct/dev path; the systemd-run path clears these via
+    // --setenv since it uses the user-manager env, not this one.)
+    if (k === "LD_PRELOAD" || k === "LD_LIBRARY_PATH") continue;
     if (typeof v === "string") out[k] = v;
   }
   return out;

@@ -429,7 +429,11 @@ await sdk.env.run(
     `# Runs Render96ex RT64 through host wine inside the recomp-build`,
     `# distrobox, using a locally-built vkd3d-proton with the RT shader`,
     `# blob parse support that shipped Proton doesn't yet have.`,
-    `exec distrobox enter recomp-build -- env \\\\`,
+    `# Strip Steam's LD_PRELOAD (gameoverlayrenderer.so → needs host`,
+    `# libGL.so.1) + LD_LIBRARY_PATH on the host before entering the`,
+    `# container, or every binary inside dies on libGL. env runs on the`,
+    `# host (which has libGL) so the strip is safe.`,
+    `exec env -u LD_PRELOAD -u LD_LIBRARY_PATH distrobox enter recomp-build -- env \\\\`,
     `  WINEPREFIX="${WINEPREFIX_ABS}" \\\\`,
     `  VKD3D_CONFIG=dxr \\\\`,
     // d3d12 + d3d12core MUST be native so wine loads OUR patched

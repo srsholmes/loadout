@@ -54,6 +54,7 @@
       "commands": [
         "distrobox",
         "podman",
+        "systemd-run",
         "bash",
         "gh",
         "unzip",
