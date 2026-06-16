@@ -339,6 +339,7 @@ function WakeButtonSection() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [legacyAck, setLegacyAck] = useState(false);
+  const [restarting, setRestarting] = useState(false);
 
   // Mounted-ref guard so awaited callbacks don't `setState` after the user
   // navigates away mid-capture (10s windows are long enough to leave on).
@@ -412,6 +413,25 @@ function WakeButtonSection() {
     },
     [call, refresh, safeSet],
   );
+
+  // Recovery: restart the InputPlumber daemon (rebuilds composite devices) and
+  // re-load the wake profile. Slower than the other ops (daemon restart + a few
+  // retries for re-enumeration), so it has its own busy state + spinner.
+  const restartIp = useCallback(async () => {
+    safeSet(setRestarting, true);
+    safeSet(setError, null);
+    safeSet(setInfo, null);
+    try {
+      const r = (await call("restartInputPlumber")) as WakeOpResult;
+      if (r.ok) safeSet(setInfo, "InputPlumber restarted — controllers should be back.");
+      else safeSet(setError, r.error ?? "Restart failed.");
+      await refresh();
+    } catch (e) {
+      safeSet(setError, e instanceof Error ? e.message : String(e));
+    } finally {
+      safeSet(setRestarting, false);
+    }
+  }, [call, refresh, safeSet]);
 
   const cardWrap = (body: React.ReactNode) => (
     <div className="card mt-3.5">
@@ -553,6 +573,30 @@ function WakeButtonSection() {
           )}
         </div>
       )}
+
+      {/* Recovery: rebuild InputPlumber's devices when a controller stops
+          working (not showing in Steam, overlay won't grab focus, etc). */}
+      <div className="mt-3.5 pt-3 border-t border-base-content/10">
+        <div className="subsection-desc mb-2">
+          Controller acting up — not showing in Steam, or the overlay won&apos;t
+          grab focus? Restart InputPlumber to rebuild its devices from scratch.
+        </div>
+        <FocusButton
+          onClick={() => void restartIp()}
+          disabled={busy || capturing || restarting}
+          variant="ghost"
+        >
+          {restarting ? (
+            <>
+              <Spinner size={14} /> <span className="ml-1.5">Restarting…</span>
+            </>
+          ) : (
+            <>
+              <FaArrowsRotate className="w-3 h-3 mr-1" /> Restart InputPlumber
+            </>
+          )}
+        </FocusButton>
+      </div>
     </div>,
   );
 }

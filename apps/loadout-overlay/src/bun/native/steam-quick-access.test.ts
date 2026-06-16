@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import {
-  dismissSteamQuickAccessIfOpen,
+  dismissSteamMenusIfOpen,
   type CdpDeps,
 } from "./steam-quick-access";
 
@@ -96,13 +96,13 @@ beforeEach(() => {
   sentMessages = [];
 });
 
-describe("dismissSteamQuickAccessIfOpen", () => {
+describe("dismissSteamMenusIfOpen", () => {
   it("returns false when Steam's CDP isn't reachable", async () => {
     fetchShouldFail = true;
-    expect(await dismissSteamQuickAccessIfOpen(mockDeps)).toBe(false);
+    expect(await dismissSteamMenusIfOpen(mockDeps)).toBe(false);
   });
 
-  it("returns false when QAM page isn't in the target list", async () => {
+  it("returns false when no menu page is in the target list", async () => {
     mockTargets = [
       {
         type: "page",
@@ -110,10 +110,10 @@ describe("dismissSteamQuickAccessIfOpen", () => {
         webSocketDebuggerUrl: "ws://bpm",
       },
     ];
-    expect(await dismissSteamQuickAccessIfOpen(mockDeps)).toBe(false);
+    expect(await dismissSteamMenusIfOpen(mockDeps)).toBe(false);
   });
 
-  it("does not send Escape when QAM page is hidden", async () => {
+  it("does not send Escape when the menu page is hidden", async () => {
     mockTargets = [
       {
         type: "page",
@@ -122,7 +122,7 @@ describe("dismissSteamQuickAccessIfOpen", () => {
       },
     ];
     mockResponses.evaluateValue = false;
-    expect(await dismissSteamQuickAccessIfOpen(mockDeps)).toBe(false);
+    expect(await dismissSteamMenusIfOpen(mockDeps)).toBe(false);
     const keyEvents = sentMessages.filter(
       (s) =>
         (s.msg as { method: string }).method === "Input.dispatchKeyEvent",
@@ -130,7 +130,7 @@ describe("dismissSteamQuickAccessIfOpen", () => {
     expect(keyEvents).toHaveLength(0);
   });
 
-  it("dispatches keyDown + keyUp Escape when QAM is visible", async () => {
+  it("dispatches keyDown + keyUp Escape when the QAM is visible", async () => {
     mockTargets = [
       {
         type: "page",
@@ -139,7 +139,7 @@ describe("dismissSteamQuickAccessIfOpen", () => {
       },
     ];
     mockResponses.evaluateValue = true;
-    expect(await dismissSteamQuickAccessIfOpen(mockDeps)).toBe(true);
+    expect(await dismissSteamMenusIfOpen(mockDeps)).toBe(true);
     const keyEvents = sentMessages
       .map((s) => s.msg)
       .filter(
@@ -153,7 +153,26 @@ describe("dismissSteamQuickAccessIfOpen", () => {
     expect(keyEvents[1].params.key).toBe("Escape");
   });
 
-  it("only targets the QuickAccess_uid2 page, not BPM or others", async () => {
+  it("dispatches Escape into the main menu when it is the open one", async () => {
+    mockTargets = [
+      {
+        type: "page",
+        title: "Steam Big Picture Mode",
+        webSocketDebuggerUrl: "ws://bpm",
+      },
+      {
+        type: "page",
+        title: "MainMenu_uid2",
+        webSocketDebuggerUrl: "ws://main",
+      },
+    ];
+    mockResponses.evaluateValue = true;
+    expect(await dismissSteamMenusIfOpen(mockDeps)).toBe(true);
+    const urls = new Set(sentMessages.map((s) => s.url));
+    expect([...urls]).toEqual(["ws://main"]);
+  });
+
+  it("only targets Steam's menu pages, not BPM or others", async () => {
     mockTargets = [
       {
         type: "page",
@@ -172,8 +191,8 @@ describe("dismissSteamQuickAccessIfOpen", () => {
       },
     ];
     mockResponses.evaluateValue = true;
-    await dismissSteamQuickAccessIfOpen(mockDeps);
+    await dismissSteamMenusIfOpen(mockDeps);
     const urls = new Set(sentMessages.map((s) => s.url));
-    expect([...urls]).toEqual(["ws://qam"]);
+    expect([...urls].sort()).toEqual(["ws://main", "ws://qam"]);
   });
 });

@@ -14,7 +14,7 @@
 import { run as _runRaw, commandExists } from "@loadout/exec";
 import { trace } from "./trace";
 import { X11Connection } from "./x11";
-import { dismissSteamQuickAccessIfOpen } from "./steam-quick-access";
+import { dismissSteamMenusIfOpen } from "./steam-quick-access";
 
 // From overlay_display.rs
 const OVERLAY_APP_ID = 0x534c; // 21324, "SL"
@@ -493,15 +493,16 @@ export class GamescopeAtoms {
   }
 
   /**
-   * If Steam's Quick Access Menu (QAM) is currently open, dismiss it
-   * via Chrome DevTools Protocol before we open our overlay.
+   * If one of Steam's BPM menus (Quick Access Menu or the main
+   * Steam-button menu) is currently open, dismiss it via Chrome
+   * DevTools Protocol before we open our overlay.
    *
-   * Why this hook exists at all: when the user has Steam's QAM open
+   * Why this hook exists at all: when the user has a Steam menu open
    * in BPM home with a game alive in baselayer, and they then toggle
    * our overlay, gamescope's compositor reliably wedges into a
    * device-wide input freeze that requires reboot. Empirically the
-   * trigger is the QAM-open state, not Steam's STEAM_OVERLAY atom or
-   * any X11-visible signal — the QAM is a CEF browser_view popup
+   * trigger is the menu-open state, not Steam's STEAM_OVERLAY atom or
+   * any X11-visible signal — both menus are CEF browser_view popups
    * INSIDE Steam BPM's existing X window, with no separate window we
    * can manipulate via X atoms.
    *
@@ -511,18 +512,19 @@ export class GamescopeAtoms {
    * STEAM_OVERLAY (Steam doesn't assert it on BPM in this scenario).
    * Both signals missed the trigger state. The reliable path is to
    * ask Steam's CEF directly: connect to its CDP at localhost:8080,
-   * find the `QuickAccess_uid2` page, check if it's visible, and if
-   * so dispatch Escape into it via Input.dispatchKeyEvent.
+   * find the `QuickAccess_uid2` / `MainMenu_uid2` pages, check if
+   * either is visible, and dispatch Escape into the open one via
+   * Input.dispatchKeyEvent.
    *
-   * No-op if Steam's CDP isn't reachable, the QAM page isn't found,
-   * or the QAM is already hidden. The CDP operation has its own
+   * No-op if Steam's CDP isn't reachable, the menu pages aren't found,
+   * or both menus are already hidden. The CDP operation has its own
    * 800ms timeout so a stalled Steam doesn't block our show() path.
    */
   private async _maybeDismissSteamMenu(): Promise<void> {
     try {
-      const dismissed = await dismissSteamQuickAccessIfOpen();
+      const dismissed = await dismissSteamMenusIfOpen();
       if (dismissed) {
-        trace(`[gamescope-atoms] pre-show: dismissed Steam QAM via CDP`);
+        trace(`[gamescope-atoms] pre-show: dismissed Steam menu via CDP`);
       }
     } catch (err) {
       console.warn("[gamescope-atoms] _maybeDismissSteamMenu:", err);

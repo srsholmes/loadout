@@ -64,6 +64,9 @@ export interface RpcHandlerDeps {
    *  successful SIGCONT) and restartSteam (clears it after kill so
    *  the next toggle rediscovers the respawned PID). */
   steamPid: Ref<number | null>;
+  /** Last time the webview sent an `overlayHeartbeat` (Date.now() ms). The
+   *  freeze watchdog in index.ts reads this to detect a hung overlay. */
+  lastHeartbeat: Ref<number>;
 }
 
 /**
@@ -83,6 +86,12 @@ export function buildRpcHandlers(deps: RpcHandlerDeps) {
       },
       toggle: async (): Promise<boolean> => requestToggle(deps.state),
       isGamescopeMode: async () => deps.gamescopeMode,
+      // Liveness ping from the webview (~1×/s). The freeze watchdog uses the
+      // last-seen time to tell a healthy overlay from a hung one. Fire-and-
+      // forget: returns nothing, never throws.
+      overlayHeartbeat: async () => {
+        deps.lastHeartbeat.current = Date.now();
+      },
       getControllerShortcuts: async () => deps.shortcuts.current,
       // BrowserView.defineRPC types every handler as (params?: unknown) => unknown,
       // so we accept unknown and validate the real shape inside. A
