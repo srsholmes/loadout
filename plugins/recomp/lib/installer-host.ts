@@ -1,4 +1,4 @@
-import { mkdir, rm, copyFile, readdir, rename, stat, writeFile, chmod } from "node:fs/promises";
+import { mkdir, rm, copyFile, readdir, rename, stat, writeFile, chmod, chown } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
@@ -12,6 +12,47 @@ import { downloadFile, extractArchive } from "./pipeline-archive";
 import { tempDir, type PlatformName } from "./platform";
 import type { PipelineEvent } from "./types";
 import type { RecompSDK, RecompEnv, Platform, RecompRuntime } from "./sdk";
+
+/**
+ * Hand ownership of a freshly-created path to the unprivileged target
+ * user (uid/gid of $HOME). The loadout backend runs as root but the
+ * build runs AS the user (rootless distrobox/podman), so a root-owned
+ * install dir blocks the build's writes. No-op when already
+ * unprivileged (dev). Recursive so any root-written children (e.g. a
+ * copied ROM) become user-owned too.
+ */
+async function chownInstallDirToUser(path: string): Promise<void> {
+  if (process.getuid?.() !== 0) return;
+  const home = process.env.HOME;
+  if (!home) return;
+  try {
+    const h = await stat(home);
+    await chownRecursive(path, h.uid, h.gid);
+  } catch {
+    /* best effort — a build that still can't write will fail loudly */
+  }
+}
+
+async function chownRecursive(
+  path: string,
+  uid: number,
+  gid: number,
+): Promise<void> {
+  await chown(path, uid, gid).catch(() => {});
+  try {
+    const entries = await readdir(path, { withFileTypes: true });
+    for (const e of entries) {
+      const full = join(path, e.name);
+      if (e.isDirectory()) {
+        await chownRecursive(full, uid, gid);
+      } else {
+        await chown(full, uid, gid).catch(() => {});
+      }
+    }
+  } catch {
+    /* unreadable dir — stop descending here */
+  }
+}
 
 type EventCallback = (event: PipelineEvent) => void;
 
@@ -139,6 +180,11 @@ async function runSetupScriptInner(
 
   // Phase B: ensure installDir exists.
   await mkdir(ctx.installDir, { recursive: true });
+  // The (root) backend just created installDir, but the build runs AS
+  // the user (distrobox/podman are rootless — see build-env). A
+  // root-owned install dir means the build's first write fails with
+  // "Permission denied". Hand ownership to the target user.
+  await chownInstallDirToUser(ctx.installDir);
 
   // Phase C: install runtime → import recipe.
   const acc: SetupAccumulator = {};
