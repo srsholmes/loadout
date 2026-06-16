@@ -499,10 +499,11 @@ describe("ProtonDBBadgesBackend", () => {
 
   // ── Steam-CEF injection ──────────────────────────────────────
   //
-  // No Steam CEF debug port is reachable in the test env (localhost:8080
-  // /json fails against the mocked fetch), so the CDP layer reports
-  // disconnected and reconnect fails cleanly. These assert the graceful-
-  // degradation contract; the injection itself is exercised on-device.
+  // No Steam CEF debug port is reachable in the test env: the module-
+  // level fetch mock returns HTTP 500 for localhost:8080/json (and never
+  // touches the real network), so `_tryConnect` bails, the CDP layer
+  // reports disconnected, and reconnect fails cleanly. These assert the
+  // graceful-degradation contract; injection itself is exercised on-device.
 
   describe("Steam-CEF injection", () => {
     it("getStatus reports disconnected when no Steam CEF is reachable", async () => {

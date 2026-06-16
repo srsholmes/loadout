@@ -39,11 +39,13 @@ export interface ProtonDBSettings {
   enableStoreBadge: boolean;
 }
 
-/** Combined payload pushed into the injected CEF badge runtime. */
+/** Combined payload pushed into the injected CEF badge runtime. The
+ *  injected scripts only read `report` + `settings`; Linux-support is
+ *  deliberately NOT carried here so the 500 ms push path never pays the
+ *  extra (rate-limited) Steam appdetails fetch. */
 interface BadgeData {
   appId: string;
   report: ProtonDBReport | null;
-  linuxSupport: boolean;
   settings: ProtonDBSettings;
 }
 
@@ -531,11 +533,18 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
         if (!targetAppId) {
           expr = `if (window.__protondb_badges) window.__protondb_badges.removeBadge();`;
         } else {
-          const badgeData = await this.getBadgeData(targetAppId);
+          // Fetch only the report — the injected runtime never reads
+          // Linux-support, so don't pay `checkLinuxSupport` on every
+          // navigation (see `BadgeData`).
+          const report = await this.getReport(targetAppId);
           // If a newer appId arrived while awaiting the fetch, drop this
           // batch and let the loop re-run for the latest.
           if (this.pendingPushSet) continue;
-          const data: BadgeData = { appId: targetAppId, ...badgeData };
+          const data: BadgeData = {
+            appId: targetAppId,
+            report,
+            settings: this.settings,
+          };
           expr = `if (window.__protondb_badges) window.__protondb_badges.updateBadge(${JSON.stringify(data)});`;
         }
 
@@ -597,6 +606,13 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
       // render targets.
       const prefixTargets = ["MainMenu"];
 
+      // Tabs we've already opened a socket to this pass — so the store
+      // loop below never opens a second WebSocket to a tab that already
+      // matched an exact/prefix target (which would orphan one socket
+      // from health-check pruning, since the two are stored under
+      // different keys).
+      const connectedTabIds = new Set<string>();
+
       for (const tab of tabs) {
         if (!tab.webSocketDebuggerUrl) continue;
 
@@ -612,6 +628,7 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
             ? "SharedJSContext"
             : tab.title;
           this.connections.set(key, conn);
+          connectedTabIds.add(tab.id);
           if (
             prefixHit === "MainMenu" ||
             tab.title === "Steam Big Picture Mode"
@@ -628,9 +645,11 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
       for (const tab of tabs) {
         if (!tab.webSocketDebuggerUrl) continue;
         if (!tab.url.includes("store.steampowered.com")) continue;
+        if (connectedTabIds.has(tab.id)) continue;
         try {
           const conn = await this._openCDP(tab.webSocketDebuggerUrl, tab.title);
           this.connections.set(`store:${tab.title}`, conn);
+          connectedTabIds.add(tab.id);
           console.log(`[protondb-badges] Connected to store: ${tab.title}`);
         } catch {
           /* store tab optional */
@@ -738,7 +757,8 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
         if (appIdMatch) {
           badgeData = {
             appId: appIdMatch[1],
-            ...(await this.getBadgeData(appIdMatch[1])),
+            report: await this.getReport(appIdMatch[1]),
+            settings: this.settings,
           };
         }
 
