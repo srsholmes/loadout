@@ -198,9 +198,18 @@ function ProtonDBBadges() {
   useEvent({
     event: "stateChanged",
     handler: (data: unknown) => {
-      const d = data as { settings?: ProtonDBSettings };
+      const d = data as {
+        settings?: ProtonDBSettings;
+        connected?: boolean;
+        tabs?: number;
+      };
       if (d.settings) {
         setSettings(d.settings);
+      }
+      // Backend emits connection state alongside settings on connect /
+      // health-check changes — reflect it live in the Steam CEF section.
+      if (typeof d.connected === "boolean") {
+        setStatus({ connected: d.connected, tabs: d.tabs ?? 0 });
       }
     },
   });
