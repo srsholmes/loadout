@@ -22,7 +22,6 @@
       "network": [
         "api.github.com",
         "github.com",
-        "objects.githubusercontent.com",
         "release-assets.githubusercontent.com"
       ],
       "filesystem": [

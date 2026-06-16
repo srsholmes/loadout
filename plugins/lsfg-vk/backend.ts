@@ -215,9 +215,17 @@ export default class LsfgVkBackend implements PluginBackend {
     requested?: LayerVersion,
   ): Promise<{ success: boolean; version?: string; error?: string }> {
     const target = requested ?? this.layerVersion;
+    // Tracked outside the try so the finally can clean them up even when
+    // a download/extract/install step throws (otherwise the zip +
+    // extracted tree are orphaned in /tmp — worse for the compat path,
+    // which downloads two archives).
+    let zipPath: string | undefined;
+    let extractDir: string | undefined;
     try {
-      this._progress("Resolving release…");
-      const { extractDir, version, zipPath } = await this._obtainLayer(target);
+      const obtained = await this._obtainLayer(target);
+      zipPath = obtained.zipPath;
+      extractDir = obtained.extractDir;
+      const version = obtained.version;
 
       this._progress("Installing layer files…");
       await this._installLayerFiles(extractDir);
@@ -225,10 +233,6 @@ export default class LsfgVkBackend implements PluginBackend {
       this._progress("Writing config…");
       await this._writeTomlConfig();
       await this._writeWrapperScript();
-
-      // Cleanup temp dirs (zip + extracted tree).
-      await rm(zipPath, { force: true });
-      await rm(extractDir, { recursive: true, force: true });
 
       // Record what we installed so the UI can show it and survive a
       // restart.
@@ -244,6 +248,11 @@ export default class LsfgVkBackend implements PluginBackend {
       this.log?.error(`install failed: ${error}`);
       this._progress(`Install failed: ${error}`, { done: true, error: true });
       return { success: false, error };
+    } finally {
+      // Always clean up temp artifacts (zip + extracted tree), success
+      // or failure.
+      if (zipPath) await rm(zipPath, { force: true });
+      if (extractDir) await rm(extractDir, { recursive: true, force: true });
     }
   }
 
