@@ -1,4 +1,5 @@
 export { colors } from "./colors";
+export { hideOverlay } from "./host";
 export {
   LoadoutProvider,
   PluginProvider,

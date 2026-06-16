@@ -1,0 +1,15 @@
+Launch Options plugin
+Copyright (c) 2026 Simon Holmes
+Licensed under BSD-3-Clause (see LICENSE).
+
+This plugin is an independent reimplementation of the launch-options
+management functionality popularised by the decky-launch-options
+Decky-Loader plugin:
+
+  https://github.com/Wurielle/decky-launch-options
+  Copyright (c) Wurielle (MIT) / Steam Deck Homebrew (BSD-3-Clause)
+
+No source code from decky-launch-options was copied or transliterated.
+This plugin reads and writes Steam's `localconfig.vdf` directly via the
+in-tree `@loadout/vdf` package; the upstream is credited here for
+inspiration and feature-parity reference only.

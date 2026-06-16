@@ -1,0 +1,40 @@
+RGB Control plugin
+Copyright (c) 2026 Simon Holmes
+Licensed under BSD-3-Clause (see LICENSE).
+
+This plugin is an independent implementation of RGB lighting control
+for Linux handheld PCs. Device-specific protocols (byte sequences,
+HID VID/PID identification, write-timing constants) were learned from
+the Hand Held Daemon project, which documents and verifies handheld
+RGB protocols across the ecosystem:
+
+  https://github.com/hhd-dev/hhd
+  Copyright (c) Hand Held Daemon contributors
+  Licensed under GPL-3.0
+
+No source code from HHD was copied or transliterated. HHD is credited
+here as the reference for what bytes each device's firmware accepts —
+the protocols themselves are facts about the hardware, not creative
+expression — while the TypeScript implementation in this plugin is
+independent. Specific drivers that derive their protocol knowledge
+from HHD:
+
+- `lib/drivers/oxp-hid-v2.ts` — OneXPlayer X1 / F1 / Apex
+  Protocol reference: hhd/device/oxp/hid_v2.py
+- `lib/drivers/asus-aura.ts` — ASUS ROG Ally / Ally X (experimental)
+  Protocol reference: hhd/device/aura/__init__.py
+- `lib/drivers/legion-go.ts` — Lenovo Legion Go / Legion Go S (experimental)
+  Protocol reference: hhd/device/legion_go/slim/hid.py
+
+Other drivers in this plugin do not derive from HHD:
+
+- `lib/drivers/openrgb.ts` — interfaces with the OpenRGB CLI directly
+- `lib/drivers/sysfs-leds.ts` — kernel `/sys/class/leds/` last-resort path
+- `lib/drivers/platform-leds.ts` — `/sys/devices/platform/{oxp-ec,asus-nb-wmi,ayaneo-ec}/leds`
+  using sysfs entries the kernel drivers expose
+
+Hardware verification status: drivers marked `experimental: true` in
+the registry have not yet been confirmed working on real hardware by a
+user. Please open an issue at https://github.com/srsholmes/loadout
+if you test one of these and either it works (so we can promote it
+out of experimental) or doesn't (so we can fix it).

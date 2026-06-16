@@ -259,14 +259,33 @@ export async function scanLibrary(
             ? localArtUrl(origin, appId, primaryUserId, "capsule")
             : cdnCapsule;
 
+          // Prefer the loader's local `/api/steam-grid/...` route as
+          // the canonical art URL — its handler probes the user's
+          // `userdata/<id>/config/grid/` first (custom SGDB art wins),
+          // falls back to Steam's downloaded appcache, and only then
+          // 302-redirects to the public CDN when nothing is local.
+          // With `Cache-Control: no-cache` + an mtime-derived ETag,
+          // browsers revalidate on every reload so newly-applied
+          // custom art appears the next time a grid mounts — without
+          // this, plugins that used `headerUrl` would see Steam's
+          // CDN art forever regardless of what the user customised.
+          //
+          // The pure CDN URLs are kept on `cdnHeaderUrl` /
+          // `cdnCapsuleUrl` for the rare plugin that wants the
+          // public, longer-cacheable variant explicitly.
+          //
+          // If we couldn't resolve a primary user id (no userdata yet)
+          // the local route can't be built — fall back to CDN.
           byAppId.set(appId, {
             appId,
             name,
             sizeOnDisk,
-            headerUrl: cdnHeader,
-            capsuleUrl: cdnCapsule,
+            headerUrl: primaryUserId ? localHeader : cdnHeader,
+            capsuleUrl: primaryUserId ? localCapsule : cdnCapsule,
             localHeaderUrl: localHeader,
             localCapsuleUrl: localCapsule,
+            cdnHeaderUrl: cdnHeader,
+            cdnCapsuleUrl: cdnCapsule,
             source: "steam",
             tags: [],
           });

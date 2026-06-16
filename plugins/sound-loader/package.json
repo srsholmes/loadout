@@ -1,0 +1,36 @@
+{
+  "name": "@loadout/plugin-sound-loader",
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-icons": "^5.6.0",
+    "@loadout/ui": "workspace:*",
+    "@loadout/types": "workspace:*",
+    "@loadout/exec": "workspace:*",
+    "@loadout/plugin-storage": "workspace:*",
+    "@loadout/steam-cdp": "workspace:*"
+  },
+  "plugin": {
+    "id": "sound-loader",
+    "name": "Sound Loader",
+    "version": "0.1.0",
+    "description": "Browse, install, and toggle community UI sound packs from deckthemes.com",
+    "author": "Steam Loader",
+    "loadOnStartup": true,
+    "permissions": {
+      "commands": ["unzip"],
+      "filesystem": [
+        "~/.local/share/Steam/steamui/sounds_custom/loadout"
+      ],
+      "network": [
+        "api.deckthemes.com",
+        "localhost",
+        "127.0.0.1"
+      ]
+    },
+    "category": "Device",
+    "subtitle": "Custom UI sound packs"
+  }
+}

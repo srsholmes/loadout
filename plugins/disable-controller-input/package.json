@@ -1,0 +1,21 @@
+{
+  "name": "@loadout/plugin-disable-controller-input",
+  "version": "0.0.1",
+  "type": "module",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@loadout/ui": "workspace:*"
+  },
+  "plugin": {
+    "id": "disable-controller-input",
+    "name": "Disable Controller Input",
+    "description": "Silence individual controllers by telling InputPlumber to drop their virtual targets — useful for handhelds where the built-in pad is hogging player 1",
+    "permissions": {
+      "commands": ["busctl"]
+    },
+    "category": "Device",
+    "subtitle": "Silence controllers via InputPlumber",
+    "target": { "type": "overlay" }
+  }
+}

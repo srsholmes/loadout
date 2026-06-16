@@ -21,6 +21,13 @@ async function rpcInvoke(
   return await fn(args);
 }
 
+/** Liveness ping for the bun-side freeze watchdog. Fire-and-forget — if the
+ *  renderer wedges and these stop arriving while Steam is frozen, bun thaws
+ *  Steam and force-closes. No-op outside Electrobun. */
+export function sendOverlayHeartbeat(): void {
+  void rpcInvoke("overlayHeartbeat");
+}
+
 export async function showOverlay() {
   return rpcInvoke("show");
 }
@@ -146,8 +153,8 @@ function loadShortcutsFromStorage(): ControllerShortcuts {
     // flicker between our overlay and Steam's UI. Default to None and
     // hide them from the Settings UI.
     guide_a: { type: "None" },
-    guide_b: { type: "None" },
-    guide_x: { type: "ToggleOverlay" },
+    guide_b: { type: "ToggleOverlay" },
+    guide_x: { type: "None" },
     guide_y: { type: "None" },
   };
 }

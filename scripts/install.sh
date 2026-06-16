@@ -341,6 +341,7 @@ phase1() {
         else
             info "Keeping existing binary."
             setup_desktop
+            setup_steam_cef_debugging
             setup_service
             return
         fi
@@ -433,6 +434,7 @@ phase1() {
     # Create symlink in ~/.local/bin so it's on PATH
     setup_bin_link
     setup_desktop
+    setup_steam_cef_debugging
     setup_service
 }
 
@@ -701,6 +703,62 @@ DESKTOPEOF
     # Update desktop database if available
     if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+    fi
+}
+
+# Enable Steam's Chromium DevTools Protocol endpoint (localhost:8080) by
+# dropping the empty `.cef-enable-remote-debugging` marker file in Steam's
+# root. Steam reads it once at startup. This is the SAME mechanism Decky
+# Loader uses — we set it ourselves so the overlay's Steam-CDP features work
+# on machines that don't have Decky installed.
+#
+# Why the overlay needs it: when Steam's Quick Access Menu is open and the
+# user triggers the overlay, the overlay closes the QAM via CDP *before*
+# claiming gamescope overlay focus. Without CDP it can't, and gamescope gets
+# into an overlay focus-fight that flickers and can freeze input device-wide
+# (recovers only on reboot). The injector + hltb + sound-loader plugins also
+# talk to this endpoint.
+CEF_DEBUG_FLAG=".cef-enable-remote-debugging"
+
+setup_steam_cef_debugging() {
+    info "Enabling Steam CEF remote debugging (for overlay focus + plugins)..."
+
+    # Steam reads the flag from its data root. `~/.steam/steam` is the
+    # canonical symlink (also where Decky writes it); `~/.local/share/Steam`
+    # is the native target it points at; the Flatpak path covers Flatpak
+    # Steam. Writing through any of them lands in the right place — a symlink
+    # target we already created is skipped by the `-e` check below.
+    created=0
+    existed=0
+    for root in \
+        "$HOME/.steam/steam" \
+        "$HOME/.local/share/Steam" \
+        "$HOME/.var/app/com.valvesoftware.Steam/data/Steam"; do
+        [ -d "$root" ] || continue
+        flag="$root/$CEF_DEBUG_FLAG"
+        if [ -e "$flag" ]; then
+            existed=1
+            continue
+        fi
+        if : > "$flag" 2>/dev/null; then
+            success "Created $flag"
+            created=1
+        else
+            warn "Could not write $flag (check permissions)."
+        fi
+    done
+
+    if [ "$created" = "0" ] && [ "$existed" = "0" ]; then
+        warn "No Steam install directory found — skipped CEF debugging flag."
+        warn "If Steam is installed elsewhere, create an empty file named"
+        warn "  $CEF_DEBUG_FLAG  in Steam's root, then restart Steam."
+        return
+    fi
+
+    if [ "$created" = "1" ]; then
+        warn "Restart Steam for CEF remote debugging to take effect."
+    else
+        info "CEF remote debugging already enabled."
     fi
 }
 
@@ -978,7 +1036,10 @@ phase2_inputplumber() {
     info "optional on a plain desktop."
     info ""
     info "On Bazzite IP is already installed — this is a no-op."
-    info "On SteamOS Deck IP ships disabled — this enables it."
+    info "On SteamOS Deck IP is already installed but ships disabled — this"
+    info "step leaves it untouched. Enabling it (and claiming the Deck's"
+    info "built-in controller) happens in-app when you choose an overlay wake"
+    info "button, so it stays opt-in."
     info "On CachyOS/Arch this installs the pacman package."
     info ""
     info "If Handheld Daemon (HHD) is running it'll be stopped and masked —"
@@ -1036,6 +1097,10 @@ main() {
     echo ""
     info "Overlay:   http://localhost:$OVERLAY_PORT"
     info "Plugins:   $INSTALL_DIR/plugins"
+    echo ""
+    warn "Restart Steam once so it picks up CEF remote debugging — required for"
+    warn "the overlay to grab focus cleanly over Steam's menus (and for plugins"
+    warn "that talk to Steam). Big Picture: Steam > Power > Restart Steam."
     echo ""
 }
 
