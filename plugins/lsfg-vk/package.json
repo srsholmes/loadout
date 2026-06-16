@@ -1,0 +1,45 @@
+{
+  "name": "@loadout/plugin-lsfg-vk",
+  "version": "0.0.1",
+  "type": "module",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-icons": "^5.6.0",
+    "@loadout/ui": "workspace:*",
+    "@loadout/types": "workspace:*",
+    "@loadout/exec": "workspace:*",
+    "@loadout/plugin-storage": "workspace:*",
+    "@loadout/vdf": "workspace:*"
+  },
+  "plugin": {
+    "id": "lsfg-vk",
+    "name": "LSFG-VK",
+    "description": "Install and configure the LSFG-VK Vulkan frame generation layer",
+    "category": "Performance",
+    "subtitle": "Vulkan frame generation",
+    "permissions": {
+      "network": [
+        "api.github.com",
+        "github.com",
+        "release-assets.githubusercontent.com"
+      ],
+      "filesystem": [
+        "~/.local/lib",
+        "~/.local/share/vulkan/implicit_layer.d",
+        "~/.config/lsfg-vk",
+        "~/lsfg",
+        "~/.local/share/Steam/steamapps/common/Lossless Scaling"
+      ],
+      "commands": [
+        "unzip",
+        "wl-copy",
+        "xclip",
+        "vulkaninfo",
+        "vkcube",
+        "setpriv"
+      ]
+    },
+    "target": { "type": "overlay" }
+  }
+}
