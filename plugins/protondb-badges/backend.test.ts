@@ -497,22 +497,28 @@ describe("ProtonDBBadgesBackend", () => {
     });
   });
 
-  // ── CEF status stubs ─────────────────────────────────────────
+  // ── Steam-CEF injection ──────────────────────────────────────
+  //
+  // No Steam CEF debug port is reachable in the test env: the module-
+  // level fetch mock returns HTTP 500 for localhost:8080/json (and never
+  // touches the real network), so `_tryConnect` bails, the CDP layer
+  // reports disconnected, and reconnect fails cleanly. These assert the
+  // graceful-degradation contract; injection itself is exercised on-device.
 
-  describe("CEF status stubs", () => {
-    it("getStatus reports disconnected (CEF injection not yet ported)", async () => {
+  describe("Steam-CEF injection", () => {
+    it("getStatus reports disconnected when no Steam CEF is reachable", async () => {
       const status = await backend.getStatus();
       expect(status.connected).toBe(false);
       expect(status.tabs).toBe(0);
     });
 
-    it("reconnect returns an error explaining CEF is unsupported", async () => {
+    it("reconnect fails cleanly when Steam CEF is unreachable", async () => {
       const result = await backend.reconnect();
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
     });
 
-    it("getCurrentRouteAppId returns null", async () => {
+    it("getCurrentRouteAppId returns null before any route is observed", async () => {
       const appId = await backend.getCurrentRouteAppId();
       expect(appId).toBeNull();
     });
