@@ -40,7 +40,21 @@ export interface SteamClientOptions extends FindTabOptions {
    * reference (e.g. the loader's SteamInjector).
    */
   tab?: CEFTab;
+  /**
+   * How many times to look for the SharedJSContext tab before giving up.
+   * Steam transiently publishes an EMPTY `/json` tab list during state
+   * transitions — most notably when entering/leaving Gaming Mode (Big
+   * Picture) or just after a non-Steam shortcut exits — so a single
+   * lookup can miss a tab that's there a moment later. Defaults to 3.
+   * Ignored when an explicit `tab` is supplied.
+   */
+  connectAttempts?: number;
+  /** Delay between SharedJSContext lookup attempts, ms. Defaults to 700. */
+  connectRetryDelayMs?: number;
 }
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Thrown when SteamClient methods are called but Steam's `window.SteamClient`
@@ -78,10 +92,25 @@ export class SteamClient {
   async connect(): Promise<void> {
     if (this.cdp?.connected) return;
 
-    const tab = this.opts.tab ?? (await findSharedJsTab(this.opts));
+    let tab = this.opts.tab ?? null;
+    if (!tab) {
+      // Retry the lookup: Steam can momentarily expose an empty tab list
+      // mid-transition (Gaming Mode ⇄ desktop, shortcut exit), so one miss
+      // doesn't mean the SharedJSContext is gone — it may just not be
+      // published yet this instant.
+      const attempts = Math.max(1, this.opts.connectAttempts ?? 3);
+      const delayMs = this.opts.connectRetryDelayMs ?? 700;
+      for (let i = 0; i < attempts && !tab; i++) {
+        if (i > 0) await sleep(delayMs);
+        tab = await findSharedJsTab(this.opts);
+      }
+    }
     if (!tab) {
       throw new SteamClientUnreachableError(
-        "No SharedJSContext tab found on Steam's CEF debug port — is Steam running with the debug port enabled?",
+        "No SharedJSContext tab found on Steam's CEF debug port. Steam may be " +
+          "mid-transition (e.g. entering/leaving Big Picture / Gaming Mode) or " +
+          "started without remote debugging enabled — retry in a moment, or " +
+          "switch Steam to desktop mode.",
       );
     }
 

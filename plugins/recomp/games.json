@@ -455,7 +455,7 @@
       "description": "Open-source reimplementation of The Legend of Dragoon (PS1 JRPG). Work in progress but playable.",
       "installType": "prebuilt",
       "releaseAssets": {
-        "windows": "Severed_Chains_Windows.tar.gz",
+        "windows": "Severed_Chains_Windows.zip",
         "linux": "Severed_Chains_Linux.tar.gz",
         "macos": "Severed_Chains_MacOS_M1.tar.gz"
       },
@@ -690,7 +690,7 @@
       "description": "Online co-op multiplayer mod for Super Mario 64. Standalone, includes everything needed to play.",
       "installType": "prebuilt",
       "releaseAssets": {
-        "windows": "sm64coopdx_Windows_DirectX.zip",
+        "windows": "sm64coopdx_Windows.zip",
         "linux": "sm64coopdx_Linux.zip",
         "macos": "sm64coopdx_macOS_ARM.zip"
       },

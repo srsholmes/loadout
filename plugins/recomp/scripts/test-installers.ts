@@ -55,14 +55,39 @@ import type { GameEntry } from "../lib/types";
 const DEEP = process.env.RECOMP_TEST_DEEP === "1";
 const CACHE_DIR = "/tmp/recomp-tests/cache";
 const EXTRACT_DIR = "/tmp/recomp-tests/extract";
-const MAX_ASSET_BYTES = 200 * 1024 * 1024;
+// 400 MB so the largest legit recomps (e.g. TRX's 334 MB Linux zip)
+// still get deep-verified rather than silently skipped.
+const MAX_ASSET_BYTES = 400 * 1024 * 1024;
 
 interface Result {
   id: string;
   name: string;
   installType: string;
   pass: boolean;
+  /**
+   * Catalog entry that intentionally isn't installable yet — a
+   * prebuilt/rom_extract with no `releaseAssets` on any platform. These
+   * surface upstream decomp/recomp projects for visibility; they are NOT
+   * download targets, so they're reported as informational rather than
+   * counted as failures (mirrors `audit-urls.ts`'s target filter).
+   */
+  inProgress: boolean;
   failures: string[];
+}
+
+/**
+ * True for a prebuilt/rom_extract entry that declares no installable
+ * `releaseAssets` on any platform. `build_from_source` (clones, no
+ * download) and `toolchain` are never "in progress" in this sense.
+ */
+function isInProgress(g: GameEntry): boolean {
+  if (g.installType === "build_from_source" || g.installType === "toolchain") {
+    return false;
+  }
+  const ra = g.releaseAssets;
+  const hasInstallableAsset =
+    !!ra && Object.values(ra).some((v) => typeof v === "string" && v);
+  return !hasInstallableAsset;
 }
 
 function checkCatalogShape(g: GameEntry): string[] {
@@ -352,19 +377,28 @@ async function checkReleaseShape(g: GameEntry): Promise<string[]> {
 }
 
 async function testEntry(g: GameEntry): Promise<Result> {
-  const failures: string[] = [
-    ...checkCatalogShape(g),
-    ...checkPlatformReachable(g),
-    ...checkRomInfoSanity(g),
-    ...(await checkRecipeLoads(g)),
-    ...(await checkRomSuggesterOnTitle(g)),
-    ...(await checkReleaseShape(g)),
-  ];
+  const inProgress = isInProgress(g);
+  // In-progress entries are intentionally not installable yet, so skip
+  // the reachability / release-shape checks that would (correctly) report
+  // "no asset" — that's the whole point of the entry, not a defect. Still
+  // validate catalog shape + ROM-info sanity so a malformed in-progress
+  // entry is caught.
+  const failures: string[] = inProgress
+    ? [...checkCatalogShape(g), ...checkRomInfoSanity(g)]
+    : [
+        ...checkCatalogShape(g),
+        ...checkPlatformReachable(g),
+        ...checkRomInfoSanity(g),
+        ...(await checkRecipeLoads(g)),
+        ...(await checkRomSuggesterOnTitle(g)),
+        ...(await checkReleaseShape(g)),
+      ];
   return {
     id: g.id,
     name: g.name,
     installType: g.installType,
     pass: failures.length === 0,
+    inProgress,
     failures,
   };
 }
@@ -388,36 +422,44 @@ async function main(): Promise<void> {
     results.push(await testEntry(g));
   }
 
-  // Group by installType for the summary
-  const byType = new Map<string, Result[]>();
-  for (const r of results) {
-    if (!byType.has(r.installType)) byType.set(r.installType, []);
-    byType.get(r.installType)!.push(r);
-  }
+  // Three honest buckets. Only `broken` — an entry that CLAIMS to be
+  // installable but fails a check — is a real defect that should fail
+  // the run. In-progress entries are informational.
+  const broken = results.filter((r) => !r.inProgress && !r.pass);
+  const inProgress = results.filter((r) => r.inProgress);
+  const installable = results.filter(
+    (r) => !r.inProgress && r.installType !== "build_from_source",
+  );
+  const fromSource = results.filter(
+    (r) => !r.inProgress && r.installType === "build_from_source",
+  );
 
-  console.log("── Summary by install type ──");
-  for (const [type, rs] of byType) {
-    const passCount = rs.filter((r) => r.pass).length;
-    console.log(
-      `  ${type.padEnd(20)} ${passCount}/${rs.length} pass`,
-    );
-  }
+  console.log("── Summary ──");
+  console.log(
+    `  installable (prebuilt/rom_extract): ${installable.filter((r) => r.pass).length}/${installable.length} verified`,
+  );
+  console.log(
+    `  build_from_source:                  ${fromSource.filter((r) => r.pass).length}/${fromSource.length} ok`,
+  );
+  console.log(
+    `  in-progress (not installable yet):  ${inProgress.length} (informational)`,
+  );
+  console.log(`  BROKEN (claims installable, fails):  ${broken.length}`);
 
-  console.log("\n── Failures ──");
-  const failures = results.filter((r) => !r.pass);
-  if (failures.length === 0) {
-    console.log("  ✓ none — all installers in good shape");
+  if (broken.length === 0) {
+    console.log("\n  ✓ no broken entries — every claimed installer is in good shape");
   } else {
-    for (const r of failures) {
+    console.log("\n── Broken entries ──");
+    for (const r of broken) {
       console.log(`\n  ✗ ${r.id} (${r.installType}) — ${r.name}`);
       for (const f of r.failures) console.log(`      • ${f}`);
     }
   }
 
   console.log(
-    `\n${results.length - failures.length}/${results.length} passed (${failures.length} failed)`,
+    `\n${results.length} entries: ${installable.filter((r) => r.pass).length} installable verified, ${inProgress.length} in-progress, ${broken.length} broken`,
   );
-  process.exit(failures.length === 0 ? 0 : 1);
+  process.exit(broken.length === 0 ? 0 : 1);
 }
 
 await main();
