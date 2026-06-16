@@ -54,3 +54,6 @@ screenshots/
 
 # background-agent git worktrees — never track
 .worktrees/
+
+# recomp build artifacts (created in install dir, never the repo)
+plugins/*/_deps/
