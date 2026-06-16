@@ -1,6 +1,89 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { commandExists, runFull, runStreaming } from "@loadout/exec";
 import { shellQuote } from "./shell";
+
+/**
+ * distrobox + rootless podman REFUSE to run under sudo/as root
+ * ("Running distrobox-enter via SUDO/DOAS is not supported"), and
+ * rootless containers live in the invoking user's storage + need that
+ * user's real login session (XDG_RUNTIME_DIR, subuid/subgid user
+ * namespace). The loadout backend is a ROOT system service, so every
+ * distrobox/podman call it makes must run inside the target user's
+ * systemd --user session — otherwise builds fail outright (idmap /
+ * "doesn't map UID 0" errors, or fifo permission errors from a
+ * root-polluted ~/.cache/distrobox) and the runtime launcher (which
+ * Steam runs AS the user) can't find a root-created container.
+ *
+ * `setpriv`/`runuser` alone are NOT enough — they change uid but don't
+ * give rootless podman a real session, so container CREATE fails with
+ * an idmap error. `systemd-run --machine=<user>@.host --user` runs the
+ * command in the user's actual session manager, which works.
+ *
+ * Resolve the target user's uid/home from $HOME (the unit sets
+ * HOME=<user home>) and the username from /etc/passwd. `null` means
+ * we're already unprivileged (a dev running the backend directly on a
+ * mutable distro) — don't wrap.
+ */
+let credsCache: { uid: number; username: string } | null | undefined;
+
+async function usernameForUid(uid: number): Promise<string | null> {
+  try {
+    const passwd = await readFile("/etc/passwd", "utf8");
+    for (const line of passwd.split("\n")) {
+      const f = line.split(":");
+      if (f.length >= 3 && Number(f[2]) === uid) return f[0];
+    }
+  } catch {
+    /* unreadable — fall through */
+  }
+  return null;
+}
+
+async function targetUserCreds(): Promise<{
+  uid: number;
+  username: string;
+} | null> {
+  if (credsCache !== undefined) return credsCache;
+  if (process.getuid?.() !== 0) {
+    credsCache = null;
+    return null;
+  }
+  const home = process.env.HOME;
+  if (!home) {
+    credsCache = null;
+    return null;
+  }
+  try {
+    const s = await stat(home);
+    const username = await usernameForUid(s.uid);
+    credsCache = username ? { uid: s.uid, username } : null;
+  } catch {
+    credsCache = null;
+  }
+  return credsCache;
+}
+
+/**
+ * Wrap a host command so it runs inside the target user's systemd
+ * --user session (proper rootless-podman context). `--pipe` forwards
+ * stdio so output still streams; `--wait` propagates the exit code;
+ * `--collect` reaps the transient unit (incl. on failure) so they don't
+ * accumulate. No-op when already unprivileged.
+ */
+async function asUserCmd(cmd: string[]): Promise<string[]> {
+  const creds = await targetUserCreds();
+  if (!creds) return cmd;
+  return [
+    "systemd-run",
+    `--machine=${creds.username}@.host`,
+    "--user",
+    "--pipe",
+    "--quiet",
+    "--wait",
+    "--collect",
+    ...cmd,
+  ];
+}
 
 /**
  * The build environment a `build_from_source` install runs in.
@@ -122,11 +205,11 @@ function distroboxEnv(name: string): BuildEnv {
   return {
     kind: "distrobox",
     label: `distrobox: ${name}`,
-    run: (command, cwd, opts) =>
+    run: async (command, cwd, opts) =>
       runStreaming(
         // `bash -lc` so the container's PATH is fully sourced.
         // distrobox-enter has no --cwd flag, so prepend `cd`.
-        [
+        await asUserCmd([
           "distrobox",
           "enter",
           name,
@@ -139,12 +222,20 @@ function distroboxEnv(name: string): BuildEnv {
           // snippet by contract (recipes pass `make -j$(nproc)` etc.) so
           // it stays evaluated — but it can never split the `cd` off.
           `cd -- ${shellQuote(cwd)} && ${command}`,
-        ],
+        ]),
         { onLine: opts.onLine, timeoutMs: opts.timeoutMs, env: enterEnv },
       ),
     has: async (cmd) => {
       const r = await runFull(
-        ["distrobox", "enter", name, "--", "bash", "-lc", `command -v ${shellQuote(cmd)}`],
+        await asUserCmd([
+          "distrobox",
+          "enter",
+          name,
+          "--",
+          "bash",
+          "-lc",
+          `command -v ${shellQuote(cmd)}`,
+        ]),
         { env: enterEnv, timeoutMs: 10_000 },
       );
       return r.exitCode === 0;
@@ -152,7 +243,7 @@ function distroboxEnv(name: string): BuildEnv {
     installPackages: async (pkgs, onLine) => {
       if (pkgs.length === 0) return { exitCode: 0 };
       return runStreaming(
-        [
+        await asUserCmd([
           "distrobox",
           "enter",
           name,
@@ -162,7 +253,7 @@ function distroboxEnv(name: string): BuildEnv {
           "install",
           "-y",
           ...pkgs,
-        ],
+        ]),
         { onLine, timeoutMs: 10 * 60 * 1000, env: enterEnv },
       );
     },
@@ -177,7 +268,7 @@ function distroboxEnv(name: string): BuildEnv {
 export async function ensureRecompContainer(
   onLine: (line: string) => void,
 ): Promise<void> {
-  const list = await runFull(["distrobox", "list", "--no-color"], {
+  const list = await runFull(await asUserCmd(["distrobox", "list", "--no-color"]), {
     timeoutMs: 10_000,
   });
   const exists = new RegExp(`\\b${RECOMP_CONTAINER}\\b`).test(list.stdout);
@@ -188,7 +279,7 @@ export async function ensureRecompContainer(
     // that catches all of these is actually entering it and running
     // `true`. We use a short timeout so a hung create surfaces fast.
     const probe = await runFull(
-      ["distrobox", "enter", RECOMP_CONTAINER, "--", "true"],
+      await asUserCmd(["distrobox", "enter", RECOMP_CONTAINER, "--", "true"]),
       { timeoutMs: 10_000 },
     );
     if (probe.exitCode === 0) return;
@@ -207,7 +298,7 @@ export async function ensureRecompContainer(
         `removing it so it can be recreated…`,
     );
     const removed = await runFull(
-      ["distrobox", "rm", "-f", RECOMP_CONTAINER],
+      await asUserCmd(["distrobox", "rm", "-f", RECOMP_CONTAINER]),
       { timeoutMs: 60_000 },
     );
     if (removed.exitCode !== 0) {
@@ -224,7 +315,7 @@ export async function ensureRecompContainer(
   }
   onLine(`Creating distrobox container '${RECOMP_CONTAINER}' from ${RECOMP_IMAGE}…`);
   const create = await runStreaming(
-    [
+    await asUserCmd([
       "distrobox",
       "create",
       "--yes",
@@ -232,7 +323,7 @@ export async function ensureRecompContainer(
       RECOMP_CONTAINER,
       "--image",
       RECOMP_IMAGE,
-    ],
+    ]),
     { onLine, timeoutMs: 15 * 60 * 1000 },
   );
   if (create.exitCode !== 0) {
