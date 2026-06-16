@@ -984,42 +984,6 @@
       "steamGridDbId": 38463
     },
     {
-      "id": "diablo",
-      "name": "Diablo (Devilution)",
-      "project": "Diablo devolved - magic behind the 1996 computer game",
-      "platform": "pc",
-      "repo": "diasurgical/devilution",
-      "description": "Source port of Diablo 1. Windows only. For cross-platform support, use DevilutionX (already in the launcher).",
-      "installType": "rom_extract",
-      "releaseAssets": {
-        "windows": "Diablo.exe",
-        "linux": null,
-        "macos": null
-      },
-      "launchCommand": {
-        "windows": "{installDir}/Diablo.exe",
-        "linux": null,
-        "macos": null
-      },
-      "tags": [
-        "devilution",
-        "diablo",
-        "game",
-        "hellfire"
-      ],
-      "website": null,
-      "latestVersion": "0.10.0",
-      "romInfo": {
-        "description": "Requires DIABDAT.MPQ and support DLLs from original Diablo CD or GOG install",
-        "validChecksums": [],
-        "extractionCommand": "",
-        "fileType": "data_folder",
-        "extensions": null
-      },
-      "steamGridDbId": 34237,
-      "status": "in_progress"
-    },
-    {
       "id": "lego-island",
       "name": "LEGO Island",
       "project": "A decompilation of LEGO Island (1997)",
@@ -1117,43 +1081,6 @@
       "status": "in_progress",
       "_reason": "Mod SDK for PS1, not a native port",
       "steamGridDbId": 36474
-    },
-    {
-      "id": "fallout-2",
-      "name": "Fallout 2 (Reverse Engineered)",
-      "project": "Reverse engineered Fallout 2",
-      "platform": "pc",
-      "repo": "alexbatalov/fallout2-re",
-      "description": "Reverse-engineered Fallout 2 exe. Drop into your Fallout 2 install directory. For a better experience, use fallout2-ce (already in the launcher).",
-      "installType": "rom_extract",
-      "releaseAssets": {
-        "windows": "fallout2-re.zip",
-        "linux": null,
-        "macos": null
-      },
-      "launchCommand": {
-        "windows": "{installDir}/fallout2-re.exe",
-        "linux": null,
-        "macos": null
-      },
-      "tags": [
-        "c",
-        "decompilation",
-        "fallout2",
-        "game",
-        "reverse-engineering"
-      ],
-      "website": null,
-      "latestVersion": "nightly",
-      "romInfo": {
-        "description": "Select your Fallout 2 install folder (Steam or GOG). The binary will be placed alongside the game data.",
-        "validChecksums": [],
-        "extractionCommand": "",
-        "fileType": "data_folder",
-        "extensions": null
-      },
-      "steamGridDbId": 8287,
-      "status": "in_progress"
     },
     {
       "id": "resident-evil-2",

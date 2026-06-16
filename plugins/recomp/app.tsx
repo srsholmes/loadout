@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { FaArrowLeft, FaFile, FaFolder, FaGear, FaHouse, FaPuzzlePiece } from "react-icons/fa6";
+import { FaArrowLeft, FaFile, FaFolder, FaFolderOpen, FaGear, FaHouse, FaPuzzlePiece } from "react-icons/fa6";
 import {
   Badge,
   Button,
@@ -721,6 +721,7 @@ function FileBrowser({
   extensions,
   startPath,
   title,
+  pickDirectory = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -732,6 +733,10 @@ function FileBrowser({
   startPath?: string;
   /** Optional title rendered in the modal header. */
   title?: string;
+  /** Directory-select mode: hide files, and surface a "Use this
+   *  folder" action that returns the current directory via `onPick`.
+   *  Used by the Settings ROM-directory picker. */
+  pickDirectory?: boolean;
 }) {
   const { call } = useBackend("recomp");
   const [listing, setListing] = useState<DirListing | null>(null);
@@ -771,6 +776,8 @@ function FileBrowser({
     .filter((e) => e.length > 0);
   const visibleEntries = (listing?.entries ?? []).filter((e) => {
     if (e.isDir) return true;
+    // Directory-select mode shows folders only — files aren't pickable.
+    if (pickDirectory) return false;
     if (wantedExts.length === 0) return true;
     const lower = e.name.toLowerCase();
     return wantedExts.some((ext) => lower.endsWith(`.${ext}`));
@@ -804,7 +811,17 @@ function FileBrowser({
             >
               <FaArrowLeft className="mr-1.5" /> Up
             </Button>
-            <div className="ml-auto">
+            <div className="ml-auto flex items-center gap-2">
+              {pickDirectory ? (
+                <Button
+                  size="sm"
+                  variant="accent"
+                  onClick={() => listing && onPick(listing.currentPath)}
+                  disabled={loading || !listing}
+                >
+                  Use this folder
+                </Button>
+              ) : null}
               <Button size="sm" variant="neutral" onClick={onClose}>
                 Cancel
               </Button>
@@ -1914,8 +1931,12 @@ function formatBytes(bytes: number): string {
 function SettingsPage() {
   const nav = useRecompNav();
   const { call } = useBackend("recomp");
+  // Cross-plugin handle so we can probe the steamgriddb backend directly
+  // (the loader allows multiple useBackend handles per shell).
+  const sgdb = useBackend("steamgriddb");
   const [settings, setSettings] = useState<Settings | null>(null);
   const [sgdbConfigured, setSgdbConfigured] = useState<boolean | null>(null);
+  const [romBrowserOpen, setRomBrowserOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -1926,31 +1947,14 @@ function SettingsPage() {
 
   // Probe the steamgriddb plugin's `hasApiKey` RPC so we can tell the
   // user whether artwork will work for their next install. If the
-  // plugin isn't installed at all the call rejects — treat that the
-  // same as "no key configured".
+  // plugin isn't installed/configured the call rejects or returns
+  // falsy — treat both as "no key configured".
   useEffect(() => {
-    const sgdbCall = (method: string) =>
-      // Use the shell's WebSocket plumbing directly to talk to the
-      // other plugin's backend.
-      (window as unknown as {
-        __STEAM_LOADER__?: {
-          call: (req: { plugin: string; method: string; args: unknown[] }) => Promise<unknown>;
-        };
-      }).__STEAM_LOADER__?.call({
-        plugin: "steamgriddb",
-        method,
-        args: [],
-      });
-
-    (async () => {
-      try {
-        const ok = (await sgdbCall("hasApiKey")) as boolean;
-        setSgdbConfigured(!!ok);
-      } catch {
-        setSgdbConfigured(false);
-      }
-    })();
-  }, []);
+    void sgdb
+      .call("hasApiKey")
+      .then((ok) => setSgdbConfigured(!!ok))
+      .catch(() => setSgdbConfigured(false));
+  }, [sgdb]);
 
   if (!settings) {
     return (
@@ -2013,14 +2017,35 @@ function SettingsPage() {
           <Text variant="secondary">
             Default location for ROMs used by recompilations that need one (e.g. Ship of Harkinian). Leave empty to enter a path per game at install time.
           </Text>
-          <div className="mt-2">
-            <TextInput
-              value={settings.romDirectory ?? ""}
-              onChange={(v) => persist({ romDirectory: v || undefined })}
-              placeholder="/home/<you>/Roms"
-            />
+          <div className="mt-2 flex items-center gap-2">
+            <div className="flex-1">
+              <TextInput
+                value={settings.romDirectory ?? ""}
+                onChange={(v) => persist({ romDirectory: v || undefined })}
+                placeholder="/home/<you>/Roms"
+              />
+            </div>
+            <Button
+              size="sm"
+              variant="neutral"
+              onClick={() => setRomBrowserOpen(true)}
+            >
+              <FaFolderOpen className="mr-1.5" /> Browse…
+            </Button>
           </div>
         </Panel></div>
+        <FileBrowser
+          open={romBrowserOpen}
+          onClose={() => setRomBrowserOpen(false)}
+          onPick={(p) => {
+            void persist({ romDirectory: p });
+            setRomBrowserOpen(false);
+          }}
+          pickDirectory
+          extensions={[]}
+          startPath={settings.romDirectory}
+          title="Select ROM folder"
+        />
         </div>
       </div>
     </>

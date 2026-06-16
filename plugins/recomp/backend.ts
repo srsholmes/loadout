@@ -36,6 +36,28 @@ import { pickRomFile } from "./lib/file-picker";
 import { suggestRomsForTitle, type RomSuggestion } from "./lib/rom-suggest";
 
 /**
+ * Fallback ROM extensions used by `suggestRomFiles` when a catalog
+ * entry doesn't declare its own `romInfo.extensions` (none currently
+ * do). Keeps fuzzy ROM discovery focused on actual ROM / disc-image
+ * files instead of every file in the search roots, while still letting
+ * the title fuzzy-match do the real work.
+ */
+const DEFAULT_ROM_EXTENSIONS = [
+  // N64
+  "z64", "n64", "v64",
+  // NES / SNES
+  "nes", "sfc", "smc",
+  // Game Boy / Advance / DS
+  "gb", "gbc", "gba", "nds",
+  // Sega
+  "md", "gen", "smd", "sms", "gg",
+  // PC Engine / others
+  "pce", "vb", "ws", "wsc",
+  // Disc images
+  "iso", "bin", "cue", "chd", "wbfs", "rvz", "gcm", "ciso", "wad",
+] as const;
+
+/**
  * Catalog display order. Headline franchises first, headline games
  * first within each group, then alphabetical.
  *
@@ -243,25 +265,48 @@ export default class RecompBackend implements PluginBackend {
 
   /**
    * Suggest ROM files for `gameId` by fuzzy-matching the game title
-   * against filenames under `settings.romDirectory`. Detail page
-   * calls this on mount when the game requires a ROM and no path is
-   * yet saved, so the user gets one-click suggestions instead of
-   * having to drill the file picker. Returns `[]` when:
-   *   - the gameId isn't in the registry
-   *   - no `romDirectory` configured in settings
-   *   - the game doesn't declare ROM extensions to filter on
-   *   - the directory walk finds nothing matching
-   * Caller treats all of these as "fall through to manual entry".
+   * against ROM filenames. Detail page calls this on mount when the
+   * game requires a ROM and no path is yet saved, so the user gets
+   * one-click suggestions instead of drilling the file picker.
+   *
+   * Search scope:
+   *   - If `settings.romDirectory` is set, scans just that directory.
+   *   - Otherwise auto-discovers across common ROM locations
+   *     (`_defaultRomRoots`) so the system finds ROMs with zero setup.
+   * Results across roots are merged, de-duped by path, and re-ranked.
+   *
+   * Returns `[]` when the gameId isn't in the registry, the game
+   * declares no ROM extensions, no roots exist, or nothing matches —
+   * the caller treats all of these as "fall through to manual entry".
    */
   async suggestRomFiles(gameId: string): Promise<RomSuggestion[]> {
     const entry = this.registry.find((g) => g.id === gameId);
     if (!entry) return [];
+    // Catalog entries don't (currently) declare extensions, so fall back
+    // to a sensible ROM/disc-image set — otherwise this returned [] for
+    // every game and the suggestion feature never surfaced anything.
+    const exts = entry.romInfo?.extensions?.length
+      ? entry.romInfo.extensions
+      : [...DEFAULT_ROM_EXTENSIONS];
+
     const romDir = this.state.settings.romDirectory;
-    if (!romDir) return [];
-    const exts = entry.romInfo?.extensions ?? [];
-    if (exts.length === 0) return [];
+    const roots = romDir ? [romDir] : await this._defaultRomRoots();
+    if (roots.length === 0) return [];
+
     try {
-      return await suggestRomsForTitle(entry.name, romDir, exts);
+      const merged: RomSuggestion[] = [];
+      const seen = new Set<string>();
+      for (const root of roots) {
+        const hits = await suggestRomsForTitle(entry.name, root, exts);
+        for (const hit of hits) {
+          if (seen.has(hit.path)) continue;
+          seen.add(hit.path);
+          merged.push(hit);
+        }
+      }
+      // fuzzysort scores: closer to 0 is a better match.
+      merged.sort((a, b) => b.score - a.score);
+      return merged.slice(0, 5);
     } catch (err) {
       console.warn(
         `[recomp] suggestRomFiles(${gameId}) failed:`,
@@ -269,6 +314,58 @@ export default class RecompBackend implements PluginBackend {
       );
       return [];
     }
+  }
+
+  /**
+   * Candidate ROM roots to auto-scan when the user hasn't set a ROM
+   * directory. Covers the usual Linux / Steam Deck layouts (incl.
+   * EmuDeck's `Emulation/roms`) plus external/SD-card mounts under
+   * `/run/media`. Only existing directories are returned, de-duped.
+   */
+  private async _defaultRomRoots(): Promise<string[]> {
+    const { stat, readdir } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const home = process.env.HOME;
+    if (!home) return [];
+    const user = process.env.USER || "deck";
+
+    const candidates: string[] = [
+      join(home, "ROMs"),
+      join(home, "Roms"),
+      join(home, "roms"),
+      join(home, "Emulation", "roms"),
+      join(home, "Emulation"),
+      join(home, "Games", "ROMs"),
+      join(home, "Downloads"),
+    ];
+
+    // External / SD-card mounts (EmuDeck on a card lands at
+    // /run/media/<user>/<label>/Emulation/roms or /run/media/<label>).
+    for (const base of [join("/run/media", user), "/run/media", "/media"]) {
+      try {
+        const mounts = await readdir(base, { withFileTypes: true });
+        for (const m of mounts) {
+          if (!m.isDirectory()) continue;
+          candidates.push(join(base, m.name, "Emulation", "roms"));
+          candidates.push(join(base, m.name, "ROMs"));
+        }
+      } catch {
+        /* mount base absent — skip */
+      }
+    }
+
+    const roots: string[] = [];
+    const seen = new Set<string>();
+    for (const c of candidates) {
+      if (seen.has(c)) continue;
+      seen.add(c);
+      try {
+        if ((await stat(c)).isDirectory()) roots.push(c);
+      } catch {
+        /* doesn't exist — skip */
+      }
+    }
+    return roots;
   }
 
   /**

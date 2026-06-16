@@ -110,6 +110,59 @@ describe("RecompBackend", () => {
     });
   });
 
+  describe("suggestRomFiles (system-wide discovery)", () => {
+    let sandboxHome: string;
+    const origHome = process.env.HOME;
+    const origXdg = process.env.XDG_CONFIG_HOME;
+
+    beforeEach(async () => {
+      const { mkdtemp, mkdir, writeFile } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      sandboxHome = await mkdtemp(join(tmpdir(), "recomp-rom-"));
+      process.env.HOME = sandboxHome;
+      process.env.XDG_CONFIG_HOME = join(sandboxHome, ".config");
+      // Drop a ROM that fuzzy-matches "The Legend of Zelda: Majora's
+      // Mask" into a default scan root (~/ROMs) — no romDirectory set.
+      await mkdir(join(sandboxHome, "ROMs"), { recursive: true });
+      await writeFile(
+        join(sandboxHome, "ROMs", "Legend of Zelda - Majoras Mask (USA).z64"),
+        "stub",
+      );
+      // Unrelated file that should NOT outrank the match.
+      await writeFile(join(sandboxHome, "ROMs", "random-notes.txt"), "x");
+    });
+
+    afterEach(async () => {
+      const { rm } = await import("node:fs/promises");
+      if (origHome === undefined) delete process.env.HOME;
+      else process.env.HOME = origHome;
+      if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = origXdg;
+      await rm(sandboxHome, { recursive: true, force: true });
+    });
+
+    it("auto-discovers a matching ROM in ~/ROMs when no romDirectory is set", async () => {
+      const fresh = new RecompBackend();
+      await fresh.onLoad();
+      // Ensure no rom directory is configured (sandbox state is empty).
+      const settings = await fresh.getSettings();
+      expect(settings.romDirectory ?? null).toBeNull();
+
+      const suggestions = await fresh.suggestRomFiles("zelda64-recomp");
+      expect(suggestions.length).toBeGreaterThan(0);
+      expect(
+        suggestions.some((s) => s.basename.includes("Majoras Mask")),
+      ).toBe(true);
+    });
+
+    it("returns [] for an unknown game id", async () => {
+      const fresh = new RecompBackend();
+      await fresh.onLoad();
+      expect(await fresh.suggestRomFiles("nonexistent")).toEqual([]);
+    });
+  });
+
   describe("installGame", () => {
     it("throws for unknown game id", async () => {
       await backend.onLoad();
