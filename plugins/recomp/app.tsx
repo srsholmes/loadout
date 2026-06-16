@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { FaArrowLeft, FaFile, FaFolder, FaFolderOpen, FaGear, FaHouse, FaPuzzlePiece } from "react-icons/fa6";
+import { FaArrowLeft, FaCircleCheck, FaFile, FaFolder, FaFolderOpen, FaGear, FaHouse, FaPuzzlePiece } from "react-icons/fa6";
 import {
   Badge,
   Button,
@@ -945,25 +945,51 @@ function RomSuggestionRow({
   const { ref, focused } = useFocusable({
     onEnterPress: onActivate,
   });
+  // Show the containing folder (not the full path repeated with the
+  // filename) so the user can tell SD-card / Downloads / etc. apart.
+  const folder =
+    path.slice(0, Math.max(0, path.length - basename.length)).replace(
+      /\/+$/,
+      "",
+    ) || "/";
   return (
     <button
       ref={ref}
       type="button"
       onClick={onActivate}
       className={
-        "text-left px-3 py-2 rounded-md border transition-colors " +
+        "flex items-center gap-3 text-left px-3 py-2.5 rounded-md border bg-base-100 transition-colors " +
         (selected
-          ? "border-accent/60 bg-accent/10"
-          : "border-base-300/40 hover:border-base-300 hover:bg-base-200/30") +
-        (focused ? " ring-2 ring-primary/40" : "")
+          ? "border-accent/70 bg-accent/10"
+          : "border-base-300/50 hover:border-base-300 hover:bg-base-200/40") +
+        (focused ? " ring-2 ring-primary/50" : "")
       }
     >
-      <div className="text-sm font-medium leading-tight truncate">
-        {basename}
-      </div>
-      <div className="text-[11px] text-base-content/55 mt-0.5 truncate">
-        {path}
-      </div>
+      <span className="shrink-0 text-base">
+        {selected ? (
+          <FaCircleCheck className="text-accent" />
+        ) : (
+          <FaFile className="text-base-content/45" />
+        )}
+      </span>
+      <span className="flex-1 min-w-0">
+        <span className="block text-sm font-medium leading-tight truncate">
+          {basename}
+        </span>
+        <span
+          className="block text-[11px] text-base-content/55 mt-0.5 truncate"
+          title={folder}
+        >
+          {folder}
+        </span>
+      </span>
+      <span className="shrink-0 text-[11px] font-semibold">
+        {selected ? (
+          <span className="chip chip-success">Selected</span>
+        ) : (
+          <span className="text-primary">Use →</span>
+        )}
+      </span>
     </button>
   );
 }
@@ -1529,11 +1555,19 @@ function GameDetailPage({ gameId }: { gameId: string }) {
                 the suggestion list so we don't keep dangling stale
                 options after the user has chosen. */}
             {romSuggestions.length > 0 ? (
-              <div className="mt-3 mb-2">
-                <div className="text-[11.5px] text-base-content/55 tracking-[0.02em] mb-1.5">
-                  Matches in your ROM folder
+              <div className="mt-3 mb-2 rounded-lg border border-accent/30 bg-accent/[0.06] p-3">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <FaCircleCheck className="text-accent shrink-0" />
+                  <span className="text-sm font-semibold">
+                    {romSuggestions.length} possible{" "}
+                    {romSuggestions.length === 1 ? "match" : "matches"} found
+                  </span>
                 </div>
-                <div className="flex flex-col gap-1">
+                <div className="text-[11.5px] text-base-content/60 mb-2.5 ml-6">
+                  We searched your ROM folders for files that look like this
+                  game. Tap one to use it.
+                </div>
+                <div className="flex flex-col gap-1.5">
                   {romSuggestions.map((s) => (
                     <RomSuggestionRow
                       key={s.path}
