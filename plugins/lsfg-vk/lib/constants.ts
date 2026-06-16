@@ -1,6 +1,6 @@
 // Shared constants for the lsfg-vk plugin (UI + backend).
 
-import type { LsfgSettings } from "./types";
+import type { LayerVersion, LsfgSettings } from "./types";
 
 export const PLUGIN_ID = "lsfg-vk";
 
@@ -24,6 +24,35 @@ export const DEFAULTS: LsfgSettings = {
   experimental_present_mode: "fifo",
   verbose_logging: false,
 };
+
+/** Default layer build to install. */
+export const DEFAULT_LAYER_VERSION: LayerVersion = "latest";
+
+/**
+ * Layer-build options for the install selector. `latest` tracks the
+ * newest upstream lsfg-vk; `compat` installs the older pre-rewrite build
+ * for setups where the latest layer crashes the app with a Vulkan
+ * initialization error at launch.
+ */
+export const LAYER_VERSION_OPTIONS: Array<{
+  value: LayerVersion;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "latest",
+    label: "Latest",
+    description:
+      "Newest lsfg-vk (LSFG 3.1). Recommended for most games.",
+  },
+  {
+    value: "compat",
+    label: "Compatibility",
+    description:
+      "Older pre-rewrite build. Use this if a game fails to launch with " +
+      "a Vulkan initialization error.",
+  },
+];
 
 /** Picker filter sentinel — show every game in the library. */
 export const ALL_COLLECTIONS = "__all__";

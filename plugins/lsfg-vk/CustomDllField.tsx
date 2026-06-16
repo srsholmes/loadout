@@ -12,15 +12,19 @@ import type { DllStatus } from "./lib/types";
 interface CustomDllFieldProps {
   dll: DllStatus;
   customDllInput: string;
+  rechecking: boolean;
   onCustomDllChange: (value: string) => void;
   onApplyCustomDll: () => void;
+  onRecheck: () => void;
 }
 
 export function CustomDllField({
   dll,
   customDllInput,
+  rechecking,
   onCustomDllChange,
   onApplyCustomDll,
+  onRecheck,
 }: CustomDllFieldProps) {
   return (
     <div className="card">
@@ -37,13 +41,18 @@ export function CustomDllField({
           <div className="subsection-label" style={{ marginBottom: 0 }}>
             Lossless.dll
           </div>
-          {dll.found ? (
-            <span className="chip chip-success">
-              Found {dll.isCustom ? "(custom)" : ""}
-            </span>
-          ) : (
-            <span className="chip chip-danger">Missing</span>
-          )}
+          <div className="flex items-center gap-2.5">
+            {dll.found ? (
+              <span className="chip chip-success">
+                Found {dll.isCustom ? "(custom)" : ""}
+              </span>
+            ) : (
+              <span className="chip chip-danger">Missing</span>
+            )}
+            <Button size="sm" onClick={onRecheck} disabled={rechecking}>
+              {rechecking ? "Checking…" : "Re-check"}
+            </Button>
+          </div>
         </div>
         <div className="subsection-desc" style={{ marginBottom: 8 }}>
           {dll.found

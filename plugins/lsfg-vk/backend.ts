@@ -17,8 +17,14 @@ import {
 } from "node:fs/promises";
 
 import { renderTomlConfig, renderWrapperScript } from "./lib/render-config";
-import type { LsfgSettings, PersistedStore } from "./lib/types";
-import { DEFAULTS, PLUGIN_ID, PROFILE, WRAPPER_TOKEN } from "./lib/constants";
+import type { LayerVersion, LsfgSettings, PersistedStore } from "./lib/types";
+import {
+  DEFAULTS,
+  DEFAULT_LAYER_VERSION,
+  PLUGIN_ID,
+  PROFILE,
+  WRAPPER_TOKEN,
+} from "./lib/constants";
 
 // Honor $HOME if set so tests can sandbox paths via env override.
 // `homedir()` on macOS resolves via /etc/passwd and ignores $HOME.
@@ -46,6 +52,43 @@ const RELEASES_API =
 /** Asset filename in the GitHub release — layer-only, ~700 KB. */
 const ASSET_NAME = "lsfg-vk_noui.zip";
 
+/**
+ * Source for the compatibility (pre-rewrite) layer. The newest lsfg-vk
+ * releases can crash certain apps with a Vulkan initialization error at
+ * launch; the last known-good build is bundled in decky-lsfg-vk v0.6.7 as
+ * a nested `bin/lsfg-vk_archlinux.zip` inside its release asset.
+ */
+const COMPAT_LAYER_URL =
+  "https://github.com/xXJSONDeruloXx/decky-lsfg-vk/releases/download/v0.6.7/Lossless.Scaling.zip";
+const COMPAT_LAYER_VERSION = "0.6.x (compatibility)";
+
+/**
+ * Fixed path the layer writes its run marker to. When the root backend
+ * runs the layer (e.g. the vkcube test) it creates this file as root,
+ * which then blocks the unprivileged game from reopening it ("Failed to
+ * open /tmp/lsfg-vk_last for writing"). We run vkcube as the user and
+ * proactively clear any root-owned marker to prevent that.
+ */
+const LSFG_TMP_MARKER = "/tmp/lsfg-vk_last";
+
+/**
+ * Resolve the target user's uid/gid so root-side spawns (vkcube) can
+ * drop privileges via `setpriv`. The backend runs as a root systemd
+ * service; derive the user from `$HOME` (set in the unit). `null` means
+ * we're already unprivileged (dev) — don't wrap.
+ */
+async function getUserCreds(): Promise<{ uid: number; gid: number } | null> {
+  if (process.getuid?.() !== 0) return null;
+  try {
+    const home = process.env.HOME;
+    if (!home) return null;
+    const s = await stat(home);
+    return { uid: s.uid, gid: s.gid };
+  } catch {
+    return null;
+  }
+}
+
 interface InstallStatus {
   installed: boolean;
   layerSoExists: boolean;
@@ -58,6 +101,8 @@ interface InstallStatus {
   layerSoPath: string;
   layerJsonPath: string;
   tomlPath: string;
+  layerVersion: LayerVersion;
+  installedVersion: string | null;
 }
 
 interface DllStatus {
@@ -91,9 +136,16 @@ export default class LsfgVkBackend implements PluginBackend {
 
   private settings: LsfgSettings = { ...DEFAULTS };
   private customDllPath: string | null = null;
+  /** Layer build the user selected for install. */
+  private layerVersion: LayerVersion = DEFAULT_LAYER_VERSION;
+  /** Human-readable version of the layer last installed (display only). */
+  private installedVersion: string | null = null;
 
   async onLoad(): Promise<void> {
     await this._loadStore();
+    // Clear any root-owned run marker left by an earlier root-side layer
+    // run, so the unprivileged game can recreate it.
+    await this._cleanupStaleTmpMarker();
   }
 
   async onUnload(): Promise<void> {
@@ -159,16 +211,13 @@ export default class LsfgVkBackend implements PluginBackend {
 
   // ── Install / Uninstall ─────────────────────────────────────────
 
-  async install(): Promise<{ success: boolean; version?: string; error?: string }> {
+  async install(
+    requested?: LayerVersion,
+  ): Promise<{ success: boolean; version?: string; error?: string }> {
+    const target = requested ?? this.layerVersion;
     try {
       this._progress("Resolving release…");
-      const { downloadUrl, version } = await this._resolveLatestNoUiAsset();
-
-      this._progress(`Downloading lsfg-vk ${version}…`);
-      const zipPath = await this._downloadAsset(downloadUrl);
-
-      this._progress("Extracting…");
-      const extractDir = await this._extractZip(zipPath);
+      const { extractDir, version, zipPath } = await this._obtainLayer(target);
 
       this._progress("Installing layer files…");
       await this._installLayerFiles(extractDir);
@@ -181,7 +230,13 @@ export default class LsfgVkBackend implements PluginBackend {
       await rm(zipPath, { force: true });
       await rm(extractDir, { recursive: true, force: true });
 
-      this._progress(`Installed v${version}`, { done: true });
+      // Record what we installed so the UI can show it and survive a
+      // restart.
+      this.layerVersion = target;
+      this.installedVersion = version;
+      await this._persistStore();
+
+      this._progress(`Installed ${version}`, { done: true });
       this.emit?.({ event: "installChanged", data: { installed: true, version } });
       return { success: true, version };
     } catch (err) {
@@ -190,6 +245,28 @@ export default class LsfgVkBackend implements PluginBackend {
       this._progress(`Install failed: ${error}`, { done: true, error: true });
       return { success: false, error };
     }
+  }
+
+  /**
+   * Switch which layer build is installed. Persists the choice; if a
+   * layer is already installed, re-installs the newly-selected build in
+   * place (this is the only way switching takes effect, since the build
+   * is a binary on disk).
+   */
+  async setLayerVersion(
+    version: LayerVersion,
+  ): Promise<{ success: boolean; version?: string; error?: string }> {
+    this.layerVersion = version;
+    await this._persistStore();
+
+    const alreadyInstalled = await this._fileExists(SO_PATH());
+    if (!alreadyInstalled) {
+      // Nothing on disk yet — the choice is recorded and the next
+      // Install will use it.
+      this.emit?.({ event: "installChanged", data: { installed: false } });
+      return { success: true };
+    }
+    return this.install(version);
   }
 
   /** Remove the layer .so, layer JSON, and wrapper script. Preserves the TOML so a re-install restores user tweaks. */
@@ -302,6 +379,11 @@ export default class LsfgVkBackend implements PluginBackend {
       };
     }
     try {
+      // Clear any stale root-owned marker first, then run vkcube AS THE
+      // USER (not root) so the marker it writes is user-owned — otherwise
+      // a root-owned /tmp/lsfg-vk_last blocks the actual game launch.
+      await this._cleanupStaleTmpMarker();
+
       // Long-lived child — vkcube outlives the RPC. Build env inline
       // so we can pass it to spawn directly.
       const env: Record<string, string> = {};
@@ -313,7 +395,24 @@ export default class LsfgVkBackend implements PluginBackend {
         env.LSFG_LOG = "1";
         env.VK_LOADER_DEBUG = "layer";
       }
-      const proc = spawn(["vkcube"], {
+
+      // Drop to the user's uid/gid when running as the root service so
+      // the layer's run marker isn't created as root.
+      const creds = await getUserCreds();
+      const cmd = creds
+        ? [
+            "setpriv",
+            "--reuid",
+            String(creds.uid),
+            "--regid",
+            String(creds.gid),
+            "--clear-groups",
+            "--",
+            "vkcube",
+          ]
+        : ["vkcube"];
+
+      const proc = spawn(cmd, {
         env,
         stdout: "ignore",
         stderr: "ignore",
@@ -337,8 +436,9 @@ export default class LsfgVkBackend implements PluginBackend {
       this._fileExists(LAYER_JSON_PATH()),
       this._fileExists(WRAPPER_PATH()),
     ]);
+    const installed = layerSoExists && layerJsonExists && wrapperExists;
     return {
-      installed: layerSoExists && layerJsonExists && wrapperExists,
+      installed,
       layerSoExists,
       layerJsonExists,
       wrapperExists,
@@ -347,6 +447,8 @@ export default class LsfgVkBackend implements PluginBackend {
       layerSoPath: SO_PATH(),
       layerJsonPath: LAYER_JSON_PATH(),
       tomlPath: TOML_PATH(),
+      layerVersion: this.layerVersion,
+      installedVersion: installed ? this.installedVersion : null,
     };
   }
 
@@ -373,6 +475,58 @@ export default class LsfgVkBackend implements PluginBackend {
       event: "installProgress",
       data: { message, ...extra },
     });
+  }
+
+  /**
+   * Download + extract the requested layer build into a temp dir, ready
+   * for `_installLayerFiles`. Returns the extracted dir, a display
+   * version string, and the downloaded zip path (so the caller can clean
+   * both up).
+   */
+  private async _obtainLayer(version: LayerVersion): Promise<{
+    extractDir: string;
+    version: string;
+    zipPath: string;
+  }> {
+    if (version === "compat") {
+      this._progress("Downloading compatibility layer…");
+      const zipPath = await this._downloadAsset(COMPAT_LAYER_URL);
+      const extractDir = await this._extractZip(zipPath);
+      // The decky bundle nests the layer inside `bin/lsfg-vk_*.zip`;
+      // extract that into the same dir so `_findExtractedFiles` can
+      // locate the .so + JSON.
+      const nested = await this._findNestedLayerZip(extractDir);
+      if (!nested) {
+        throw new Error("nested lsfg-vk layer zip not found in bundle");
+      }
+      await this._extractZipInto(nested, extractDir);
+      return { extractDir, version: COMPAT_LAYER_VERSION, zipPath };
+    }
+
+    this._progress("Resolving release…");
+    const { downloadUrl, version: tag } = await this._resolveLatestNoUiAsset();
+    this._progress(`Downloading lsfg-vk ${tag}…`);
+    const zipPath = await this._downloadAsset(downloadUrl);
+    const extractDir = await this._extractZip(zipPath);
+    return { extractDir, version: `v${tag}`, zipPath };
+  }
+
+  /** Find a nested `lsfg-vk*.zip` inside an extracted bundle tree. */
+  private async _findNestedLayerZip(dir: string): Promise<string | null> {
+    const queue: string[] = [dir];
+    while (queue.length) {
+      const cur = queue.shift()!;
+      const entries = await readdir(cur, { withFileTypes: true });
+      for (const e of entries) {
+        const path = join(cur, e.name);
+        if (e.isDirectory()) {
+          queue.push(path);
+        } else if (/^lsfg-vk.*\.zip$/i.test(e.name)) {
+          return path;
+        }
+      }
+    }
+    return null;
   }
 
   private async _resolveLatestNoUiAsset(): Promise<{
@@ -412,17 +566,22 @@ export default class LsfgVkBackend implements PluginBackend {
   private async _extractZip(zipPath: string): Promise<string> {
     const extractDir = join(tmpdir(), `lsfg-vk-extract-${Date.now()}`);
     await mkdir(extractDir, { recursive: true });
+    await this._extractZipInto(zipPath, extractDir);
+    return extractDir;
+  }
+
+  /** Extract a zip into an existing directory (used for nested bundles). */
+  private async _extractZipInto(zipPath: string, dir: string): Promise<void> {
     const { exitCode, stdout } = await run([
       "unzip",
       "-o",
       zipPath,
       "-d",
-      extractDir,
+      dir,
     ]);
     if (exitCode !== 0) {
       throw new Error(`unzip failed (exit ${exitCode}): ${stdout}`);
     }
-    return extractDir;
   }
 
   private async _installLayerFiles(extractDir: string): Promise<void> {
@@ -504,12 +663,39 @@ export default class LsfgVkBackend implements PluginBackend {
     }
   }
 
+  /**
+   * Remove the layer's run marker if it's owned by someone other than
+   * the target user (i.e. left behind by a root-side layer run). A
+   * root-owned `/tmp/lsfg-vk_last` makes the unprivileged game abort with
+   * "Failed to open /tmp/lsfg-vk_last for writing". No-op when we're not
+   * root (dev) or the file is already the user's / absent.
+   */
+  private async _cleanupStaleTmpMarker(): Promise<void> {
+    const creds = await getUserCreds();
+    if (!creds) return; // unprivileged — can't (and needn't) clean up
+    try {
+      const s = await stat(LSFG_TMP_MARKER);
+      if (s.uid !== creds.uid) {
+        await rm(LSFG_TMP_MARKER, { force: true });
+        this.log?.info(`Removed stale ${LSFG_TMP_MARKER} (uid ${s.uid})`);
+      }
+    } catch {
+      // ENOENT — nothing to clean up.
+    }
+  }
+
   private async _loadStore(): Promise<void> {
     try {
       const data = await readPluginStorage<PersistedStore>(PLUGIN_ID);
       if (data.settings) Object.assign(this.settings, data.settings);
       if (typeof data.customDllPath === "string") {
         this.customDllPath = data.customDllPath || null;
+      }
+      if (data.layerVersion === "latest" || data.layerVersion === "compat") {
+        this.layerVersion = data.layerVersion;
+      }
+      if (typeof data.installedVersion === "string") {
+        this.installedVersion = data.installedVersion;
       }
     } catch (err) {
       this.log?.warn(`Failed to load store: ${err}`);
@@ -521,6 +707,8 @@ export default class LsfgVkBackend implements PluginBackend {
       const data: PersistedStore = {
         settings: this.settings,
         customDllPath: this.customDllPath ?? undefined,
+        layerVersion: this.layerVersion,
+        installedVersion: this.installedVersion,
       };
       await writePluginStorage<PersistedStore>(PLUGIN_ID, data);
     } catch (err) {

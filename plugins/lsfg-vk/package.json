@@ -22,7 +22,8 @@
       "network": [
         "api.github.com",
         "github.com",
-        "objects.githubusercontent.com"
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com"
       ],
       "filesystem": [
         "~/.local/lib",
@@ -36,7 +37,8 @@
         "wl-copy",
         "xclip",
         "vulkaninfo",
-        "vkcube"
+        "vkcube",
+        "setpriv"
       ]
     },
     "target": { "type": "overlay" }

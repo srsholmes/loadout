@@ -5,25 +5,35 @@
 // the parent (LsfgVkManager) so this component doesn't have to know
 // the `lsfg-vk` backend exists.
 
-import { Button } from "@loadout/ui";
+import { Button, Select } from "@loadout/ui";
 
-import type { InstallStatus } from "./lib/types";
+import { LAYER_VERSION_OPTIONS } from "./lib/constants";
+import type { InstallStatus, LayerVersion } from "./lib/types";
 
 interface InstallCardProps {
   install: InstallStatus;
   installing: boolean;
+  rechecking: boolean;
   progress: string;
   onInstall: () => void;
   onUninstall: () => void;
+  onRecheck: () => void;
+  onSelectLayerVersion: (version: LayerVersion) => void;
 }
 
 export function InstallCard({
   install,
   installing,
+  rechecking,
   progress,
   onInstall,
   onUninstall,
+  onRecheck,
+  onSelectLayerVersion,
 }: InstallCardProps) {
+  const versionDesc = LAYER_VERSION_OPTIONS.find(
+    (o) => o.value === install.layerVersion,
+  )?.description;
   return (
     <div className="card">
       <div className="subsection">
@@ -52,6 +62,13 @@ export function InstallCard({
             ) : (
               <span className="chip chip-danger">Not installed</span>
             )}
+            <Button
+              size="sm"
+              onClick={onRecheck}
+              disabled={installing || rechecking}
+            >
+              {rechecking ? "Checking…" : "Re-check"}
+            </Button>
             {install.installed ? (
               <Button size="sm" onClick={onUninstall} disabled={installing}>
                 Uninstall
@@ -74,6 +91,45 @@ export function InstallCard({
             style={{ marginTop: 10, fontSize: 12 }}
           >
             {progress}
+          </div>
+        )}
+      </div>
+
+      <div className="subsection">
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+            marginBottom: 8,
+          }}
+        >
+          <div className="subsection-label" style={{ marginBottom: 0 }}>
+            Layer version
+          </div>
+          <div style={{ minWidth: 180 }}>
+            <Select
+              value={install.layerVersion}
+              options={LAYER_VERSION_OPTIONS.map((o) => ({
+                value: o.value,
+                label: o.label,
+              }))}
+              onChange={(v) => {
+                if (!installing) onSelectLayerVersion(v as LayerVersion);
+              }}
+            />
+          </div>
+        </div>
+        {versionDesc && (
+          <div className="subsection-desc">{versionDesc}</div>
+        )}
+        {install.installed && install.installedVersion && (
+          <div
+            className="subsection-desc mono"
+            style={{ marginTop: 4, fontSize: 11 }}
+          >
+            Installed: {install.installedVersion}
           </div>
         )}
       </div>

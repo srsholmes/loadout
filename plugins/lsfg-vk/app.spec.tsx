@@ -59,6 +59,8 @@ const installedStatus = {
     layerJsonPath:
       "/home/user/.local/share/vulkan/implicit_layer.d/VkLayer_LS_frame_generation.json",
     tomlPath: "/home/user/.config/lsfg-vk/conf.toml",
+    layerVersion: "latest",
+    installedVersion: "v1.0.0",
   },
   dll: {
     found: true,
@@ -85,6 +87,7 @@ const notInstalledStatus = {
     layerSoExists: false,
     layerJsonExists: false,
     wrapperExists: false,
+    installedVersion: null,
   },
   dll: { found: false, path: null, isCustom: false },
 };
@@ -184,6 +187,116 @@ describe("lsfg-vk plugin UI", () => {
     await waitFor(() =>
       expect(container.textContent).toContain("~/lsfg %command%"),
     );
+  });
+
+  it("settings view re-runs getStatus when the Re-check button is clicked", async () => {
+    const container = createContainer();
+    const headerSlot = document.createElement("div");
+    document.body.appendChild(headerSlot);
+    const { mount } = await import("./app");
+    mount(container, { headerSlot });
+    await enterSettingsView(headerSlot);
+
+    await waitFor(() => expect(container.textContent).toContain("Re-check"));
+    const callsBefore = callMock.mock.calls.filter(
+      (c) => c[0] === "getStatus",
+    ).length;
+
+    const recheckBtn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent === "Re-check",
+    ) as HTMLButtonElement;
+    expect(recheckBtn).toBeDefined();
+    fireEvent.click(recheckBtn);
+
+    await waitFor(() => {
+      const callsAfter = callMock.mock.calls.filter(
+        (c) => c[0] === "getStatus",
+      ).length;
+      expect(callsAfter).toBeGreaterThan(callsBefore);
+    });
+  });
+
+  it("not-installed picker view offers a Re-check that re-runs getStatus", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") return Promise.resolve(notInstalledStatus);
+      return Promise.resolve(null);
+    });
+    const container = createContainer();
+    const headerSlot = document.createElement("div");
+    document.body.appendChild(headerSlot);
+    const { mount } = await import("./app");
+    mount(container, { headerSlot });
+
+    await waitFor(() =>
+      expect(container.textContent).toContain("Re-check installation"),
+    );
+    const callsBefore = callMock.mock.calls.filter(
+      (c) => c[0] === "getStatus",
+    ).length;
+
+    const recheckBtn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent === "Re-check installation",
+    ) as HTMLButtonElement;
+    fireEvent.click(recheckBtn);
+
+    await waitFor(() => {
+      const callsAfter = callMock.mock.calls.filter(
+        (c) => c[0] === "getStatus",
+      ).length;
+      expect(callsAfter).toBeGreaterThan(callsBefore);
+    });
+  });
+
+  it("settings view exposes the layer-version selector with the installed version", async () => {
+    const container = createContainer();
+    const headerSlot = document.createElement("div");
+    document.body.appendChild(headerSlot);
+    const { mount } = await import("./app");
+    mount(container, { headerSlot });
+    await enterSettingsView(headerSlot);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Layer version");
+      expect(container.textContent).toContain("Installed: v1.0.0");
+    });
+  });
+
+  it("selecting a layer version calls setLayerVersion on the backend", async () => {
+    const container = createContainer();
+    const headerSlot = document.createElement("div");
+    document.body.appendChild(headerSlot);
+    const { mount } = await import("./app");
+    mount(container, { headerSlot });
+    await enterSettingsView(headerSlot);
+
+    // Open the custom Select (button trigger showing the current "Latest"
+    // label), then click the "Compatibility" option row.
+    await waitFor(() =>
+      expect(container.textContent).toContain("Layer version"),
+    );
+    const trigger = Array.from(
+      container.querySelectorAll('button[aria-haspopup="listbox"]'),
+    )[0] as HTMLButtonElement;
+    expect(trigger).toBeDefined();
+    fireEvent.click(trigger);
+
+    let compatRow: HTMLElement | undefined;
+    await waitFor(() => {
+      compatRow = Array.from(
+        container.querySelectorAll('[role="option"]'),
+      ).find((el) =>
+        el.textContent?.includes("Compatibility"),
+      ) as HTMLElement | undefined;
+      expect(compatRow).toBeDefined();
+    });
+    fireEvent.click(compatRow!);
+
+    await waitFor(() => {
+      expect(
+        callMock.mock.calls.some(
+          (c) => c[0] === "setLayerVersion" && c[1] === "compat",
+        ),
+      ).toBe(true);
+    });
   });
 
   it("default view shows the install prompt when the layer is missing", async () => {

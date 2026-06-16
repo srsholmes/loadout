@@ -14,6 +14,7 @@ import { useBackend } from "@loadout/ui";
 import type {
   DllStatus,
   FullStatus,
+  LayerVersion,
   LsfgSettings,
   ProgressEvent,
 } from "./types";
@@ -30,6 +31,7 @@ export function useLsfgManager({ flashStatus }: UseLsfgManagerArgs) {
   const [status, setStatus] = useState<FullStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [installing, setInstalling] = useState(false);
+  const [rechecking, setRechecking] = useState(false);
   const [progress, setProgress] = useState("");
   const [customDllInput, setCustomDllInput] = useState("");
 
@@ -79,6 +81,21 @@ export function useLsfgManager({ flashStatus }: UseLsfgManagerArgs) {
     refresh();
   }, [refresh]);
 
+  // User-triggered re-detection: re-runs `getStatus`, which re-checks
+  // the layer files AND the Lossless.dll on disk. Needed when the user
+  // installs the layer or Lossless Scaling outside the plugin (no event
+  // fires for those, so the cached status would otherwise stay stale).
+  // Keeps a dedicated `rechecking` flag so the button can show feedback
+  // without blanking the whole view to the initial-load spinner.
+  const handleRecheck = useCallback(async () => {
+    setRechecking(true);
+    try {
+      await refresh();
+    } finally {
+      setRechecking(false);
+    }
+  }, [refresh]);
+
   const handleInstall = useCallback(async () => {
     setInstalling(true);
     setProgress("Starting…");
@@ -104,6 +121,26 @@ export function useLsfgManager({ flashStatus }: UseLsfgManagerArgs) {
     refresh();
   }, [call, refresh, flashStatus]);
 
+  // Switch the layer build. When a layer is installed this re-installs
+  // the chosen version in place (shows the install spinner); otherwise it
+  // just records the choice for the next Install.
+  const handleSelectLayerVersion = useCallback(
+    async (version: LayerVersion) => {
+      setInstalling(true);
+      setProgress("Switching layer version…");
+      const res = (await call("setLayerVersion", version)) as {
+        success: boolean;
+        error?: string;
+      } | null;
+      if (res && !res.success) {
+        flashStatus(res.error ?? "Failed to switch layer version", 5000);
+      }
+      setInstalling(false);
+      refresh();
+    },
+    [call, refresh, flashStatus],
+  );
+
   const handleUpdateSetting = useCallback(
     async <K extends keyof LsfgSettings>(key: K, value: LsfgSettings[K]) => {
       await call("updateSettings", { [key]: value });
@@ -124,11 +161,14 @@ export function useLsfgManager({ flashStatus }: UseLsfgManagerArgs) {
     status,
     loading,
     installing,
+    rechecking,
     progress,
     customDllInput,
     setCustomDllInput,
     handleInstall,
     handleUninstall,
+    handleRecheck,
+    handleSelectLayerVersion,
     handleUpdateSetting,
     handleSetCustomDll,
   };

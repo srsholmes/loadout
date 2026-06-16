@@ -5,6 +5,14 @@
 // `@loadout/types` (consumed via the `__core:game-library` core
 // service), not from a local copy.
 
+/**
+ * Which lsfg-vk layer build to install:
+ * - `latest` — newest upstream release (LSFG 3.1). Best for native games.
+ * - `compat` — older pre-rewrite build for setups where the latest layer
+ *   crashes the app with a Vulkan initialization error at launch.
+ */
+export type LayerVersion = "latest" | "compat";
+
 /** TOML-backed config that the layer reads from `~/.config/lsfg-vk/conf.toml`. */
 export interface LsfgSettings {
   multiplier: number;
@@ -23,6 +31,10 @@ export interface LsfgSettings {
 export interface PersistedStore {
   settings?: Partial<LsfgSettings>;
   customDllPath?: string;
+  /** Which layer build the user picked. Drives `install()`. */
+  layerVersion?: LayerVersion;
+  /** Human-readable version of the layer last installed (display only). */
+  installedVersion?: string | null;
 }
 
 /** Returned by `launch-options` plugin's `getGames` RPC. */
@@ -50,6 +62,10 @@ export interface InstallStatus {
   layerSoPath: string;
   layerJsonPath: string;
   tomlPath: string;
+  /** Layer build selected for install (persists across restarts). */
+  layerVersion: LayerVersion;
+  /** Human-readable version of the currently-installed layer, or null. */
+  installedVersion: string | null;
 }
 
 export interface DllStatus {

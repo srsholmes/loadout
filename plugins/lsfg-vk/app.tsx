@@ -28,11 +28,14 @@ function LsfgVkManager() {
     status,
     loading,
     installing,
+    rechecking,
     progress,
     customDllInput,
     setCustomDllInput,
     handleInstall,
     handleUninstall,
+    handleRecheck,
+    handleSelectLayerVersion,
     handleUpdateSetting,
     handleSetCustomDll,
   } = useLsfgManager({ flashStatus });
@@ -105,7 +108,10 @@ function LsfgVkManager() {
             <StatusBanner message={statusMsg} />
 
             {!install.installed ? (
-              <NotInstalledCard />
+              <NotInstalledCard
+                rechecking={rechecking}
+                onRecheck={handleRecheck}
+              />
             ) : (
               <div className="card">
                 <GamePicker
@@ -133,16 +139,21 @@ function LsfgVkManager() {
         <InstallCard
           install={install}
           installing={installing}
+          rechecking={rechecking}
           progress={progress}
           onInstall={handleInstall}
           onUninstall={handleUninstall}
+          onRecheck={handleRecheck}
+          onSelectLayerVersion={handleSelectLayerVersion}
         />
 
         <CustomDllField
           dll={dll}
           customDllInput={customDllInput}
+          rechecking={rechecking}
           onCustomDllChange={setCustomDllInput}
           onApplyCustomDll={handleSetCustomDll}
+          onRecheck={handleRecheck}
         />
 
         <AdvancedSettings

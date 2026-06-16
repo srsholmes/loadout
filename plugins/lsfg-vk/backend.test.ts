@@ -291,4 +291,35 @@ describe("LsfgVkBackend", () => {
       }
     });
   });
+
+  // ── Layer version selection ─────────────────────────────────────
+
+  describe("layer version", () => {
+    it("defaults to 'latest'", async () => {
+      const status = await backend.getStatus();
+      expect(status.install.layerVersion).toBe("latest");
+      expect(status.install.installedVersion).toBeNull();
+    });
+
+    it("setLayerVersion records the choice when nothing is installed", async () => {
+      const res = await backend.setLayerVersion("compat");
+      expect(res.success).toBe(true);
+
+      const status = await backend.getStatus();
+      expect(status.install.layerVersion).toBe("compat");
+      // No layer on disk yet, so no re-install was attempted.
+      expect(status.install.installed).toBe(false);
+    });
+
+    it("persists the layer-version choice across a reload", async () => {
+      await backend.setLayerVersion("compat");
+
+      // A fresh backend reading the same sandboxed storage should pick
+      // up the persisted choice on load.
+      const reloaded = new LsfgVkBackend();
+      await reloaded.onLoad();
+      const status = await reloaded.getStatus();
+      expect(status.install.layerVersion).toBe("compat");
+    });
+  });
 });
