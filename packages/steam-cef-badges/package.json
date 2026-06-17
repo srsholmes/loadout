@@ -1,0 +1,15 @@
+{
+  "name": "@loadout/steam-cef-badges",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@loadout/steam-cdp": "workspace:*",
+    "@loadout/steam-paths": "workspace:*"
+  }
+}
