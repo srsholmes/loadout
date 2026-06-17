@@ -224,9 +224,16 @@ function sendToWebview<K extends keyof WebviewMessages>(
   }
 }
 
+// Default overlay window size. 1920×1080 so the overlay opens large on a
+// desktop monitor (issue #108). The window stays resizable, so Steam Deck
+// users on the 1280×800 panel can shrink it. Shared with GamescopeAtoms so
+// its on-show centring matches the real window size.
+const OVERLAY_WIDTH = 1920;
+const OVERLAY_HEIGHT = 1080;
+
 const overlay = new BrowserWindow({
   title: "Loadout Overlay",
-  frame: { x: 0, y: 0, width: 1280, height: 800 },
+  frame: { x: 0, y: 0, width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT },
   titleBarStyle: "default",
   transparent: false,
   hidden: !DESKTOP_SMOKE_TEST,
@@ -254,6 +261,9 @@ const overlay = new BrowserWindow({
 const atoms = new GamescopeAtoms({
   display: DISPLAY,
   windowName: "Loadout Overlay",
+  // Keep on-show centring in sync with the BrowserWindow frame above.
+  windowWidth: OVERLAY_WIDTH,
+  windowHeight: OVERLAY_HEIGHT,
   // Kill switch: set OVERLAY_FORCE_XPROP=1 to bypass the libxcb fast
   // path and use the original xprop-subprocess writes. Useful for
   // bisecting if the libxcb port is suspected of new bugs.
