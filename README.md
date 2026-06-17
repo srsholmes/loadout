@@ -63,13 +63,37 @@ bun install
 bun run build-and-install    # compile + install to ~/.local/share/, enable user units
 ```
 
-For development with hot reload:
+### Developing
+
+The overlay ships a **patched Electrobun native wrapper** (see
+[`apps/loadout-overlay/vendor/README.md`](apps/loadout-overlay/vendor/README.md))
+that fixes a 100% CPU spin in CEF's browser process. The build and install
+scripts swap it in automatically — but `electrobun dev` does not, so the
+**dev-mode overlay runs the stock wrapper and pins a CPU core**.
+
+**Recommended — build and install to see accurate results.** This is the only
+workflow that matches what users actually run: the patched wrapper, the real
+systemd user units, and production CEF flags. Re-run it after each change:
 
 ```sh
-bun run dev:overlay          # loader dev server + Electrobun overlay, live reload
+bun run build-and-install               # compile + install + enable user units
+systemctl --user restart loadout-overlay   # restart the overlay to pick up the build
+journalctl --user -u loadout-overlay -f    # follow overlay logs
 ```
 
-CEF DevTools are at `http://localhost:9222` in dev builds.
+CEF DevTools are at `http://localhost:9222` (attach any Chromium or use CDP).
+
+**Fast UI iteration (hot reload).** For quick webview/React work where the
+native runtime doesn't matter, `bun run dev:overlay` starts the loader dev
+server + Electrobun with live reload:
+
+```sh
+bun run dev:overlay
+```
+
+Caveat: dev mode uses the **stock** native wrapper, so expect a busy CPU core
+and none of the patched-wrapper behaviour. Always confirm a change with
+`build-and-install` before trusting it.
 
 Runtime requirements: an X11/Xwayland display, membership in the `input` group
 (so the overlay can grab evdev devices), and a working Steam install. The CEF
