@@ -447,7 +447,7 @@ export async function startServer(options: ServerOptions = {}) {
   });
 
   // --- File watching for hot reload ---
-  const { watch } = await import("node:fs");
+  const { watch, existsSync } = await import("node:fs");
   const watchers: ReturnType<typeof watch>[] = [];
 
   const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -473,17 +473,24 @@ export async function startServer(options: ServerOptions = {}) {
     watchers.push(watcher);
   }
 
-  // Watch packages/ui/ for SDK changes
+  // Watch packages/ui/ for SDK changes. Dev-only: in an installed layout
+  // `projectRoot` isn't the source repo, so this dir doesn't exist —
+  // `watch()` on a missing path throws ENOENT, which previously surfaced as
+  // an uncaught exception at startup. Guard on existence and skip cleanly.
   const uiSrcDir = join(projectRoot, "packages/ui/src");
-  const uiWatcher = watch(uiSrcDir, { recursive: true }, (_eventType, filename) => {
-    if (!filename) return;
-    debounced("sdk", () => {
-      log.debug(`[hot-reload] SDK changed: ${filename}`);
-      bundleCache.clear(); // SDK change invalidates all bundles
-      broadcast({ type: "event", plugin: "__system", event: "reload", data: { plugin: "__sdk" } });
+  if (existsSync(uiSrcDir)) {
+    const uiWatcher = watch(uiSrcDir, { recursive: true }, (_eventType, filename) => {
+      if (!filename) return;
+      debounced("sdk", () => {
+        log.debug(`[hot-reload] SDK changed: ${filename}`);
+        bundleCache.clear(); // SDK change invalidates all bundles
+        broadcast({ type: "event", plugin: "__system", event: "reload", data: { plugin: "__sdk" } });
+      });
     });
-  });
-  watchers.push(uiWatcher);
+    watchers.push(uiWatcher);
+  } else {
+    log.debug(`[hot-reload] SDK source dir absent (${uiSrcDir}); skipping SDK watch`);
+  }
 
   return { server, watchers };
 }
