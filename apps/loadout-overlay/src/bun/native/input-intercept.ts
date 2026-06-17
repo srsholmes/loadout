@@ -523,6 +523,13 @@ export interface InputInterceptOptions {
   onAxis?: (axis: "RightStickX" | "RightStickY", value: number) => void;
   /** Optional — number of controllers that were opened. For diagnostic logs. */
   onReady?: (counts: { controllers: number; keyboards: number; qam: number }) => void;
+  /** When true (default), the Steam Input virtual pad (28de:11ff) is READ for
+   *  nav — required on the Steam Deck, where a running game makes the built-in
+   *  controller present only as this virtual pad. When false, it's grab-only:
+   *  an external InputPlumber-managed pad drives nav over DBus and reading the
+   *  mirror would double every input. index.ts sets this to "no IP composites".
+   */
+  readVirtualPadsForNav?: boolean;
 }
 
 export interface InputInterceptHandle {
@@ -540,13 +547,25 @@ export interface InputInterceptHandle {
 export async function startInputIntercept(
   opts: InputInterceptOptions,
 ): Promise<InputInterceptHandle> {
-  // isController matches BOTH physical pads (read for nav) and Steam Input's
-  // virtual pads (grab-only — see file header). isSteamVirtual disambiguates
-  // them in openAndTrack via `grabOnly`.
+  // The Steam Input virtual pad (28de:11ff) needs care. On the Steam Deck,
+  // whenever a game/app is running Steam Input re-exposes the BUILT-IN
+  // controller AS this virtual pad (the native "Steam Deck" gamepad node
+  // disappears) — so it becomes the ONLY nav source for the Deck's controls
+  // and MUST be read for nav. (Grabbing it while reading also silences the
+  // game underneath, which is what #97 wanted; per this file's header that's
+  // safe — Steam BPM reads the PHYSICAL pad via hidraw, not this mirror.)
+  //
+  // The exception is an EXTERNAL pad managed by InputPlumber: there the pad's
+  // nav arrives over IP's DBus stream (ip-intercept.ts) and the virtual pad is
+  // just a mirror — reading it too would double every input, so we only GRAB
+  // it. index.ts sets readVirtualPadsForNav = "no IP composites present", i.e.
+  // the Deck-alone case reads; the external-IP-pad case stays grab-only.
+  const readVirtualPadsForNav = opts.readVirtualPadsForNav ?? true;
+
+  // Track controllers including the virtual pad; isSteamVirtual only decides
+  // read-for-nav vs grab-only below (via `grabOnly` in openAndTrack).
   const devices = (await enumerateDevices()).filter(
-    (d) => d.flags.isController ||
-           d.flags.isKeyboard ||
-           d.flags.isQam,
+    (d) => d.flags.isController || d.flags.isKeyboard || d.flags.isQam,
   );
 
   const tracked: TrackedDevice[] = [];
@@ -560,7 +579,9 @@ export async function startInputIntercept(
       );
       return null;
     }
-    const grabOnly = dev.isSteamVirtual;
+    // A virtual pad is read for nav (grabOnly=false) on the Deck-alone case,
+    // or grab-only when an external IP-managed pad drives nav over DBus.
+    const grabOnly = dev.isSteamVirtual && !readVirtualPadsForNav;
     // Grab-only virtual pads are never read for nav, so masks + axis
     // calibration are irrelevant — skip them.
     if (!grabOnly) applyIdleMasks(fd, dev);
