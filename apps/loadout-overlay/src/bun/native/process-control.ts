@@ -52,6 +52,44 @@ export function findSteamPid(): number | null {
 }
 
 /**
+ * True when the system is in Steam Gaming Mode (a `gamescope` compositor
+ * process is running). In desktop mode (KDE/Plasma on SteamOS) gamescope
+ * is NOT running, so this returns false.
+ *
+ * We scan /proc for the comm rather than trusting $GAMESCOPE_DISPLAY: the
+ * loadout overlay runs as a session-level `systemd --user` service that
+ * inherits GAMESCOPE_DISPLAY=:0 even in desktop mode, so that env var
+ * falsely reports gaming mode here (see quick-links isGamingMode, which
+ * has the env caveat). A running gamescope process is the reliable signal.
+ *
+ * Used to gate the Steam SIGSTOP freeze: in gaming mode Steam reads the
+ * overlay's inputs while it's open (hence the freeze), but in desktop mode
+ * freezing Steam just wedges the Steam client window the user is using.
+ */
+export function isGameModeActive(): boolean {
+  let entries: string[];
+  try {
+    entries = readdirSync("/proc");
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    const pid = Number(entry);
+    if (!Number.isFinite(pid) || pid <= 0) continue;
+    try {
+      // gamescope's kernel comm is "gamescope" (9 chars, under the
+      // 15-char TASK_COMM_LEN cap, so no truncation to worry about).
+      if (readFileSync(`/proc/${pid}/comm`, "utf8").trim() === "gamescope") {
+        return true;
+      }
+    } catch {
+      // Process gone between readdir and readFile — normal, skip.
+    }
+  }
+  return false;
+}
+
+/**
  * Send a signal to a pid via libc kill(2). Returns true on success.
  * Non-throwing: on permission error or ESRCH we log and return false
  * so the caller can continue (overlay should NOT become unusable just
