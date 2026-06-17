@@ -1,16 +1,17 @@
 /**
- * Gaming Mode detection for the CEF injector.
+ * SteamOS Gaming Mode detection.
  *
- * Plugin CEF injection (ProtonDB / HLTB badges, route/menu patches, panels)
- * should only happen in Steam Gaming Mode, not in the desktop client — see
- * issue #111. We gate the injector on whether the SteamOS gamescope
- * compositor is running, scanning /proc/<pid>/comm.
+ * "Gaming Mode" is the gamescope session (Steam fullscreen GamepadUI), as
+ * opposed to the KDE/Plasma desktop. Detect it by scanning /proc for a
+ * running gamescope compositor process.
  *
- * We deliberately do NOT key off $GAMESCOPE_DISPLAY: the loader runs as a
- * session-level service that inherits GAMESCOPE_DISPLAY=":0" even in desktop
- * mode, so it would falsely report Gaming Mode. A running gamescope process
- * is the reliable signal. (Same rationale and prefix-match as the overlay's
- * isGameModeActive in apps/loadout-overlay/src/bun/native/process-control.ts.)
+ * We deliberately do NOT key off $GAMESCOPE_DISPLAY: session-level services
+ * (the loader, the overlay) inherit GAMESCOPE_DISPLAY=":0" even in desktop
+ * mode, so it falsely reports Gaming Mode. A running gamescope process is the
+ * reliable signal.
+ *
+ * Shared between the overlay (gates the Steam SIGSTOP freeze) and the loader's
+ * CEF injector (gates plugin injection — issue #111).
  */
 
 import { readdirSync, readFileSync } from "node:fs";

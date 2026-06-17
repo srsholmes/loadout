@@ -2,6 +2,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { readdir, readFile } from "node:fs/promises";
 
+export { isGamescopeRunning } from "./gaming-mode";
+
 /**
  * Get the base Steam installation directory.
  * Checks standard path first, then Flatpak path.
