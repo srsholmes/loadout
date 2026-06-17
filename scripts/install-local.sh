@@ -146,6 +146,45 @@ fi
 # Bazzite/CachyOS/Fedora — those ship the libs in the base image.
 sh "$SCRIPT_DIR/fetch-deck-overlay-libs.sh" "$OVERLAY_INSTALL_DIR/bin"
 
+# --- Steam CEF remote debugging ---
+# Drop the empty `.cef-enable-remote-debugging` marker in Steam's root so
+# Steam opens its Chromium DevTools Protocol endpoint on localhost:8080.
+# Same mechanism Decky Loader uses. The overlay needs it to close the QAM
+# via CDP before claiming gamescope overlay focus (without it gamescope
+# gets into a focus-fight that can freeze input until reboot), and the
+# theme-loader / steamgriddb / protondb / quick-links plugins all talk to
+# this port. Mirrors setup_steam_cef_debugging() in install.sh.
+echo ""
+echo "Enabling Steam CEF remote debugging (for overlay focus + plugins)..."
+CEF_DEBUG_CREATED=0
+CEF_DEBUG_EXISTED=0
+for STEAM_ROOT in \
+    "$HOME/.steam/steam" \
+    "$HOME/.local/share/Steam" \
+    "$HOME/.var/app/com.valvesoftware.Steam/data/Steam"; do
+    [ -d "$STEAM_ROOT" ] || continue
+    CEF_FLAG="$STEAM_ROOT/.cef-enable-remote-debugging"
+    if [ -e "$CEF_FLAG" ]; then
+        CEF_DEBUG_EXISTED=1
+        continue
+    fi
+    if : > "$CEF_FLAG" 2>/dev/null; then
+        echo "Created $CEF_FLAG"
+        CEF_DEBUG_CREATED=1
+    else
+        echo "WARNING: could not write $CEF_FLAG (check permissions)." >&2
+    fi
+done
+if [ "$CEF_DEBUG_CREATED" = "0" ] && [ "$CEF_DEBUG_EXISTED" = "0" ]; then
+    echo "WARNING: no Steam install dir found — skipped CEF debugging flag." >&2
+    echo "         Create an empty .cef-enable-remote-debugging in Steam's root," >&2
+    echo "         then restart Steam." >&2
+elif [ "$CEF_DEBUG_CREATED" = "1" ]; then
+    echo "Restart Steam for CEF remote debugging to take effect."
+else
+    echo "CEF remote debugging already enabled."
+fi
+
 # --- Backend: root system service ---
 # The backend runs as root so plugins can write hardware sysfs / run
 # privileged tools without per-op sudo prompts at runtime (HHD/Decky

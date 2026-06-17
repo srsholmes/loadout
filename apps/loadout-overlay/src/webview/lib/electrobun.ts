@@ -98,8 +98,8 @@ function loadShortcutsFromStorage(): ControllerShortcuts {
     // flicker between our overlay and Steam's UI. Default to None and
     // hide them from the Settings UI.
     guide_a: { type: "None" },
-    guide_b: { type: "None" },
-    guide_x: { type: "ToggleOverlay" },
+    guide_b: { type: "ToggleOverlay" },
+    guide_x: { type: "None" },
     guide_y: { type: "None" },
   };
 }

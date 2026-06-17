@@ -3,6 +3,7 @@ import {
   listInstalledGames,
   type InstalledGame,
 } from "@loadout/steam-paths";
+import { SteamCefBadgeInjector } from "@loadout/steam-cef-badges";
 import {
   readPluginStorage,
   writePluginStorage,
@@ -38,6 +39,16 @@ export interface ProtonDBSettings {
   enableStoreBadge: boolean;
 }
 
+/** Combined payload pushed into the injected CEF badge runtime. The
+ *  injected scripts only read `report` + `settings`; Linux-support is
+ *  deliberately NOT carried here so the 500 ms push path never pays the
+ *  extra (rate-limited) Steam appdetails fetch. */
+interface BadgeData {
+  appId: string;
+  report: ProtonDBReport | null;
+  settings: ProtonDBSettings;
+}
+
 // ─── Constants ──────────────────────────────────────────────────────
 
 const PLUGIN_ID = "protondb-badges";
@@ -65,28 +76,30 @@ const DEFAULT_SETTINGS: ProtonDBSettings = {
 /**
  * ProtonDB Badges backend.
  *
- * Exposes the ProtonDB compatibility tier (plus a few Steam-store
- * side fetches: per-title Linux support, free-text search) as RPC
- * methods consumed by `app.tsx`. The grid view in the overlay fans
- * out one `getReport` call per installed game, so the backend caps
- * concurrent ProtonDB requests at 4 (cache hits skip the queue) to
- * avoid 429s from a 100+ game library.
+ * Two surfaces:
+ *
+ *  1. **Overlay UI** — exposes the ProtonDB compatibility tier (plus a
+ *     few Steam-store side fetches: per-title Linux support, free-text
+ *     search) as RPC methods consumed by `app.tsx`. The grid view fans
+ *     out one `getReport` call per installed game, so the backend caps
+ *     concurrent ProtonDB requests at 4 (cache hits skip the queue) to
+ *     avoid 429s from a 100+ game library.
+ *
+ *  2. **Steam-CEF badge injection** — connects to Steam's CEF debug
+ *     port over CDP, discovers the Big Picture Mode / SharedJSContext /
+ *     store tabs, and injects a CSS rule + a passive JS runtime
+ *     (`window.__protondb_badges = { updateBadge, removeBadge, cleanup }`)
+ *     into each. The backend polls the SharedJSContext route for the
+ *     viewed appId, fetches the report server-side, and pushes it into
+ *     the runtime — so a tier badge appears on the live Steam game /
+ *     store page, not just inside the overlay. This is the layer PR #50
+ *     dropped and issue #59 restored; it mirrors the sibling `hltb`
+ *     plugin's injection architecture.
  *
  * Settings persist via `@loadout/plugin-storage` at
  * `~/.config/loadout/plugins/protondb-badges.json`. API responses
  * persist via the inlined `lib/external-cache.ts` TTL disk cache at
  * `~/.cache/loadout/protondb-badges/`.
- *
- * **Removed vs source steam-loader plugin**: the source also did
- * CEF-side badge injection into Steam Big Picture Mode via the
- * `@steam-loader/steam-cdp` `CDPClient`. That helper isn't exposed
- * to Loadout plugins (no public package; lives in `apps/loadout/`),
- * and Steam-CEF panel injection is the responsibility of
- * `target: { type: "panel" }` + `patches[]` in loadout — a
- * fundamentally different mechanism. The native overlay UI is the
- * primary surface in loadout, so the migration drops the CEF-side
- * badge renderer; the overlay's `app.tsx` (library grid + home
- * widget) carries the user-facing functionality.
  */
 export default class ProtonDBBadgesBackend implements PluginBackend {
   emit?: (payload: EmitPayload) => void;
@@ -112,14 +125,48 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
   private lookupQueue: Array<() => void> = [];
   private static readonly MAX_CONCURRENT_LOOKUPS = 4;
 
+  // ─── CDP injection state ────────────────────────────────────────
+
+  /** Shared Steam-CEF badge-injection lifecycle (connection discovery,
+   *  BPM render-tab fan-out, health check, route polling, push coalescing,
+   *  Gaming-Mode gating). Constructed in onLoad. See
+   *  `@loadout/steam-cef-badges`. */
+  private injector!: SteamCefBadgeInjector<BadgeData>;
+
   // ─── Lifecycle ──────────────────────────────────────────────────
 
   async onLoad(): Promise<void> {
     console.log("[protondb-badges] Plugin loaded");
     await this._loadSettings();
+
+    this.injector = new SteamCefBadgeInjector<BadgeData>({
+      pluginId: PLUGIN_ID,
+      styleId: "protondb-badges-styles",
+      bpmGlobalName: "__protondb_badges",
+      storeGlobalName: "__protondb_store_badges",
+      css: this._generateBadgeCSS(),
+      bpmScript: this._generateBPMScript(),
+      buildStoreScript: (d) => this._generateStoreScript(d),
+      // Report only — the injected runtime never reads Linux-support, so
+      // don't pay the rate-limited checkLinuxSupport on every navigation
+      // (see the BadgeData doc comment).
+      fetchBadgeData: async (appId) => ({
+        appId,
+        report: await this.getReport(appId),
+        settings: this.settings,
+      }),
+      buildBpmUpdateExpr: (d) =>
+        d
+          ? `if (window.__protondb_badges) window.__protondb_badges.updateBadge(${JSON.stringify(d)});`
+          : `if (window.__protondb_badges) window.__protondb_badges.removeBadge();`,
+      onStateChange: () => this._emitState(),
+    });
+    void this.injector.start();
   }
 
   async onUnload(): Promise<void> {
+    await this.injector?.stop();
+
     this.reportCache.clear();
     this.searchCache.clear();
     this.linuxCache.clear();
@@ -311,30 +358,298 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
     this.settings = { ...DEFAULT_SETTINGS, ...settings };
     await this._saveSettings();
     this._emitState();
+
+    // Re-inject so style/position/toggle changes show live on the Steam
+    // side (debounced inside the injector so dragging a control doesn't
+    // peg the CDP bridge).
+    this.injector?.reinjectDebounced();
   }
 
-  // ─── RPC: CEF status (stubs) ────────────────────────────────────
-  // The source plugin also drove CEF-side badge injection (Big Picture
-  // Mode + Steam store tabs) via CDP. That mechanism doesn't exist in
-  // Loadout yet — a future panel-target migration would re-add it.
-  // These stubs let the existing settings UI render its "Steam CEF"
-  // status section without errors; users see "Disconnected" and the
-  // Reconnect button is a no-op.
+  // ─── RPC: Steam-CEF status ──────────────────────────────────────
 
   async getStatus(): Promise<{ connected: boolean; tabs: number }> {
-    return { connected: false, tabs: 0 };
+    return this.injector?.getStatus() ?? { connected: false, tabs: 0 };
   }
 
   async reconnect(): Promise<{ success: boolean; error?: string }> {
-    return {
-      success: false,
-      error: "Steam CEF injection is not yet supported in Loadout",
-    };
+    if (!this.injector) return { success: false, error: "Not initialized" };
+    return this.injector.reconnect();
   }
 
+  /**
+   * appId of the game page currently viewed in Steam BPM (route-derived,
+   * NOT the running game). Mirrors hltb's route polling; will fold into a
+   * `__core:game-detection` subscribe once that lands for backends.
+   */
   async getCurrentRouteAppId(): Promise<string | null> {
-    return null;
+    return this.injector?.getCurrentAppId() ?? null;
   }
+
+  // ─── Badge CSS ──────────────────────────────────────────────────
+
+  private _generateBadgeCSS(): string {
+    return `
+/* ProtonDB Badges - loadout */
+#protondb-badge-container {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  pointer-events: auto;
+  transition: filter 0.2s, transform 0.2s;
+}
+#protondb-badge-container:hover {
+  filter: brightness(1.12);
+}
+#protondb-badge-container .pdb-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#protondb-badge-container .pdb-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+  background: rgba(14,20,27,0.9);
+  backdrop-filter: blur(8px);
+}
+#protondb-badge-container .pdb-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+}
+#protondb-badge-container .pdb-dot-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: rgba(14,20,27,0.9);
+  padding: 3px 8px;
+  border-radius: 5px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+#protondb-badge-container.pdb-show-label .pdb-dot-label,
+#protondb-badge-container:hover .pdb-dot-label {
+  opacity: 1;
+}
+#protondb-badge-container .pdb-submit {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: rgba(26,159,255,0.92);
+  padding: 5px 9px;
+  border-radius: 5px;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+}
+#protondb-badge-container .pdb-submit:hover { filter: brightness(1.12); }
+`;
+  }
+
+  // ─── Big Picture Mode Badge Script ──────────────────────────────
+
+  /**
+   * Passive renderer injected into the BPM / SharedJSContext tab(s). It
+   * does NOT fetch — the backend pushes data via
+   * `window.__protondb_badges.updateBadge(data)`. Exposes the exact
+   * surface the source plugin used:
+   *   `{ updateBadge, removeBadge, cleanup }`.
+   */
+  private _generateBPMScript(): string {
+    return `
+(function() {
+  if (window.__protondb_badges) window.__protondb_badges.cleanup();
+
+  var TIER_INFO = {
+    platinum: { label: "Platinum", color: "#b4c7dc", text: "#1a1a1a" },
+    gold:     { label: "Gold",     color: "#cfb53b", text: "#1a1a1a" },
+    silver:   { label: "Silver",   color: "#a6a6a6", text: "#1a1a1a" },
+    bronze:   { label: "Bronze",   color: "#cd7f32", text: "#1a1a1a" },
+    borked:   { label: "Borked",   color: "#ff5c5c", text: "#1a1a1a" },
+    pending:  { label: "Pending",  color: "#6b7280", text: "#ffffff" }
+  };
+
+  var badgeEl = null;
+
+  function removeBadge() {
+    if (badgeEl) { badgeEl.remove(); badgeEl = null; }
+  }
+
+  function positionStyle(container, position) {
+    var p = position || "tl";
+    container.style.position = "fixed";
+    container.style.zIndex = "99999";
+    if (p[0] === "t") container.style.top = "60px"; else container.style.bottom = "60px";
+    if (p[1] === "l") container.style.left = "20px";
+    else if (p[1] === "m") { container.style.left = "50%"; container.style.transform = "translateX(-50%)"; }
+    else container.style.right = "20px";
+  }
+
+  function createBadge(data) {
+    var settings = data.settings || {};
+    var report = data.report;
+    if (!settings.enableLibraryBadge || !report || !report.tier) { removeBadge(); return; }
+
+    var tier = String(report.tier).toLowerCase();
+    var info = TIER_INFO[tier] || { label: tier, color: "#6b7280", text: "#ffffff" };
+
+    removeBadge();
+
+    var container = document.createElement("div");
+    container.id = "protondb-badge-container";
+    container.style.cursor = "pointer";
+    positionStyle(container, settings.position);
+
+    var inner = document.createElement("div");
+    inner.className = "pdb-inner";
+
+    var size = settings.size || "regular";
+    if (size === "minimalist") {
+      var dot = document.createElement("span");
+      dot.className = "pdb-dot";
+      dot.style.background = info.color;
+      inner.appendChild(dot);
+
+      var hover = settings.labelOnHover || "off";
+      if (hover !== "off") {
+        var dlabel = document.createElement("span");
+        dlabel.className = "pdb-dot-label";
+        dlabel.textContent = info.label;
+        if (hover === "regular") dlabel.style.fontSize = "13px";
+        inner.appendChild(dlabel);
+      }
+    } else {
+      var pill = document.createElement("span");
+      pill.className = "pdb-pill";
+      pill.style.background = info.color;
+      pill.style.color = info.text;
+      if (size === "small") {
+        pill.style.fontSize = "11px";
+        pill.style.padding = "4px 9px";
+      }
+      pill.textContent = info.label;
+      inner.appendChild(pill);
+    }
+
+    if (settings.showSubmitButton && data.appId) {
+      var submit = document.createElement("span");
+      submit.className = "pdb-submit";
+      submit.textContent = "Submit";
+      submit.addEventListener("click", function(ev) {
+        ev.stopPropagation();
+        window.open("https://www.protondb.com/app/" + data.appId, "_blank");
+      });
+      inner.appendChild(submit);
+    }
+
+    container.appendChild(inner);
+    container.addEventListener("click", function() {
+      if (data.appId) window.open("https://www.protondb.com/app/" + data.appId, "_blank");
+    });
+
+    document.body.appendChild(container);
+    badgeEl = container;
+  }
+
+  window.__protondb_badges = {
+    cleanup: function() { removeBadge(); },
+    removeBadge: function() { removeBadge(); },
+    updateBadge: function(data) {
+      if (!data) { removeBadge(); return; }
+      createBadge(data);
+    }
+  };
+})();
+`;
+  }
+
+  // ─── Store Badge Script ─────────────────────────────────────────
+
+  /**
+   * Store-page badge script with data embedded at injection time (no
+   * HTTP fetch from inside CEF). Exposes
+   * `window.__protondb_store_badges = { updateBadge, removeBadge, cleanup }`.
+   */
+  private _generateStoreScript(badgeData: BadgeData | null): string {
+    const settingsJson = JSON.stringify(this.settings);
+    const dataJson = badgeData ? JSON.stringify(badgeData) : "null";
+    return `
+(function() {
+  if (window.__protondb_store_badges) window.__protondb_store_badges.cleanup();
+
+  var SETTINGS = ${settingsJson};
+  var BADGE_DATA = ${dataJson};
+
+  var TIER_INFO = {
+    platinum: { label: "Platinum", color: "#b4c7dc", text: "#1a1a1a" },
+    gold:     { label: "Gold",     color: "#cfb53b", text: "#1a1a1a" },
+    silver:   { label: "Silver",   color: "#a6a6a6", text: "#1a1a1a" },
+    bronze:   { label: "Bronze",   color: "#cd7f32", text: "#1a1a1a" },
+    borked:   { label: "Borked",   color: "#ff5c5c", text: "#1a1a1a" },
+    pending:  { label: "Pending",  color: "#6b7280", text: "#ffffff" }
+  };
+
+  var badgeEl = null;
+  function removeBadge() { if (badgeEl) { badgeEl.remove(); badgeEl = null; } }
+
+  function showBadge(data) {
+    if (!data || !SETTINGS.enableStoreBadge) { removeBadge(); return; }
+    var report = data.report;
+    if (!report || !report.tier) { removeBadge(); return; }
+    removeBadge();
+
+    var tier = String(report.tier).toLowerCase();
+    var info = TIER_INFO[tier] || { label: tier, color: "#6b7280", text: "#ffffff" };
+
+    var el = document.createElement("div");
+    el.id = "protondb-store-badge";
+    el.style.cssText = "position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:999999;display:flex;align-items:center;gap:10px;cursor:pointer;font-family:sans-serif;";
+
+    var pill = document.createElement("span");
+    pill.style.cssText = "display:inline-flex;align-items:center;padding:8px 16px;border-radius:6px;font-weight:700;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;box-shadow:0 2px 12px rgba(0,0,0,0.4);";
+    pill.style.background = info.color;
+    pill.style.color = info.text;
+    pill.textContent = "ProtonDB: " + info.label;
+    el.appendChild(pill);
+
+    if (SETTINGS.showSubmitButton && data.appId) {
+      var submit = document.createElement("span");
+      submit.style.cssText = "font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:#fff;background:rgba(26,159,255,0.92);padding:6px 11px;border-radius:5px;box-shadow:0 2px 12px rgba(0,0,0,0.4);";
+      submit.textContent = "Submit";
+      submit.addEventListener("click", function(ev) {
+        ev.stopPropagation();
+        window.open("https://www.protondb.com/app/" + data.appId, "_blank");
+      });
+      el.appendChild(submit);
+    }
+
+    el.addEventListener("click", function() {
+      if (data.appId) window.open("https://www.protondb.com/app/" + data.appId, "_blank");
+    });
+    document.body.appendChild(el);
+    badgeEl = el;
+  }
+
+  if (BADGE_DATA) showBadge(BADGE_DATA);
+
+  window.__protondb_store_badges = {
+    cleanup: function() { removeBadge(); },
+    removeBadge: function() { removeBadge(); },
+    updateBadge: function(data) { showBadge(data); }
+  };
+})();
+`;
+  }
+
 
   // ─── Private helpers ────────────────────────────────────────────
 
@@ -394,9 +709,13 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
   }
 
   private _emitState(): void {
+    const { connected, tabs } = this.injector?.getStatus() ?? {
+      connected: false,
+      tabs: 0,
+    };
     this.emit?.({
       event: "stateChanged",
-      data: { settings: this.settings },
+      data: { settings: this.settings, connected, tabs },
     });
   }
 }

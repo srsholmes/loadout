@@ -9,7 +9,9 @@
     "@loadout/ui": "workspace:*",
     "@loadout/types": "workspace:*",
     "@loadout/steam-paths": "workspace:*",
-    "@loadout/plugin-storage": "workspace:*"
+    "@loadout/plugin-storage": "workspace:*",
+    "@loadout/steam-cdp": "workspace:*",
+    "@loadout/steam-cef-badges": "workspace:*"
   },
   "plugin": {
     "id": "protondb-badges",
@@ -18,7 +20,8 @@
     "permissions": {
       "network": [
         "www.protondb.com",
-        "store.steampowered.com"
+        "store.steampowered.com",
+        "localhost"
       ],
       "filesystem": [
         "read:~/.local/share/Steam",

@@ -21,6 +21,7 @@ import type {
   ControllerShortcuts,
 } from "../webview/lib/electrobun";
 import { GamescopeAtoms } from "./native/gamescope-atoms";
+import { detectGamescopeScreenSizeSync } from "./native/screen-size";
 import {
   startInputIntercept,
   type InputInterceptHandle,
@@ -45,6 +46,7 @@ import {
   findSteamPid,
   suspendSteam,
   resumeSteam,
+  isGameModeActive,
 } from "./native/process-control";
 
 import { trace } from "./native/trace";
@@ -77,8 +79,8 @@ const state = createOverlayState(DESKTOP_SMOKE_TEST);
 const shortcuts: { current: ControllerShortcuts } = {
   current: {
     guide_a: { type: "None" },
-    guide_b: { type: "None" },
-    guide_x: { type: "ToggleOverlay" },
+    guide_b: { type: "ToggleOverlay" },
+    guide_x: { type: "None" },
     guide_y: { type: "None" },
   },
 };
@@ -223,9 +225,29 @@ function sendToWebview<K extends keyof WebviewMessages>(
   }
 }
 
+// Overlay window size, decided once at startup and *born at size* — the
+// window is never resized live, because under `GDK_GL=disable` the
+// software-rendered CEF surface segfaults on reallocation (PR #113).
+//
+// Desktop: 1920×1080 so the overlay opens large on a monitor (issue #108).
+//
+// Gaming Mode: size to the gamescope inner-X resolution so the X11 window
+// maps 1:1 to the visible output. Born too large (the 1920×1080 default on
+// a 1280×800 panel), gamescope scales the visual down but routes pointer
+// input in unscaled window space — the cursor only reaches a corner and
+// clicks land far from where they're drawn (issue #106). Fall back to the
+// Deck's native 1280×800 if xrandr can't be read.
+const DESKTOP_SIZE = { width: 1920, height: 1080 };
+const GAMESCOPE_FALLBACK_SIZE = { width: 1280, height: 800 };
+const overlaySize = gamescopeMode
+  ? (detectGamescopeScreenSizeSync(DISPLAY) ?? GAMESCOPE_FALLBACK_SIZE)
+  : DESKTOP_SIZE;
+const OVERLAY_WIDTH = overlaySize.width;
+const OVERLAY_HEIGHT = overlaySize.height;
+
 const overlay = new BrowserWindow({
   title: "Loadout Overlay",
-  frame: { x: 0, y: 0, width: 1280, height: 800 },
+  frame: { x: 0, y: 0, width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT },
   titleBarStyle: "default",
   transparent: false,
   hidden: !DESKTOP_SMOKE_TEST,
@@ -253,6 +275,9 @@ const overlay = new BrowserWindow({
 const atoms = new GamescopeAtoms({
   display: DISPLAY,
   windowName: "Loadout Overlay",
+  // Keep on-show centring in sync with the BrowserWindow frame above.
+  windowWidth: OVERLAY_WIDTH,
+  windowHeight: OVERLAY_HEIGHT,
   // Kill switch: set OVERLAY_FORCE_XPROP=1 to bypass the libxcb fast
   // path and use the original xprop-subprocess writes. Useful for
   // bisecting if the libxcb port is suspected of new bugs.
@@ -320,14 +345,19 @@ if (SUSPEND_STEAM_ENABLED) {
 //
 // Guarantees Steam is never left SIGSTOPped by a hung overlay. While Steam is
 // frozen we poll once a second: if the webview stopped sending
-// `overlayHeartbeat` pings (renderer wedged) OR the freeze has run past a hard
-// cap, we emergency-close the overlay and thaw Steam. A SIGKILL→restart is
-// handled by the startup SIGCONT above; this handles the HANG case (bun alive,
-// CEF renderer wedged) the startup path can't see.
+// `overlayHeartbeat` pings (renderer wedged) we emergency-close the overlay and
+// thaw Steam. A SIGKILL→restart is handled by the startup SIGCONT above; this
+// handles the HANG case (bun alive, CEF renderer wedged) the startup path can't
+// see.
+//
+// NOTE: there is deliberately NO time-since-open hard cap. Steam stays frozen
+// the whole time the overlay is open, so any fixed ceiling would force-close a
+// perfectly healthy overlay that the user is actively using (issue #102 — "the
+// overlay keeps closing automatically" was a 30s cap firing on every open).
+// A genuinely wedged renderer stops the heartbeat, which the staleness check
+// below catches within FREEZE_HEARTBEAT_TIMEOUT_MS — that is the real safety net.
 const FREEZE_HEARTBEAT_TIMEOUT_MS = 5_000; // no ping this long while frozen → hung
-const FREEZE_HARD_CAP_MS = 30_000; // absolute ceiling on a single freeze
 let freezeWatchTimer: ReturnType<typeof setInterval> | null = null;
-let frozenAt = 0;
 
 function stopFreezeWatchdog(): void {
   if (freezeWatchTimer) clearInterval(freezeWatchTimer);
@@ -335,7 +365,6 @@ function stopFreezeWatchdog(): void {
 }
 
 function startFreezeWatchdog(): void {
-  frozenAt = Date.now();
   lastHeartbeat.current = Date.now(); // assume alive at open; webview keeps it fresh
   stopFreezeWatchdog();
   freezeWatchTimer = setInterval(() => {
@@ -343,11 +372,12 @@ function startFreezeWatchdog(): void {
       stopFreezeWatchdog();
       return;
     }
-    const now = Date.now();
-    const sinceBeat = now - lastHeartbeat.current;
-    const frozenFor = now - frozenAt;
-    if (sinceBeat > FREEZE_HEARTBEAT_TIMEOUT_MS || frozenFor > FREEZE_HARD_CAP_MS) {
-      forceCloseOverlay(`unresponsive (sinceBeat=${sinceBeat}ms frozenFor=${frozenFor}ms)`);
+    const sinceBeat = Date.now() - lastHeartbeat.current;
+    // Only force-close when the renderer has actually gone quiet — a
+    // healthy overlay keeps the heartbeat fresh and stays open as long as
+    // the user wants (no time-since-open cap; see note above).
+    if (sinceBeat > FREEZE_HEARTBEAT_TIMEOUT_MS) {
+      forceCloseOverlay(`unresponsive (sinceBeat=${sinceBeat}ms)`);
     }
   }, 1_000);
 }
@@ -438,12 +468,21 @@ function toggleOverlay(source: string) {
   } else {
     // --- Open path: suspend Steam (if enabled), grab controllers,
     // raise the window, set atoms. Also matches open_overlay().
-    if (SUSPEND_STEAM_ENABLED) {
+    // Freeze Steam ONLY in Gaming Mode. In gaming mode Steam reads the
+    // overlay's controller/QAM inputs while it's open (so we SIGSTOP it to
+    // stop input bleed-through); in desktop mode there's no game underneath
+    // and the frozen `steam` process IS the client window the user is using,
+    // so freezing it just wedges Steam — the bug this gate fixes. The evdev
+    // grab below still runs in both modes, so the controller overlay keeps
+    // working on the desktop without touching Steam.
+    if (SUSPEND_STEAM_ENABLED && isGameModeActive()) {
       if (steamPid.current === null) steamPid.current = findSteamPid();
       if (steamPid.current !== null) {
         suspendSteam(steamPid.current);
         startFreezeWatchdog();
       }
+    } else if (SUSPEND_STEAM_ENABLED) {
+      trace("[toggle] desktop mode (no gamescope) — skipping Steam freeze");
     }
     intercept.current?.grab();
     ipIntercept.current?.grab();

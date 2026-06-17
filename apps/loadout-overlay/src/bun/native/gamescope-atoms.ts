@@ -15,6 +15,7 @@ import { run as _runRaw, commandExists } from "@loadout/exec";
 import { trace } from "./trace";
 import { X11Connection } from "./x11";
 import { dismissSteamMenusIfOpen } from "./steam-quick-access";
+import { parseScreenGeometry } from "./screen-size";
 
 // From overlay_display.rs
 const OVERLAY_APP_ID = 0x534c; // 21324, "SL"
@@ -74,11 +75,20 @@ export interface AtomTargetOptions {
    *  available. Kill switch for the libxcb migration — set
    *  `OVERLAY_FORCE_XPROP=1` in the environment to flip this. */
   forceXprop?: boolean;
+  /** The overlay window's width/height, used by `_positionOnPrimary` to
+   *  centre it on the monitor. Must match the BrowserWindow `frame` size
+   *  or the centring is off. Defaults to the legacy 1280×800. */
+  windowWidth?: number;
+  windowHeight?: number;
 }
 
 export class GamescopeAtoms {
   private display: string;
   private windowName: string;
+  /** Overlay window size — used to centre it on the monitor in
+   *  `_positionOnPrimary`. Kept in sync with the BrowserWindow frame. */
+  private windowWidth: number;
+  private windowHeight: number;
   /** Cached window id; re-resolved on first failure. */
   private windowId: string | null = null;
   /** Cached Steam Big Picture window id — re-resolved on show(). */
@@ -126,6 +136,8 @@ export class GamescopeAtoms {
   constructor(opts: AtomTargetOptions) {
     this.display = opts.display;
     this.windowName = opts.windowName;
+    this.windowWidth = opts.windowWidth ?? 1280;
+    this.windowHeight = opts.windowHeight ?? 800;
 
     // Try to open a libxcb connection up front. Failure (server down,
     // wrong display, libxcb missing) is non-fatal — we silently fall
@@ -825,9 +837,10 @@ export class GamescopeAtoms {
       // Under gamescope's inner X usually: "DP-1 connected 2560x1440+0+0 ..."
       const geom = this._pickMonitorGeometry(stdout);
       if (!geom) return;
-      // windowmove + windowsize: center the overlay in the monitor.
-      const x = geom.x + Math.max(0, Math.floor((geom.w - 1280) / 2));
-      const y = geom.y + Math.max(0, Math.floor((geom.h - 800) / 2));
+      // Center the overlay in the monitor, using the real window size so
+      // a non-default frame (e.g. the 1920×1080 default) isn't mis-placed.
+      const x = geom.x + Math.max(0, Math.floor((geom.w - this.windowWidth) / 2));
+      const y = geom.y + Math.max(0, Math.floor((geom.h - this.windowHeight) / 2));
       await run([
         "env",
         `DISPLAY=${this.display}`,
@@ -845,31 +858,9 @@ export class GamescopeAtoms {
   private _pickMonitorGeometry(
     xrandr: string,
   ): { x: number; y: number; w: number; h: number } | null {
-    // Each monitor line looks roughly:
-    //   "<name> connected [primary] <W>x<H>+<X>+<Y> ..."
-    // We prefer the line marked "primary"; otherwise the first connected
-    // output with a concrete geometry.
-    const geomRe = /(\d+)x(\d+)\+(\d+)\+(\d+)/;
-    let primary: RegExpMatchArray | null = null;
-    let firstConnected: RegExpMatchArray | null = null;
-    for (const line of xrandr.split("\n")) {
-      if (!line.includes(" connected")) continue;
-      const m = line.match(geomRe);
-      if (!m) continue;
-      if (line.includes(" primary ")) {
-        primary = m;
-        break;
-      }
-      if (!firstConnected) firstConnected = m;
-    }
-    const m = primary ?? firstConnected;
-    if (!m) return null;
-    return {
-      w: Number(m[1]),
-      h: Number(m[2]),
-      x: Number(m[3]),
-      y: Number(m[4]),
-    };
+    // Shared with the startup window-sizing probe (native/screen-size.ts)
+    // so both centring and born-at-size sizing parse xrandr identically.
+    return parseScreenGeometry(xrandr);
   }
 
   /** Hide: zero our atoms, drop opacity, force Steam's atoms back to 0,

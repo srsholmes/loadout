@@ -77,9 +77,10 @@ mock.module("node:fs", () => ({
   appendFileSync: () => {},
 }));
 
-const { findSteamPid, suspendSteam, resumeSteam } = await import(
-  "./process-control"
-);
+// isGameModeActive is re-exported from @loadout/steam-paths and tested there
+// (gaming-mode.test.ts) — no need to re-test the same impl here.
+const { findSteamPid, suspendSteam, resumeSteam } =
+  await import("./process-control");
 
 beforeEach(() => {
   killCalls.length = 0;

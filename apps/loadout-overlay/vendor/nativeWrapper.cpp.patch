@@ -1,0 +1,88 @@
+diff --git a/package/src/native/linux/nativeWrapper.cpp b/package/src/native/linux/nativeWrapper.cpp
+index 36310d6..87818a6 100644
+--- a/package/src/native/linux/nativeWrapper.cpp
++++ b/package/src/native/linux/nativeWrapper.cpp
+@@ -802,8 +802,7 @@ public:
+         // In multi-process mode, return nullptr so render process uses the helper
+         return nullptr;
+     }
+-    
+-    
++
+     void OnContextInitialized() override {
+         CefRegisterSchemeHandlerFactory("views", "", new ViewsSchemeHandlerFactory());
+     }
+@@ -2046,6 +2045,7 @@ bool initializeCEF() {
+     CefSettings settings;
+     settings.no_sandbox = true;
+     settings.windowless_rendering_enabled = true;  // Required for OSR/transparent windows
++    settings.external_message_pump = false;  // loadout CPU-spin fix: drive CEF's own MessagePumpGlib via CefRunMessageLoop() (see runCEFEventLoop)
+     settings.log_severity = LOGSEVERITY_ERROR;  // Change to WARNING to see more CEF logs
+     // settings.remote_debugging_port = 9222;
+     
+@@ -5882,20 +5882,38 @@ gboolean process_x11_events(gpointer data) {
+ void runCEFEventLoop() {
+     // Initialize GTK on the main thread (this MUST be done here)
+     initializeGTK();
+-    printf("=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2 === CEF EVENT LOOP STARTED ===\n");
++    printf("=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2-loadout-cefloop === CEF EVENT LOOP STARTED ===\n");
+     fflush(stdout);
+-        
+-    // Set up a timer to periodically call CefDoMessageLoopWork()
+-    // This integrates CEF message loop with GTK main loop
+-    g_timeout_add(10, cef_timer_callback, nullptr); // 10ms interval
+-        
+-    
++
++    // CPU-spin fix: drive the loop with CEF's own CefRunMessageLoop() instead of
++    // a raw gtk_main(). CEF installs its MessagePumpGlib + Ozone X11 GSources on
++    // the default GMainContext; their prepare() returns a 0ms timeout unless
++    // MessagePumpGlib::Run has set up its RunState. A vanilla g_main_loop_run
++    // (gtk_main) iterates those sources WITHOUT that state, so prepare keeps
++    // returning timeout 0, the loop never blocks in poll(), and one core pins at
++    // 100% (this is the spin, NOT CEF #2809's external-pump path). CefRunMessageLoop
++    // runs MessagePumpGlib::Run, which blocks correctly when idle. It still services
++    // the default context, so our GTK dialogs/tray and the X11 timer below keep
++    // working. Quit via CefQuitMessageLoop() in stopEventLoop().
++
+     // Set up X11 event processing
+     g_timeout_add(10, process_x11_events, nullptr); // Process X11 events every 10ms
+ 
+     sleep(1); // Give time for output to flush
+-    gtk_main();
+-    
++
++    // Initialize CEF eagerly here so CefRunMessageLoop() below actually runs CEF's
++    // message loop. CEF was previously initialized lazily on first webview creation;
++    // if we call CefRunMessageLoop() before CefInitialize() it returns immediately
++    // (no UI thread loop to run) and the process exits. Eager init is safe — CEF
++    // needs no browser to initialize, and the lazy call sites are guarded by
++    // g_cefInitialized so they become no-ops. startEventLoop() has already set the
++    // identifier/channel globals used for the cache path.
++    if (!g_cefInitialized.load()) {
++        initializeCEF();
++    }
++
++    CefRunMessageLoop();
++
+     // Cleanup CEF on shutdown
+ 
+     if (g_cefInitialized) {
+@@ -8938,9 +8956,15 @@ ELECTROBUN_EXPORT void stopEventLoop() {
+     g_shuttingDown.store(true);
+     printf("[stopEventLoop] Initiating clean event loop exit\n");
+ 
+-    // gtk_main_quit should be called from the GTK thread
++    // Quit on the main loop thread. In CEF mode the loop is CefRunMessageLoop()
++    // (MessagePumpGlib), so it must be torn down with CefQuitMessageLoop();
++    // gtk_main_quit() would no-op there and the process would hang on shutdown.
+     g_idle_add([](gpointer) -> gboolean {
+-        gtk_main_quit();
++        if (isCEFAvailable()) {
++            CefQuitMessageLoop();
++        } else {
++            gtk_main_quit();
++        }
+         return G_SOURCE_REMOVE;
+     }, nullptr);
+ }

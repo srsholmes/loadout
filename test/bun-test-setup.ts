@@ -1,5 +1,7 @@
 // Bun test preload — the all-bun equivalent of the old vitest happy-dom
-// env + test/setup-ui.ts. Wired via bunfig.toml `[test] preload`.
+// env. Wired via the `--preload ./test/bun-test-setup.ts` flag on the
+// `test:ui` script (package.json); applied only to the UI test invocation
+// (bun test <spec.tsx>), never to backend tests.
 import { afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { createElement } from "react";
