@@ -21,6 +21,7 @@ import type {
   ControllerShortcuts,
 } from "../webview/lib/electrobun";
 import { GamescopeAtoms } from "./native/gamescope-atoms";
+import { detectGamescopeScreenSizeSync } from "./native/screen-size";
 import {
   startInputIntercept,
   type InputInterceptHandle,
@@ -224,12 +225,25 @@ function sendToWebview<K extends keyof WebviewMessages>(
   }
 }
 
-// Default overlay window size. 1920×1080 so the overlay opens large on a
-// desktop monitor (issue #108). The window stays resizable, so Steam Deck
-// users on the 1280×800 panel can shrink it. Shared with GamescopeAtoms so
-// its on-show centring matches the real window size.
-const OVERLAY_WIDTH = 1920;
-const OVERLAY_HEIGHT = 1080;
+// Overlay window size, decided once at startup and *born at size* — the
+// window is never resized live, because under `GDK_GL=disable` the
+// software-rendered CEF surface segfaults on reallocation (PR #113).
+//
+// Desktop: 1920×1080 so the overlay opens large on a monitor (issue #108).
+//
+// Gaming Mode: size to the gamescope inner-X resolution so the X11 window
+// maps 1:1 to the visible output. Born too large (the 1920×1080 default on
+// a 1280×800 panel), gamescope scales the visual down but routes pointer
+// input in unscaled window space — the cursor only reaches a corner and
+// clicks land far from where they're drawn (issue #106). Fall back to the
+// Deck's native 1280×800 if xrandr can't be read.
+const DESKTOP_SIZE = { width: 1920, height: 1080 };
+const GAMESCOPE_FALLBACK_SIZE = { width: 1280, height: 800 };
+const overlaySize = gamescopeMode
+  ? (detectGamescopeScreenSizeSync(DISPLAY) ?? GAMESCOPE_FALLBACK_SIZE)
+  : DESKTOP_SIZE;
+const OVERLAY_WIDTH = overlaySize.width;
+const OVERLAY_HEIGHT = overlaySize.height;
 
 const overlay = new BrowserWindow({
   title: "Loadout Overlay",
