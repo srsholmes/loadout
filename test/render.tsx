@@ -1,5 +1,6 @@
 /**
- * Shared test render utilities for React component tests (vitest + happy-dom).
+ * Shared test render utilities for React component tests (bun test +
+ * happy-dom, via the `test/bun-test-setup.ts` preload).
  */
 import { render as rtlRender, type RenderOptions, type RenderResult } from "@testing-library/react";
 import type { ReactElement } from "react";
