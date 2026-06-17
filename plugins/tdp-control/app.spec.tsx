@@ -130,4 +130,77 @@ describe("tdp-control plugin", () => {
       expect(container.textContent).toContain("AMD Custom APU 0405");
     });
   });
+
+  describe("per-game profile grid (#105)", () => {
+    const profiles = [
+      { appId: 1145360, gameName: "Hades", tdpWatts: 12 },
+      { appId: 391540, gameName: "Undertale", tdpWatts: 8 },
+    ];
+
+    beforeEach(() => {
+      callMock.mockImplementation((method: string) => {
+        if (method === "getTdpInfo") return Promise.resolve(mockTdpInfo);
+        if (method === "getPerGameEnabled") return Promise.resolve(true);
+        if (method === "getGameProfiles") return Promise.resolve(profiles);
+        if (method === "getGameDefaultTdp") return Promise.resolve(15);
+        return Promise.resolve(null);
+      });
+    });
+
+    it("renders a cover card per saved profile with its TDP badge", async () => {
+      const container = document.createElement("div");
+      const { mount } = await import("./app");
+      mount(container);
+      await waitFor(() => {
+        expect(container.textContent).toContain("Hades");
+        expect(container.textContent).toContain("Undertale");
+        // each saved TDP shows as a badge
+        expect(container.textContent).toContain("12W");
+        expect(container.textContent).toContain("8W");
+      });
+      // cover art is rendered via the capsule artwork URL
+      const imgs = Array.from(container.querySelectorAll("img"));
+      expect(
+        imgs.some((i) => i.getAttribute("src")?.includes("/steam-grid/1145360")),
+      ).toBe(true);
+    });
+
+    it("calls removeGameProfile(appId) when a card's Remove is clicked", async () => {
+      const container = document.createElement("div");
+      const { mount } = await import("./app");
+      mount(container);
+      await waitFor(() => {
+        expect(container.textContent).toContain("Hades");
+      });
+      const removeBtn = Array.from(
+        container.querySelectorAll("button"),
+      ).find((b) => b.textContent?.trim() === "Remove");
+      expect(removeBtn).toBeDefined();
+      removeBtn!.click();
+      await waitFor(() => {
+        expect(callMock).toHaveBeenCalledWith("removeGameProfile", 1145360);
+      });
+    });
+
+    it("is controller-activatable: the card tile carries the remove handler (onPick)", async () => {
+      // GameCard registers the whole tile as the spatial-nav focusable and
+      // fires onPick on controller A / Enter. We wire onPick to the same
+      // remove handler, so the card must be an interactive role=button and
+      // activating it removes the profile (what A does on-device).
+      const container = document.createElement("div");
+      const { mount } = await import("./app");
+      mount(container);
+      await waitFor(() => {
+        expect(container.textContent).toContain("Hades");
+      });
+      const card = Array.from(
+        container.querySelectorAll('[role="button"]'),
+      ).find((el) => el.textContent?.includes("Hades"));
+      expect(card).toBeDefined();
+      (card as HTMLElement).click();
+      await waitFor(() => {
+        expect(callMock).toHaveBeenCalledWith("removeGameProfile", 1145360);
+      });
+    });
+  });
 });
