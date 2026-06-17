@@ -77,9 +77,14 @@ export function isGameModeActive(): boolean {
     const pid = Number(entry);
     if (!Number.isFinite(pid) || pid <= 0) continue;
     try {
-      // gamescope's kernel comm is "gamescope" (9 chars, under the
-      // 15-char TASK_COMM_LEN cap, so no truncation to worry about).
-      if (readFileSync(`/proc/${pid}/comm`, "utf8").trim() === "gamescope") {
+      // Prefix-match, not exact: the SteamOS compositor's kernel comm is
+      // "gamescope-wl" (the Wayland gamescope), NOT a bare "gamescope".
+      // Other gamescope-spawned helpers ("gamescopereaper") also share the
+      // prefix and only exist in Gaming Mode, so matching any "gamescope*"
+      // comm is correct. The desktop's xdg-desktop-portal-gamescope is
+      // truncated to "xdg-desktop-por" (15-char TASK_COMM_LEN), so it does
+      // NOT start with "gamescope" — no false positive in desktop mode.
+      if (readFileSync(`/proc/${pid}/comm`, "utf8").trim().startsWith("gamescope")) {
         return true;
       }
     } catch {
