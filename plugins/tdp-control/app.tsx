@@ -563,6 +563,7 @@ function TdpControl() {
                               variant="danger"
                               onClick={removeProfile}
                               disabled={applying}
+                              style={{ width: "100%" }}
                             >
                               Remove
                             </Button>
