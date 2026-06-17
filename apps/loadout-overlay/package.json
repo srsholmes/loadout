@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "electrobun dev",
-    "build": "vite build && electrobun build --release",
-    "build:dev": "vite build && electrobun build",
+    "build": "vite build && electrobun build --release && sh ../../scripts/inject-patched-wrapper.sh",
+    "build:dev": "vite build && electrobun build && sh ../../scripts/inject-patched-wrapper.sh",
     "webview:dev": "vite",
     "webview:build": "vite build",
-    "electrobun:only": "electrobun build"
+    "electrobun:only": "electrobun build && sh ../../scripts/inject-patched-wrapper.sh"
   },
   "dependencies": {
     "@noriginmedia/norigin-spatial-navigation": "^3.0.0",
