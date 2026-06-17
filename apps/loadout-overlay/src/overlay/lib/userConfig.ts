@@ -21,6 +21,24 @@ const MIRROR_KEY = "loadout:user-config-mirror";
 let cache: Config = readMirror();
 let loaded = false;
 
+// Resolves once the backend's authoritative config has been merged into
+// `cache` (success or failure). Callers that decide whether to *write* a
+// default for an unset key (e.g. the gamescope auto-scale) must await this
+// first — otherwise they race the boot fetch, read the not-yet-populated
+// cache as "unset", and clobber the persisted value. This is especially
+// likely right after an overlay reinstall, when the localStorage mirror
+// (which normally seeds `cache` synchronously) has been wiped with the CEF
+// cache dir, leaving the async fetch as the only source.
+let resolveLoaded!: () => void;
+const loadedPromise = new Promise<void>((resolve) => {
+  resolveLoaded = resolve;
+});
+
+/** Resolves once `loadUserConfig()` has populated the cache from the backend. */
+export function whenUserConfigLoaded(): Promise<void> {
+  return loadedPromise;
+}
+
 function readMirror(): Config {
   try {
     const raw = localStorage.getItem(MIRROR_KEY);
@@ -55,6 +73,11 @@ export async function loadUserConfig(): Promise<void> {
     notify();
   } catch (err) {
     console.warn("[userConfig] Failed to load from backend:", err);
+  } finally {
+    // Unblock `whenUserConfigLoaded()` even on failure: if the backend is
+    // unreachable a PATCH wouldn't reach disk anyway, so there's nothing to
+    // clobber, and we mustn't deadlock waiters forever.
+    resolveLoaded();
   }
 }
 
