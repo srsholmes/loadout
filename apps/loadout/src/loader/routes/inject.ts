@@ -6,12 +6,15 @@
  *
  *   GET /vendor/vendor-all.js          → shared React / vendor globals
  *   GET /inject/sdk/bundle.js          → @loadout/ui SDK
- *   GET /inject/plugins/<id>/bundle.js → that plugin's compiled IIFE
  *
  * Bundles are built once at startup by `buildInjectBundles()` and
  * cached on the RouteContext. When the bundle is absent (`vendor` or
- * `sdk` empty string, plugin not in map) the routes fall through to
- * the loader's 404 so the requester can detect a missing artifact.
+ * `sdk` empty string) the routes fall through to the loader's 404 so
+ * the requester can detect a missing artifact.
+ *
+ * The per-plugin bundle route (`/inject/plugins/<id>/bundle.js`) was
+ * removed as dead code — issue #60. No plugin ships a panel.tsx, so the
+ * bundle map was always empty and the panel-mount path was unreachable.
  */
 
 import { jsResponse } from "../index";
@@ -41,25 +44,7 @@ export const sdkBundleRoute: RouteHandler = {
   },
 };
 
-const INJECT_PLUGIN_PATTERN = /^\/inject\/plugins\/([^/]+)\/bundle\.js$/;
-
-export const injectPluginBundleRoute: RouteHandler = {
-  name: "inject.plugin",
-  match: (_req, url) => INJECT_PLUGIN_PATTERN.test(url.pathname),
-  async handle(_req, url, ctx) {
-    const match = url.pathname.match(INJECT_PLUGIN_PATTERN)!;
-    const pluginId = match[1];
-    const bundle = ctx.injectBundles.plugins.get(pluginId);
-    if (bundle) return jsResponse(bundle);
-    return new Response(`// Plugin ${pluginId} not found`, {
-      status: 404,
-      headers: { "Content-Type": "application/javascript" },
-    });
-  },
-};
-
 export const injectRoutes: RouteHandler[] = [
   vendorBundleRoute,
   sdkBundleRoute,
-  injectPluginBundleRoute,
 ];

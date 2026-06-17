@@ -218,10 +218,10 @@ export async function startServer(options: ServerOptions = {}) {
   log.info(`Loaded ${plugins.size} plugin(s)`);
 
   // --- Build inject bundles for CEF injection ---
-  let injectBundles: InjectBundles = { vendor: "", sdk: "", plugins: new Map() };
+  let injectBundles: InjectBundles = { vendor: "", sdk: "" };
   try {
     injectBundles = await buildInjectBundles(pluginsDir, [...plugins.keys()]);
-    log.info(`Built inject bundles: SDK + ${injectBundles.plugins.size} plugin(s)`);
+    log.info(`Built inject bundles: vendor + SDK`);
   } catch (err) {
     log.error(`Failed to build inject bundles: ${err}`);
   }
@@ -422,7 +422,6 @@ export async function startServer(options: ServerOptions = {}) {
   const injector = new SteamInjector({
     loaderPort: port,
     sessionToken: token,
-    injectBundles: injectBundles.vendor ? injectBundles : undefined,
     log: (msg: string) => log.info(msg),
     // Bypass Steam CEF's fetch-blocking by dispatching the broadcast in-process
     // from the injector's binding callback. Without this, game launches show
