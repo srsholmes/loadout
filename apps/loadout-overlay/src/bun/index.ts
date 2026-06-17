@@ -45,6 +45,7 @@ import {
   findSteamPid,
   suspendSteam,
   resumeSteam,
+  isGameModeActive,
 } from "./native/process-control";
 
 import { trace } from "./native/trace";
@@ -439,12 +440,21 @@ function toggleOverlay(source: string) {
   } else {
     // --- Open path: suspend Steam (if enabled), grab controllers,
     // raise the window, set atoms. Also matches open_overlay().
-    if (SUSPEND_STEAM_ENABLED) {
+    // Freeze Steam ONLY in Gaming Mode. In gaming mode Steam reads the
+    // overlay's controller/QAM inputs while it's open (so we SIGSTOP it to
+    // stop input bleed-through); in desktop mode there's no game underneath
+    // and the frozen `steam` process IS the client window the user is using,
+    // so freezing it just wedges Steam — the bug this gate fixes. The evdev
+    // grab below still runs in both modes, so the controller overlay keeps
+    // working on the desktop without touching Steam.
+    if (SUSPEND_STEAM_ENABLED && isGameModeActive()) {
       if (steamPid.current === null) steamPid.current = findSteamPid();
       if (steamPid.current !== null) {
         suspendSteam(steamPid.current);
         startFreezeWatchdog();
       }
+    } else if (SUSPEND_STEAM_ENABLED) {
+      trace("[toggle] desktop mode (no gamescope) — skipping Steam freeze");
     }
     intercept.current?.grab();
     ipIntercept.current?.grab();
