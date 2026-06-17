@@ -66,7 +66,6 @@ export function sdkGlobalPlugin(): BunPlugin {
 export interface InjectBundles {
   vendor: string;
   sdk: string;
-  plugins: Map<string, string>;
 }
 
 /**
@@ -179,38 +178,11 @@ import * as ReactDOMClient from "react-dom/client";
     console.warn("Could not find @loadout/ui in any plugin's node_modules — SDK inject bundle skipped");
   }
 
-  // Build plugin bundles
-  const pluginBundles = new Map<string, string>();
-
-  for (const pluginId of pluginIds) {
-    const panelPath = join(pluginsDir, pluginId, "panel.tsx");
-    const bundleDir = join(buildRoot, `plugins/${pluginId}`);
-
-    // Skip plugins that only have app.tsx (overlay-only plugins)
-    if (!(await Bun.file(panelPath).exists())) continue;
-
-    try {
-      await mkdir(bundleDir, { recursive: true });
-      const result = await Bun.build({
-        entrypoints: [panelPath],
-        outdir: bundleDir,
-        plugins: [vendorGlobalsPlugin(), sdkGlobalPlugin()],
-        format: "esm",
-        target: "browser",
-      });
-
-      if (result.success && result.outputs.length > 0) {
-        const code = await Bun.file(result.outputs[0].path).text();
-        pluginBundles.set(pluginId, transformToIIFE(code, `__LOADOUT_PLUGIN_${pluginId}`));
-      } else {
-        console.error(`Failed to build inject plugin ${pluginId}:`, result.logs);
-      }
-    } catch (err) {
-      console.error(`Failed to build inject bundle for ${pluginId}:`, err);
-    }
-  }
-
-  return { vendor: vendorBundle, sdk: sdkBundle, plugins: pluginBundles };
+  // The per-plugin bundle build loop (compiling each plugin's panel.tsx
+  // into a __LOADOUT_PLUGIN_* IIFE) was removed as dead code — issue #60.
+  // No plugin ships a panel.tsx, so the map was always empty and the
+  // panel-mount path that consumed it was unreachable.
+  return { vendor: vendorBundle, sdk: sdkBundle };
 }
 
 /**

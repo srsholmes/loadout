@@ -15,7 +15,7 @@ export interface RouteEntry {
   path: string;
   /** Plugin ID that owns this route */
   pluginId: string;
-  /** Named export from the plugin's panel.tsx */
+  /** Named export from the plugin that provides the route component */
   exportName: string;
 }
 
