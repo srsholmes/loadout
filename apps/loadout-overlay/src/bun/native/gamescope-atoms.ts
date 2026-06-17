@@ -15,6 +15,7 @@ import { run as _runRaw, commandExists } from "@loadout/exec";
 import { trace } from "./trace";
 import { X11Connection } from "./x11";
 import { dismissSteamMenusIfOpen } from "./steam-quick-access";
+import { parseScreenGeometry } from "./screen-size";
 
 // From overlay_display.rs
 const OVERLAY_APP_ID = 0x534c; // 21324, "SL"
@@ -857,31 +858,9 @@ export class GamescopeAtoms {
   private _pickMonitorGeometry(
     xrandr: string,
   ): { x: number; y: number; w: number; h: number } | null {
-    // Each monitor line looks roughly:
-    //   "<name> connected [primary] <W>x<H>+<X>+<Y> ..."
-    // We prefer the line marked "primary"; otherwise the first connected
-    // output with a concrete geometry.
-    const geomRe = /(\d+)x(\d+)\+(\d+)\+(\d+)/;
-    let primary: RegExpMatchArray | null = null;
-    let firstConnected: RegExpMatchArray | null = null;
-    for (const line of xrandr.split("\n")) {
-      if (!line.includes(" connected")) continue;
-      const m = line.match(geomRe);
-      if (!m) continue;
-      if (line.includes(" primary ")) {
-        primary = m;
-        break;
-      }
-      if (!firstConnected) firstConnected = m;
-    }
-    const m = primary ?? firstConnected;
-    if (!m) return null;
-    return {
-      w: Number(m[1]),
-      h: Number(m[2]),
-      x: Number(m[3]),
-      y: Number(m[4]),
-    };
+    // Shared with the startup window-sizing probe (native/screen-size.ts)
+    // so both centring and born-at-size sizing parse xrandr identically.
+    return parseScreenGeometry(xrandr);
   }
 
   /** Hide: zero our atoms, drop opacity, force Steam's atoms back to 0,
