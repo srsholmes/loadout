@@ -24,7 +24,7 @@ mock.module("node:fs", () => ({
   },
 }));
 
-const { isGamescopeRunning } = await import("./game-mode");
+const { isGamescopeRunning } = await import("./gaming-mode");
 
 beforeEach(() => {
   fsState = { procEntries: [], commByPid: {} };

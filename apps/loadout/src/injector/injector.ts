@@ -14,7 +14,7 @@ import { buildWebpackPatcherScript, type WebpackPatchEntry } from "./webpack-pat
 import { buildInspectorScript } from "./inspector";
 import { DISCOVER_STEAM_REACT } from "./steam-react";
 import { createGameSessionMonitor, type GameSessionMonitor } from "./game-session-monitor";
-import { isGamescopeRunning } from "./game-mode";
+import { isGamescopeRunning } from "@loadout/steam-paths";
 
 export interface InjectorOptions {
   /** CEF remote debug port (Steam's default is 8080) */
