@@ -522,6 +522,19 @@ function TdpControl() {
                     {gameProfiles.map((p) => {
                       const isCurrent =
                         currentGame !== null && currentGame.appId === p.appId;
+                      // Wired to BOTH the card's onPick (controller A /
+                      // Enter — GameCard registers the whole tile as the
+                      // spatial-nav focusable) and the Remove button's
+                      // onClick (mouse/touch), so the card is fully usable
+                      // with a controller. See GameCard's interaction docs.
+                      const removeProfile = async () => {
+                        if (applying) return;
+                        await call("removeGameProfile", p.appId).catch(() => {});
+                        const profiles = (await call("getGameProfiles").catch(
+                          () => [],
+                        )) as SavedGameProfile[];
+                        setGameProfiles(profiles);
+                      };
                       return (
                         <GameCard
                           key={p.appId}
@@ -529,6 +542,7 @@ function TdpControl() {
                           fallbackImageUrl={steamArtworkUrls(p.appId).header}
                           title={p.gameName}
                           highlighted={isCurrent}
+                          onPick={removeProfile}
                           topLeftBadge={
                             isCurrent ? (
                               <span className="chip chip-accent">RUNNING</span>
@@ -547,15 +561,7 @@ function TdpControl() {
                             <Button
                               size="sm"
                               variant="danger"
-                              onClick={async () => {
-                                await call("removeGameProfile", p.appId).catch(
-                                  () => {},
-                                );
-                                const profiles = (await call(
-                                  "getGameProfiles",
-                                ).catch(() => [])) as SavedGameProfile[];
-                                setGameProfiles(profiles);
-                              }}
+                              onClick={removeProfile}
                               disabled={applying}
                             >
                               Remove
