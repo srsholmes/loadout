@@ -61,6 +61,36 @@ error() {
     printf "${RED}[ERROR]${NC} %s\n" "$1"
 }
 
+# --- Inject patched Electrobun native wrapper ---
+# electrobun build downloads the stock libNativeWrapper.so. We ship a patched
+# build (apps/loadout-overlay/vendor/libNativeWrapper.so) that fixes a 100%-CPU
+# busy-loop in CEF's browser process — see that dir's README.md. Swap it over
+# the freshly built tree so clones and CI releases get the fix. Guarded and
+# idempotent: a missing vendor file just leaves the stock (spinning) wrapper.
+inject_patched_wrapper() {
+    electrobun_dir="$1"
+    patched="$electrobun_dir/vendor/libNativeWrapper.so"
+    if [ ! -f "$patched" ]; then
+        warn "No vendored libNativeWrapper.so — using stock wrapper (overlay will spin at 100% CPU)."
+        return 0
+    fi
+    # The build emits the wrapper under build/<variant>/loadout-overlay-*/bin/.
+    # Replace every libNativeWrapper*.so the build produced (the runtime dlopen's
+    # libNativeWrapper.so; the _cef.so variant, if present, is harmless to match).
+    # Build paths contain no spaces, so an unquoted find expansion is safe here
+    # and keeps this POSIX-sh compatible (build.sh runs under `sh`, not bash).
+    injected=0
+    for so in $(find "$electrobun_dir/build" -type f -name 'libNativeWrapper*.so' 2>/dev/null); do
+        cp -f "$patched" "$so"
+        injected=$((injected + 1))
+    done
+    if [ "$injected" -gt 0 ]; then
+        success "Injected patched libNativeWrapper.so into $injected build artifact(s) (CEF CPU-spin fix)."
+    else
+        warn "Patched wrapper present but no build artifact to inject into — did electrobun build emit a bin/?"
+    fi
+}
+
 # --- Determine version ---
 
 get_version() {
@@ -208,6 +238,7 @@ build() {
         info "Building Electrobun overlay..."
         if (cd "$ELECTROBUN_DIR" && bunx vite build 2>&1 && bunx electrobun build --release 2>&1); then
             success "Electrobun overlay built (see $ELECTROBUN_DIR/build/ for artifacts)"
+            inject_patched_wrapper "$ELECTROBUN_DIR"
         else
             warn "Electrobun overlay build failed. Backend binary is still usable."
         fi
