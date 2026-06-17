@@ -181,5 +181,26 @@ describe("tdp-control plugin", () => {
         expect(callMock).toHaveBeenCalledWith("removeGameProfile", 1145360);
       });
     });
+
+    it("is controller-activatable: the card tile carries the remove handler (onPick)", async () => {
+      // GameCard registers the whole tile as the spatial-nav focusable and
+      // fires onPick on controller A / Enter. We wire onPick to the same
+      // remove handler, so the card must be an interactive role=button and
+      // activating it removes the profile (what A does on-device).
+      const container = document.createElement("div");
+      const { mount } = await import("./app");
+      mount(container);
+      await waitFor(() => {
+        expect(container.textContent).toContain("Hades");
+      });
+      const card = Array.from(
+        container.querySelectorAll('[role="button"]'),
+      ).find((el) => el.textContent?.includes("Hades"));
+      expect(card).toBeDefined();
+      (card as HTMLElement).click();
+      await waitFor(() => {
+        expect(callMock).toHaveBeenCalledWith("removeGameProfile", 1145360);
+      });
+    });
   });
 });
