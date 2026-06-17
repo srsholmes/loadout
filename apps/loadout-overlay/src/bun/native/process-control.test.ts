@@ -90,25 +90,29 @@ beforeEach(() => {
 // final test re-mocks node:fs to a throwing readdirSync and never restores
 // it, which would poison any later /proc-scanning test.
 describe("isGameModeActive", () => {
-  it("returns true when a 'gamescope' process is running (gaming mode)", () => {
+  it("returns true for the real SteamOS compositor comm 'gamescope-wl'", () => {
+    // The kernel comm is "gamescope-wl" (Wayland gamescope), NOT a bare
+    // "gamescope" — exact-matching "gamescope" was the gaming-mode regression.
     fsState.procEntries = ["1", "1500", "3372"];
     fsState.commByPid["1"] = "systemd";
-    fsState.commByPid["1500"] = "gamescope";
+    fsState.commByPid["1500"] = "gamescope-wl";
     fsState.commByPid["3372"] = "steam";
     expect(isGameModeActive()).toBe(true);
   });
 
+  it("also matches a bare 'gamescope' comm (other hosts)", () => {
+    fsState.procEntries = ["1500"];
+    fsState.commByPid["1500"] = "gamescope";
+    expect(isGameModeActive()).toBe(true);
+  });
+
   it("returns false in desktop mode (no gamescope, e.g. KDE/Plasma)", () => {
-    fsState.procEntries = ["1", "42", "3372"];
+    fsState.procEntries = ["1", "42", "3372", "99"];
     fsState.commByPid["1"] = "systemd";
     fsState.commByPid["42"] = "plasmashell";
     fsState.commByPid["3372"] = "steam";
-    expect(isGameModeActive()).toBe(false);
-  });
-
-  it("does NOT match partial prefixes like 'gamescopereaper'", () => {
-    fsState.procEntries = ["77"];
-    fsState.commByPid["77"] = "gamescopereap"; // 13-char truncation paranoia
+    // xdg-desktop-portal-gamescope truncates to "xdg-desktop-por" — must NOT match.
+    fsState.commByPid["99"] = "xdg-desktop-por";
     expect(isGameModeActive()).toBe(false);
   });
 
