@@ -4,7 +4,7 @@ import {
   listInstalledGames,
   type InstalledGame,
 } from "@loadout/steam-paths";
-import { CDPClient } from "@loadout/steam-cdp";
+import { SteamCefBadgeInjector } from "@loadout/steam-cef-badges";
 import { createExternalCache } from "@loadout/external-cache";
 import { parseBinaryVdf } from "@loadout/vdf";
 import {
@@ -117,20 +117,8 @@ export interface HltbSettings {
   enableStoreBadge: boolean;
 }
 
-interface CEFTab {
-  id: string;
-  title: string;
-  url: string;
-  webSocketDebuggerUrl: string;
-  type: string;
-}
-
-interface CDPConnection {
-  client: CDPClient;
-  tabTitle: string;
-}
-
-const CDP_TIMEOUT_MS = 5000;
+/** Badge payload pushed into the injected HLTB runtime (BPM + store). */
+type HltbBadgeData = { times: GameTimes | null; settings: HltbSettings };
 
 // ─── Constants ──────────────────────────────────────────────────────
 
@@ -142,7 +130,6 @@ const CACHE_TTL = 12 * 60 * 60 * 1000;
  *  the disk cache in the first place. */
 const DISK_CACHE_TTL_SEC = 12 * 60 * 60;
 const PLUGIN_ID = "hltb";
-const DEBUG_PORT = 8080;
 /**
  * Fuzzysort score floor for accepting a name-based HLTB match.
  *
@@ -243,54 +230,15 @@ export default class HltbBackend implements PluginBackend {
   // Settings
   private settings: HltbSettings = { ...DEFAULT_SETTINGS };
 
-  // CDP connections keyed by tab title
-  private connections = new Map<string, CDPConnection>();
-  private connected = false;
-  private healthInterval?: Timer;
-  private urlPollInterval?: Timer;
+  /** Shared Steam-CEF badge-injection lifecycle (connection discovery,
+   *  BPM render-tab fan-out, health check, route polling, push coalescing,
+   *  Gaming-Mode gating). Constructed in onLoad. See
+   *  `@loadout/steam-cef-badges`. */
+  private injector!: SteamCefBadgeInjector<HltbBadgeData>;
+
+  /** Re-seed timer for non-Steam shortcut names — NOT CEF machinery,
+   *  so it stays in the plugin (the injector owns the CEF intervals). */
   private shortcutSeedInterval?: Timer;
-
-  /** Current appId derived from SharedJSContext URL */
-  private currentAppId: string | null = null;
-  /** Re-entrancy guards for the two background interval ticks
-   *  (`checkHealth` 5s, `pollCurrentAppId` 500ms). CDP evaluates can
-   *  take up to `CDP_TIMEOUT_MS` (5s); without these guards a slow
-   *  tick lets the next interval fire on top, racing on
-   *  `connections`/`bpmRenderKeys` mid-iteration or piling evaluates
-   *  on the same socket. */
-  private polling = false;
-  private healthChecking = false;
-
-  /** Whether a badge data push is already in progress */
-  private pushingBadgeData = false;
-  /** Tail-queue for `pushBadgeDataToBPM`: when a push is in flight
-   *  and a new appId arrives, we stash it here and the running push
-   *  drains to it on completion. `pendingPushSet` (not just a
-   *  non-null check) because `null` is a valid pending value
-   *  (= "user navigated away from a game page"). */
-  private pendingPushAppId: string | null = null;
-  private pendingPushSet = false;
-
-  /**
-   * Connection keys that are candidate render targets for the BPM
-   * pill — i.e. either the parent `Steam Big Picture Mode` tab or any
-   * popup with title starting `MainMenu` (Steam re-creates these per
-   * session: `MainMenu_uid2`, `_uid3`, …).
-   *
-   * Which tab is *actually* visible depends on Steam build and runtime
-   * state: on some builds the parent shell hosts the React UI and the
-   * MainMenu popups stay hidden (`document.visibilityState === "hidden"`);
-   * on others it's the reverse. Rather than guess, we inject the badge
-   * system into every candidate and push data to all of them on each
-   * route change. Only the tab that's currently visible composites to
-   * the user; the rest update their hidden DOMs harmlessly. This kept
-   * the pill working both on the build that originally motivated #92
-   * (visible tab was `MainMenu_uid2`) and on builds where the parent
-   * shell hosts the UI directly.
-   *
-   * Health-check rediscovery refills this list when popups die.
-   */
-  private bpmRenderKeys: string[] = [];
 
   /**
    * Concurrency limiter for HLTB lookups. Without this, the new
@@ -353,16 +301,23 @@ export default class HltbBackend implements PluginBackend {
       })
       .catch(() => {});
 
-    this.tryConnect()
-      .then((ok) => {
-        if (ok) this.injectBadgeSystem();
-      })
-      .catch(() => {
-        console.log("[hltb] Steam CEF not available yet, will retry");
-      });
+    this.injector = new SteamCefBadgeInjector<HltbBadgeData>({
+      pluginId: PLUGIN_ID,
+      styleId: "hltb-badges-styles",
+      bpmGlobalName: "__hltb_badges",
+      storeGlobalName: "__hltb_store_badges",
+      css: this.generateBadgeCSS(),
+      bpmScript: this.generateBPMScript(),
+      buildStoreScript: (d) => this.generateStoreScript(d),
+      fetchBadgeData: (appId) => this.getBadgeData(appId),
+      buildBpmUpdateExpr: (d) =>
+        d
+          ? `if (window.__hltb_badges) window.__hltb_badges.update(${JSON.stringify(d)});`
+          : `if (window.__hltb_badges) window.__hltb_badges.update(null);`,
+      onStateChange: () => this.emitState(),
+    });
+    void this.injector.start();
 
-    this.healthInterval = setInterval(() => this.checkHealth(), 5000);
-    this.urlPollInterval = setInterval(() => this.pollCurrentAppId(), 500);
     // Re-seed shortcuts every 5 minutes so newly-added non-Steam games
     // (e.g. EmuDeck just imported a ROM) become resolvable without a
     // plugin reload. Piggyback the same tick to prune expired cache
@@ -464,20 +419,8 @@ export default class HltbBackend implements PluginBackend {
   }
 
   async onUnload(): Promise<void> {
-    clearInterval(this.healthInterval);
-    clearInterval(this.urlPollInterval);
     clearInterval(this.shortcutSeedInterval);
-    await this.removeBadgeSystem();
-
-    // Silent catch: `ws.close()` may throw if the socket is already
-    // CLOSING/CLOSED — harmless during unload.
-    for (const conn of this.connections.values()) {
-      try {
-        conn.client.close();
-      } catch {}
-    }
-    this.connections.clear();
-    this.connected = false;
+    await this.injector?.stop();
 
     this.searchCache.clear();
     this.steamTimesCache.clear();
@@ -888,7 +831,7 @@ export default class HltbBackend implements PluginBackend {
    * a `__core:game-detection` subscribe once E-004 lands.
    */
   async getCurrentRouteAppId(): Promise<string | null> {
-    return this.currentAppId;
+    return this.injector?.getCurrentAppId() ?? null;
   }
 
   /** Get game name from Steam appdetails API. */
@@ -1087,44 +1030,24 @@ export default class HltbBackend implements PluginBackend {
    * collapses the burst into a single re-injection after the user
    * stops poking.
    */
-  private readonly INJECT_DEBOUNCE_MS = 250;
-  private injectDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-
   async updateSettings(settings: HltbSettings): Promise<void> {
     this.settings = { ...DEFAULT_SETTINGS, ...settings };
     await this.saveSettings();
     this.emitState();
-    if (!this.connected) return;
-    if (this.injectDebounceTimer) clearTimeout(this.injectDebounceTimer);
-    this.injectDebounceTimer = setTimeout(() => {
-      this.injectDebounceTimer = null;
-      void this.injectBadgeSystem();
-    }, this.INJECT_DEBOUNCE_MS);
+    // Re-inject so style/position/toggle changes show live (debounced
+    // inside the injector so dragging a control doesn't peg the bridge).
+    this.injector?.reinjectDebounced();
   }
 
   // ─── RPC: Status ────────────────────────────────────────────────
 
   async getStatus(): Promise<{ connected: boolean; tabs: number }> {
-    return { connected: this.connected, tabs: this.connections.size };
+    return this.injector?.getStatus() ?? { connected: false, tabs: 0 };
   }
 
   async reconnect(): Promise<{ success: boolean; error?: string }> {
-    for (const conn of this.connections.values()) {
-      try {
-        conn.client.close();
-      } catch {}
-    }
-    this.connections.clear();
-    this.bpmRenderKeys = [];
-    this.connected = false;
-
-    const ok = await this.tryConnect();
-    if (ok) {
-      await this.injectBadgeSystem();
-      this.emitState();
-      return { success: true };
-    }
-    return { success: false, error: "Could not connect to Steam CEF" };
+    if (!this.injector) return { success: false, error: "Not initialized" };
+    return this.injector.reconnect();
   }
 
   async clearCache(): Promise<void> {
@@ -1149,318 +1072,6 @@ export default class HltbBackend implements PluginBackend {
    */
   async clearExternalCache(): Promise<void> {
     await this.clearCache();
-  }
-
-  // ─── Route Polling (SharedJSContext) ────────────────────────────
-  //
-  // In BPM / gamescope, window.location.href stays pinned to the BPM entry
-  // URL forever — all navigation happens inside a React Router SPA. The
-  // browser URL never changes even when the user opens a game's details page,
-  // so URL scraping never finds an appId and the badge never renders.
-  //
-  // Steam exposes the router on SharedJSContext as `window.tempNavStore`, a
-  // MobX store that mirrors React Router v5:
-  //   tempNavStore.m_history.location.pathname  — current route
-  //   tempNavStore.m_locationPathname           — same, as an observable
-  //
-  // On a game page the pathname is `/library/app/<id>` (or `/routes/library/
-  // app/<id>` on some builds). Polling that covers both BPM and Desktop
-  // Steam. Fallback to window.location.pathname keeps this working if Steam
-  // ever renames the global.
-
-  private async pollCurrentAppId(): Promise<void> {
-    if (this.polling) return;
-    const conn = this.connections.get("SharedJSContext");
-    if (!conn || !conn.client.connected) return;
-
-    this.polling = true;
-    try {
-      const pathname = (await this.cdpEvaluate(
-        conn,
-        "(window.tempNavStore && window.tempNavStore.m_history && window.tempNavStore.m_history.location && window.tempNavStore.m_history.location.pathname) || window.location.pathname || ''",
-      )) as string;
-      const match = pathname?.match?.(/^\/(?:routes\/)?library\/app\/(\d+)/);
-      const newAppId = match ? match[1] : null;
-
-      if (newAppId !== this.currentAppId) {
-        this.currentAppId = newAppId;
-        // Push badge data to BPM tab whenever the viewed app changes
-        this.pushBadgeDataToBPM(newAppId).catch(() => {});
-      }
-    } catch {
-      // Ignore — will retry next tick
-    } finally {
-      this.polling = false;
-    }
-  }
-
-  /**
-   * Fetch HLTB data server-side and push it directly into the BPM tab via CDP.
-   * This avoids the injected script needing to fetch() from localhost,
-   * which is blocked by mixed content on https://steamloopback.host.
-   */
-  private async pushBadgeDataToBPM(appId: string | null): Promise<void> {
-    // Coalesce rapid route changes: if a push is in flight, record
-    // the *latest* appId and let the running invocation drain to it
-    // before exiting. Previously this was a drop-on-busy guard, which
-    // showed a stale pill when the user navigated faster than HLTB
-    // could respond.
-    this.pendingPushAppId = appId;
-    this.pendingPushSet = true;
-    if (this.pushingBadgeData) return;
-    this.pushingBadgeData = true;
-
-    try {
-      while (this.pendingPushSet) {
-        const targetAppId = this.pendingPushAppId;
-        this.pendingPushSet = false;
-
-        const targets = this.bpmRenderKeys
-          .map((k) => ({ key: k, conn: this.connections.get(k) }))
-          .filter((t) => t.conn && t.conn.client.connected);
-        if (targets.length === 0) continue;
-
-        // Push to every candidate. Only the currently-visible tab
-        // composites to the user — see the bpmRenderKeys doc comment
-        // for why we fan-out rather than guess which popup is
-        // on-screen. Per-target try/catch isolates a single tab error
-        // (e.g. socket racing close during checkHealth) so later
-        // targets still receive the update.
-        let expr: string;
-        if (!targetAppId) {
-          expr = `if (window.__hltb_badges) window.__hltb_badges.update(null);`;
-        } else {
-          const data = await this.getBadgeData(targetAppId);
-          // Re-check: if a newer appId arrived while we awaited
-          // getBadgeData, drop this batch and let the loop re-run.
-          if (this.pendingPushSet) continue;
-          const dataJson = JSON.stringify(data);
-          expr = `if (window.__hltb_badges) window.__hltb_badges.update(${dataJson});`;
-        }
-
-        const pushed: string[] = [];
-        for (const t of targets) {
-          try {
-            await this.cdpEvaluate(t.conn!, expr);
-            pushed.push(t.key);
-          } catch (err) {
-            console.warn(
-              `[hltb] Failed to push badge data to ${t.key}:`,
-              err,
-            );
-          }
-        }
-        if (targetAppId && pushed.length > 0) {
-          console.log(
-            `[hltb] Pushed badge data to ${pushed.join(", ")} for app ${targetAppId}`,
-          );
-        }
-      }
-    } finally {
-      this.pushingBadgeData = false;
-    }
-  }
-
-  // ─── CDP Infrastructure ─────────────────────────────────────────
-
-  private async tryConnect(): Promise<boolean> {
-    try {
-      const res = await fetch(`http://localhost:${DEBUG_PORT}/json`, {
-        signal: AbortSignal.timeout(3000),
-      });
-      if (!res.ok) throw new Error(`/json returned ${res.status}`);
-
-      const tabs = (await res.json()) as CEFTab[];
-
-      // Close existing
-      for (const conn of this.connections.values()) {
-        try {
-          conn.client.close();
-        } catch {}
-      }
-      this.connections.clear();
-
-      const sharedJSNames = [
-        "SharedJSContext",
-        "Steam Shared Context presented by Valve\u2122",
-        "SP",
-        "Steam",
-      ];
-      const exactTargets = [...sharedJSNames, "Steam Big Picture Mode"];
-      // Steam splits the BPM UI across two layers depending on the
-      // build: the parent `Steam Big Picture Mode` tab (hosts React
-      // on some builds) and per-session `MainMenu_uid<N>` popups
-      // (hosts React on others). We treat both as candidate render
-      // targets and let `pushBadgeDataToBPM` fan out \u2014 only the
-      // visible one is composited to the user, the hidden ones update
-      // their off-screen DOMs harmlessly. Avoids re-breaking #92 every
-      // time Steam shuffles which popup hosts the UI.
-      const prefixTargets = ["MainMenu"];
-
-      this.bpmRenderKeys = [];
-
-      for (const tab of tabs) {
-        if (!tab.webSocketDebuggerUrl) continue;
-
-        const isExact = exactTargets.includes(tab.title);
-        const prefixHit = prefixTargets.find((p) => tab.title.startsWith(p));
-        if (!isExact && !prefixHit) continue;
-
-        try {
-          const conn = await this.openCDP(tab.webSocketDebuggerUrl, tab.title);
-          // Normalize SharedJSContext variants to canonical key.
-          // MainMenu popups keep their full title (e.g. `MainMenu_uid2`)
-          // because Steam recreates them per-session.
-          const key = sharedJSNames.includes(tab.title)
-            ? "SharedJSContext"
-            : tab.title;
-          this.connections.set(key, conn);
-          if (prefixHit === "MainMenu" || tab.title === "Steam Big Picture Mode") {
-            this.bpmRenderKeys.push(key);
-          }
-          console.log(`[hltb] Connected to: ${tab.title} (key: ${key})`);
-        } catch (err) {
-          console.warn(`[hltb] Failed to connect to ${tab.title}:`, err);
-        }
-      }
-
-      // Also connect to store tabs
-      for (const tab of tabs) {
-        if (!tab.webSocketDebuggerUrl) continue;
-        if (!tab.url.includes("store.steampowered.com")) continue;
-        try {
-          const conn = await this.openCDP(tab.webSocketDebuggerUrl, tab.title);
-          this.connections.set(`store:${tab.title}`, conn);
-          console.log(`[hltb] Connected to store: ${tab.title}`);
-        } catch {}
-      }
-
-      this.connected =
-        this.connections.has("SharedJSContext") ||
-        this.bpmRenderKeys.length > 0;
-      this.emitState();
-      return this.connected;
-    } catch {
-      this.connected = false;
-      return false;
-    }
-  }
-
-  private async openCDP(wsUrl: string, tabTitle: string): Promise<CDPConnection> {
-    const client = new CDPClient(wsUrl);
-    await client.connect();
-    return { client, tabTitle };
-  }
-
-  private cdpEvaluate(
-    conn: CDPConnection,
-    expression: string,
-  ): Promise<unknown> {
-    return conn.client.evaluate(expression, { timeoutMs: CDP_TIMEOUT_MS });
-  }
-
-  // ─── CSS/JS Injection ───────────────────────────────────────────
-
-  private async injectCSSToTab(
-    conn: CDPConnection,
-    styleId: string,
-    css: string,
-  ): Promise<void> {
-    const escaped = css
-      .replace(/\\/g, "\\\\")
-      .replace(/`/g, "\\`")
-      .replace(/\$/g, "\\$");
-    await this.cdpEvaluate(
-      conn,
-      `
-      (function() {
-        var e = document.getElementById("${styleId}");
-        if (e) e.remove();
-        var s = document.createElement("style");
-        s.id = "${styleId}";
-        s.dataset.steamLoaderPlugin = "hltb";
-        document.head.appendChild(s);
-        s.textContent = \`${escaped}\`;
-      })()
-    `,
-    );
-  }
-
-  private async injectBadgeSystem(): Promise<void> {
-    const css = this.generateBadgeCSS();
-
-    // Inject into every candidate BPM render tab. Steam splits the UI
-    // across the parent shell + MainMenu popups in build-dependent
-    // ways; we don't know which one the user sees, so we inject into
-    // all of them. Hidden tabs render the badge into their off-screen
-    // DOM harmlessly.
-    const bpmConns = this.bpmRenderKeys
-      .map((k) => ({ key: k, conn: this.connections.get(k) }))
-      .filter((t) => t.conn && t.conn.client.connected);
-
-    if (bpmConns.length > 0) {
-      for (const t of bpmConns) {
-        try {
-          await this.injectCSSToTab(t.conn!, "hltb-badges-styles", css);
-          await this.cdpEvaluate(t.conn!, this.generateBPMScript());
-          console.log(`[hltb] Injected badge system into ${t.key}`);
-        } catch (err) {
-          console.warn(`[hltb] Failed to inject into ${t.key}:`, err);
-        }
-      }
-      // Push current badge data if an app is selected — fan-out
-      // happens inside pushBadgeDataToBPM.
-      if (this.currentAppId) {
-        this.pushBadgeDataToBPM(this.currentAppId).catch(() => {});
-      }
-    } else {
-      console.warn(
-        "[hltb] No BPM render tab discovered — badge will not appear. Tabs:",
-        Array.from(this.connections.keys()).join(", "),
-      );
-    }
-
-    // Inject into store tabs — fetch data server-side and embed it
-    for (const [key, conn] of this.connections) {
-      if (!key.startsWith("store:")) continue;
-      if (!conn.client.connected) continue;
-      try {
-        // Extract appId from the store tab's URL
-        const url = (await this.cdpEvaluate(
-          conn,
-          "window.location.href",
-        )) as string;
-        const appIdMatch = url?.match?.(
-          /store\.steampowered\.com\/app\/(\d+)/,
-        );
-        let badgeData: {
-          times: GameTimes | null;
-          settings: HltbSettings;
-        } | null = null;
-        if (appIdMatch) {
-          badgeData = await this.getBadgeData(appIdMatch[1]);
-        }
-
-        await this.injectCSSToTab(conn, "hltb-badges-styles", css);
-        await this.cdpEvaluate(conn, this.generateStoreScript(badgeData));
-      } catch {}
-    }
-  }
-
-  private async removeBadgeSystem(): Promise<void> {
-    for (const conn of this.connections.values()) {
-      if (!conn.client.connected) continue;
-      try {
-        await this.cdpEvaluate(
-          conn,
-          `
-          if(window.__hltb_badges) window.__hltb_badges.cleanup();
-          if(window.__hltb_store_badges) window.__hltb_store_badges.cleanup();
-          var s=document.getElementById("hltb-badges-styles"); if(s)s.remove();
-        `,
-        );
-      } catch {}
-    }
   }
 
   // ─── Badge CSS ──────────────────────────────────────────────────
@@ -1725,47 +1336,13 @@ export default class HltbBackend implements PluginBackend {
   // ─── State Emission ─────────────────────────────────────────────
 
   private emitState(): void {
+    const { connected, tabs } = this.injector?.getStatus() ?? {
+      connected: false,
+      tabs: 0,
+    };
     this.emit?.({
       event: "stateChanged",
-      data: {
-        connected: this.connected,
-        tabs: this.connections.size,
-        settings: this.settings,
-      },
+      data: { connected, tabs, settings: this.settings },
     });
-  }
-
-  // ─── Health Check ───────────────────────────────────────────────
-
-  private async checkHealth(): Promise<void> {
-    if (this.healthChecking) return;
-    this.healthChecking = true;
-    try {
-      for (const [key, conn] of this.connections) {
-        if (!conn.client.connected) {
-          this.connections.delete(key);
-          console.log(`[hltb] Pruned dead connection: ${key}`);
-          this.bpmRenderKeys = this.bpmRenderKeys.filter((k) => k !== key);
-        }
-      }
-
-      const wasConnected = this.connected;
-      this.connected =
-        this.connections.has("SharedJSContext") ||
-        this.bpmRenderKeys.length > 0;
-
-      if (!this.connected || this.bpmRenderKeys.length === 0) {
-        if (wasConnected && !this.connected) this.emitState();
-        // If every BPM render tab died (e.g. the user closed BPM and
-        // reopened it, replacing MainMenu_uid2 with MainMenu_uid3),
-        // re-run discovery so we pick up the new popup set. Without
-        // this the pill stays gone until the next reconnect / health
-        // drop.
-        const ok = await this.tryConnect();
-        if (ok) await this.injectBadgeSystem();
-      }
-    } finally {
-      this.healthChecking = false;
-    }
   }
 }

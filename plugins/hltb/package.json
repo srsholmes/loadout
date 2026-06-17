@@ -15,6 +15,7 @@
     "@loadout/external-cache": "workspace:*",
     "@loadout/plugin-storage": "workspace:*",
     "@loadout/steam-cdp": "workspace:*",
+    "@loadout/steam-cef-badges": "workspace:*",
     "@loadout/vdf": "workspace:*"
   },
   "plugin": {

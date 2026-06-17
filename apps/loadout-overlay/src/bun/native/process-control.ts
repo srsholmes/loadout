@@ -51,48 +51,14 @@ export function findSteamPid(): number | null {
   return null;
 }
 
-/**
- * True when the system is in Steam Gaming Mode (a `gamescope` compositor
- * process is running). In desktop mode (KDE/Plasma on SteamOS) gamescope
- * is NOT running, so this returns false.
- *
- * We scan /proc for the comm rather than trusting $GAMESCOPE_DISPLAY: the
- * loadout overlay runs as a session-level `systemd --user` service that
- * inherits GAMESCOPE_DISPLAY=:0 even in desktop mode, so that env var
- * falsely reports gaming mode here (see quick-links isGamingMode, which
- * has the env caveat). A running gamescope process is the reliable signal.
- *
- * Used to gate the Steam SIGSTOP freeze: in gaming mode Steam reads the
- * overlay's inputs while it's open (hence the freeze), but in desktop mode
- * freezing Steam just wedges the Steam client window the user is using.
- */
-export function isGameModeActive(): boolean {
-  let entries: string[];
-  try {
-    entries = readdirSync("/proc");
-  } catch {
-    return false;
-  }
-  for (const entry of entries) {
-    const pid = Number(entry);
-    if (!Number.isFinite(pid) || pid <= 0) continue;
-    try {
-      // Prefix-match, not exact: the SteamOS compositor's kernel comm is
-      // "gamescope-wl" (the Wayland gamescope), NOT a bare "gamescope".
-      // Other gamescope-spawned helpers ("gamescopereaper") also share the
-      // prefix and only exist in Gaming Mode, so matching any "gamescope*"
-      // comm is correct. The desktop's xdg-desktop-portal-gamescope is
-      // truncated to "xdg-desktop-por" (15-char TASK_COMM_LEN), so it does
-      // NOT start with "gamescope" — no false positive in desktop mode.
-      if (readFileSync(`/proc/${pid}/comm`, "utf8").trim().startsWith("gamescope")) {
-        return true;
-      }
-    } catch {
-      // Process gone between readdir and readFile — normal, skip.
-    }
-  }
-  return false;
-}
+// Steam Gaming Mode detection lives in @loadout/steam-paths so the overlay
+// (gating the SIGSTOP freeze) and the loader's CEF injector (gating plugin
+// injection, issue #111) share one implementation. Re-exported here under
+// the overlay-local name so callers keep importing it from this native facade.
+// Gates the freeze: in gaming mode Steam reads the overlay's inputs while it's
+// open (hence the freeze); in desktop mode freezing Steam just wedges the
+// Steam client window the user is using.
+export { isGamescopeRunning as isGameModeActive } from "@loadout/steam-paths";
 
 /**
  * Send a signal to a pid via libc kill(2). Returns true on success.

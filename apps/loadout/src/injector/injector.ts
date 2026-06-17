@@ -14,6 +14,7 @@ import { buildWebpackPatcherScript, type WebpackPatchEntry } from "./webpack-pat
 import { buildInspectorScript } from "./inspector";
 import { DISCOVER_STEAM_REACT } from "./steam-react";
 import { createGameSessionMonitor, type GameSessionMonitor } from "./game-session-monitor";
+import { isGamescopeRunning } from "@loadout/steam-paths";
 
 export interface InjectorOptions {
   /** CEF remote debug port (Steam's default is 8080) */
@@ -57,6 +58,15 @@ export interface InjectorOptions {
    * banner instead of failing silently. Audit A-021.
    */
   onGiveUp?: (info: { reason: string; crashCount: number }) => void;
+  /**
+   * Predicate gating plugin CEF injection on Gaming Mode (issue #111).
+   * Plugin bundles, webpack/route/menu patches, panels and overlays are
+   * only injected when this returns true; in desktop mode the injector
+   * still connects to CEF and runs the game-session monitor, but injects
+   * nothing. Defaults to `isGamescopeRunning` (a gamescope process scan);
+   * overridable for tests. Guard at the injection level, not per-plugin.
+   */
+  isGameMode?: () => boolean | Promise<boolean>;
 }
 
 const GLOBAL_FLAG = "loadoutHasLoaded";
@@ -315,6 +325,7 @@ export class SteamInjector {
   private onGameLaunch?: InjectorOptions["onGameLaunch"];
   private onGameExit?: InjectorOptions["onGameExit"];
   private onGiveUp?: InjectorOptions["onGiveUp"];
+  private isGameMode: () => boolean | Promise<boolean>;
 
   constructor(options: InjectorOptions = {}) {
     this.debugPort = options.debugPort ?? 8080;
@@ -328,6 +339,7 @@ export class SteamInjector {
     this.onGiveUp = options.onGiveUp;
     this.log = options.log ?? console.log;
     this.cdpFactory = options.cdpFactory ?? null;
+    this.isGameMode = options.isGameMode ?? isGamescopeRunning;
   }
 
   /**
@@ -455,32 +467,42 @@ export class SteamInjector {
     // Step 3: Enable Page events for reload detection
     await this.cdp.send("Page.enable");
 
-    // Step 4: Inject if not already loaded
-    const alreadyLoaded = await this.cdp.hasGlobalVar(GLOBAL_FLAG);
-    if (!alreadyLoaded) {
-      await this.inject();
+    // Plugin CEF injection is gated on Gaming Mode (issue #111): the
+    // desktop Steam client must not get ProtonDB/HLTB badges, route/menu
+    // patches or panels. We still connect to CEF and run the game-session
+    // monitor below in desktop mode — only the plugin injection is skipped.
+    const gameMode = await this.isGameMode();
+    if (gameMode) {
+      // Step 4: Inject if not already loaded
+      const alreadyLoaded = await this.cdp.hasGlobalVar(GLOBAL_FLAG);
+      if (!alreadyLoaded) {
+        await this.inject();
+      } else {
+        this.log("[injector] Loadout already loaded in this context");
+      }
+
+      // Step 5: Wait for Steam to fully load, then connect to BPM tab.
+      // SharedJSContext comes up first; BPM/QAM tabs appear later.
+      for (let attempt = 0; attempt < 10 && this.running; attempt++) {
+        await this.connectBPM();
+        if (this.bpmCdp?.connected) break;
+        this.log(`[injector] Waiting for BPM tab... (attempt ${attempt + 1}/10)`);
+        await Bun.sleep(2000);
+      }
+
+      // Step 5.5: Inject inspector into BPM
+      if (this.devMode) {
+        await this.injectInspector();
+      }
+
+      // Step 6: Discover Steam's internal webpack components
+      await this.discoverComponents();
     } else {
-      this.log("[injector] Loadout already loaded in this context");
+      this.log("[injector] Desktop mode (no gamescope) — skipping plugin injection");
     }
 
-    // Step 5: Wait for Steam to fully load, then connect to BPM tab.
-    // SharedJSContext comes up first; BPM/QAM tabs appear later.
-    for (let attempt = 0; attempt < 10 && this.running; attempt++) {
-      await this.connectBPM();
-      if (this.bpmCdp?.connected) break;
-      this.log(`[injector] Waiting for BPM tab... (attempt ${attempt + 1}/10)`);
-      await Bun.sleep(2000);
-    }
-
-    // Step 5.5: Inject inspector into BPM
-    if (this.devMode) {
-      await this.injectInspector();
-    }
-
-    // Step 6: Discover Steam's internal webpack components
-    await this.discoverComponents();
-
-    // Step 7: Start game session monitor (forwards launch/exit events to TDP backend)
+    // Step 7: Start game session monitor (forwards launch/exit events to TDP
+    // backend). Runs in both modes — games can launch from the desktop client.
     await this.startGameSessionMonitor();
 
     // Step 8: Monitor for page events
@@ -970,13 +992,17 @@ export class SteamInjector {
       const unsubDom = this.cdp!.on("Page.domContentEventFired", async () => {
         this.log("[injector] Page reloaded, checking if re-injection needed...");
         try {
+          // Re-injection is gated on Gaming Mode too (issue #111) — a reload
+          // in the desktop client must not re-add plugin injection. The game
+          // session monitor is re-armed in both modes.
+          const gameMode = await this.isGameMode();
           const loaded = await this.cdp!.hasGlobalVar(GLOBAL_FLAG);
-          if (!loaded) {
+          if (gameMode && !loaded) {
             await this.inject();
             await this.connectBPM();
             await this.discoverComponents();
-            await this.startGameSessionMonitor();
           }
+          await this.startGameSessionMonitor();
         } catch (err) {
           this.log(`[injector] Re-injection check failed: ${err}`);
         }
@@ -1031,6 +1057,13 @@ export class SteamInjector {
   async reinject(): Promise<void> {
     if (!this.cdp?.connected) {
       this.log("[injector] Cannot reinject — no CDP connection");
+      return;
+    }
+
+    // Hot reload must respect the Gaming Mode gate (issue #111) — don't
+    // re-inject plugins into the desktop client on a file change.
+    if (!(await this.isGameMode())) {
+      this.log("[injector] Hot reload skipped — desktop mode (no gamescope)");
       return;
     }
 

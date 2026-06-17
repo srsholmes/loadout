@@ -102,7 +102,7 @@ mkdir -p "$NM_DST/@loadout"
 
 # Workspace packages used by plugins. Add new packages here when a
 # plugin starts importing them.
-for pkg in types exec steam-paths ui plugin-storage vdf external-cache per-game-profiles steam-cdp file-picker steam-shortcut sgdb-art deck-hid; do
+for pkg in types exec steam-paths ui plugin-storage vdf external-cache per-game-profiles steam-cdp steam-cef-badges file-picker steam-shortcut sgdb-art deck-hid; do
     if [ -d "$PROJECT_ROOT/packages/$pkg" ]; then
         cp -RL "$PROJECT_ROOT/packages/$pkg" "$NM_DST/@loadout/$pkg"
         # Drop the workspace's own node_modules — its entries are
