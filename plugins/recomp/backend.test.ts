@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import type { EmitPayload } from "@loadout/types";
 import RecompBackend from "./backend";
 
