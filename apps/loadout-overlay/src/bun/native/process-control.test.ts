@@ -77,14 +77,46 @@ mock.module("node:fs", () => ({
   appendFileSync: () => {},
 }));
 
-const { findSteamPid, suspendSteam, resumeSteam } = await import(
-  "./process-control"
-);
+const { findSteamPid, suspendSteam, resumeSteam, isGameModeActive } =
+  await import("./process-control");
 
 beforeEach(() => {
   killCalls.length = 0;
   killReturn = 0;
   fsState = { procEntries: [], commByPid: {} };
+});
+
+// NOTE: this block must stay BEFORE the findSteamPid block — that block's
+// final test re-mocks node:fs to a throwing readdirSync and never restores
+// it, which would poison any later /proc-scanning test.
+describe("isGameModeActive", () => {
+  it("returns true when a 'gamescope' process is running (gaming mode)", () => {
+    fsState.procEntries = ["1", "1500", "3372"];
+    fsState.commByPid["1"] = "systemd";
+    fsState.commByPid["1500"] = "gamescope";
+    fsState.commByPid["3372"] = "steam";
+    expect(isGameModeActive()).toBe(true);
+  });
+
+  it("returns false in desktop mode (no gamescope, e.g. KDE/Plasma)", () => {
+    fsState.procEntries = ["1", "42", "3372"];
+    fsState.commByPid["1"] = "systemd";
+    fsState.commByPid["42"] = "plasmashell";
+    fsState.commByPid["3372"] = "steam";
+    expect(isGameModeActive()).toBe(false);
+  });
+
+  it("does NOT match partial prefixes like 'gamescopereaper'", () => {
+    fsState.procEntries = ["77"];
+    fsState.commByPid["77"] = "gamescopereap"; // 13-char truncation paranoia
+    expect(isGameModeActive()).toBe(false);
+  });
+
+  it("tolerates a process disappearing between readdir and readFile", () => {
+    fsState.procEntries = ["777", "888"];
+    fsState.commByPid["888"] = "gamescope";
+    expect(isGameModeActive()).toBe(true);
+  });
 });
 
 describe("findSteamPid", () => {
