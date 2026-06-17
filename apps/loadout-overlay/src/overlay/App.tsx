@@ -16,7 +16,7 @@ import { usePlugins } from "./hooks/usePlugins";
 import { useSidebarAutoCollapseSetting } from "./hooks/useSidebarCollapse";
 import { useStatusMetrics } from "./hooks/useStatusMetrics";
 import { useEnabledPlugins } from "./hooks/useEnabledPlugins";
-import { useConfigValue, getConfigValue, setConfigValue } from "./lib/userConfig";
+import { useConfigValue, getConfigValue, setConfigValue, whenUserConfigLoaded } from "./lib/userConfig";
 import { GamepadNavProvider, useFocusable, Focusable, FocusContext, setFocus, getCurrentFocusKey } from "./components/GamepadNav";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { hideOverlay, isGamescopeMode, getControllerShortcuts, setControllerShortcuts, sendOverlayHeartbeat } from "./lib/host";
@@ -238,9 +238,14 @@ function AppInner() {
   const [homePickerOpen, setHomePickerOpen] = useState(false);
   const metrics = useStatusMetrics();
 
-  // On mount: detect gamescope mode for scaling
+  // On mount: detect gamescope mode for scaling.
+  // Wait for the persisted config to load before deciding whether `uiScale`
+  // is unset — otherwise we race the boot fetch, read the not-yet-populated
+  // cache as "unset", and overwrite the user's saved scale with the gamescope
+  // default (most visible right after a reinstall, when the localStorage
+  // mirror is gone). See whenUserConfigLoaded() in lib/userConfig.
   useEffect(() => {
-    isGamescopeMode().then((gs) => {
+    Promise.all([isGamescopeMode(), whenUserConfigLoaded()]).then(([gs]) => {
       setGamescope(gs);
       if (gs && getConfigValue<number | undefined>("uiScale", undefined) === undefined) {
         setScale(GAMESCOPE_SCALE);
