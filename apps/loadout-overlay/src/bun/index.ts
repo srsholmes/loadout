@@ -312,19 +312,33 @@ function broadcastOverlayVisibility(): void {
 // it's kept behind an env flag as a fallback for hosts where IP can't manage a
 // pad. The watchdog + startup-resume below stay wired so the flag is safe.
 //
-// EXTERNAL-PAD FIX (under test): Steam reads external pads directly via hidraw
-// (outside gamescope's focus routing), so neither the evdev grab nor the focus
-// atoms stop Steam BPM navigating behind the overlay from an external pad. HHD
-// hits the same wall and solves it by freezing Steam ("to avoid HID device dual
-// input"). Freezing Steam blocks that — but on the Steam Deck it ALSO kills the
-// built-in controls inside the overlay: the Deck's built-in pad navigates via
-// Steam Input's virtual pad (read by CEF's Web Gamepad API), and a frozen Steam
-// stops emitting on it. So freeze is OPT-IN (off by default); enable with
-// DECK_OVERLAY_SUSPEND_STEAM=1 on hosts where blocking external-pad BPM nav
-// matters more than built-in-pad overlay nav. The resume-burst is mitigated by
-// the deferred SIGCONT + (TODO) the virtual-pad grab held across resume.
-const SUSPEND_STEAM_ENABLED =
-  process.env.DECK_OVERLAY_SUSPEND_STEAM === "1";
+// EXTERNAL-PAD FIX: Steam reads external pads directly via hidraw (outside
+// gamescope's focus routing), so neither the evdev grab nor the focus atoms
+// stop Steam BPM navigating behind the overlay from an external pad. The IP
+// InterceptMode=GamepadOnly we set on open only DIVERTS input if IP is actually
+// grabbing the source device (ManageAllDevices) — which it currently isn't — so
+// on its own it does NOT starve Steam's hidraw read. HHD hits the same wall and
+// solves it by freezing Steam ("to avoid HID device dual input"). Freezing
+// blocks that — but on the Steam Deck it ALSO kills the built-in controls inside
+// the overlay: the Deck's built-in pad navigates via Steam Input's virtual pad
+// (read by CEF's Web Gamepad API), and a frozen Steam stops emitting on it.
+//
+// These two hosts need OPPOSITE behaviour, so the freeze is decided PER-HOST
+// (finalized after IP discovery below, since it keys off ipHandle.available):
+//   - External IP-managed pad (e.g. OXP APEX): nav arrives over IP's DBus
+//     stream, independent of Steam, so freezing Steam blocks its direct hidraw
+//     read (no double-capture) WITHOUT starving overlay nav → freeze ON.
+//   - Steam Deck alone (no IP composite): built-in nav reads Steam's virtual
+//     pad, which a frozen Steam stops emitting → freeze OFF.
+// #99 made freeze a single global opt-in to save the Deck, which regressed the
+// APEX (Steam captured the pad again behind the overlay). Coupling the decision
+// to host type fixes both. DECK_OVERLAY_SUSPEND_STEAM=1/0 force on/off and
+// override the auto policy.
+const SUSPEND_STEAM_ENV = process.env.DECK_OVERLAY_SUSPEND_STEAM; // "1"=force on, "0"=force off, unset=auto
+// Provisional until finalized post-IP-discovery. A forced-on freeze applies
+// immediately; auto/off start false so an open during the brief discovery
+// window can't freeze the Deck.
+let suspendSteamEnabled = SUSPEND_STEAM_ENV === "1";
 
 // Startup safety net for the frozen-Steam risk: a previous overlay instance
 // that crashed or was SIGKILLed *while open* could have left Steam SIGSTOPped
@@ -333,7 +347,10 @@ const SUSPEND_STEAM_ENABLED =
 // no-op, so this is free; combined with systemd's auto-restart it bounds any
 // stuck-frozen window to a single overlay restart. (HHD does NOT do this — it's
 // our crash-recovery edge.)
-if (SUSPEND_STEAM_ENABLED) {
+// Unconditional: the freeze policy is now decided per-host at runtime, so a
+// prior session may have frozen Steam under a different policy than this one.
+// SIGCONT on a running process is a kernel no-op, so this is always safe.
+{
   const bootSteamPid = findSteamPid();
   if (bootSteamPid !== null) {
     resumeSteam(bootSteamPid);
@@ -444,7 +461,7 @@ function toggleOverlay(source: string) {
     atoms.hide().catch((e) => console.warn("[overlay] atoms.hide:", e));
     intercept.current?.release();
     ipIntercept.current?.release();
-    // Always SIGCONT Steam on close, even when SUSPEND_STEAM_ENABLED is
+    // Always SIGCONT Steam on close, even when suspendSteamEnabled is
     // off. Users have reported Steam appearing frozen after the overlay
     // closes (menu visible but inputs ignored) — if anything left Steam
     // TASK_STOPPED earlier (a prior session with the flag on, a stuck
@@ -475,13 +492,13 @@ function toggleOverlay(source: string) {
     // so freezing it just wedges Steam — the bug this gate fixes. The evdev
     // grab below still runs in both modes, so the controller overlay keeps
     // working on the desktop without touching Steam.
-    if (SUSPEND_STEAM_ENABLED && isGameModeActive()) {
+    if (suspendSteamEnabled && isGameModeActive()) {
       if (steamPid.current === null) steamPid.current = findSteamPid();
       if (steamPid.current !== null) {
         suspendSteam(steamPid.current);
         startFreezeWatchdog();
       }
-    } else if (SUSPEND_STEAM_ENABLED) {
+    } else if (suspendSteamEnabled) {
       trace("[toggle] desktop mode (no gamescope) — skipping Steam freeze");
     }
     intercept.current?.grab();
@@ -579,6 +596,20 @@ void (async () => {
   // No IP composites (Deck alone, or no external IP-managed pad) → the virtual
   // pad is the Deck's built-in controls; read it for nav.
   const readVirtualPadsForNav = !ipHandle?.available;
+
+  // Finalize the Steam-freeze policy now that host type is known (see the
+  // SUSPEND_STEAM_ENV comment above). Auto = freeze iff an IP-managed external
+  // pad is present; that's the case (OXP APEX) where nav comes over IP's DBus
+  // stream and freezing Steam blocks its hidraw double-capture without starving
+  // overlay nav. On the Deck alone we must NOT freeze (it would kill the
+  // virtual-pad nav we just opted to read). env "1"/"0" override the auto rule.
+  if (SUSPEND_STEAM_ENV === "1") suspendSteamEnabled = true;
+  else if (SUSPEND_STEAM_ENV === "0") suspendSteamEnabled = false;
+  else suspendSteamEnabled = !!ipHandle?.available;
+  console.log(
+    `[overlay] steam-freeze ${suspendSteamEnabled ? "ON" : "OFF"} ` +
+      `(env=${SUSPEND_STEAM_ENV ?? "auto"}, ipManaged=${!!ipHandle?.available})`,
+  );
 
   try {
     const handle = await startInputIntercept({
