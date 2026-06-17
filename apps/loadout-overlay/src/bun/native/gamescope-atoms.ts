@@ -74,11 +74,20 @@ export interface AtomTargetOptions {
    *  available. Kill switch for the libxcb migration — set
    *  `OVERLAY_FORCE_XPROP=1` in the environment to flip this. */
   forceXprop?: boolean;
+  /** The overlay window's width/height, used by `_positionOnPrimary` to
+   *  centre it on the monitor. Must match the BrowserWindow `frame` size
+   *  or the centring is off. Defaults to the legacy 1280×800. */
+  windowWidth?: number;
+  windowHeight?: number;
 }
 
 export class GamescopeAtoms {
   private display: string;
   private windowName: string;
+  /** Overlay window size — used to centre it on the monitor in
+   *  `_positionOnPrimary`. Kept in sync with the BrowserWindow frame. */
+  private windowWidth: number;
+  private windowHeight: number;
   /** Cached window id; re-resolved on first failure. */
   private windowId: string | null = null;
   /** Cached Steam Big Picture window id — re-resolved on show(). */
@@ -126,6 +135,8 @@ export class GamescopeAtoms {
   constructor(opts: AtomTargetOptions) {
     this.display = opts.display;
     this.windowName = opts.windowName;
+    this.windowWidth = opts.windowWidth ?? 1280;
+    this.windowHeight = opts.windowHeight ?? 800;
 
     // Try to open a libxcb connection up front. Failure (server down,
     // wrong display, libxcb missing) is non-fatal — we silently fall
@@ -825,9 +836,10 @@ export class GamescopeAtoms {
       // Under gamescope's inner X usually: "DP-1 connected 2560x1440+0+0 ..."
       const geom = this._pickMonitorGeometry(stdout);
       if (!geom) return;
-      // windowmove + windowsize: center the overlay in the monitor.
-      const x = geom.x + Math.max(0, Math.floor((geom.w - 1280) / 2));
-      const y = geom.y + Math.max(0, Math.floor((geom.h - 800) / 2));
+      // Center the overlay in the monitor, using the real window size so
+      // a non-default frame (e.g. the 1920×1080 default) isn't mis-placed.
+      const x = geom.x + Math.max(0, Math.floor((geom.w - this.windowWidth) / 2));
+      const y = geom.y + Math.max(0, Math.floor((geom.h - this.windowHeight) / 2));
       await run([
         "env",
         `DISPLAY=${this.display}`,
