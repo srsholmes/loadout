@@ -5,6 +5,8 @@ import {
   useBackend,
   useCurrentGame,
   Button,
+  Badge,
+  GameCard,
   Spinner,
   Slider,
   SegmentedItem,
@@ -511,30 +513,58 @@ function TdpControl() {
                   <div className="subsection-desc" style={{ marginBottom: 4 }}>
                     Saved profiles ({gameProfiles.length})
                   </div>
-                  {gameProfiles.map((p) => (
-                    <div
-                      key={p.appId}
-                      className="row"
-                      style={{ alignItems: "center", justifyContent: "space-between" }}
-                    >
-                      <span className="row-label">{p.gameName}</span>
-                      <span className="flex items-center gap-2.5">
-                        <span className="row-value mono">{p.tdpWatts}W</span>
-                        <Button
-                          onClick={async () => {
-                            await call("removeGameProfile", p.appId).catch(() => {});
-                            const profiles = (await call("getGameProfiles").catch(
-                              () => [],
-                            )) as SavedGameProfile[];
-                            setGameProfiles(profiles);
-                          }}
-                          disabled={applying}
-                        >
-                          Remove
-                        </Button>
-                      </span>
-                    </div>
-                  ))}
+                  {/* Cover grid — mirrors the HLTB / ProtonDB game grids
+                      (issue #105). 4 cols when the shell sidebar is open,
+                      6 when collapsed. Each tile shows the game's capsule
+                      art, its saved TDP as an overlay badge, and a Remove
+                      action. */}
+                  <div className="grid grid-cols-4 sidebar-collapsed:grid-cols-6 gap-2.5">
+                    {gameProfiles.map((p) => {
+                      const isCurrent =
+                        currentGame !== null && currentGame.appId === p.appId;
+                      return (
+                        <GameCard
+                          key={p.appId}
+                          imageUrl={steamArtworkUrls(p.appId).capsule}
+                          fallbackImageUrl={steamArtworkUrls(p.appId).header}
+                          title={p.gameName}
+                          highlighted={isCurrent}
+                          topLeftBadge={
+                            isCurrent ? (
+                              <span className="chip chip-accent">RUNNING</span>
+                            ) : undefined
+                          }
+                          overlayBadges={
+                            <Badge
+                              variant="accent"
+                              size="xs"
+                              className="font-semibold"
+                            >
+                              <span className="mono">{p.tdpWatts}W</span>
+                            </Badge>
+                          }
+                          action={
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              onClick={async () => {
+                                await call("removeGameProfile", p.appId).catch(
+                                  () => {},
+                                );
+                                const profiles = (await call(
+                                  "getGameProfiles",
+                                ).catch(() => [])) as SavedGameProfile[];
+                                setGameProfiles(profiles);
+                              }}
+                              disabled={applying}
+                            >
+                              Remove
+                            </Button>
+                          }
+                        />
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
