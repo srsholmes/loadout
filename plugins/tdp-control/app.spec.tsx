@@ -130,4 +130,56 @@ describe("tdp-control plugin", () => {
       expect(container.textContent).toContain("AMD Custom APU 0405");
     });
   });
+
+  describe("per-game profile grid (#105)", () => {
+    const profiles = [
+      { appId: 1145360, gameName: "Hades", tdpWatts: 12 },
+      { appId: 391540, gameName: "Undertale", tdpWatts: 8 },
+    ];
+
+    beforeEach(() => {
+      callMock.mockImplementation((method: string) => {
+        if (method === "getTdpInfo") return Promise.resolve(mockTdpInfo);
+        if (method === "getPerGameEnabled") return Promise.resolve(true);
+        if (method === "getGameProfiles") return Promise.resolve(profiles);
+        if (method === "getGameDefaultTdp") return Promise.resolve(15);
+        return Promise.resolve(null);
+      });
+    });
+
+    it("renders a cover card per saved profile with its TDP badge", async () => {
+      const container = document.createElement("div");
+      const { mount } = await import("./app");
+      mount(container);
+      await waitFor(() => {
+        expect(container.textContent).toContain("Hades");
+        expect(container.textContent).toContain("Undertale");
+        // each saved TDP shows as a badge
+        expect(container.textContent).toContain("12W");
+        expect(container.textContent).toContain("8W");
+      });
+      // cover art is rendered via the capsule artwork URL
+      const imgs = Array.from(container.querySelectorAll("img"));
+      expect(
+        imgs.some((i) => i.getAttribute("src")?.includes("/steam-grid/1145360")),
+      ).toBe(true);
+    });
+
+    it("calls removeGameProfile(appId) when a card's Remove is clicked", async () => {
+      const container = document.createElement("div");
+      const { mount } = await import("./app");
+      mount(container);
+      await waitFor(() => {
+        expect(container.textContent).toContain("Hades");
+      });
+      const removeBtn = Array.from(
+        container.querySelectorAll("button"),
+      ).find((b) => b.textContent?.trim() === "Remove");
+      expect(removeBtn).toBeDefined();
+      removeBtn!.click();
+      await waitFor(() => {
+        expect(callMock).toHaveBeenCalledWith("removeGameProfile", 1145360);
+      });
+    });
+  });
 });
