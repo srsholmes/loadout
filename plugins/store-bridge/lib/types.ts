@@ -68,9 +68,10 @@ export interface InstalledGame {
   /** Extra launch-time CLI args reported by the store (Epic
    *  "launch_parameters", e.g. "-window-mode exclusive"). */
   launchParameters?: string;
-  /** Native OS of the executable. Drives whether we set Proton as
-   *  the Steam compat tool when adding the shortcut. */
-  platform?: "windows" | "linux" | "macos";
+  /** Native OS of the executable. `"windows"` drives whether we set
+   *  Proton as the Steam compat tool when adding the shortcut (the
+   *  host is always Linux). */
+  platform?: "windows" | "linux";
   source: InstallSource;
   addedToSteam: boolean;
   steamAppId?: number;

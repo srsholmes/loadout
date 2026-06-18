@@ -440,13 +440,17 @@ class EpicDriverImpl implements StoreDriver {
   }
 }
 
-/** legendary surfaces "Win32"/"Win64"/"Mac"/"Linux"; we squash to our 3-value enum. */
-function normalisePlatform(p?: string): "windows" | "linux" | "macos" | undefined {
+/**
+ * legendary surfaces "Win32"/"Win64"/"Mac"/"Linux"; we squash to the
+ * two platforms the Deck can run — Windows (via Proton) and Linux. macOS
+ * binaries can't run here, so they map to undefined (treated as
+ * unsupported).
+ */
+function normalisePlatform(p?: string): "windows" | "linux" | undefined {
   if (!p) return undefined;
   const lc = p.toLowerCase();
   if (lc.startsWith("win")) return "windows";
   if (lc === "linux") return "linux";
-  if (lc === "mac" || lc === "macos" || lc === "darwin") return "macos";
   return undefined;
 }
 
@@ -463,11 +467,10 @@ function unique<T>(xs: T[]): T[] {
 }
 
 /** Heuristic fallback when legendary's platform field is empty. */
-function guessPlatform(exe?: string): "windows" | "linux" | "macos" | undefined {
+function guessPlatform(exe?: string): "windows" | "linux" | undefined {
   if (!exe) return undefined;
   const lc = exe.toLowerCase();
   if (lc.endsWith(".exe")) return "windows";
-  if (lc.endsWith(".app")) return "macos";
   return "linux";
 }
 
