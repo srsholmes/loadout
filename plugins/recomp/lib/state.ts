@@ -261,49 +261,46 @@ export async function pruneOrphanInstalledMods(
   state: PersistedState,
   catalog: Map<string, Set<string>>,
 ): Promise<PersistedState> {
-  let mutated = false;
-  const nextGames: Record<string, InstalledGame> = { ...state.games };
+  // Decide what to drop from the caller's snapshot (for the warn/log),
+  // then apply those drops atomically onto the FRESH on-disk state via
+  // `mutateState` — a blind `saveState` of the snapshot would clobber any
+  // concurrent RPC write (e.g. a setRomPath serviced while this onLoad
+  // sweep runs). Keyed per (gameId, modId) so we only remove the exact
+  // orphans, leaving everything else (incl. concurrent edits) intact.
+  const drops: Array<[string, string]> = [];
   for (const [gameId, game] of Object.entries(state.games)) {
     if (!game.installedMods) continue;
     if (Object.keys(game.installedMods).length === 0) continue;
     const allowed = catalog.get(gameId);
     if (!allowed || allowed.size === 0) {
-      // Registry doesn't know about ANY mods for this game right now.
-      // Either:
-      //   - the game's manifest was dropped (rare; usually a recipe
-      //     rename), OR
-      //   - registry load failed mid-flight (a parse error / missing
-      //     setup.ts skipped the game), OR
-      //   - the games.json mods catalog was emptied upstream.
-      // In every case, blanket-removing the user's installedMods is
-      // a destructive overreach. Skip and log instead — the next
-      // mod install will overwrite the orphan entry if it really is
-      // gone, and a healthy registry load on subsequent boot will
-      // converge.
+      // Registry doesn't know about ANY mods for this game right now
+      // (manifest dropped, registry load failed mid-flight, or catalog
+      // emptied upstream). Blanket-removing the user's installedMods is
+      // a destructive overreach — skip and log instead; the next mod
+      // install / a healthy boot converges.
       console.warn(
         `[recomp] pruneOrphanInstalledMods: skipping ${gameId} — registry has no mods for it (would have dropped ${Object.keys(game.installedMods).length} record(s)). Verify the game's manifest loaded correctly.`,
       );
       continue;
     }
-    const filtered: Record<string, NonNullable<InstalledGame["installedMods"]>[string]> = {};
-    let droppedAny = false;
-    for (const [modId, entry] of Object.entries(game.installedMods)) {
-      if (allowed.has(modId)) {
-        filtered[modId] = entry;
-      } else {
-        droppedAny = true;
+    for (const modId of Object.keys(game.installedMods)) {
+      if (!allowed.has(modId)) {
+        drops.push([gameId, modId]);
         console.log(
           `[recomp] pruneOrphanInstalledMods: dropping ${gameId}/${modId} (no longer in registry)`,
         );
       }
     }
-    if (droppedAny) {
-      mutated = true;
-      nextGames[gameId] = { ...game, installedMods: filtered };
-    }
   }
-  if (!mutated) return state;
-  const updated = { ...state, games: nextGames };
-  await saveState(updated);
-  return updated;
+  if (drops.length === 0) return state;
+  return mutateState((current) => {
+    const nextGames: Record<string, InstalledGame> = { ...current.games };
+    for (const [gameId, modId] of drops) {
+      const game = nextGames[gameId];
+      if (!game?.installedMods || !(modId in game.installedMods)) continue;
+      const { [modId]: _removed, ...rest } = game.installedMods;
+      nextGames[gameId] = { ...game, installedMods: rest };
+    }
+    return { ...current, games: nextGames };
+  });
 }

@@ -28,6 +28,19 @@ import { setupScriptPathFor } from "./registry";
 type EventCallback = (event: PipelineEvent) => void;
 
 /**
+ * Hosts a GitHub release-asset download may legitimately redirect through
+ * (github.com → its object CDN; release-assets.githubusercontent.com is
+ * the 2025 successor to objects.githubusercontent.com). Passed to
+ * `downloadFile` so the post-redirect host is validated.
+ */
+const GITHUB_DOWNLOAD_HOSTS = [
+  "github.com",
+  "objects.githubusercontent.com",
+  "release-assets.githubusercontent.com",
+  "codeload.github.com",
+];
+
+/**
  * After a build_from_source `partialDir` → `installDir` rename, rewrite
  * any baked-in `partialDir` absolute paths inside the top-level shell
  * scripts the recipe/host generated (launcher.sh, recomp-launch.sh, …)
@@ -422,15 +435,24 @@ export async function installGame(
       percent: 0, message: "Starting download...",
     });
 
-    await downloadFile(assetUrl, downloadPath, (downloaded, total) => {
-      const percent = total > 0 ? (downloaded / total) * 100 : 0;
-      const mbDown = (downloaded / 1_048_576).toFixed(1);
-      const mbTotal = (total / 1_048_576).toFixed(1);
-      onEvent({
-        type: "progress", gameId, stage: "downloading",
-        percent, message: `${mbDown} / ${mbTotal} MB`,
-      });
-    });
+    await downloadFile(
+      assetUrl,
+      downloadPath,
+      (downloaded, total) => {
+        const percent = total > 0 ? (downloaded / total) * 100 : 0;
+        const mbDown = (downloaded / 1_048_576).toFixed(1);
+        const mbTotal = (total / 1_048_576).toFixed(1);
+        onEvent({
+          type: "progress", gameId, stage: "downloading",
+          percent, message: `${mbDown} / ${mbTotal} MB`,
+        });
+      },
+      // Validate the post-redirect host: a release asset URL on
+      // github.com legitimately 302s to GitHub's object CDN, but bytes
+      // must not be fetched from any other (attacker-controlled)
+      // redirect target. Mirrors store-bridge's github-release allowlist.
+      GITHUB_DOWNLOAD_HOSTS,
+    );
 
     // Checksum gate (FIX 4): if the manifest pinned an expected
     // sha256 for this platform, verify the downloaded bytes BEFORE
@@ -759,6 +781,11 @@ export async function updateGame(
         `Restore failed: ${message}. Your saves are preserved at: ${backupDir}`,
       );
     }
+    // The restore copies ran as the root backend, so the restored saves/
+    // configs are root-owned again even though installGame() already
+    // chowned the fresh tree. Re-own so the user-launched game can write
+    // its own save data (EACCES otherwise).
+    await chownInstallDirToUser(installDir);
   }
 
   return newState;

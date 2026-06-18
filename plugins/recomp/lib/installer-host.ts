@@ -443,10 +443,20 @@ async function cloneFromGitHub(
     await extractArchive(tarPath, stagingDir);
     const entries = await readdir(stagingDir);
     let sourceRoot = stagingDir;
-    if (entries.length === 1) {
-      const onlyEntry = join(stagingDir, entries[0]!);
-      const stats = await stat(onlyEntry);
-      if (stats.isDirectory()) sourceRoot = onlyEntry;
+    // GitHub archives extract to a single `<repo>-<branch>/` directory,
+    // but a tarball can also drop loose sidecar files alongside it
+    // (`pax_global_header`, macOS `._*`). Flatten into the sole
+    // directory if there's exactly one, ignoring any sidecar files —
+    // requiring `entries.length === 1` would leave the tree nested and
+    // the recipe would `make` against an empty root.
+    const dirEntries: string[] = [];
+    for (const name of entries) {
+      if ((await stat(join(stagingDir, name))).isDirectory()) {
+        dirEntries.push(name);
+      }
+    }
+    if (dirEntries.length === 1) {
+      sourceRoot = join(stagingDir, dirEntries[0]!);
     }
     // Move contents into dest (which already exists). Don't wipe
     // dest — the recipe may have called placeRom first. Overwrite

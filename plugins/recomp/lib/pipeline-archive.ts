@@ -70,10 +70,21 @@ function rejectIfUnsafe(member: string, kind: string, archivePath: string): void
   }
 }
 
+// Force the C locale on listing tools so their human-readable output is
+// stable: GNU tar localizes both the date column AND the " link to "
+// hardlink phrase, and zipinfo localizes its month names — parsing those
+// is what the traversal/symlink guard depends on. (Merged onto
+// process.env so PATH etc. survive — Bun.spawn's env REPLACES, not
+// merges.)
+function cLocaleEnv(): Record<string, string | undefined> {
+  return { ...process.env, LC_ALL: "C", LANG: "C", LC_TIME: "C" };
+}
+
 /**
- * List a tar(.gz) archive's members with symlink targets. Uses
- * `tar -tv` so symlink/hardlink lines carry their ` -> target`. The
- * verbose listing is `mode user/group size date time name [-> link]`.
+ * List a tar(.gz) archive's members with symlink AND hardlink targets.
+ * Uses `tar -tv`; symlink lines carry ` -> target`, hardlink lines carry
+ * ` link to target` (both localized — hence the C locale). The verbose
+ * listing is `mode user/group size date time name [-> link | link to link]`.
  */
 async function listTar(
   archivePath: string,
@@ -83,30 +94,33 @@ async function listTar(
   const proc = spawn(["tar", flag, archivePath], {
     stdout: "pipe",
     stderr: "pipe",
+    env: cLocaleEnv(),
   });
-  const [out, code] = await Promise.all([
+  // Drain BOTH streams concurrently with exit: a tar that emits a lot of
+  // stderr warnings (e.g. "implausibly old time stamp" on a foreign
+  // archive) would otherwise fill the OS pipe buffer and block before
+  // exiting → `proc.exited` never resolves → the root backend hangs.
+  const [out, errText, code] = await Promise.all([
     new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
     proc.exited,
   ]);
   if (code !== 0) {
-    const err = await new Response(proc.stderr).text();
-    throw new Error(`Could not read archive listing for ${basename(archivePath)} (tar exit ${code}): ${err}`);
+    throw new Error(`Could not read archive listing for ${basename(archivePath)} (tar exit ${code}): ${errText}`);
   }
   const result: { name: string; link?: string }[] = [];
   for (const line of out.split("\n")) {
     if (line.trim() === "") continue;
-    // The name is everything after the 5th whitespace-collapsed field
-    // (mode, owner/group, size, date, time). Split on the first run of
-    // spaces six times is brittle across locales, so instead grab the
-    // tail after the "time" token by matching the timestamp.
+    // Grab the tail after the timestamp (mode, owner/group, size, date,
+    // time, then the name). C locale keeps the date/time columns stable.
     const m = line.match(/^\S+\s+\S+\s+\d+\s+[\d-]+\s+[\d:]+\s+(.*)$/);
     const tail = m ? m[1]! : line;
-    const arrow = tail.indexOf(" -> ");
-    if (arrow !== -1) {
-      result.push({
-        name: tail.slice(0, arrow),
-        link: tail.slice(arrow + 4),
-      });
+    const sym = tail.indexOf(" -> "); // symlink
+    const hard = tail.indexOf(" link to "); // hardlink
+    if (sym !== -1) {
+      result.push({ name: tail.slice(0, sym), link: tail.slice(sym + 4) });
+    } else if (hard !== -1) {
+      result.push({ name: tail.slice(0, hard), link: tail.slice(hard + 9) });
     } else {
       result.push({ name: tail });
     }
@@ -114,27 +128,56 @@ async function listTar(
   return result;
 }
 
-/** List a zip archive's member names (`unzip -Z1`). */
+/**
+ * List a zip archive's members with symlink targets. Uses `unzip -Z`
+ * (zipinfo verbose) rather than `-Z1` (names only) so symlink entries —
+ * which `-Z1` hides entirely, leaving the traversal/symlink guard
+ * blind to them — surface with their `lrwx…` type and ` -> target`.
+ * A symlink whose target we can't parse is rejected (fail-safe).
+ */
 async function listZip(
   archivePath: string,
 ): Promise<{ name: string; link?: string }[]> {
-  const proc = spawn(["unzip", "-Z1", archivePath], {
+  const proc = spawn(["unzip", "-Z", archivePath], {
     stdout: "pipe",
     stderr: "pipe",
+    env: cLocaleEnv(),
   });
-  const [out, code] = await Promise.all([
+  const [out, errText, code] = await Promise.all([
     new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
     proc.exited,
   ]);
   if (code !== 0) {
-    const err = await new Response(proc.stderr).text();
-    throw new Error(`Could not read archive listing for ${basename(archivePath)} (unzip exit ${code}): ${err}`);
+    throw new Error(`Could not read archive listing for ${basename(archivePath)} (unzip exit ${code}): ${errText}`);
   }
-  return out
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l !== "")
-    .map((name) => ({ name }));
+  const result: { name: string; link?: string }[] = [];
+  for (const line of out.split("\n")) {
+    // zipinfo entry lines: a 10-char unix permission string (first char
+    // is the type: '-' file, 'd' dir, 'l' symlink), … then a
+    // `dd-Mon-yy HH:MM` timestamp, then the name [+ ` -> target`].
+    // Header ("Archive:", "Zip file size:") and footer ("N files, …")
+    // lines don't match and are skipped.
+    const m = line.match(
+      /^([dl-])[rwxsStT-]{9}\s.*\s\d{2}-[A-Za-z]{3}-\d{2}\s+\d{2}:\d{2}\s+(.+)$/,
+    );
+    if (!m) continue;
+    const type = m[1]!;
+    const tail = m[2]!;
+    const sym = tail.indexOf(" -> ");
+    if (sym !== -1) {
+      result.push({ name: tail.slice(0, sym), link: tail.slice(sym + 4) });
+    } else if (type === "l") {
+      // Symlink entry whose target we couldn't parse — never let it
+      // through unvalidated.
+      throw new Error(
+        `Refusing to extract ${basename(archivePath)}: could not parse symlink target for "${tail}".`,
+      );
+    } else {
+      result.push({ name: tail });
+    }
+  }
+  return result;
 }
 
 /**
@@ -230,6 +273,14 @@ async function extractNestedArchives(dir: string): Promise<void> {
         }
         try { await rm(path); } catch { /* ignore */ }
         foundNested = true;
+        // Only auto-unpack a nested `.zip` when it's (essentially) the
+        // sole payload (≤2 entries). Unlike nested tarballs — which are
+        // unambiguously wrappers — a `.zip` sitting alongside many other
+        // files is more likely a data archive the game reads at runtime
+        // (e.g. an asset pack) than a wrapper, and unpacking+deleting it
+        // would corrupt the install. The trade-off: a genuine wrapper
+        // zip shipped beside ≥2 siblings is left packed (opaque launch
+        // failure) — rare for the prebuilt/rom_extract sources we target.
       } else if (lower.endsWith(".zip") && entries.length <= 2) {
         await assertSafeArchive(path);
         const proc = spawn(["unzip", "-o", path, "-d", dir], {

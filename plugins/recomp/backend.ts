@@ -250,6 +250,7 @@ export default class RecompBackend implements PluginBackend {
     gameId: string,
     path: string | null,
   ): Promise<string | null> {
+    if (path != null) await this.assertRomPathAllowed(path);
     this.state = await setRomPath(this.state, gameId, path);
     return this.state.romPaths?.[gameId] ?? null;
   }
@@ -257,6 +258,29 @@ export default class RecompBackend implements PluginBackend {
   /** Read the saved ROM path for `gameId`, or null if none. */
   async getRomPath(gameId: string): Promise<string | null> {
     return this.state.romPaths?.[gameId] ?? null;
+  }
+
+  /**
+   * Validate a user-supplied ROM path before it's persisted or copied.
+   * The backend runs as root, so without this an RPC caller could point
+   * a ROM at any backend-readable file (e.g. `/etc/shadow`) and have the
+   * pipeline `cp` it into an install dir — a "copy any file out"
+   * primitive. realpath-canonicalize, then require it under the same
+   * allow-roots gate `listDirectory` / `importModFromDisk` use.
+   */
+  private async assertRomPathAllowed(romPath: string): Promise<void> {
+    const { realpath } = await import("node:fs/promises");
+    let canonical: string;
+    try {
+      canonical = await realpath(romPath);
+    } catch {
+      throw new Error(`ROM path '${romPath}' not found or unreadable.`);
+    }
+    if (!pathRootAllowed(canonical)) {
+      throw new Error(
+        `ROM path '${canonical}' is outside the allowed roots (${allowedRootsErrorPhrase()}).`,
+      );
+    }
   }
 
   async pickRomFile(extensions?: string[]): Promise<string | null> {
@@ -406,19 +430,33 @@ export default class RecompBackend implements PluginBackend {
     parent: string | null;
     entries: { name: string; isDir: boolean }[];
   }> {
-    const { readdir, stat } = await import("node:fs/promises");
+    const { readdir, stat, realpath } = await import("node:fs/promises");
     const { join, resolve, dirname } = await import("node:path");
     const home = process.env.HOME ?? "/home";
 
-    let resolved: string;
+    let requested: string;
     if (!path || path.length === 0) {
-      resolved = await this.defaultBrowseDir();
+      requested = await this.defaultBrowseDir();
     } else if (path === "~") {
-      resolved = home;
+      requested = home;
     } else if (path.startsWith("~/")) {
-      resolved = join(home, path.slice(2));
+      requested = join(home, path.slice(2));
     } else {
-      resolved = resolve(path);
+      requested = resolve(path);
+    }
+
+    // Canonicalize via realpath BEFORE the allow-roots gate: `resolve()`
+    // is purely lexical, so a symlink that lives under an allowed root
+    // but points outside it (e.g. `~/evil → /etc`) would otherwise pass
+    // the check and let readdir enumerate the real target. Gating on the
+    // realpath closes that. (importModFromDisk already does this.)
+    let resolved: string;
+    try {
+      resolved = await realpath(requested);
+    } catch {
+      throw new Error(
+        `listDirectory: path '${requested}' does not exist or is unreadable.`,
+      );
     }
 
     // Refuse anything outside the user's home + standard mount points.
@@ -490,14 +528,32 @@ export default class RecompBackend implements PluginBackend {
 
   // ── Pipeline ─────────────────────────────────────────────────────
 
+  /**
+   * Acquire an exclusive per-game operation lock. Base ops (install/
+   * update/uninstall) pass just `gameId`; mod ops pass their `modOpKey`
+   * as `opKey` so the UI can still show per-mod "installing" state — but
+   * BOTH the game-wide lock and the op-specific key are taken, so no two
+   * operations ever touch the same game at once (an install renaming the
+   * dir must not race a mod's writes, etc.). Returns a release fn.
+   */
+  private lockGameOp(gameId: string, opKey: string = gameId): () => void {
+    if (this.operations.has(gameId) || this.operations.has(opKey)) {
+      throw new Error(`Operation already in progress for '${gameId}'`);
+    }
+    this.operations.add(gameId);
+    if (opKey !== gameId) this.operations.add(opKey);
+    return () => {
+      this.operations.delete(gameId);
+      if (opKey !== gameId) this.operations.delete(opKey);
+    };
+  }
+
   async installGame(id: string, romPath?: string): Promise<void> {
     const entry = this.registry.find((g) => g.id === id);
     if (!entry) throw new Error(`Game '${id}' not found in registry`);
+    if (romPath) await this.assertRomPathAllowed(romPath);
 
-    if (this.operations.has(id)) {
-      throw new Error(`Operation already in progress for '${id}'`);
-    }
-    this.operations.add(id);
+    const release = this.lockGameOp(id);
 
     // Resolve the ROM path: explicit arg wins, then any path the
     // user previously saved via `setRomPath`. Persist a freshly-
@@ -516,7 +572,7 @@ export default class RecompBackend implements PluginBackend {
         data: { gameId: id, status: "installed" },
       });
     } finally {
-      this.operations.delete(id);
+      release();
     }
   }
 
@@ -524,10 +580,7 @@ export default class RecompBackend implements PluginBackend {
     const entry = this.registry.find((g) => g.id === id);
     if (!entry) throw new Error(`Game '${id}' not found in registry`);
 
-    if (this.operations.has(id)) {
-      throw new Error(`Operation already in progress for '${id}'`);
-    }
-    this.operations.add(id);
+    const release = this.lockGameOp(id);
 
     try {
       this.state = await updateGame(entry, this.state, (event) => {
@@ -538,15 +591,12 @@ export default class RecompBackend implements PluginBackend {
         data: { gameId: id, status: "installed" },
       });
     } finally {
-      this.operations.delete(id);
+      release();
     }
   }
 
   async uninstallGame(id: string): Promise<void> {
-    if (this.operations.has(id)) {
-      throw new Error(`Operation already in progress for '${id}'`);
-    }
-    this.operations.add(id);
+    const release = this.lockGameOp(id);
 
     try {
       // Also remove the Steam shortcut so it doesn't dangle after the
@@ -561,7 +611,7 @@ export default class RecompBackend implements PluginBackend {
         data: { gameId: id, status: "available" },
       });
     } finally {
-      this.operations.delete(id);
+      release();
     }
   }
 
@@ -649,11 +699,7 @@ export default class RecompBackend implements PluginBackend {
         `Mod "${modId}" is manual-import — use the Import from disk button instead.`,
       );
     }
-    const key = modOpKey(gameId, modId);
-    if (this.operations.has(key)) {
-      throw new Error(`Operation already in progress for mod '${modId}'`);
-    }
-    this.operations.add(key);
+    const release = this.lockGameOp(gameId, modOpKey(gameId, modId));
     try {
       const result = await installMod(entry, installed, mod, (event) =>
         this.emitPipelineEvent(event),
@@ -677,7 +723,7 @@ export default class RecompBackend implements PluginBackend {
       });
       throw err;
     } finally {
-      this.operations.delete(key);
+      release();
     }
   }
 
@@ -732,11 +778,7 @@ export default class RecompBackend implements PluginBackend {
         `Mod "${modId}" is ${mod.source.kind} — use Install (auto-download) instead.`,
       );
     }
-    const key = modOpKey(gameId, modId);
-    if (this.operations.has(key)) {
-      throw new Error(`Operation already in progress for mod '${modId}'`);
-    }
-    this.operations.add(key);
+    const release = this.lockGameOp(gameId, modOpKey(gameId, modId));
     try {
       const result = await installModFromArchive(
         entry,
@@ -766,7 +808,7 @@ export default class RecompBackend implements PluginBackend {
       });
       throw err;
     } finally {
-      this.operations.delete(key);
+      release();
     }
   }
 
