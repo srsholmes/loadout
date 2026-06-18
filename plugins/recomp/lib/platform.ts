@@ -42,7 +42,15 @@ export function modCacheDir(gameId: string, modId: string): string {
 }
 
 export function configDir(): string {
-  return join(homedir(), ".config", "steam-loader", "recomp");
+  // Honour `$XDG_CONFIG_HOME` like `modCacheDir` honours XDG_CACHE_HOME.
+  // On the device this is unset, so it resolves to the same
+  // `~/.config/...` path as before — but it lets tests redirect state
+  // writes into a temp sandbox (otherwise `os.homedir()` ignores the
+  // `process.env.HOME` they set, and `updateSettings` leaks into the
+  // real on-disk state and pollutes later tests).
+  const xdg = process.env.XDG_CONFIG_HOME;
+  const base = xdg && xdg.length > 0 ? xdg : join(homedir(), ".config");
+  return join(base, "steam-loader", "recomp");
 }
 
 export function getPlatformValue<T extends PlatformAssets | PlatformCommand>(
