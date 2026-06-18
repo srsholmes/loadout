@@ -84,9 +84,8 @@ describe("addNonSteamShortcut", () => {
     expect(idxLaunch).toBeGreaterThan(idxName);
   });
 
-  it("writes a Proton compat tool only when platform=windows on Linux host", async () => {
+  it("writes a Proton compat tool when platform=windows (host is always Linux)", async () => {
     const { addNonSteamShortcut } = await import("./index");
-    const wasLinux = process.platform === "linux";
     await addNonSteamShortcut({
       displayName: "Alba",
       exe: "/games/alba.exe",
@@ -94,12 +93,8 @@ describe("addNonSteamShortcut", () => {
       platform: "windows",
     });
     const idxCompat = calls.findIndex((c) => c.startsWith("compat:"));
-    if (wasLinux) {
-      expect(idxCompat).toBeGreaterThanOrEqual(0);
-      expect(calls[idxCompat]).toContain("proton_experimental");
-    } else {
-      expect(idxCompat).toBe(-1);
-    }
+    expect(idxCompat).toBeGreaterThanOrEqual(0);
+    expect(calls[idxCompat]).toContain("proton_experimental");
   });
 
   it("does not write a compat tool for native linux installs", async () => {

@@ -5,6 +5,9 @@ handhelds and desktops running Gamescope. Think **Decky Loader re-imagined in
 one language**: the plugin host, plugin backends, plugin UIs, and the overlay
 itself are all TypeScript on Bun — no Python service, no multi-runtime interop.
 
+**Linux only.** Loadout targets distros with Steam Gaming Mode — **SteamOS**,
+**Bazzite**, and **CachyOS**. There is no macOS or Windows build.
+
 > **Status: early.** This repository is a minimal, freshly-rebuilt version of
 > the project. It currently ships the full platform plus **one example plugin**
 > (`steam-gamescope-ipc`) as a proof-of-concept. The remaining plugins are

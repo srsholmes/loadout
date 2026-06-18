@@ -1,5 +1,10 @@
 # OS Compatibility
 
+Loadout is a **Linux-only** app — an overlay for distros running Steam's
+Gaming Mode. Supported targets are **SteamOS**, **Bazzite**, and
+**CachyOS**. There is no macOS or Windows build; the notes below cover
+the differences between the supported Linux distros.
+
 ## The Immutability Spectrum
 
 | OS | Filesystem | Notes |
@@ -95,7 +100,7 @@ async function findCEFPort(): Promise<number> {
 | **Bazzite** | `fsync`/`futex2` patched kernel for broader hardware. Deck-specific if on Deck hardware |
 | **CachyOS** | BORE scheduler kernel with custom patches. Not Deck-specific |
 
-## Cross-Platform Distribution
+## Distribution (standalone Linux binary)
 
 The standalone binary (`bun build --compile`) means no runtime dependencies:
 
@@ -124,8 +129,8 @@ Single ~95MB binary. Users don't need Bun, Node, or Python installed.
 ## Development Workflow
 
 - **Desktop Linux** — Cleanest. Run Steam natively, loader connects. QAM only available in Big Picture mode
-- **macOS/Windows** — TypeScript compilation, type checking, unit tests work with Bun. Can't connect to Steam CEF. Push to device via git/rsync
 - **Remote dev on device** — SSH available. VS Code Remote works. Bun fast enough for direct dev
+- **Type-checking off-device** — `bun run typecheck`/unit tests run on any OS with Bun, but the app only builds and runs on Linux, and the overlay needs a Linux box with Steam to test
 
 ## CI Testing
 
