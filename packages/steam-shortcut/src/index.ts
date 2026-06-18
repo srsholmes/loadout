@@ -108,7 +108,14 @@ export async function addNonSteamShortcut(
     throw new Error("addNonSteamShortcut: spec.displayName must be non-empty");
   }
 
+  // Step logging: each line below is the LAST thing journald sees before
+  // the next CDP `Runtime.evaluate` hits Steam's client IPC. If a call
+  // crashes the webhelper (observed: `stalled cross-thread pipe` /
+  // `bufRet.TellPut()` asserts), the final `[steam-shortcut] →` line
+  // names the culprit. Cheap and permanent — keep it.
+  const log = (step: string) => console.log(`[steam-shortcut] → ${step}`);
   return withSteamClient(async (sc) => {
+    log(`addShortcut "${spec.displayName}" exe=${spec.exe}`);
     const appId = await sc.apps.addShortcut(
       spec.displayName,
       spec.exe,
@@ -120,9 +127,12 @@ export async function addNonSteamShortcut(
         "SteamClient.Apps.AddShortcut returned no appid — restart Steam and retry",
       );
     }
+    log(`addShortcut ok appId=${appId}`);
 
     // Persistence-critical follow-ups.
+    log(`setShortcutName appId=${appId}`);
     await sc.apps.setShortcutName(appId, spec.displayName);
+    log(`setShortcutLaunchOptions appId=${appId}`);
     await sc.apps.setShortcutLaunchOptions(appId, spec.args);
 
     // Windows binary on a Linux host → register Proton as the
@@ -130,6 +140,7 @@ export async function addNonSteamShortcut(
     // this Steam tries to native-exec the .exe and silently
     // fails — the "click Launch, nothing happens" symptom.
     if (spec.platform === "windows" && process.platform === "linux") {
+      log(`specifyCompatTool appId=${appId}`);
       await bestEffort("specifyCompatTool", () =>
         sc.apps.specifyCompatTool(
           appId,
@@ -142,17 +153,20 @@ export async function addNonSteamShortcut(
     // User-tag dynamic grouping (sidebar).
     const userTag = spec.userTag;
     if (userTag) {
+      log(`addUserTag appId=${appId} tag=${userTag}`);
       await bestEffort("addUserTag", () => sc.apps.addUserTag(appId, userTag));
     }
 
     // User-created Steam Library Collection (Collections tab).
     const collectionName = spec.collectionName;
     if (collectionName) {
+      log(`addAppToCollection appId=${appId} name=${collectionName}`);
       await bestEffort("addAppToCollection", () =>
         sc.apps.addAppToCollection(appId, collectionName),
       );
     }
 
+    log(`done appId=${appId}`);
     return { appId, gameId64: shortcutGameId64(appId) };
   });
 }
