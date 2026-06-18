@@ -93,6 +93,33 @@ describe("RecompBackend", () => {
   });
 
   describe("getSettings / updateSettings", () => {
+    // Sandbox HOME so `updateSettings` (which persists to
+    // `~/.config/steam-loader/recomp/state.json`) writes into a temp
+    // dir instead of polluting the dev box's real recomp state. Before
+    // this, the "/test/roms" write below leaked into real state and
+    // bricked the file browser on open.
+    let sandboxHome: string;
+    const origHome = process.env.HOME;
+    const origXdg = process.env.XDG_CONFIG_HOME;
+
+    beforeEach(async () => {
+      const { mkdtemp } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      sandboxHome = await mkdtemp(join(tmpdir(), "recomp-settings-"));
+      process.env.HOME = sandboxHome;
+      process.env.XDG_CONFIG_HOME = join(sandboxHome, ".config");
+    });
+
+    afterEach(async () => {
+      const { rm } = await import("node:fs/promises");
+      if (origHome === undefined) delete process.env.HOME;
+      else process.env.HOME = origHome;
+      if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = origXdg;
+      await rm(sandboxHome, { recursive: true, force: true });
+    });
+
     it("returns settings with defaults", async () => {
       await backend.onLoad();
       const settings = await backend.getSettings();
@@ -103,10 +130,20 @@ describe("RecompBackend", () => {
 
     it("updates settings partially", async () => {
       await backend.onLoad();
-      await backend.updateSettings({ romDirectory: "/test/roms" });
+      await backend.updateSettings({ romDirectory: sandboxHome });
       const settings = await backend.getSettings();
-      expect(settings.romDirectory).toBe("/test/roms");
+      expect(settings.romDirectory).toBe(sandboxHome);
       expect(typeof settings.autoAddToSteam).toBe("boolean");
+    });
+
+    it("listDirectory falls back to $HOME when the saved romDirectory is gone", async () => {
+      await backend.onLoad();
+      // Saved dir is inside an allowed root but doesn't exist — exactly
+      // the "/test/roms" leak. Opening the browser (no path arg) must
+      // resolve to $HOME instead of throwing "outside the allowed roots".
+      await backend.updateSettings({ romDirectory: "/tmp/recomp-does-not-exist" });
+      const listing = await backend.listDirectory();
+      expect(listing.currentPath).toBe(sandboxHome);
     });
   });
 

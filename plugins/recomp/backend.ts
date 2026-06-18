@@ -379,6 +379,28 @@ export default class RecompBackend implements PluginBackend {
    * Hidden entries (`.foo`) are filtered out — the user wants ROMs,
    * not config-dir noise.
    */
+  /**
+   * Starting directory for the file browser when no path is supplied.
+   * Prefers the saved `romDirectory`, but only when it's inside an
+   * allowed root AND still exists on disk. A stale or test-leaked value
+   * (a removed SD card, or a default like "/test/roms") would otherwise
+   * make the browser throw on open and brick ROM/mod selection — fall
+   * back to $HOME, which is always allowed and always exists.
+   */
+  private async defaultBrowseDir(): Promise<string> {
+    const { stat } = await import("node:fs/promises");
+    const home = process.env.HOME ?? "/home";
+    const saved = this.state.settings.romDirectory;
+    if (saved && pathRootAllowed(saved)) {
+      try {
+        if ((await stat(saved)).isDirectory()) return saved;
+      } catch {
+        // Missing / unreadable → fall through to $HOME.
+      }
+    }
+    return home;
+  }
+
   async listDirectory(path?: string): Promise<{
     currentPath: string;
     parent: string | null;
@@ -390,7 +412,7 @@ export default class RecompBackend implements PluginBackend {
 
     let resolved: string;
     if (!path || path.length === 0) {
-      resolved = this.state.settings.romDirectory ?? home;
+      resolved = await this.defaultBrowseDir();
     } else if (path === "~") {
       resolved = home;
     } else if (path.startsWith("~/")) {

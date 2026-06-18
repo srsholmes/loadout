@@ -784,13 +784,21 @@ function FileBrowser({
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div
-        className="bg-base-100 rounded-xl shadow-2xl w-full max-w-xl flex flex-col overflow-hidden"
-        style={{ height: "80vh" }}
+        className="bg-base-100 rounded-xl shadow-2xl w-full max-w-xl flex flex-col overflow-hidden p-4 gap-3"
+        style={{
+          // Single flex column that sizes to its content but never
+          // exceeds the viewport, so on the Deck's short gaming-mode
+          // screen the header/footer stay on screen and the file list
+          // scrolls internally instead of the whole modal being clipped
+          // top & bottom. Centered on both axes by the parent flex.
+          // (A nested `flex-1` child inside a max-height-only box
+          // collapses to zero — hence the flattened single level.)
+          maxHeight: "90vh",
+        }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="p-4 gap-3 flex flex-col" style={{ height: "100%" }}>
           {title ? (
             <div className="text-sm font-medium shrink-0">{title}</div>
           ) : null}
@@ -838,7 +846,11 @@ function FileBrowser({
           <div
             className="rounded-md border border-base-300/50"
             style={{
-              flex: "1 1 0",
+              // basis `auto` (not 0) so the list takes its content size
+              // and only shrinks+scrolls once the box hits its max
+              // height — a `0` basis collapses to nothing in a
+              // max-height-only (non-definite-height) flex column.
+              flex: "1 1 auto",
               minHeight: 0,
               overflowY: "auto",
               WebkitOverflowScrolling: "touch",
@@ -882,7 +894,6 @@ function FileBrowser({
               </ul>
             )}
           </div>
-        </div>
       </div>
     </div>
   );
