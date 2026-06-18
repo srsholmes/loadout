@@ -27,7 +27,12 @@ await sdk.env.ensurePackages([
   "pkgconf-pkg-config",
   "libpng-devel",
   "libxml2-devel",
-  "libelf-devel",
+  // Fedora ships the libelf development headers under
+  // `elfutils-libelf-devel`; there is no bare `libelf-devel` package,
+  // and dnf5 (Fedora 41+) fails the WHOLE install transaction — not
+  // just the one arg — on a single unmatched name, so the wrong name
+  // here blocked every other dependency too.
+  "elfutils-libelf-devel",
   "binutils-mips64-linux-gnu",
   "gcc-mips64-linux-gnu",
   "gcc-c++-mips64-linux-gnu",

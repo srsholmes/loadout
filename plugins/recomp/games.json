@@ -105,15 +105,15 @@
       "romInfo": {
         "description": "Provide your legally owned Jak & Daxter PS2 ISO",
         "validChecksums": [],
-        "extractionCommand": "{installDir}/extractor {romPath} --proj jak1"
+        "extractionCommand": "{installDir}/extractor {romPath} --game jak1 --extract --decompile --compile"
       },
       "toolchain": {
         "description": "OpenGOAL includes its own extractor and compiler toolchain",
-        "setupCommand": "{installDir}/gk --proj jak1 -- -boot -fakeiso"
+        "setupCommand": ""
       },
       "launchCommand": {
-        "windows": "{installDir}/gk.exe --proj jak1 -- -boot -fakeiso",
-        "linux": "{installDir}/gk --proj jak1 -- -boot -fakeiso"
+        "windows": "{installDir}/gk.exe --game jak1 -- -boot -fakeiso",
+        "linux": "{installDir}/gk --game jak1 -- -boot -fakeiso"
       },
       "tags": [
         "jak",
@@ -397,16 +397,16 @@
       "romInfo": {
         "description": "Provide your legally owned Jak II PS2 ISO",
         "validChecksums": [],
-        "extractionCommand": "{installDir}/extractor {romPath} --proj jak2"
+        "extractionCommand": "{installDir}/extractor {romPath} --game jak2 --extract --decompile --compile"
       },
       "toolchain": {
         "description": "OpenGOAL includes its own extractor and compiler toolchain",
-        "setupCommand": "{installDir}/gk --proj jak2 -- -boot -fakeiso"
+        "setupCommand": ""
       },
       "launchCommand": {
-        "windows": "{installDir}/gk.exe --proj jak2 -- -boot -fakeiso",
-        "linux": "{installDir}/gk --proj jak2 -- -boot -fakeiso",
-        "macos": "{installDir}/gk --proj jak2 -- -boot -fakeiso"
+        "windows": "{installDir}/gk.exe --game jak2 -- -boot -fakeiso",
+        "linux": "{installDir}/gk --game jak2 -- -boot -fakeiso",
+        "macos": "{installDir}/gk --game jak2 -- -boot -fakeiso"
       },
       "tags": [
         "jak",
