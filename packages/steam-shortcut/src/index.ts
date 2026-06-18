@@ -28,12 +28,11 @@ export interface SteamShortcutSpec {
    *  to dirname(exe). */
   cwd?: string;
   /**
-   * Native OS of `exe`. When `"windows"` on a Linux host the
-   * shortcut pins Proton Experimental as its compat tool so Steam
-   * runs the .exe through Wine. Other values are no-ops on the
-   * compat-tool front.
+   * Native OS of `exe`. When `"windows"` the shortcut pins Proton
+   * Experimental as its compat tool so Steam runs the .exe through
+   * Wine (the host is always Linux). `"linux"` is a no-op.
    */
-  platform?: "windows" | "linux" | "macos";
+  platform?: "windows" | "linux";
   /**
    * User-tag value. Surfaces as a dynamic auto-grouping in Steam's
    * library sidebar. Best-effort — older Steam builds without
@@ -135,11 +134,11 @@ export async function addNonSteamShortcut(
     log(`setShortcutLaunchOptions appId=${appId}`);
     await sc.apps.setShortcutLaunchOptions(appId, spec.args);
 
-    // Windows binary on a Linux host → register Proton as the
-    // compat tool so Steam runs the .exe through Wine. Without
-    // this Steam tries to native-exec the .exe and silently
-    // fails — the "click Launch, nothing happens" symptom.
-    if (spec.platform === "windows" && process.platform === "linux") {
+    // Windows binary → register Proton as the compat tool so Steam
+    // runs the .exe through Wine (the host is always Linux). Without
+    // this Steam tries to native-exec the .exe and silently fails —
+    // the "click Launch, nothing happens" symptom.
+    if (spec.platform === "windows") {
       log(`specifyCompatTool appId=${appId}`);
       await bestEffort("specifyCompatTool", () =>
         sc.apps.specifyCompatTool(
