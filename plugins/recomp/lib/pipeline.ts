@@ -1,4 +1,4 @@
-import { mkdir, rm, cp, rename } from "node:fs/promises";
+import { mkdir, rm, cp, rename, readdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, basename } from "node:path";
 import { spawn } from "@loadout/exec";
@@ -22,9 +22,46 @@ import { applyArtwork } from "./artwork";
 import { extractArchive } from "./pipeline-archive";
 import { downloadFile, githubToken, githubFetch } from "./github";
 import { runSetupScript } from "./installer-host";
+import { chownInstallDirToUser } from "./fs-owner";
 import { setupScriptPathFor } from "./registry";
 
 type EventCallback = (event: PipelineEvent) => void;
+
+/**
+ * After a build_from_source `partialDir` → `installDir` rename, rewrite
+ * any baked-in `partialDir` absolute paths inside the top-level shell
+ * scripts the recipe/host generated (launcher.sh, recomp-launch.sh, …)
+ * so they point at the final location. Without this, a recipe that
+ * embedded `${sdk.installDir}` (= partialDir at build time) into its
+ * launcher leaves the game pointing into the vanished staging dir.
+ *
+ * Top-level only and `.sh`-only by design: generated launchers live at
+ * the install root, and we don't want to rewrite bytes inside build
+ * artifacts. Best-effort per file so one unreadable script doesn't
+ * abort the install.
+ */
+async function rewritePartialPathsInScripts(
+  installDir: string,
+  partialDir: string,
+): Promise<void> {
+  let entries;
+  try {
+    entries = await readdir(installDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    if (!e.isFile() || !e.name.endsWith(".sh")) continue;
+    const full = join(installDir, e.name);
+    try {
+      const body = await readFile(full, "utf-8");
+      if (!body.includes(partialDir)) continue;
+      await writeFile(full, body.replaceAll(partialDir, installDir));
+    } catch {
+      /* unreadable / not text — skip */
+    }
+  }
+}
 
 // Disk-backed cache for the most-recent-release lookup. Distinct
 // instance from `lib/artwork.ts`'s `cache` so the two concerns
@@ -343,6 +380,18 @@ export async function installGame(
         await rm(installDir, { recursive: true, force: true });
       }
       await rename(partialDir, installDir);
+
+      // The recipe ran with installDir = partialDir, so any generated
+      // launch script (e.g. Render96-RT's launcher.sh) baked the
+      // partialDir absolute path into its body — WINEPREFIX, the `cd`
+      // into build/, SDL config paths, etc. We rewrote the persisted
+      // launch *command* above, but the script *file's contents* still
+      // point into the now-vanished partialDir, so the game won't
+      // launch. Rewrite partialDir → installDir inside the top-level
+      // shell scripts the recipe/host generated. (Wineprefixes use
+      // relative dosdevices symlinks, so they survive the rename
+      // untouched — only the scripts need patching.)
+      await rewritePartialPathsInScripts(installDir, partialDir);
     } else {
       // Resolve asset URL
       onEvent({
@@ -458,6 +507,14 @@ export async function installGame(
         await rm(installDir, { recursive: true, force: true });
       }
       await rename(partialDir, installDir);
+
+      // The backend runs as a root system service, so everything staged
+      // above is root-owned. Hand the tree to the user: rom_extract
+      // engines (Ship of Harkinian, 2 Ship 2 Harkinian) extract their
+      // ROM into assets *inside* this dir on first launch, running AS
+      // the user — which fails with EACCES against a root-owned tree.
+      // build_from_source already does this in installer-host.
+      await chownInstallDirToUser(installDir);
     } // end of prebuilt branch — build_from_source skipped to here
 
     const now = new Date().toISOString();
