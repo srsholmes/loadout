@@ -206,7 +206,7 @@ describe("startInputIntercept — device selection", () => {
     h.shutdown();
   });
 
-  it("grab-only tracks the Steam Input virtual pad (28de:11ff): opened, and EVIOCGRAB'd alongside the physical pad on intercept", async () => {
+  it("reads the Steam Input virtual pad (28de:11ff) for nav by default (Deck built-in over a game): opened + EVIOCGRAB'd", async () => {
     devicesOnSystem = [
       mkDevice("/dev/input/event5", "Microsoft X-Box 360 pad", { isController: true }, {
         isSteamVirtual: true,
@@ -215,18 +215,44 @@ describe("startInputIntercept — device selection", () => {
       }),
       mkDevice("/dev/input/event6", "Xbox Wireless Controller", { isController: true }),
     ];
+    // Default readVirtualPadsForNav=true (the Deck-alone case): the virtual pad
+    // IS the built-in controller's nav source, so it's read like any pad.
     const h = await startInputIntercept({ onWake: () => {}, onAction: () => {} });
-    // Both the virtual pad and the physical pad are opened/tracked now —
-    // the virtual one so we can grab it to silence the game underneath.
     const opens = ffiCalls.filter((c) => c.kind === "open");
     expect(opens.map((c) => (c as { path: string }).path).sort()).toEqual([
       "/dev/input/event5",
       "/dev/input/event6",
     ]);
-    // On intercept, BOTH get EVIOCGRAB'd (physical for nav, virtual grab-only).
+    // On intercept both get EVIOCGRAB'd (both read for nav).
+    h.grab();
     expect(
       ffiCalls.filter((c) => c.kind === "ioctl" && c.request === 0x40044590n),
-    ).toHaveLength(0);
+    ).toHaveLength(2);
+    h.shutdown();
+  });
+
+  it("grab-only tracks the Steam Input virtual pad when readVirtualPadsForNav=false (external IP pad drives nav over DBus)", async () => {
+    devicesOnSystem = [
+      mkDevice("/dev/input/event5", "Microsoft X-Box 360 pad", { isController: true }, {
+        isSteamVirtual: true,
+        vendor: "28de",
+        product: "11ff",
+      }),
+      mkDevice("/dev/input/event6", "Xbox Wireless Controller", { isController: true }),
+    ];
+    const h = await startInputIntercept({
+      onWake: () => {},
+      onAction: () => {},
+      readVirtualPadsForNav: false,
+    });
+    // Both opened, but the virtual pad is grab-only (read for nav: only the
+    // physical pad). Still both EVIOCGRAB'd on intercept — virtual to silence
+    // the game, physical for nav.
+    const opens = ffiCalls.filter((c) => c.kind === "open");
+    expect(opens.map((c) => (c as { path: string }).path).sort()).toEqual([
+      "/dev/input/event5",
+      "/dev/input/event6",
+    ]);
     h.grab();
     expect(
       ffiCalls.filter((c) => c.kind === "ioctl" && c.request === 0x40044590n),

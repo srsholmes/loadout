@@ -208,6 +208,11 @@ build() {
         info "Building Electrobun overlay..."
         if (cd "$ELECTROBUN_DIR" && bunx vite build 2>&1 && bunx electrobun build --release 2>&1); then
             success "Electrobun overlay built (see $ELECTROBUN_DIR/build/ for artifacts)"
+            # Swap our patched libNativeWrapper.so over the stock one electrobun
+            # downloaded (CEF 100%-CPU spin fix — see vendor/README.md). Shared
+            # with apps/loadout-overlay's package.json build scripts so every
+            # build path gets it.
+            sh "$PROJECT_ROOT/scripts/inject-patched-wrapper.sh" "$ELECTROBUN_DIR"
         else
             warn "Electrobun overlay build failed. Backend binary is still usable."
         fi

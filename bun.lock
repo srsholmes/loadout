@@ -126,6 +126,14 @@
       "name": "@loadout/steam-cdp",
       "version": "0.0.1",
     },
+    "packages/steam-cef-badges": {
+      "name": "@loadout/steam-cef-badges",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/steam-cdp": "workspace:*",
+        "@loadout/steam-paths": "workspace:*",
+      },
+    },
     "packages/steam-paths": {
       "name": "@loadout/steam-paths",
       "version": "0.0.1",
@@ -226,6 +234,7 @@
         "@loadout/external-cache": "workspace:*",
         "@loadout/plugin-storage": "workspace:*",
         "@loadout/steam-cdp": "workspace:*",
+        "@loadout/steam-cef-badges": "workspace:*",
         "@loadout/steam-paths": "workspace:*",
         "@loadout/types": "workspace:*",
         "@loadout/ui": "workspace:*",
@@ -302,6 +311,7 @@
       "dependencies": {
         "@loadout/plugin-storage": "workspace:*",
         "@loadout/steam-cdp": "workspace:*",
+        "@loadout/steam-cef-badges": "workspace:*",
         "@loadout/steam-paths": "workspace:*",
         "@loadout/types": "workspace:*",
         "@loadout/ui": "workspace:*",
@@ -652,6 +662,8 @@
     "@loadout/sgdb-art": ["@loadout/sgdb-art@workspace:packages/sgdb-art"],
 
     "@loadout/steam-cdp": ["@loadout/steam-cdp@workspace:packages/steam-cdp"],
+
+    "@loadout/steam-cef-badges": ["@loadout/steam-cef-badges@workspace:packages/steam-cef-badges"],
 
     "@loadout/steam-paths": ["@loadout/steam-paths@workspace:packages/steam-paths"],
 

@@ -21,6 +21,7 @@ import type {
   ControllerShortcuts,
 } from "../webview/lib/electrobun";
 import { GamescopeAtoms } from "./native/gamescope-atoms";
+import { detectGamescopeScreenSizeSync } from "./native/screen-size";
 import {
   startInputIntercept,
   type InputInterceptHandle,
@@ -45,6 +46,7 @@ import {
   findSteamPid,
   suspendSteam,
   resumeSteam,
+  isGameModeActive,
 } from "./native/process-control";
 
 import { trace } from "./native/trace";
@@ -223,9 +225,29 @@ function sendToWebview<K extends keyof WebviewMessages>(
   }
 }
 
+// Overlay window size, decided once at startup and *born at size* — the
+// window is never resized live, because under `GDK_GL=disable` the
+// software-rendered CEF surface segfaults on reallocation (PR #113).
+//
+// Desktop: 1920×1080 so the overlay opens large on a monitor (issue #108).
+//
+// Gaming Mode: size to the gamescope inner-X resolution so the X11 window
+// maps 1:1 to the visible output. Born too large (the 1920×1080 default on
+// a 1280×800 panel), gamescope scales the visual down but routes pointer
+// input in unscaled window space — the cursor only reaches a corner and
+// clicks land far from where they're drawn (issue #106). Fall back to the
+// Deck's native 1280×800 if xrandr can't be read.
+const DESKTOP_SIZE = { width: 1920, height: 1080 };
+const GAMESCOPE_FALLBACK_SIZE = { width: 1280, height: 800 };
+const overlaySize = gamescopeMode
+  ? (detectGamescopeScreenSizeSync(DISPLAY) ?? GAMESCOPE_FALLBACK_SIZE)
+  : DESKTOP_SIZE;
+const OVERLAY_WIDTH = overlaySize.width;
+const OVERLAY_HEIGHT = overlaySize.height;
+
 const overlay = new BrowserWindow({
   title: "Loadout Overlay",
-  frame: { x: 0, y: 0, width: 1280, height: 800 },
+  frame: { x: 0, y: 0, width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT },
   titleBarStyle: "default",
   transparent: false,
   hidden: !DESKTOP_SMOKE_TEST,
@@ -253,6 +275,9 @@ const overlay = new BrowserWindow({
 const atoms = new GamescopeAtoms({
   display: DISPLAY,
   windowName: "Loadout Overlay",
+  // Keep on-show centring in sync with the BrowserWindow frame above.
+  windowWidth: OVERLAY_WIDTH,
+  windowHeight: OVERLAY_HEIGHT,
   // Kill switch: set OVERLAY_FORCE_XPROP=1 to bypass the libxcb fast
   // path and use the original xprop-subprocess writes. Useful for
   // bisecting if the libxcb port is suspected of new bugs.
@@ -287,15 +312,33 @@ function broadcastOverlayVisibility(): void {
 // it's kept behind an env flag as a fallback for hosts where IP can't manage a
 // pad. The watchdog + startup-resume below stay wired so the flag is safe.
 //
-// EXTERNAL-PAD FIX (under test): Steam reads external pads directly via hidraw
-// (outside gamescope's focus routing), so neither the evdev grab nor the focus
-// atoms stop Steam BPM navigating behind the overlay from an external pad. HHD
-// hits the same wall and solves it by freezing Steam ("to avoid HID device dual
-// input"). So freeze is now ON by default; disable with DECK_OVERLAY_SUSPEND_STEAM=0.
-// The resume-burst is mitigated by the deferred SIGCONT + (TODO) the virtual-pad
-// grab held across resume to absorb replayed input.
-const SUSPEND_STEAM_ENABLED =
-  process.env.DECK_OVERLAY_SUSPEND_STEAM !== "0";
+// EXTERNAL-PAD FIX: Steam reads external pads directly via hidraw (outside
+// gamescope's focus routing), so neither the evdev grab nor the focus atoms
+// stop Steam BPM navigating behind the overlay from an external pad. The IP
+// InterceptMode=GamepadOnly we set on open only DIVERTS input if IP is actually
+// grabbing the source device (ManageAllDevices) — which it currently isn't — so
+// on its own it does NOT starve Steam's hidraw read. HHD hits the same wall and
+// solves it by freezing Steam ("to avoid HID device dual input"). Freezing
+// blocks that — but on the Steam Deck it ALSO kills the built-in controls inside
+// the overlay: the Deck's built-in pad navigates via Steam Input's virtual pad
+// (read by CEF's Web Gamepad API), and a frozen Steam stops emitting on it.
+//
+// These two hosts need OPPOSITE behaviour, so the freeze is decided PER-HOST
+// (finalized after IP discovery below, since it keys off ipHandle.available):
+//   - External IP-managed pad (e.g. OXP APEX): nav arrives over IP's DBus
+//     stream, independent of Steam, so freezing Steam blocks its direct hidraw
+//     read (no double-capture) WITHOUT starving overlay nav → freeze ON.
+//   - Steam Deck alone (no IP composite): built-in nav reads Steam's virtual
+//     pad, which a frozen Steam stops emitting → freeze OFF.
+// #99 made freeze a single global opt-in to save the Deck, which regressed the
+// APEX (Steam captured the pad again behind the overlay). Coupling the decision
+// to host type fixes both. DECK_OVERLAY_SUSPEND_STEAM=1/0 force on/off and
+// override the auto policy.
+const SUSPEND_STEAM_ENV = process.env.DECK_OVERLAY_SUSPEND_STEAM; // "1"=force on, "0"=force off, unset=auto
+// Provisional until finalized post-IP-discovery. A forced-on freeze applies
+// immediately; auto/off start false so an open during the brief discovery
+// window can't freeze the Deck.
+let suspendSteamEnabled = SUSPEND_STEAM_ENV === "1";
 
 // Startup safety net for the frozen-Steam risk: a previous overlay instance
 // that crashed or was SIGKILLed *while open* could have left Steam SIGSTOPped
@@ -304,7 +347,10 @@ const SUSPEND_STEAM_ENABLED =
 // no-op, so this is free; combined with systemd's auto-restart it bounds any
 // stuck-frozen window to a single overlay restart. (HHD does NOT do this — it's
 // our crash-recovery edge.)
-if (SUSPEND_STEAM_ENABLED) {
+// Unconditional: the freeze policy is now decided per-host at runtime, so a
+// prior session may have frozen Steam under a different policy than this one.
+// SIGCONT on a running process is a kernel no-op, so this is always safe.
+{
   const bootSteamPid = findSteamPid();
   if (bootSteamPid !== null) {
     resumeSteam(bootSteamPid);
@@ -415,7 +461,7 @@ function toggleOverlay(source: string) {
     atoms.hide().catch((e) => console.warn("[overlay] atoms.hide:", e));
     intercept.current?.release();
     ipIntercept.current?.release();
-    // Always SIGCONT Steam on close, even when SUSPEND_STEAM_ENABLED is
+    // Always SIGCONT Steam on close, even when suspendSteamEnabled is
     // off. Users have reported Steam appearing frozen after the overlay
     // closes (menu visible but inputs ignored) — if anything left Steam
     // TASK_STOPPED earlier (a prior session with the flag on, a stuck
@@ -439,12 +485,21 @@ function toggleOverlay(source: string) {
   } else {
     // --- Open path: suspend Steam (if enabled), grab controllers,
     // raise the window, set atoms. Also matches open_overlay().
-    if (SUSPEND_STEAM_ENABLED) {
+    // Freeze Steam ONLY in Gaming Mode. In gaming mode Steam reads the
+    // overlay's controller/QAM inputs while it's open (so we SIGSTOP it to
+    // stop input bleed-through); in desktop mode there's no game underneath
+    // and the frozen `steam` process IS the client window the user is using,
+    // so freezing it just wedges Steam — the bug this gate fixes. The evdev
+    // grab below still runs in both modes, so the controller overlay keeps
+    // working on the desktop without touching Steam.
+    if (suspendSteamEnabled && isGameModeActive()) {
       if (steamPid.current === null) steamPid.current = findSteamPid();
       if (steamPid.current !== null) {
         suspendSteam(steamPid.current);
         startFreezeWatchdog();
       }
+    } else if (suspendSteamEnabled) {
+      trace("[toggle] desktop mode (no gamescope) — skipping Steam freeze");
     }
     intercept.current?.grab();
     ipIntercept.current?.grab();
@@ -504,57 +559,83 @@ function onWake(event: WakeEvent): void {
   }
 }
 
-startInputIntercept({
-  onWake,
-  onAction: (action) => {
-    // Bridge to the webview. onOverlayAction() in main.tsx turns these
-    // into synthetic KeyboardEvents (ArrowUp/Down/Enter/Escape/...) so
-    // norigin-spatial-navigation picks them up unchanged.
-    sendToWebview("overlay-action", { action });
-  },
-  onAxis: (axis, value) => {
-    // Right-stick analog values — webview drives smooth scroll of the
-    // main content area with its own rAF + momentum loop.
-    sendToWebview("overlay-scroll", { axis, value });
-  },
-  onReady: (c) =>
-    console.log(
-      `[overlay] input intercept ready — ${c.controllers} controller(s), ${c.keyboards} keyboard(s), ${c.qam} qam device(s)`,
-    ),
-})
-  .then((handle) => {
-    intercept.current = handle;
-  })
-  .catch((err) => {
-    console.error("[overlay] input intercept failed to start:", err);
-  });
-
-// InputPlumber intercept-mode path. Discovers IP composite devices and, when
-// present, drives focus via InterceptMode + the DBus ui_* signal stream
-// instead of (the ineffective, on deck-uhid) EVIOCGRAB. Nav/wake events flow
-// to the exact same webview surface as the evdev path. No-op when IP is absent.
-startIpIntercept({
-  onAction: (action) => {
-    sendToWebview("overlay-action", { action });
-  },
-  onAxis: (axis, value) => {
-    sendToWebview("overlay-scroll", { axis, value });
-  },
-  onWake,
-  onReady: (info) =>
-    console.log(
-      `[overlay] ip intercept ready — ${info.composites} composite device(s)`,
-    ),
-})
-  .then((handle) => {
-    ipIntercept.current = handle;
-    if (handle.available) {
+// Start the two input paths. ORDER MATTERS: the InputPlumber intercept-mode
+// path discovers IP composite devices first, then the evdev interceptor starts
+// with `readVirtualPadsForNav` set from whether any IP composites exist.
+//
+// Why: on the Steam Deck, when a game/app is running Steam Input exposes the
+// BUILT-IN controller only as the virtual Xbox 360 pad (28de:11ff). With no IP
+// composite to drive nav over DBus, that virtual pad is the Deck's sole nav
+// source, so the evdev path must READ it (not exclude/grab-only it). When an
+// external IP-managed pad IS present, IP's DBus stream drives nav and the
+// virtual pad is a mirror we only grab — so we DON'T read it (would double).
+void (async () => {
+  let ipHandle: IpInterceptHandle | null = null;
+  try {
+    ipHandle = await startIpIntercept({
+      onAction: (action) => {
+        sendToWebview("overlay-action", { action });
+      },
+      onAxis: (axis, value) => {
+        sendToWebview("overlay-scroll", { axis, value });
+      },
+      onWake,
+      onReady: (info) =>
+        console.log(
+          `[overlay] ip intercept ready — ${info.composites} composite device(s)`,
+        ),
+    });
+    ipIntercept.current = ipHandle;
+    if (ipHandle.available) {
       console.log("[overlay] ip intercept ACTIVE — using InterceptMode + DBus nav");
     }
-  })
-  .catch((err) => {
+  } catch (err) {
     console.error("[overlay] ip intercept failed to start:", err);
-  });
+  }
+
+  // No IP composites (Deck alone, or no external IP-managed pad) → the virtual
+  // pad is the Deck's built-in controls; read it for nav.
+  const readVirtualPadsForNav = !ipHandle?.available;
+
+  // Finalize the Steam-freeze policy now that host type is known (see the
+  // SUSPEND_STEAM_ENV comment above). Auto = freeze iff an IP-managed external
+  // pad is present; that's the case (OXP APEX) where nav comes over IP's DBus
+  // stream and freezing Steam blocks its hidraw double-capture without starving
+  // overlay nav. On the Deck alone we must NOT freeze (it would kill the
+  // virtual-pad nav we just opted to read). env "1"/"0" override the auto rule.
+  if (SUSPEND_STEAM_ENV === "1") suspendSteamEnabled = true;
+  else if (SUSPEND_STEAM_ENV === "0") suspendSteamEnabled = false;
+  else suspendSteamEnabled = !!ipHandle?.available;
+  console.log(
+    `[overlay] steam-freeze ${suspendSteamEnabled ? "ON" : "OFF"} ` +
+      `(env=${SUSPEND_STEAM_ENV ?? "auto"}, ipManaged=${!!ipHandle?.available})`,
+  );
+
+  try {
+    const handle = await startInputIntercept({
+      readVirtualPadsForNav,
+      onWake,
+      onAction: (action) => {
+        // Bridge to the webview. onOverlayAction() in main.tsx turns these
+        // into synthetic KeyboardEvents (ArrowUp/Down/Enter/Escape/...) so
+        // norigin-spatial-navigation picks them up unchanged.
+        sendToWebview("overlay-action", { action });
+      },
+      onAxis: (axis, value) => {
+        // Right-stick analog values — webview drives smooth scroll of the
+        // main content area with its own rAF + momentum loop.
+        sendToWebview("overlay-scroll", { axis, value });
+      },
+      onReady: (c) =>
+        console.log(
+          `[overlay] input intercept ready — ${c.controllers} controller(s), ${c.keyboards} keyboard(s), ${c.qam} qam device(s) (readVirtualPadsForNav=${readVirtualPadsForNav})`,
+        ),
+    });
+    intercept.current = handle;
+  } catch (err) {
+    console.error("[overlay] input intercept failed to start:", err);
+  }
+})();
 
 // Steam-Deck-native wake button: read /dev/hidrawN (the controller's
 // gamepad interface) in parallel with Steam Input. Open multiplexes

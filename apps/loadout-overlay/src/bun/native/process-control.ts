@@ -51,6 +51,15 @@ export function findSteamPid(): number | null {
   return null;
 }
 
+// Steam Gaming Mode detection lives in @loadout/steam-paths so the overlay
+// (gating the SIGSTOP freeze) and the loader's CEF injector (gating plugin
+// injection, issue #111) share one implementation. Re-exported here under
+// the overlay-local name so callers keep importing it from this native facade.
+// Gates the freeze: in gaming mode Steam reads the overlay's inputs while it's
+// open (hence the freeze); in desktop mode freezing Steam just wedges the
+// Steam client window the user is using.
+export { isGamescopeRunning as isGameModeActive } from "@loadout/steam-paths";
+
 /**
  * Send a signal to a pid via libc kill(2). Returns true on success.
  * Non-throwing: on permission error or ESRCH we log and return false
