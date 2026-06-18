@@ -107,6 +107,37 @@ describe("downloadFile", () => {
     expect(requests[1]?.url).toContain("objects.githubusercontent.com");
   });
 
+  it("walks the github.com → release-assets.githubusercontent.com redirect", async () => {
+    // GitHub migrated release-asset downloads from
+    // objects.githubusercontent.com to release-assets.githubusercontent.com
+    // in 2025. The walker must trust the new host or every self-install
+    // download fails closed at hop 1.
+    stubFetch((url) => {
+      if (url.startsWith("https://github.com/")) {
+        return Promise.resolve(
+          new Response(null, {
+            status: 302,
+            headers: {
+              location: "https://release-assets.githubusercontent.com/blob/abc",
+            },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response(new Uint8Array([0xde, 0xad, 0xbe, 0xef]), {
+          status: 200,
+          headers: { "content-length": "4" },
+        }),
+      );
+    });
+    await downloadFile(
+      "https://github.com/x/y/releases/download/v1/legendary",
+      join(dir, "ra.bin"),
+    );
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.url).toContain("release-assets.githubusercontent.com");
+  });
+
   it("refuses to follow a redirect to a non-allow-listed host", async () => {
     // 302 from github.com pointing at an attacker host — the manual
     // walker must reject BEFORE issuing the second fetch, so the

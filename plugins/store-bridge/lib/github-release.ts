@@ -33,15 +33,18 @@ export async function githubToken(): Promise<string | undefined> {
 /**
  * Allow-list of hostnames the GitHub-release download walker will
  * follow. Real release-asset URLs redirect from `github.com` →
- * `objects.githubusercontent.com` (and sometimes `*.githubusercontent.com`
- * /`codeload.github.com` for source archives). We re-check the host
- * on EVERY hop of the redirect chain, not just the final URL, so a
- * malicious release that 302s through an attacker host can't have
- * its body fetched before the final-host check fires.
+ * `release-assets.githubusercontent.com` (GitHub migrated asset
+ * downloads here in 2025; older links still hit
+ * `objects.githubusercontent.com`), and `codeload.github.com` serves
+ * source archives. We re-check the host on EVERY hop of the redirect
+ * chain, not just the final URL, so a malicious release that 302s
+ * through an attacker host can't have its body fetched before the
+ * final-host check fires.
  */
 const TRUSTED_GITHUB_HOSTS = [
   "github.com",
   "objects.githubusercontent.com",
+  "release-assets.githubusercontent.com",
   "codeload.github.com",
 ];
 
