@@ -751,6 +751,7 @@ function CatalogTile({
   onOpen: () => void;
 }) {
   const { call } = useBackend("store-bridge");
+  const [busy, setBusy] = useState(false);
   const isInstalling = typeof progress === "number";
   const action = pickTileAction(g, isInstalling);
 
@@ -792,6 +793,14 @@ function CatalogTile({
     ) : undefined;
 
   const runAction = async () => {
+    // Re-entrancy guard. `addInstalledToSteam` (and a launch) take a
+    // CDP round-trip to resolve, during which the button stays
+    // mounted with the same label — without this, a second tap fires
+    // a second RPC before the first flips the tile to "Play". For
+    // add-to-Steam that means a duplicate shortcut + a second burst
+    // of CDP evaluates into Steam, which can crash the Steam UI.
+    if (busy) return;
+    setBusy(true);
     try {
       switch (action.kind) {
         case "install":
@@ -814,6 +823,8 @@ function CatalogTile({
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       notify(`${g.title}: ${friendlyErrorMessage(msg)}`, { kind: "error" });
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -833,7 +844,7 @@ function CatalogTile({
           <Button
             size="sm"
             variant={action.variant}
-            disabled={action.disabled}
+            disabled={action.disabled || busy}
             onClick={runAction}
           >
             {action.label}
@@ -891,6 +902,11 @@ function DetailView({ storeId, gameId }: { storeId: StoreId; gameId: string }) {
   const [game, setGame] = useState<GameInfo | null>(null);
   const [installing, setInstalling] = useState(false);
   const [installPct, setInstallPct] = useState<number | null>(null);
+  // Guards the Add-to-Steam button against a second click while the
+  // first RPC is still resolving — see the matching guard on the
+  // catalog tile. A repeat add spawns a duplicate shortcut and a
+  // second CDP burst into Steam, which can crash the UI.
+  const [addingToSteam, setAddingToSteam] = useState(false);
 
   // Re-derive `installing` from the backend's in-flight registry
   // when the detail view mounts. Without this, leaving and coming
@@ -1170,7 +1186,10 @@ function DetailView({ storeId, gameId }: { storeId: StoreId; gameId: string }) {
             )}
             {isInstalled && !installed.addedToSteam && (
               <Button
+                disabled={addingToSteam}
                 onClick={async () => {
+                  if (addingToSteam) return;
+                  setAddingToSteam(true);
                   try {
                     await call("addInstalledToSteam", storeId, gameId);
                     // Belt-and-braces: the backend also emits
@@ -1187,10 +1206,12 @@ function DetailView({ storeId, gameId }: { storeId: StoreId; gameId: string }) {
                       )}`,
                       { kind: "error" },
                     );
+                  } finally {
+                    setAddingToSteam(false);
                   }
                 }}
               >
-                Add to Steam
+                {addingToSteam ? "Adding…" : "Add to Steam"}
               </Button>
             )}
             {isInstalled && installed.addedToSteam && (
