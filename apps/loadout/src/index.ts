@@ -85,7 +85,7 @@ log.info(`Bun version: ${Bun.version}`);
 log.info(`Project root: ${projectRoot}`);
 log.info(`Port: ${port}`);
 log.info(`Log file: ${LOG_PATH}`);
-log.info(`Platform: ${process.platform} ${process.arch}`);
+log.info(`Arch: ${process.arch}`); // Linux-only app; host platform is always linux
 log.info(`User: ${process.env.USER || process.env.HOME || "unknown"}`);
 log.info(`Process uid: ${process.getuid?.() ?? "?"} (target user: ${targetUser || "none"})`);
 
