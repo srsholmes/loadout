@@ -73,13 +73,17 @@ function normalizeTitle(name: string): string {
 /**
  * Walk a directory recursively, returning files whose extension is
  * in `extensions` (lowercased, leading-dot stripped). Capped at
- * depth 5 and 5_000 total files so a misconfigured romDirectory
- * pointed at `$HOME` doesn't spin forever.
+ * depth 5 and 3_000 matching files: the suggest now scans the whole
+ * `Emulation/roms` parent (all platform subdirs), so this bounds the
+ * fuzzy-match cost (and a misconfigured romDirectory pointed at `$HOME`
+ * can't spin forever). Each `readdir` is awaited, so the walk yields to
+ * the event loop rather than blocking it. 3_000 matching ROM files is a
+ * larger library than any realistic setup, so recall is unaffected.
  */
 async function walkForExtensions(
   root: string,
   extensions: ReadonlySet<string>,
-  cap = 5000,
+  cap = 3000,
   maxDepth = 5,
 ): Promise<string[]> {
   const found: string[] = [];

@@ -188,9 +188,13 @@ describe("RecompBackend", () => {
 
       const suggestions = await fresh.suggestRomFiles("zelda64-recomp");
       expect(suggestions.length).toBeGreaterThan(0);
-      expect(
-        suggestions.some((s) => s.basename.includes("Majoras Mask")),
-      ).toBe(true);
+      // Match on the sandbox ROM specifically (its full path is under
+      // sandboxHome) — `_defaultRomRoots` also scans real `/run/media`
+      // mounts, so asserting on a sandbox-anchored path keeps the test
+      // deterministic on a dev box that happens to have ROMs on an SD card.
+      const hit = suggestions.find((s) => s.basename.includes("Majoras Mask"));
+      expect(hit).toBeDefined();
+      expect(hit!.path.startsWith(sandboxHome)).toBe(true);
     });
 
     it("returns [] for an unknown game id", async () => {

@@ -392,6 +392,15 @@ export async function installGame(
       // relative dosdevices symlinks, so they survive the rename
       // untouched — only the scripts need patching.)
       await rewritePartialPathsInScripts(installDir, partialDir);
+
+      // Hand the promoted tree to the user. installer-host chowns the
+      // *staging* dir before the build, but the post-rename tree also
+      // holds files the root backend wrote (the host launch wrapper,
+      // the scripts just rewritten above) AND a per-game wineprefix the
+      // user-launched game must WRITE at runtime (registry, saves) —
+      // all of which are root-owned without this. Same EACCES class the
+      // prebuilt branch guards against below.
+      await chownInstallDirToUser(installDir);
     } else {
       // Resolve asset URL
       onEvent({
@@ -513,7 +522,7 @@ export async function installGame(
       // engines (Ship of Harkinian, 2 Ship 2 Harkinian) extract their
       // ROM into assets *inside* this dir on first launch, running AS
       // the user — which fails with EACCES against a root-owned tree.
-      // build_from_source already does this in installer-host.
+      // (The build_from_source branch does the same after its rename.)
       await chownInstallDirToUser(installDir);
     } // end of prebuilt branch — build_from_source skipped to here
 
@@ -794,6 +803,17 @@ function requiresRom(entry: GameEntry): boolean {
  * Security: realpath-verifies the exe lives inside `cwd` (the
  * install dir) before running, so a malformed template can't run
  * something outside the install scope.
+ *
+ * SECURITY (tracked, #124): this runs the resolved binary in the ROOT
+ * backend process. Only `rom_extract`/`toolchain` extraction commands
+ * reach here, and they execute a binary that came out of a downloaded
+ * release archive — so a compromised upstream release = root code
+ * execution. The realpath check confines exec to the install dir, but
+ * the binary itself is still trusted implicitly. Hardening (drop to the
+ * user session like build_from_source does, + pin release checksums) is
+ * tracked separately because it changes argv[0] (bypassing the per-
+ * command allowlist) and needs end-to-end testing against a real
+ * OpenGOAL install.
  */
 async function runCommandTemplate(
   template: string,
@@ -835,9 +855,17 @@ async function runCommandTemplate(
     stderr: "pipe",
   });
 
-  const code = await proc.exited;
+  // Drain BOTH streams concurrently with exit. A verbose command (the
+  // OpenGOAL extractor's `--decompile --compile` prints thousands of
+  // lines) can fill the OS pipe buffer and BLOCK the child before it
+  // exits if we only await `exited` and read stderr after — a deadlock.
+  // Reading both to end as the process runs prevents that.
+  const [, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
   if (code !== 0) {
-    const stderr = await new Response(proc.stderr).text();
     throw new Error(`Command failed (exit ${code}): ${stderr}`);
   }
 }

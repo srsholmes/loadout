@@ -1,4 +1,4 @@
-import { chown, readdir, stat } from "node:fs/promises";
+import { lchown, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 /**
@@ -34,7 +34,13 @@ async function chownRecursive(
   uid: number,
   gid: number,
 ): Promise<void> {
-  await chown(path, uid, gid).catch(() => {});
+  // `lchown`, never `chown`: we run as root over a tree that may contain
+  // extracted symlinks. `chown` follows links, so a symlink named e.g.
+  // `x` → `/etc/shadow` would retarget ownership of the link's TARGET.
+  // `lchown` re-owns the link itself. We also only recurse into REAL
+  // directories (readdir's Dirent reports a symlink-to-dir as non-dir),
+  // so we never descend through a link out of the tree.
+  await lchown(path, uid, gid).catch(() => {});
   try {
     const entries = await readdir(path, { withFileTypes: true });
     for (const e of entries) {
@@ -42,7 +48,7 @@ async function chownRecursive(
       if (e.isDirectory()) {
         await chownRecursive(full, uid, gid);
       } else {
-        await chown(full, uid, gid).catch(() => {});
+        await lchown(full, uid, gid).catch(() => {});
       }
     }
   } catch {
