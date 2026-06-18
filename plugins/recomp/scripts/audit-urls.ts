@@ -67,7 +67,7 @@ const targets = games.filter(
 
 async function check(g: Game): Promise<Result> {
   const assets = g.releaseAssets ?? {};
-  const pattern = assets.linux || assets.windows || assets.macos;
+  const pattern = assets.linux || assets.windows;
   if (!pattern) {
     return { id: g.id, repo: g.repo, ok: false, reason: "no releaseAssets declared" };
   }
@@ -93,8 +93,8 @@ async function check(g: Game): Promise<Result> {
   if (!rel) {
     return { id: g.id, repo: g.repo, ok: false, reason: "no releases published" };
   }
-  // Check linux first, then windows, then macos — whichever is declared.
-  for (const plat of ["linux", "windows", "macos"] as const) {
+  // Check linux first, then windows (Proton) — whichever is declared.
+  for (const plat of ["linux", "windows"] as const) {
     const pat = assets[plat];
     if (!pat) continue;
     if (rel.assets.some((a) => globToRe(pat).test(a.name))) {

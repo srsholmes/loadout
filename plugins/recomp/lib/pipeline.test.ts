@@ -42,7 +42,7 @@ describe("resolveTemplate", () => {
   it("replaces {platform}", async () => {
     const { resolveTemplate } = await import("./pipeline");
     const result = resolveTemplate("{installDir}/bin/{platform}/game", "/games/test");
-    // Platform will be one of linux/windows/macos
+    // Host platform is always linux
     expect(result).toContain("/games/test/bin/");
     expect(result).toContain("/game");
   });
@@ -186,15 +186,13 @@ describe("resolveAssetUrl", () => {
 
   it("throws when no platform asset pattern exists at all", async () => {
     const { resolveAssetUrl } = await import("./pipeline");
-    // Neither linux nor windows — Linux hosts can't fall back to
-    // Proton, macOS hosts have nothing to load. Should throw.
+    // Neither linux nor windows — nothing to load (and nothing for the
+    // Windows-via-Proton fallback to pick up). Should throw.
     const entry = makeGameEntry({
-      releaseAssets: { macos: "test-mac.zip" },
+      releaseAssets: {},
     });
 
-    if (process.platform !== "darwin") {
-      await expect(resolveAssetUrl(entry)).rejects.toThrow("not available");
-    }
+    await expect(resolveAssetUrl(entry)).rejects.toThrow("not available");
   });
 
   it("throws when no matching asset found", async () => {

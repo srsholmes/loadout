@@ -13,8 +13,8 @@
  *      and the install-type-specific fields (releaseAssets for
  *      prebuilt, setup.ts for build_from_source, romInfo for
  *      rom_extract).
- *   2. PLATFORM REACHABILITY — at least one of {linux, windows,
- *      macos} declares a launchCommand AND a releaseAsset. Pure-null
+ *   2. PLATFORM REACHABILITY — at least one of {linux, windows}
+ *      declares a launchCommand AND a releaseAsset. Pure-null
  *      entries that can't be installed on any platform are flagged
  *      so they don't pollute the catalog.
  *   3. RECIPE LOAD — `build_from_source` setup.ts files import +
@@ -113,8 +113,8 @@ function checkPlatformReachable(g: GameEntry): string[] {
     return ["no releaseAsset for any platform — uninstallable on Linux"];
   }
   // Check launchCommand exists on at least one platform.
-  const hasLaunch = ["linux", "windows", "macos"].some(
-    (p) => !!(g.launchCommand?.[p as "linux" | "windows" | "macos"]),
+  const hasLaunch = ["linux", "windows"].some(
+    (p) => !!(g.launchCommand?.[p as "linux" | "windows"]),
   );
   if (!hasLaunch && g.installType !== "toolchain") {
     return ["no launchCommand on any platform"];

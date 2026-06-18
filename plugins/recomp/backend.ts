@@ -840,7 +840,7 @@ export default class RecompBackend implements PluginBackend {
       //   - build_from_source: has a repo + a setup.ts recipe shipped
       //     alongside the manifest. The recipe handles launch wiring
       //     itself via sdk.declareLaunchCommand.
-      const hasLaunchOnSomePlatform = (["linux", "windows", "macos"] as const)
+      const hasLaunchOnSomePlatform = (["linux", "windows"] as const)
         .some((p) => !!entry.launchCommand?.[p]);
       const hasNativeBuild =
         (!!getEffectivePlatformValue(entry.releaseAssets) &&

@@ -37,7 +37,7 @@ export interface SetupResult {
    *  `.exe` — pipeline uses this to set `installedPlatform` so the
    *  Steam shortcut gets Proton wired up. Defaults to the host
    *  platform when the recipe doesn't declare. */
-  targetPlatform?: "linux" | "windows" | "macos";
+  targetPlatform?: "linux" | "windows";
 }
 
 /**
@@ -261,7 +261,7 @@ interface SetupAccumulator {
   outputBinary?: string;
   launchCommand?: string;
   version?: string;
-  targetPlatform?: "linux" | "windows" | "macos";
+  targetPlatform?: "linux" | "windows";
 }
 
 function buildRuntime(
@@ -270,8 +270,7 @@ function buildRuntime(
   acc: SetupAccumulator,
   onEvent: EventCallback,
 ): RecompRuntime {
-  const platform: Platform =
-    ctx.platform === "windows" ? "windows" : ctx.platform === "macos" ? "macos" : "linux";
+  const platform: Platform = ctx.platform === "windows" ? "windows" : "linux";
 
   const recordLine = (line: string, stage: string) => {
     onEvent({

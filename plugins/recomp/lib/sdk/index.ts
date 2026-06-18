@@ -23,7 +23,9 @@
  * the plugin bundle, so process-level isolation isn't needed.
  */
 
-export type Platform = "linux" | "windows" | "macos";
+// Host is always Linux; `windows` is a cross-compile *target* whose .exe
+// runs via Proton on the Linux host.
+export type Platform = "linux" | "windows";
 
 export interface RecompEnv {
   readonly kind: "distrobox";
@@ -186,8 +188,7 @@ export const sdk: RecompSDK = {
   get ready(): Promise<void> {
     return runtime().sdk.ready;
   },
-  cloneFromGitHub: (repo, branch) =>
-    runtime().sdk.cloneFromGitHub(repo, branch),
+  cloneFromGitHub: (repo, branch) => runtime().sdk.cloneFromGitHub(repo, branch),
   placeRom: (destRel) => runtime().sdk.placeRom(destRel),
   declareOutput: (binRelPath) => runtime().sdk.declareOutput(binRelPath),
   declareLaunchCommand: (cmd) => runtime().sdk.declareLaunchCommand(cmd),

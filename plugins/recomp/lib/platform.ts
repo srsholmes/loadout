@@ -2,22 +2,17 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import type { PlatformAssets, PlatformCommand } from "./types";
 
-export type PlatformName = "linux" | "windows" | "macos";
+// Loadout is a Linux-only app, so the *host* is always Linux. `windows`
+// remains as a *game-target*: recomp installs Windows game binaries that
+// run via Proton on the Linux host (see getEffectivePlatformValue).
+export type PlatformName = "linux" | "windows";
 
+/** The host platform Loadout runs on — always Linux. */
 export function currentPlatform(): PlatformName {
-  switch (process.platform) {
-    case "win32": return "windows";
-    case "darwin": return "macos";
-    default: return "linux";
-  }
+  return "linux";
 }
 
 export function dataDir(): string {
-  const plat = currentPlatform();
-  if (plat === "macos") {
-    return join(homedir(), "Library", "Application Support", "RecompHub");
-  }
-  // Linux (and fallback)
   return join(homedir(), ".local", "share", "recomp-hub");
 }
 
@@ -56,13 +51,9 @@ export function configDir(): string {
 export function getPlatformValue<T extends PlatformAssets | PlatformCommand>(
   assets: T,
 ): string | undefined {
-  const plat = currentPlatform();
-  switch (plat) {
-    case "windows": return assets.windows;
-    case "linux": return assets.linux;
-    case "macos": return assets.macos ?? assets.linux;
-    default: return undefined;
-  }
+  // Host is always Linux; prefer the native Linux value. The
+  // Linux→Windows-via-Proton fallback lives in getEffectivePlatformValue.
+  return assets.linux ?? undefined;
 }
 
 export interface ResolvedPlatformValue {

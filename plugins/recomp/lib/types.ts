@@ -36,15 +36,15 @@ export const PLATFORM_COLOR: Record<string, string> = {
 // ── Registry Types (matching games.json) ─────────────────────────────
 
 export interface PlatformAssets {
+  /** Windows binary — run via Proton on the Linux host. */
   windows?: string;
   linux?: string;
-  macos?: string;
 }
 
 export interface PlatformCommand {
+  /** Windows launch command — run via Proton on the Linux host. */
   windows?: string;
   linux?: string;
-  macos?: string;
 }
 
 export interface RomInfo {
@@ -297,7 +297,7 @@ export interface InstalledGame {
    *  was registered with Proton as the compat tool. Optional for
    *  backwards-compat with state files written before this field
    *  existed (assumed = current platform when absent). */
-  installedPlatform?: "linux" | "windows" | "macos";
+  installedPlatform?: "linux" | "windows";
   /** For `build_from_source` installs, the launch command the
    *  recipe (or the auto-generated distrobox wrapper) declared.
    *  Persisted so `addInstalledToSteam` can re-register the

@@ -11,13 +11,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": "Zelda64Recompiled-*-Windows.zip",
-        "linux": "Zelda64Recompiled-*-Linux-X64.zip",
-        "macos": "Zelda64Recompiled-*-macOS.zip"
+        "linux": "Zelda64Recompiled-*-Linux-X64.zip"
       },
       "launchCommand": {
         "windows": "{installDir}/Zelda64Recompiled.exe",
-        "linux": "{installDir}/Zelda64Recompiled",
-        "macos": "{installDir}/Zelda64Recompiled.app/Contents/MacOS/Zelda64Recompiled"
+        "linux": "{installDir}/Zelda64Recompiled"
       },
       "tags": [
         "zelda",
@@ -39,13 +37,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": "BanjoRecompiled-*-Windows.zip",
-        "linux": "BanjoRecompiled-*-Linux-X64.zip",
-        "macos": "BanjoRecompiled-*-macOS.zip"
+        "linux": "BanjoRecompiled-*-Linux-X64.zip"
       },
       "launchCommand": {
         "windows": "{installDir}/BanjoRecompiled.exe",
-        "linux": "{installDir}/BanjoRecompiled",
-        "macos": "{installDir}/BanjoRecompiled.app/Contents/MacOS/BanjoRecompiled"
+        "linux": "{installDir}/BanjoRecompiled"
       },
       "tags": [
         "banjo",
@@ -66,8 +62,7 @@
       "installType": "rom_extract",
       "releaseAssets": {
         "windows": "SoH-*-Win64.zip",
-        "linux": "SoH-*-Linux.zip",
-        "macos": "SoH-*-Mac.zip"
+        "linux": "SoH-*-Linux.zip"
       },
       "romInfo": {
         "description": "Provide your legally owned Ocarina of Time ROM (US v1.0)",
@@ -99,8 +94,7 @@
       "installType": "toolchain",
       "releaseAssets": {
         "windows": "opengoal-windows-*.zip",
-        "linux": "opengoal-linux-*.tar.gz",
-        "macos": "opengoal-macos-intel-*.tar.gz"
+        "linux": "opengoal-linux-*.tar.gz"
       },
       "romInfo": {
         "description": "Provide your legally owned Jak & Daxter PS2 ISO",
@@ -327,8 +321,7 @@
       "installType": "rom_extract",
       "releaseAssets": {
         "windows": "2Ship-*-Win64.zip",
-        "linux": "2Ship-*-Linux.zip",
-        "macos": "2Ship-*-Mac.zip"
+        "linux": "2Ship-*-Linux.zip"
       },
       "romInfo": {
         "description": "Provide your legally owned Majora's Mask ROM (US v1.0)",
@@ -338,8 +331,7 @@
       },
       "launchCommand": {
         "windows": "{installDir}/2s2h.exe",
-        "linux": "{installDir}/2ship.appimage",
-        "macos": "{installDir}/2s2h.app/Contents/MacOS/2s2h"
+        "linux": "{installDir}/2ship.appimage"
       },
       "tags": [
         "zelda",
@@ -391,8 +383,7 @@
       "installType": "toolchain",
       "releaseAssets": {
         "windows": "opengoal-windows-*.zip",
-        "linux": "opengoal-linux-*.tar.gz",
-        "macos": "opengoal-macos-intel-*.tar.gz"
+        "linux": "opengoal-linux-*.tar.gz"
       },
       "romInfo": {
         "description": "Provide your legally owned Jak II PS2 ISO",
@@ -405,8 +396,7 @@
       },
       "launchCommand": {
         "windows": "{installDir}/gk.exe --game jak2 -- -boot -fakeiso",
-        "linux": "{installDir}/gk --game jak2 -- -boot -fakeiso",
-        "macos": "{installDir}/gk --game jak2 -- -boot -fakeiso"
+        "linux": "{installDir}/gk --game jak2 -- -boot -fakeiso"
       },
       "tags": [
         "jak",
@@ -429,8 +419,7 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": "TRX-*-Windows.zip",
-        "linux": "TRX-*-Linux.zip",
-        "macos": "TRX-*-Mac.dmg"
+        "linux": "TRX-*-Linux.zip"
       },
       "launchCommand": {
         "windows": "{installDir}/TRX.exe",
@@ -456,8 +445,7 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": "Severed_Chains_Windows.zip",
-        "linux": "Severed_Chains_Linux.tar.gz",
-        "macos": "Severed_Chains_MacOS_M1.tar.gz"
+        "linux": "Severed_Chains_Linux.tar.gz"
       },
       "launchCommand": {
         "windows": "{installDir}/Severed Chains.exe",
@@ -512,8 +500,7 @@
       "installType": "rom_extract",
       "releaseAssets": {
         "windows": "v3-windows-x64.zip",
-        "linux": "v3-linux.zip",
-        "macos": "v3-mac.zip"
+        "linux": "v3-linux.zip"
       },
       "romInfo": {
         "description": "Requires data files from the 2011 Sonic CD remaster (Data.rsdk)",
@@ -573,8 +560,7 @@
       "installType": "rom_extract",
       "releaseAssets": {
         "windows": "dethrace-*-windows-x64.zip",
-        "linux": "dethrace-*-linux-x64.tar.gz",
-        "macos": "dethrace-*-macos-arm64-x64.dmg"
+        "linux": "dethrace-*-linux-x64.tar.gz"
       },
       "romInfo": {
         "description": "Requires original Carmageddon game data (from GOG or CD)",
@@ -604,12 +590,10 @@
       "description": "Decompilation of 3D Pinball: Space Cadet from Windows XP. Standalone, no data files needed.",
       "installType": "prebuilt",
       "releaseAssets": {
-        "windows": "SpaceCadetPinballx64Win.zip",
-        "macos": "SpaceCadetPinballMac.zip"
+        "windows": "SpaceCadetPinballx64Win.zip"
       },
       "launchCommand": {
-        "windows": "{installDir}/SpaceCadetPinball.exe",
-        "macos": "{installDir}/SpaceCadetPinball.app/Contents/MacOS/SpaceCadetPinball"
+        "windows": "{installDir}/SpaceCadetPinball.exe"
       },
       "tags": [
         "pinball",
@@ -660,8 +644,7 @@
       "installType": "rom_extract",
       "releaseAssets": {
         "windows": "opentdu_release_Win32_vulkan.zip",
-        "linux": "opentdu_release_unix_vulkan.zip",
-        "macos": "opentdu_release_darwin_vulkan.zip"
+        "linux": "opentdu_release_unix_vulkan.zip"
       },
       "romInfo": {
         "description": "Requires original Test Drive Unlimited game files",
@@ -691,13 +674,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": "sm64coopdx_Windows.zip",
-        "linux": "sm64coopdx_Linux.zip",
-        "macos": "sm64coopdx_macOS_ARM.zip"
+        "linux": "sm64coopdx_Linux.zip"
       },
       "launchCommand": {
         "windows": "{installDir}/sm64coopdx.exe",
-        "linux": "{installDir}/sm64coopdx",
-        "macos": "{installDir}/sm64coopdx.app/Contents/MacOS/sm64coopdx"
+        "linux": "{installDir}/sm64coopdx"
       },
       "tags": [
         "mario",
@@ -720,8 +701,7 @@
       "installType": "rom_extract",
       "releaseAssets": {
         "windows": "devilutionx-windows-x86_64.zip",
-        "linux": "devilutionx-linux-x86_64.appimage",
-        "macos": "devilutionx-macOS-universal.dmg"
+        "linux": "devilutionx-linux-x86_64.appimage"
       },
       "romInfo": {
         "description": "Requires DIABDAT.MPQ from Diablo (GOG/Battle.net/CD). Shareware version works for demo.",
@@ -730,8 +710,7 @@
       },
       "launchCommand": {
         "windows": "{installDir}/devilutionx.exe",
-        "linux": "{installDir}/devilutionx-linux-x86_64.AppImage",
-        "macos": "{installDir}/devilutionx.app/Contents/MacOS/devilutionx"
+        "linux": "{installDir}/devilutionx-linux-x86_64.AppImage"
       },
       "tags": [
         "diablo",
@@ -754,8 +733,7 @@
       "installType": "rom_extract",
       "releaseAssets": {
         "windows": "OpenMW-*-win64.exe",
-        "linux": "openmw-*-Linux-64Bit.tar.gz",
-        "macos": "OpenMW-*-macos-arm64.dmg"
+        "linux": "openmw-*-Linux-64Bit.tar.gz"
       },
       "romInfo": {
         "description": "Requires Morrowind game data (Steam/GOG). Point OpenMW at your Morrowind Data Files folder.",
@@ -764,8 +742,7 @@
       },
       "launchCommand": {
         "windows": "{installDir}/openmw.exe",
-        "linux": "{installDir}/openmw",
-        "macos": "{installDir}/OpenMW.app/Contents/MacOS/openmw"
+        "linux": "{installDir}/openmw"
       },
       "tags": [
         "elder-scrolls",
@@ -788,8 +765,7 @@
       "installType": "rom_extract",
       "releaseAssets": {
         "windows": "OpenRCT2-*-windows-portable-x64.zip",
-        "linux": "OpenRCT2-*-linux-x86_64.AppImage",
-        "macos": "OpenRCT2-*-macos-universal.zip"
+        "linux": "OpenRCT2-*-linux-x86_64.AppImage"
       },
       "romInfo": {
         "description": "Requires RollerCoaster Tycoon 2 data files (Steam/GOG).",
@@ -798,8 +774,7 @@
       },
       "launchCommand": {
         "windows": "{installDir}/openrct2.exe",
-        "linux": "{installDir}/OpenRCT2.AppImage",
-        "macos": "{installDir}/OpenRCT2.app/Contents/MacOS/OpenRCT2"
+        "linux": "{installDir}/OpenRCT2.AppImage"
       },
       "tags": [
         "rct",
@@ -822,8 +797,7 @@
       "installType": "rom_extract",
       "releaseAssets": {
         "windows": "VCMI-Windows-x64.exe",
-        "linux": "VCMI-Linux-x64.AppImage",
-        "macos": "VCMI-macOS-arm.dmg"
+        "linux": "VCMI-Linux-x64.AppImage"
       },
       "romInfo": {
         "description": "Requires Heroes of Might and Magic III data files (GOG recommended).",
@@ -855,8 +829,7 @@
       "installType": "rom_extract",
       "releaseAssets": {
         "windows": "fallout-ce-windows-x64.zip",
-        "linux": "fallout-ce-linux-x64.tar.gz",
-        "macos": "fallout-ce-macos.dmg"
+        "linux": "fallout-ce-linux-x64.tar.gz"
       },
       "romInfo": {
         "description": "Requires MASTER.DAT and CRITTER.DAT from Fallout (Steam/GOG).",
@@ -886,8 +859,7 @@
       "installType": "rom_extract",
       "releaseAssets": {
         "windows": "fallout2-ce-windows-x64.zip",
-        "linux": "fallout2-ce-linux-x64.tar.gz",
-        "macos": "fallout2-ce-macos.dmg"
+        "linux": "fallout2-ce-linux-x64.tar.gz"
       },
       "romInfo": {
         "description": "Requires PATCH000.DAT and MASTER.DAT from Fallout 2 (Steam/GOG).",
@@ -913,17 +885,15 @@
       "project": "Isle Portable",
       "platform": "pc",
       "repo": "isledecomp/isle-portable",
-      "description": "Cross-platform reimplementation of LEGO Island (1997). Windows, Linux, macOS, and more.",
+      "description": "Reimplementation of LEGO Island (1997), runnable on Linux (Windows builds via Proton).",
       "installType": "rom_extract",
       "releaseAssets": {
         "windows": "isle-*-Windows-x64.zip",
-        "linux": "Isle_Portable-x86_64.AppImage",
-        "macos": "isle-*-Darwin-arm64.dmg"
+        "linux": "Isle_Portable-x86_64.AppImage"
       },
       "launchCommand": {
         "windows": "{installDir}/ISLE.EXE",
-        "linux": "{installDir}/Isle_Portable-x86_64.AppImage",
-        "macos": "{installDir}/ISLE.app/Contents/MacOS/ISLE"
+        "linux": "{installDir}/Isle_Portable-x86_64.AppImage"
       },
       "romInfo": {
         "description": "Select your LEGO Island game data folder (from original CD install). Also download isle-assets.zip from the release page.",
@@ -953,13 +923,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": "NXEngine-Evo-*-Win64.zip",
-        "linux": "NXEngine-Evo-*-Linux-x86_64.AppImage",
-        "macos": "NXEngine-Evo-*-OSX.dmg"
+        "linux": "NXEngine-Evo-*-Linux-x86_64.AppImage"
       },
       "launchCommand": {
         "windows": "{installDir}/nxengine-evo.exe",
-        "linux": "{installDir}/NXEngine-Evo.AppImage",
-        "macos": "{installDir}/NXEngine Evo.app/Contents/MacOS/NXEngine Evo"
+        "linux": "{installDir}/NXEngine-Evo.AppImage"
       },
       "tags": [
         "cave-story",
@@ -982,13 +950,11 @@
       "installType": "rom_extract",
       "releaseAssets": {
         "windows": "ISLE.EXE",
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": "{installDir}/ISLE.EXE",
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [],
       "website": null,
@@ -1013,13 +979,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [
         "anime",
@@ -1047,13 +1011,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [
         "crash-bandicoot",
@@ -1081,13 +1043,11 @@
       "installType": "rom_extract",
       "releaseAssets": {
         "windows": "OpenBiohazard2-win64-*.zip",
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": "{installDir}/OpenBiohazard2.exe",
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [
         "go",
@@ -1116,13 +1076,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": "mudclient*-windows-x86_64.zip",
-        "linux": "mudclient*-linux-x86_64.tar.gz",
-        "macos": null
+        "linux": "mudclient*-linux-x86_64.tar.gz"
       },
       "launchCommand": {
         "windows": "{installDir}/mudclient.exe",
-        "linux": "{installDir}/mudclient",
-        "macos": null
+        "linux": "{installDir}/mudclient"
       },
       "tags": [
         "3ds",
@@ -1151,13 +1109,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [],
       "website": null,
@@ -1176,13 +1132,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [],
       "website": "https://mikompilation.com/",
@@ -1202,8 +1156,7 @@
       "releaseAssets": {},
       "launchCommand": {
         "windows": "{installDir}/OpenBarnyard.exe",
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [
         "disassembly",
@@ -1234,13 +1187,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [],
       "website": null,
@@ -1259,13 +1210,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [
         "decompilation",
@@ -1293,13 +1242,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [],
       "website": null,
@@ -1318,13 +1265,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [],
       "website": null,
@@ -1343,13 +1288,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [
         "angry-bird-game",
@@ -1388,13 +1331,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": "resl-*-windows.zip",
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": "{installDir}/resl.exe",
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [
         "coroutine",
@@ -1426,13 +1367,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": "Samurai.Vs.Zombies.PC.7z",
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": "{installDir}/Samurai Vs Zombies.exe",
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [],
       "website": null,
@@ -1449,13 +1388,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [
         "6502",
@@ -1485,13 +1422,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [],
       "website": null,
@@ -1510,13 +1445,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [
         "android",
@@ -1544,13 +1477,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [],
       "website": null,
@@ -1569,13 +1500,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [
         "dragonballlegends"
@@ -1596,13 +1525,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [
         "decompilation",
@@ -1626,13 +1553,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [],
       "website": null,
@@ -1651,13 +1576,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": "build-win64-*.zip",
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": "{installDir}/Cloud Patrol.exe",
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [],
       "website": null,
@@ -1670,17 +1593,15 @@
       "project": "A decompilation of the Big Blue Bubble game `DOMA Days` (v1.01).",
       "platform": "unknown",
       "repo": "iestyn129/DOMADays",
-      "description": "Decompiled Ren'Py visual novel. Includes builds for Windows, macOS, and Linux.",
+      "description": "Decompiled Ren'Py visual novel. Includes builds for Linux and Windows (via Proton).",
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": "DOMADays.*.zip",
-        "linux": "DOMADays.*.zip",
-        "macos": "DOMADays.*.zip"
+        "linux": "DOMADays.*.zip"
       },
       "launchCommand": {
         "windows": "{installDir}/DOMADays.exe",
-        "linux": "{installDir}/DOMADays.sh",
-        "macos": "{installDir}/DOMADays.app/Contents/MacOS/DOMADays"
+        "linux": "{installDir}/DOMADays.sh"
       },
       "tags": [],
       "website": null,
@@ -1697,13 +1618,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "launchCommand": {
         "windows": null,
-        "linux": null,
-        "macos": null
+        "linux": null
       },
       "tags": [],
       "website": null,
@@ -8202,13 +8121,11 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "linux": "Dusklight-*-linux-x86_64.AppImage",
-        "windows": "Dusklight-*-win32-x86_64.zip",
-        "macos": "Dusklight-*-macos-*.zip"
+        "windows": "Dusklight-*-win32-x86_64.zip"
       },
       "launchCommand": {
         "linux": "{installDir}/dusklight.AppImage",
-        "windows": "{installDir}/Dusklight.exe",
-        "macos": "{installDir}/Dusklight.app/Contents/MacOS/Dusklight"
+        "windows": "{installDir}/Dusklight.exe"
       },
       "steamGridDbId": null,
       "tags": [

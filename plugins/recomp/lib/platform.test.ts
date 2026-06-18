@@ -8,24 +8,13 @@ import {
   tempDir,
   configDir,
   getPlatformValue,
+  getEffectivePlatformValue,
 } from "./platform";
 import type { PlatformAssets } from "./types";
 
 describe("currentPlatform", () => {
-  it("returns a valid platform name", () => {
-    const plat = currentPlatform();
-    expect(["linux", "windows", "macos"]).toContain(plat);
-  });
-
-  it("matches process.platform mapping", () => {
-    const plat = currentPlatform();
-    if (process.platform === "darwin") {
-      expect(plat).toBe("macos");
-    } else if (process.platform === "win32") {
-      expect(plat).toBe("windows");
-    } else {
-      expect(plat).toBe("linux");
-    }
+  it("is always linux — Loadout is a Linux-only app", () => {
+    expect(currentPlatform()).toBe("linux");
   });
 });
 
@@ -69,35 +58,45 @@ describe("configDir", () => {
 });
 
 describe("getPlatformValue", () => {
-  const assets: PlatformAssets = {
-    windows: "game-win.zip",
-    linux: "game-linux.tar.gz",
-    macos: "game-mac.zip",
-  };
-
-  it("returns the correct value for the current platform", () => {
-    const value = getPlatformValue(assets);
-    const plat = currentPlatform();
-    if (plat === "windows") expect(value).toBe("game-win.zip");
-    else if (plat === "linux") expect(value).toBe("game-linux.tar.gz");
-    else if (plat === "macos") expect(value).toBe("game-mac.zip");
+  it("returns the native Linux value (host is always Linux)", () => {
+    const assets: PlatformAssets = {
+      windows: "game-win.zip",
+      linux: "game-linux.tar.gz",
+    };
+    expect(getPlatformValue(assets)).toBe("game-linux.tar.gz");
   });
 
-  it("returns undefined when platform has no value", () => {
-    const empty: PlatformAssets = {};
-    expect(getPlatformValue(empty)).toBeUndefined();
+  it("returns undefined when there's no Linux value", () => {
+    expect(getPlatformValue({})).toBeUndefined();
+    // A Windows-only entry has no native Linux value here — the
+    // Windows-via-Proton resolution is getEffectivePlatformValue's job.
+    expect(getPlatformValue({ windows: "game-win.zip" })).toBeUndefined();
+  });
+});
+
+describe("getEffectivePlatformValue (Linux→Windows-via-Proton)", () => {
+  it("prefers the native Linux value", () => {
+    const r = getEffectivePlatformValue({
+      linux: "game-linux.tar.gz",
+      windows: "game-win.zip",
+    });
+    expect(r).toEqual({ value: "game-linux.tar.gz", platform: "linux" });
   });
 
-  it("macOS falls back to linux value if macos is missing", () => {
-    const linuxOnly: PlatformAssets = { linux: "game-linux.tar.gz" };
-    const value = getPlatformValue(linuxOnly);
-    const plat = currentPlatform();
-    if (plat === "macos") {
-      expect(value).toBe("game-linux.tar.gz");
-    } else if (plat === "linux") {
-      expect(value).toBe("game-linux.tar.gz");
-    } else {
-      expect(value).toBeUndefined();
-    }
+  it("falls back to the Windows binary (run via Proton) when no Linux value", () => {
+    const r = getEffectivePlatformValue({ windows: "game-win.zip" });
+    expect(r).toEqual({ value: "game-win.zip", platform: "windows" });
+  });
+
+  it("treats an explicit null Linux value as 'not shipped' and falls back to Windows", () => {
+    const r = getEffectivePlatformValue({
+      linux: null as unknown as string,
+      windows: "game-win.zip",
+    });
+    expect(r).toEqual({ value: "game-win.zip", platform: "windows" });
+  });
+
+  it("returns undefined when neither Linux nor Windows is available", () => {
+    expect(getEffectivePlatformValue({})).toBeUndefined();
   });
 });
