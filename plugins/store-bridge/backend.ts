@@ -676,6 +676,27 @@ export default class StoreBridgeBackend implements PluginBackend {
     let snapshot = await this.readState();
     let installed = snapshot.stores[storeId]?.installed[gameId];
     if (!installed) throw new Error(`Not installed: ${storeId}/${gameId}`);
+    // Idempotency guard. `AddShortcut` allocates a fresh appid on
+    // every call — it does NOT dedupe by name — so a repeated add
+    // (rapid double-click, or a manual click racing the implicit
+    // add-to-Steam tail of `installGame`) would spawn duplicate
+    // shortcuts AND fire overlapping bursts of CDP evaluates
+    // (collectionStore MobX mutations + multi-MB artwork pushes)
+    // into Steam's single SharedJSContext — observed to crash the
+    // Steam UI. If the record already carries a Steam appid, treat
+    // this as a no-op and just re-announce the state so the UI
+    // syncs. The repair path (Remove from Steam → Add) clears
+    // `addedToSteam` first, so it isn't blocked by this guard.
+    if (installed.addedToSteam && installed.steamAppId) {
+      this.log?.info(
+        `[store-bridge] addInstalledToSteam: ${gameId} already added (appId=${installed.steamAppId}); skipping duplicate add.`,
+      );
+      this.emit?.({
+        event: "gameStatusChanged",
+        data: { storeId, gameId, status: "added-to-steam" },
+      });
+      return;
+    }
     // Refresh launch metadata if the record is missing it — covers
     // records persisted before we started caching executable/platform
     // (e.g. the user installed a title with an older plugin build and
