@@ -691,17 +691,50 @@ class UrlApi {
 }
 
 /**
+ * Serialises every `withSteamClient` session. Steam's CEF IPC client
+ * asserts `"Collided with existing master response stream"`
+ * (chrome_ipc_client.cpp) and the whole `steamwebhelper` process aborts
+ * — taking the entire Steam UI down — if two CDP clients drive the
+ * SharedJSContext target's IPC at the same time. A one-shot
+ * `withSteamClient` opens a fresh connection per call, so a caller that
+ * fires several at once (e.g. recomp registering multiple non-Steam
+ * shortcuts + pushing artwork in the same tick) produces overlapping
+ * connections and crashes Steam.
+ *
+ * Chaining each session onto a single module-level promise guarantees at
+ * most one transient connection is live at a time. The chain swallows
+ * each session's outcome so one failing session never rejects the next
+ * waiter; the real result/rejection still flows back to that session's
+ * own caller.
+ */
+let steamClientChain: Promise<unknown> = Promise.resolve();
+
+/**
  * One-shot helper: connect → run callback → close. The right shape for
  * occasional, human-paced calls (e.g. clicking Apply once per game).
+ *
+ * Sessions are serialised globally — see `steamClientChain` — so
+ * concurrent callers can't open colliding CDP connections and crash
+ * Steam's webhelper.
  */
 export async function withSteamClient<T>(
   fn: (sc: SteamClient) => Promise<T>,
   opts: SteamClientOptions = {},
 ): Promise<T> {
-  const sc = new SteamClient(opts);
-  try {
-    return await fn(sc);
-  } finally {
-    await sc.close();
-  }
+  const run = async (): Promise<T> => {
+    const sc = new SteamClient(opts);
+    try {
+      return await fn(sc);
+    } finally {
+      await sc.close();
+    }
+  };
+  // Queue behind any in-flight session regardless of how it settled.
+  const result = steamClientChain.then(run, run);
+  // Keep the chain alive but isolated from this session's success/failure.
+  steamClientChain = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
 }
