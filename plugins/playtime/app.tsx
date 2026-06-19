@@ -87,8 +87,7 @@ function DayFilterBar({
   isToday: boolean;
   onToggle: () => void;
 }) {
-  const { ref } = useFocusable({ onEnterPress: onToggle });
-  const [focused, setFocused] = useState(false);
+  const { ref, focused } = useFocusable({ onEnterPress: onToggle });
 
   // Mirror GameCard's ref-merge so spatial-nav focuses the button.
   const setRef = (node: HTMLButtonElement | null) => {
@@ -106,8 +105,6 @@ function DayFilterBar({
       ref={setRef}
       type="button"
       onClick={onToggle}
-      onFocus={() => setFocused(true)}
-      onBlur={() => setFocused(false)}
       aria-pressed={selected}
       title={`${label} · ${hoursLabel}h — ${selected ? "shown" : "hidden"} (tap to filter)`}
       className={[
@@ -250,7 +247,8 @@ function PlayTime() {
   const [currentSession, setCurrentSession] = useState<CurrentSession | null>(null);
   const [range, setRange] = useState<RangeKey>("week");
   // Day filters: all 7 rolling days selected by default. Indices map to
-  // the `days` array (oldest → today).
+  // the `days` array (oldest → today). getDailyBreakdown always returns
+  // exactly 7 entries, so these indices stay aligned with it.
   const [selectedDays, setSelectedDays] = useState<Set<number>>(
     () => new Set([0, 1, 2, 3, 4, 5, 6]),
   );
@@ -261,12 +259,23 @@ function PlayTime() {
       call("getDailyBreakdown").then((d) =>
         setDays((d as DailyBreakdown[] | null) ?? []),
       );
-      call("getSteamPlaytime").then((g) =>
-        setSteamGames((g as GameStats[] | null) ?? []),
-      );
     },
     [call],
   );
+
+  // Steam lifetime totals only feed the all-time view and change rarely,
+  // so fetch them lazily when All is opened rather than re-parsing every
+  // localconfig.vdf on every session event.
+  useEffect(() => {
+    if (range !== "allTime") return;
+    let alive = true;
+    call("getSteamPlaytime").then((g) => {
+      if (alive) setSteamGames((g as GameStats[] | null) ?? []);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [call, range]);
 
   // Subscribe to session updates
   useEvent({
@@ -351,6 +360,8 @@ function PlayTime() {
 
   // Headline + Stats describe exactly what's in the grid, so switching
   // the period selector visibly changes both the list and the numbers.
+  // For all-time this includes Steam's lifetime totals, so TOTAL/TOP GAME
+  // reflect the whole library — not just sessions tracked by this plugin.
   const gridTotalMs = gridGames.reduce((sum, g) => sum + g.totalMs, 0);
   const totalHours = formatHoursNumber(gridTotalMs);
   const gamesCount = gridGames.length;

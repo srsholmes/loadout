@@ -294,9 +294,10 @@ function vdfNavigate(root: VdfObject, path: string[]): VdfObject | null {
  * localconfig.vdf. Path:
  *   UserLocalConfigStore > Software > Valve > Steam > apps > <appId> > Playtime
  *
- * Returns appId → minutes. Steam stores this for every owned app it has
- * ever launched, so it's the authoritative lifetime total (the same
- * number the library UI shows) — available locally with no login.
+ * Returns appId → minutes for apps that carry a recorded `Playtime`
+ * (apps with no playtime entry are skipped). It's Steam's authoritative
+ * lifetime total — the same number the library UI shows — available
+ * locally with no login.
  */
 export function extractSteamPlaytimeMinutes(
   root: VdfObject,
