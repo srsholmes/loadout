@@ -6,13 +6,7 @@ Adds ProtonDB compatibility ratings to your Steam library — a tier badge on ev
 
 ## Screenshots
 
-### Overview
-
-![ProtonDB Badges — Overview](./assets/screenshot.png)
-
-### Settings
-
-![ProtonDB Badges — Settings](./assets/screenshot-settings.png)
+![ProtonDB Badges](./assets/screenshot.png)
 
 ## See also
 

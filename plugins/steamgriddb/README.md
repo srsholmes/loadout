@@ -14,10 +14,6 @@ Browse and apply custom artwork — grids, heroes, logos, icons — from SteamGr
 
 ![SteamGridDB — Game detail](./assets/screenshot-detail.png)
 
-### Settings
-
-![SteamGridDB — Settings](./assets/screenshot-settings.png)
-
 ## See also
 
 - [All plugins](../../README.md#plugins)

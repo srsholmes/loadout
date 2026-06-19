@@ -26,10 +26,6 @@ Surfaces non-Steam storefront libraries and adds their games to Steam as shortcu
 
 ![Store Bridge — Game detail](./assets/screenshot-detail.png)
 
-### Settings
-
-![Store Bridge — Settings](./assets/screenshot-settings.png)
-
 ## See also
 
 - [All plugins](../../README.md#plugins)
