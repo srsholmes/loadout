@@ -10,6 +10,7 @@ import {
   Badge,
   Button,
   GameCard,
+  GameHero,
   HeaderBackButton,
   IconButton,
   Panel,
@@ -1103,13 +1104,25 @@ function DetailView({ storeId, gameId }: { storeId: StoreId; gameId: string }) {
       </PluginHeader>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
-        {game.heroUrl && (
-          <img
-            src={game.heroUrl}
-            alt=""
-            className="w-full rounded-lg object-cover max-h-64"
-          />
-        )}
+        {/* Shared hero banner — the selected game's art + logo/title,
+            matching the home screen and other plugins' detail pages. */}
+        <GameHero
+          heroUrl={game.heroUrl}
+          fallbackHeroUrl={game.coverUrl}
+          gameName={game.title}
+        >
+          {game.logoUrl ? (
+            <img
+              src={game.logoUrl}
+              alt=""
+              className="max-h-20 max-w-[45%] object-contain drop-shadow-lg"
+            />
+          ) : (
+            <h2 className="text-2xl font-bold text-base-content drop-shadow-lg truncate">
+              {game.title}
+            </h2>
+          )}
+        </GameHero>
 
         <Panel title="Actions">
           {installPct !== null && (

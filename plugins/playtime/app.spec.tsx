@@ -184,11 +184,11 @@ describe("playtime plugin", () => {
     const { mount } = await import("./app");
     mount(container, { headerSlot });
     await waitFor(() => {
-      // Header subtitle (from getCurrentSession) + the shared NowPlaying
-      // hero (from useCurrentGame) both surface the running game.
+      // The running game surfaces in the portaled header subtitle. PlayTime
+      // no longer renders the full now-playing hero (that lives on the home
+      // screen) — just this lightweight subtitle.
       expect(headerSlot.textContent).toContain("Now playing");
-      expect(container.textContent).toContain("Now playing");
-      expect(container.textContent).toContain("Counter-Strike 2");
+      expect(headerSlot.textContent).toContain("Counter-Strike 2");
     });
   });
 });

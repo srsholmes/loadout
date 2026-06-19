@@ -4,6 +4,7 @@ import {
   Badge,
   Button,
   GameCard,
+  GameHero,
   HeaderBackButton,
   IconButton,
   Panel,
@@ -1352,53 +1353,15 @@ function GameDetailPage({ gameId }: { gameId: string }) {
       <div className="p-6 h-full overflow-y-auto">
         <div className="max-w-3xl mx-auto">
 
-        {/* Hero banner — landscape 460×215. Mirrors HLTB / store-bridge.
-            Title + project chip overlaid on a bottom-up gradient scrim
-            so they stay legible over any artwork. */}
-        <div
-          className="relative rounded-lg overflow-hidden mb-4"
-          style={{
-            aspectRatio: "460 / 215",
-            background:
-              "linear-gradient(135deg, var(--bg-2) 0%, var(--bg-inset) 100%)",
-          }}
+        {/* Shared hero banner — the selected game's art with title +
+            project/platform overlaid, matching the home screen and the
+            other plugins' detail pages. */}
+        <GameHero
+          heroUrl={heroUrl ?? undefined}
+          gameName={game.name}
+          className="mb-4"
         >
-          {heroUrl ? (
-            <img
-              src={heroUrl}
-              alt={game.name}
-              className="absolute inset-0 w-full h-full object-cover block"
-              // Bias toward the top — SGDB heroes are typically 1920×620
-              // (≈3.1:1) but our frame is 460×215 (≈2.14:1). object-cover
-              // default-centers, slicing logo/title content out of the
-              // top of compositions. Bias 30% from top keeps the focal
-              // area visible at the cost of slightly more bottom crop
-              // (which already sits under the title overlay anyway).
-              style={{ objectPosition: "center 30%" }}
-              // Defence-in-depth against CDNs that 200-respond with a
-              // 1×1 transparent stub: treat any image whose decoded
-              // size is unusably small as a failed load.
-              onLoad={(e) => {
-                if (e.currentTarget.naturalWidth < 50) setHeroUrl(null);
-              }}
-              onError={() => setHeroUrl(null)}
-            />
-          ) : null}
-          {/* Bottom gradient + title overlay always renders. When the
-              image is missing, the gradient sits on the flat
-              `bg-2/bg-inset` background and the title is the only
-              visible artwork — no need for the duplicate italic
-              centred title that previously stacked under the
-              overlay's title. */}
-          <div
-            className="absolute inset-x-0 bottom-0 pointer-events-none"
-            style={{
-              height: "60%",
-              background:
-                "linear-gradient(to top, rgba(0,0,0,0.80) 0%, rgba(0,0,0,0.45) 60%, rgba(0,0,0,0) 100%)",
-            }}
-          />
-          <div className="absolute inset-x-4 bottom-3 flex flex-col gap-1">
+          <div className="flex flex-col gap-1 min-w-0">
             <div className="text-lg font-semibold leading-tight text-white drop-shadow truncate">
               {game.name}
             </div>
@@ -1407,7 +1370,7 @@ function GameDetailPage({ gameId }: { gameId: string }) {
               {game.installedVersion ? ` · v${game.installedVersion.replace(/^v/i, "")}` : ""}
             </div>
           </div>
-        </div>
+        </GameHero>
 
         {/* Action button cluster — sits directly under the hero so
             Install / Play / Update is above the fold without scrolling
