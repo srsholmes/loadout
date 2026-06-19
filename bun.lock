@@ -154,6 +154,7 @@
       "name": "@loadout/ui",
       "version": "0.0.1",
       "dependencies": {
+        "@loadout/steam-paths": "workspace:*",
         "@loadout/types": "workspace:*",
         "@noriginmedia/norigin-spatial-navigation": "^3.0.0",
         "fuzzysort": "^3.1.0",

@@ -2,20 +2,24 @@ import { useState, useEffect, useMemo } from "react";
 import {
   PluginHeader,
   SegmentedItem,
+  GameCard,
+  NowPlaying,
+  useFocusable,
   mountComponent,
   mountHeaderStub,
   useBackend,
   useCurrentGame,
 } from "@loadout/ui";
+import { steamArtworkUrls } from "@loadout/steam-paths/artwork";
 import {
   type GameStats,
   type Stats,
   type CurrentSession,
+  type DailyBreakdown,
   type RangeKey,
   formatHoursNumber,
   formatHoursStr,
   formatElapsed,
-  colorFor,
 } from "./lib/time";
 
 export { FaHourglassHalf as icon } from "react-icons/fa6";
@@ -28,11 +32,6 @@ interface PeriodStats {
   games: GameStats[];
 }
 
-interface DayBreakdown {
-  day: string;
-  totalMs: number;
-}
-
 const RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
   { key: "today", label: "Day" },
   { key: "week", label: "Week" },
@@ -40,45 +39,156 @@ const RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
   { key: "allTime", label: "All" },
 ];
 
+// Pixel height the tallest day bar fills. Bars are sized in pixels
+// (not `%`) because a percentage height inside an auto-height flex
+// column collapses to `minHeight` for every bar — the original "all
+// bars the same height" bug.
+const DAY_BAR_AREA_PX = 84;
+
 // --- Subcomponents ---
 
-function NowPlayingHeader({ session }: { session: CurrentSession }) {
-  const [elapsed, setElapsed] = useState(session.elapsedMs);
+/** Live "Nm elapsed" counter for the running session, dropped into the
+ *  shared NowPlaying hero's metadata slot. */
+function SessionElapsed({ session }: { session: CurrentSession }) {
+  const [elapsed, setElapsed] = useState(() => Date.now() - session.startTime);
 
   useEffect(() => {
     setElapsed(Date.now() - session.startTime);
-    const interval = setInterval(() => {
+    const id = setInterval(() => {
       setElapsed(Date.now() - session.startTime);
     }, 1000);
-    return () => clearInterval(interval);
+    return () => clearInterval(id);
   }, [session.startTime]);
 
   return (
-    <div
-      className="subsection"
-      style={{ display: "flex", alignItems: "center", gap: 14 }}
+    <span
+      className="mono"
+      style={{ fontSize: 12, color: "var(--color-success)" }}
     >
-      <span
-        className="shrink-0"
+      {formatElapsed(elapsed)} elapsed
+    </span>
+  );
+}
+
+/** A single day in the filter row: a proportional-height bar that
+ *  toggles whether that day's games count toward the grid below. */
+function DayFilterBar({
+  label,
+  hoursLabel,
+  heightPx,
+  selected,
+  isToday,
+  onToggle,
+}: {
+  label: string;
+  hoursLabel: string;
+  heightPx: number;
+  selected: boolean;
+  isToday: boolean;
+  onToggle: () => void;
+}) {
+  const { ref } = useFocusable({ onEnterPress: onToggle });
+  const [focused, setFocused] = useState(false);
+
+  // Mirror GameCard's ref-merge so spatial-nav focuses the button.
+  const setRef = (node: HTMLButtonElement | null) => {
+    (ref as { current: HTMLElement | null }).current = node;
+  };
+
+  const barColor = !selected
+    ? "var(--bg-2)"
+    : isToday
+      ? "var(--accent)"
+      : "var(--accent-soft)";
+
+  return (
+    <button
+      ref={setRef}
+      type="button"
+      onClick={onToggle}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      aria-pressed={selected}
+      title={`${label} · ${hoursLabel}h — ${selected ? "shown" : "hidden"} (tap to filter)`}
+      className={[
+        "flex flex-col items-center gap-1.5 rounded-md py-1 transition-all",
+        focused ? "ring-2 ring-[var(--accent)] scale-[1.04]" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      style={{
+        flex: 1,
+        background: "transparent",
+        border: "none",
+        cursor: "pointer",
+        opacity: selected ? 1 : 0.5,
+      }}
+    >
+      <div
         style={{
-          width: 10,
-          height: 10,
-          borderRadius: 999,
-          background: "var(--color-success)",
-          boxShadow: "0 0 10px var(--color-success)",
+          height: DAY_BAR_AREA_PX,
+          width: "100%",
+          display: "flex",
+          alignItems: "flex-end",
         }}
-      />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 14, fontWeight: 600 }}>{session.gameName}</div>
+      >
         <div
-          className="mono"
-          style={{ fontSize: 11.5, color: "var(--fg-3)" }}
-        >
-          {formatElapsed(elapsed)} elapsed
-        </div>
+          style={{
+            width: "100%",
+            height: Math.max(4, heightPx),
+            minHeight: 4,
+            borderRadius: 4,
+            background: barColor,
+            border: selected ? "none" : "1px dashed var(--line)",
+          }}
+        />
       </div>
-      <div className="chip chip-success">NOW PLAYING</div>
+      <div className="mono" style={{ fontSize: 10, color: "var(--fg-3)" }}>
+        {label.charAt(0)}
+      </div>
+      <div className="mono" style={{ fontSize: 10.5, color: "var(--fg-2)" }}>
+        {hoursLabel}h
+      </div>
+    </button>
+  );
+}
+
+/** Time-played bar shown under each game tile — the same idea as
+ *  recomp's download bar, but its length tracks play time. */
+function TimeBar({ ms, maxMs }: { ms: number; maxMs: number }) {
+  const pct = maxMs > 0 ? Math.max(6, (ms / maxMs) * 100) : 0;
+  return (
+    <div className="flex flex-col gap-1 w-full">
+      <div
+        className="h-1.5 w-full rounded-full overflow-hidden"
+        style={{ background: "var(--bg-2)" }}
+      >
+        <div
+          className="h-full rounded-full"
+          style={{ width: `${pct}%`, background: "var(--accent)" }}
+        />
+      </div>
+      <span
+        className="mono"
+        style={{ fontSize: 10.5, color: "var(--fg-2)" }}
+      >
+        {formatElapsed(ms)}
+      </span>
     </div>
+  );
+}
+
+/** A game tile in the "All Games" grid — shared GameCard art with the
+ *  time-played bar in the subtitle slot. */
+function GameGridCard({ game, maxMs }: { game: GameStats; maxMs: number }) {
+  const art = steamArtworkUrls(game.appId);
+  return (
+    <GameCard
+      imageUrl={art.capsule}
+      fallbackImageUrl={art.header}
+      title={game.gameName}
+      subtitle={<TimeBar ms={game.totalMs} maxMs={maxMs} />}
+    />
   );
 }
 
@@ -135,25 +245,41 @@ function PlayTime() {
   const { call, useEvent } = useBackend("playtime");
 
   const [stats, setStats] = useState<Stats | null>(null);
+  const [days, setDays] = useState<DailyBreakdown[]>([]);
   const [currentSession, setCurrentSession] = useState<CurrentSession | null>(null);
   const [range, setRange] = useState<RangeKey>("week");
+  // Day filters: all 7 rolling days selected by default. Indices map to
+  // the `days` array (oldest → today).
+  const [selectedDays, setSelectedDays] = useState<Set<number>>(
+    () => new Set([0, 1, 2, 3, 4, 5, 6]),
+  );
+
+  const refreshData = useMemo(
+    () => () => {
+      call("getStats").then((s) => setStats(s as Stats));
+      call("getDailyBreakdown").then((d) =>
+        setDays((d as DailyBreakdown[] | null) ?? []),
+      );
+    },
+    [call],
+  );
 
   // Subscribe to session updates
   useEvent({
     event: "sessionUpdate",
     handler: (data) => {
       setCurrentSession(data as CurrentSession | null);
-      call("getStats").then((s) => setStats(s as Stats));
+      refreshData();
     },
   });
 
   // Fetch initial data on mount
   useEffect(() => {
-    call("getStats").then((s) => setStats(s as Stats));
+    refreshData();
     call("getCurrentSession").then((s) =>
       setCurrentSession(s as CurrentSession | null),
     );
-  }, [call]);
+  }, [call, refreshData]);
 
   const period = stats ? (stats[range] as PeriodStats) : null;
 
@@ -171,12 +297,37 @@ function PlayTime() {
   }, [range]);
 
   const totalHours = period ? formatHoursNumber(period.totalMs) : 0;
-  const topGames = period ? period.games.slice(0, 5) : [];
 
-  // For the bar chart: always show the rolling 7-day breakdown.
-  const bars = (stats?.weeklyBreakdown ?? []) as DayBreakdown[];
-  const maxBarMs = Math.max(1, ...bars.map((b) => b.totalMs));
-  const lastBarIdx = bars.length - 1;
+  // Day-filter bars: heights are proportional to each day's total time.
+  const maxBarMs = Math.max(1, ...days.map((d) => d.totalMs));
+  const lastBarIdx = days.length - 1;
+
+  const toggleDay = (i: number) => {
+    setSelectedDays((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  };
+
+  // "All games" grid: union the per-game totals across the selected
+  // days, then sort by most-played.
+  const filteredGames = useMemo(() => {
+    const map = new Map<string, GameStats>();
+    days.forEach((d, i) => {
+      if (!selectedDays.has(i)) return;
+      for (const g of d.games) {
+        const existing = map.get(g.appId);
+        if (existing) existing.totalMs += g.totalMs;
+        else map.set(g.appId, { ...g });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => b.totalMs - a.totalMs);
+  }, [days, selectedDays]);
+
+  const maxGameMs = Math.max(1, ...filteredGames.map((g) => g.totalMs));
+  const allDaysSelected = selectedDays.size === days.length && days.length > 0;
 
   const sessionsEstimate = period?.gamesPlayed ?? 0;
   // Divisor for AVG/DAY varies by range: 1 for today, 7 for week, day-of-
@@ -190,6 +341,8 @@ function PlayTime() {
     period && divisor !== null && divisor > 0
       ? formatHoursStr(period.totalMs / divisor, 1)
       : "—";
+  const topGameMs =
+    period && period.games.length > 0 ? period.games[0].totalMs : 0;
 
   const headerNode = (
     <PluginHeader>
@@ -228,12 +381,17 @@ function PlayTime() {
       <div className="p-7 h-full overflow-y-auto">
         <div className="page-content">
           <div className="card">
-            {/* NOW PLAYING (only if a session is live) */}
-            {currentSession && <NowPlayingHeader session={currentSession} />}
+            {/* NOW PLAYING — shared hero (artwork + logo) with a live
+                elapsed counter. Self-hides when no game is running. */}
+            <NowPlaying>
+              {currentSession ? (
+                <SessionElapsed session={currentSession} />
+              ) : null}
+            </NowPlaying>
 
-            {/* HEADER: total hours + 7-day bars. Period selector lives
-                in the portaled topbar header, so the body just shows
-                the headline metric for the active period. */}
+            {/* HEADLINE METRIC + DAY FILTER BARS. The period selector in
+                the topbar drives the headline; the day bars below double
+                as filters for the "All Games" grid. */}
             <div className="subsection">
               <div className="subsection-label mb-0.5">This {rangeLabel}</div>
               <div className="metric-value mono" style={{ fontSize: 40 }}>
@@ -249,73 +407,46 @@ function PlayTime() {
                 </span>
               </div>
 
-              {bars.length > 0 && (
-                <div
-                  style={{
-                    display: "flex",
-                    gap: 6,
-                    alignItems: "flex-end",
-                    height: 100,
-                    marginTop: 18,
-                  }}
-                >
-                  {bars.map((b, i) => {
-                    const pct = (b.totalMs / maxBarMs) * 100;
-                    return (
-                      <div
-                        key={`${b.day}-${i}`}
-                        style={{
-                          flex: 1,
-                          display: "flex",
-                          flexDirection: "column",
-                          alignItems: "center",
-                          gap: 6,
-                        }}
-                      >
-                        <div
-                          style={{
-                            flex: 1,
-                            width: "100%",
-                            display: "flex",
-                            alignItems: "flex-end",
-                          }}
-                        >
-                          <div
-                            style={{
-                              width: "100%",
-                              height: `${pct}%`,
-                              background:
-                                i === lastBarIdx
-                                  ? "var(--accent)"
-                                  : "var(--accent-soft)",
-                              borderRadius: 4,
-                              minHeight: 4,
-                            }}
-                          />
-                        </div>
-                        <div
-                          className="mono"
-                          style={{ fontSize: 10, color: "var(--fg-3)" }}
-                        >
-                          {b.day.charAt(0)}
-                        </div>
-                        <div
-                          className="mono"
-                          style={{ fontSize: 10.5, color: "var(--fg-2)" }}
-                        >
-                          {formatHoursStr(b.totalMs, 1)}h
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+              {days.length > 0 && (
+                <>
+                  <div
+                    className="subsection-label"
+                    style={{ marginTop: 18, marginBottom: 8 }}
+                  >
+                    Filter by day{" "}
+                    <span style={{ color: "var(--fg-3)", fontWeight: 400 }}>
+                      · tap to toggle
+                      {allDaysSelected ? "" : ` · ${selectedDays.size}/${days.length}`}
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 6,
+                      alignItems: "flex-end",
+                    }}
+                  >
+                    {days.map((b, i) => (
+                      <DayFilterBar
+                        key={b.dayStart}
+                        label={b.day}
+                        hoursLabel={formatHoursStr(b.totalMs, 1)}
+                        heightPx={(b.totalMs / maxBarMs) * DAY_BAR_AREA_PX}
+                        selected={selectedDays.has(i)}
+                        isToday={i === lastBarIdx}
+                        onToggle={() => toggleDay(i)}
+                      />
+                    ))}
+                  </div>
+                </>
               )}
             </div>
 
-            {/* MOST PLAYED */}
+            {/* ALL GAMES — grid of every game played on the selected
+                days, ordered by most-played, each with a time bar. */}
             <div className="subsection">
-              <div className="subsection-label">Most Played</div>
-              {topGames.length === 0 ? (
+              <div className="subsection-label">All Games</div>
+              {filteredGames.length === 0 ? (
                 <div
                   style={{
                     fontSize: 12.5,
@@ -323,97 +454,15 @@ function PlayTime() {
                     padding: "8px 2px",
                   }}
                 >
-                  No games played in this range yet.
+                  {selectedDays.size === 0
+                    ? "No days selected — tap a day above to show its games."
+                    : "No games played on the selected days yet."}
                 </div>
               ) : (
-                <div style={{ display: "grid", gap: 4 }}>
-                  {topGames.map((g) => {
-                    const color = colorFor(g.appId);
-                    const pct =
-                      period && period.totalMs > 0
-                        ? (g.totalMs / period.totalMs) * 100
-                        : 0;
-                    return (
-                      <div
-                        key={g.appId}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 12,
-                          padding: "10px 12px",
-                          background: "var(--bg-inset)",
-                          borderRadius: 8,
-                        }}
-                      >
-                        <div
-                          style={{
-                            width: 4,
-                            height: 28,
-                            borderRadius: 2,
-                            background: color,
-                            flexShrink: 0,
-                          }}
-                        />
-                        <div
-                          style={{
-                            flex: 1,
-                            minWidth: 0,
-                            overflow: "hidden",
-                          }}
-                        >
-                          <div
-                            style={{
-                              fontSize: 13,
-                              fontWeight: 500,
-                              whiteSpace: "nowrap",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                            }}
-                          >
-                            {g.gameName}
-                          </div>
-                          <div
-                            className="mono"
-                            style={{
-                              fontSize: 10.5,
-                              color: "var(--fg-3)",
-                            }}
-                          >
-                            {formatElapsed(g.totalMs)}
-                          </div>
-                        </div>
-                        <div
-                          style={{
-                            width: 140,
-                            height: 6,
-                            background: "var(--bg-2)",
-                            borderRadius: 3,
-                            overflow: "hidden",
-                            flexShrink: 0,
-                          }}
-                        >
-                          <div
-                            style={{
-                              width: `${Math.max(pct, 2)}%`,
-                              height: "100%",
-                              background: color,
-                            }}
-                          />
-                        </div>
-                        <span
-                          className="mono"
-                          style={{
-                            fontSize: 13,
-                            fontWeight: 600,
-                            width: 56,
-                            textAlign: "right",
-                          }}
-                        >
-                          {formatHoursStr(g.totalMs, 1)}h
-                        </span>
-                      </div>
-                    );
-                  })}
+                <div className="grid grid-cols-4 sidebar-collapsed:grid-cols-6 gap-2.5">
+                  {filteredGames.map((g) => (
+                    <GameGridCard key={g.appId} game={g} maxMs={maxGameMs} />
+                  ))}
                 </div>
               )}
             </div>
@@ -437,7 +486,7 @@ function PlayTime() {
                 />
                 <InsetStat
                   label="TOP GAME"
-                  value={topGames[0] ? formatHoursStr(topGames[0].totalMs, 1) : "0"}
+                  value={topGameMs > 0 ? formatHoursStr(topGameMs, 1) : "0"}
                   unit="h"
                   tone="var(--accent)"
                 />

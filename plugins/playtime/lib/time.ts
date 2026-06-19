@@ -59,6 +59,23 @@ export interface CurrentSession {
   elapsedMs: number;
 }
 
+/**
+ * One calendar day of the rolling 7-day window, carrying both the
+ * day's total and its per-game breakdown. The UI uses `totalMs` for
+ * the bar height and `games` to build the (day-filtered) "All games"
+ * grid underneath.
+ */
+export interface DailyBreakdown {
+  /** Short day label, e.g. "Mon". */
+  day: string;
+  /** Epoch ms at local start-of-day — stable React key + filter id. */
+  dayStart: number;
+  /** Sum of all game time on this day. */
+  totalMs: number;
+  /** Per-game totals for this day, sorted by totalMs descending. */
+  games: GameStats[];
+}
+
 // --- Date boundary helpers ---
 
 export function startOfDay(ts: number): number {
@@ -150,6 +167,56 @@ export function getWeeklyBreakdown(
     }
 
     days.push({ day: dayLabel, totalMs });
+  }
+
+  return days;
+}
+
+/**
+ * Build the rolling 7-day breakdown WITH per-game totals (oldest first,
+ * today last). Same day-clamping as `getWeeklyBreakdown`, but each day
+ * also carries the per-game split so the UI can union games across the
+ * user's selected days.
+ */
+export function getDailyGameBreakdown(
+  sessions: GameSession[],
+  now: number,
+): DailyBreakdown[] {
+  const days: DailyBreakdown[] = [];
+
+  for (let i = 6; i >= 0; i--) {
+    const dayStart = startOfDay(now - i * 86_400_000);
+    const dayEnd = dayStart + 86_400_000;
+    const date = new Date(dayStart);
+    const dayLabel = DAY_NAMES[date.getDay()];
+
+    const gameMap = new Map<string, GameStats>();
+    let totalMs = 0;
+    for (const s of sessions) {
+      const sEnd = s.endTime ?? now;
+      if (sEnd < dayStart || s.startTime >= dayEnd) continue;
+      const start = Math.max(s.startTime, dayStart);
+      const end = Math.min(sEnd, dayEnd);
+      const duration = Math.max(0, end - start);
+      if (duration <= 0) continue;
+
+      totalMs += duration;
+      const existing = gameMap.get(s.appId);
+      if (existing) {
+        existing.totalMs += duration;
+      } else {
+        gameMap.set(s.appId, {
+          appId: s.appId,
+          gameName: s.gameName,
+          totalMs: duration,
+        });
+      }
+    }
+
+    const games = Array.from(gameMap.values()).sort(
+      (a, b) => b.totalMs - a.totalMs,
+    );
+    days.push({ day: dayLabel, dayStart, totalMs, games });
   }
 
   return days;

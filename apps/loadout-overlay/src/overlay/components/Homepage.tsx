@@ -3,7 +3,7 @@ import GridLayout, { type LayoutItem } from "react-grid-layout/legacy";
 import type { PluginInfo } from "../hooks/usePlugins";
 import { HomeWidgetHost } from "./HomeWidgetHost";
 import { WidgetPicker } from "./WidgetPicker";
-import { NowPlaying } from "./NowPlaying";
+import { NowPlaying } from "@loadout/ui";
 import { useFocusable, FocusContext } from "./GamepadNav";
 import { useConfigValue, isUserConfigLoaded } from "../lib/userConfig";
 

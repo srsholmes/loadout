@@ -8,7 +8,9 @@ import {
   type PlaytimeData,
   type Stats,
   type CurrentSession,
+  type DailyBreakdown,
   computeStats,
+  getDailyGameBreakdown,
 } from "./lib/time";
 
 const PLUGIN_ID = "playtime";
@@ -163,6 +165,19 @@ export default class PlaytimeBackend implements PluginBackend {
   /** Return playtime stats: today, this week, this month, all time, weekly breakdown. */
   async getStats(): Promise<Stats> {
     return computeStats(this.data.sessions, this.activeSession, Date.now());
+  }
+
+  /**
+   * Return the rolling 7-day breakdown with per-game totals per day.
+   * Drives the day-filter bars and the day-filtered "All games" grid in
+   * the UI (which `getStats().weeklyBreakdown` can't, as it only carries
+   * per-day totals — no per-game split).
+   */
+  async getDailyBreakdown(): Promise<DailyBreakdown[]> {
+    const all = this.activeSession
+      ? [...this.data.sessions, this.activeSession]
+      : this.data.sessions;
+    return getDailyGameBreakdown(all, Date.now());
   }
 
   /** Return recent game sessions, optionally filtered by appId. */
