@@ -12,7 +12,7 @@
  *
  * - `__core:game-detection` — emits `gameChanged` with `{ currentGame,
  *   recentSessions }` whenever the active Steam app changes. Owner:
- *   `packages/loader/src/services/game-detection.ts`. Consumers should
+ *   `apps/loadout/src/loader/services/game-detection.ts`. Consumers should
  *   prefer subscribing here over polling Steam's CDP URL bar.
  * - `__system` — diagnostic broadcasts from the loader itself
  *   (e.g. `inject-failed` when the injector retry ladder gives up).
@@ -96,6 +96,16 @@ export interface PluginMeta {
   version: string;
   description: string;
   author: string;
+  /**
+   * Short human-readable subtitle shown under the plugin's page title in
+   * the overlay. Set via `package.json → plugin.subtitle`.
+   */
+  subtitle?: string;
+  /**
+   * Sidebar grouping — plugins sharing a category are grouped together in
+   * the overlay's plugin list. Set via `package.json → plugin.category`.
+   */
+  category?: string;
   permissions?: PluginPermissions;
   /** Rendering target(s). If omitted, defaults to overlay. Array for multi-target plugins. */
   target?: PluginTarget | PluginTarget[];

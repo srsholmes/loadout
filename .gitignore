@@ -52,6 +52,9 @@ qam-watch.log
 # Stale loadout marketing screenshots — loadout will add its own
 screenshots/
 
+# Local screenshot scratch folder (capture-steam-interval.ts output)
+screenshot-review/
+
 # background-agent git worktrees — never track
 .worktrees/
 
