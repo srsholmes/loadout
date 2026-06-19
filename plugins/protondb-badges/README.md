@@ -6,7 +6,16 @@ Adds ProtonDB compatibility ratings to your Steam library — a tier badge on ev
 
 ## Screenshots
 
+### Plugin
+
 ![ProtonDB Badges](./assets/screenshot.png)
+
+### In Big Picture
+
+The ProtonDB tier badge (here, **Platinum**) shown right on a game page in
+Gaming Mode:
+
+![ProtonDB Badges — tier badge in Big Picture](./assets/screenshot-big-picture.png)
 
 ## See also
 
