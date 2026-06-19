@@ -252,6 +252,16 @@ const overlay = new BrowserWindow({
   title: "Loadout Overlay",
   frame: { x: 0, y: 0, width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT },
   titleBarStyle: "default",
+  // Create the window NON-RESIZABLE. Live drag-resize crashes the overlay:
+  // dragging a corner (or dragging the window between monitors) streams a
+  // storm of geometry changes that reallocate CEF's window surface faster
+  // than it can keep up → SIGSEGV/SIGABRT with non-deterministic crash
+  // sites (heap corruption). A SINGLE atomic geometry change is safe — the
+  // WM "maximise" button never crashed in testing — so we disable user
+  // resize and instead maximise on open (see toggleOverlay). This overrides
+  // Electrobun's hardcoded `Resizable: true` default via the styleMask
+  // spread in BrowserWindow's constructor.
+  styleMask: { Resizable: false },
   transparent: false,
   hidden: !DESKTOP_SMOKE_TEST,
   url: process.env.ELECTROBUN_DEV_URL ?? "views://overlay/index.html",
@@ -507,6 +517,18 @@ function toggleOverlay(source: string) {
     intercept.current?.grab();
     ipIntercept.current?.grab();
     overlay.show();
+    // Fill the screen with a single, safe geometry change. Drag-resize is
+    // disabled (it crashes CEF — see BrowserWindow creation), so maximise
+    // is how the window grows to fit the display. Desktop only: under
+    // gamescope the window is already born at the inner-X resolution and
+    // there's no WM to maximise against.
+    if (!gamescopeMode) {
+      try {
+        overlay.maximize();
+      } catch (e) {
+        console.warn("[overlay] maximize on open failed:", e);
+      }
+    }
     atoms.show().catch((e) => console.warn("[overlay] atoms.show:", e));
     state.isOpen = true;
     broadcastOverlayVisibility();
