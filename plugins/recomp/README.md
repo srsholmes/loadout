@@ -14,6 +14,13 @@ Browse, install, and launch community recompilations and native ports of classic
 
 ![RecompHub — Game detail](./assets/screenshot-detail.png)
 
+### In Big Picture
+
+Your recompiled titles, added to Steam with full artwork — a dedicated
+RecompHub collection right in the Gaming Mode library:
+
+![RecompHub — Big Picture library](./assets/screenshot-big-picture-library.png)
+
 ## See also
 
 - [All plugins](../../README.md#plugins)

@@ -40,6 +40,22 @@ The greatest hits — and there are [a dozen more](#all-plugins) below:
 - ⏱️ **[HowLongToBeat](plugins/hltb/README.md)** & **[PlayTime](plugins/playtime/README.md)** —
   Know what you're signing up for, and where your hours actually go.
 
+## In Gaming Mode
+
+Plugins reach right into Steam's Big Picture UI — themed, badged, and native:
+
+**[RecompHub](plugins/recomp/README.md)** turns recompiled classics into native
+Steam entries with full artwork — a dedicated collection in your library:
+
+![RecompHub in Big Picture](plugins/recomp/assets/screenshot-big-picture-library.png)
+
+**[Theme Loader](plugins/theme-loader/README.md)** restyles the whole interface
+with community CSS themes:
+
+![Themed Big Picture home](plugins/theme-loader/assets/screenshot-big-picture-home.png)
+
+![Themed Big Picture game page](plugins/theme-loader/assets/screenshot-big-picture-game.png)
+
 ## Supported devices & testing
 
 **Loadout is Linux-only by design** — it targets distros that ship Steam Gaming

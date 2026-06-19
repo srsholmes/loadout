@@ -6,7 +6,17 @@ Browse, install, and toggle community CSS themes for Steam's Big Picture UI, res
 
 ## Screenshots
 
+### Plugin
+
 ![Theme Loader](./assets/screenshot.png)
+
+### In Big Picture
+
+A community theme restyling the Gaming Mode home and game pages:
+
+![Theme Loader — themed home](./assets/screenshot-big-picture-home.png)
+
+![Theme Loader — themed game page](./assets/screenshot-big-picture-game.png)
 
 ## See also
 
