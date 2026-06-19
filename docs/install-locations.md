@@ -43,17 +43,18 @@ Document of record: `memory/project_root_service_selinux.md` (and the
 
 `/usr/local/bin` is writable on a normal Linux system and on `PATH` by default. No SELinux issue, no immutable-root issue. Same path as Bazzite for consistency.
 
-## What the install scripts need to do
+## What the install scripts do
 
-The current scripts (`scripts/install.sh`, `scripts/install-local.sh`) hardcode `/usr/local/bin/loadout`. They need to:
+`scripts/install.sh` and `scripts/install-local.sh` resolve the binary path at
+install time:
 
-1. Source `/etc/os-release` and read `ID` (and `ID_LIKE` as a fallback).
-2. If `ID=steamos`, set the binary install path to `$HOME/.local/share/loadout/loadout` (no sudo needed for the binary itself; the system unit install still needs sudo).
-3. Otherwise (Bazzite, Fedora-ostree, CachyOS, Arch, generic): keep `/usr/local/bin/loadout` with `sudo install` + `restorecon`.
-4. Generate `loadout.service` with the chosen `ExecStart=` path baked in (the unit template already uses `__BIN__`/concrete substitution).
+1. Source `/etc/os-release` and read `ID` (with `ID_LIKE` as a fallback).
+2. If `ID=steamos`, install the binary to `$HOME/.local/share/loadout/loadout` (no sudo needed for the binary itself; the system unit install still needs sudo).
+3. Otherwise (Bazzite, Fedora-ostree, CachyOS, Arch, generic): install to `/usr/local/bin/loadout` with `sudo install` + `restorecon`.
+4. Generate `loadout.service` with the chosen `ExecStart=` path baked in (the unit template uses `__BIN__`/`__USER__` substitution).
 5. Surface the chosen path in the install summary so the user knows where the binary landed.
 
-The `uninstall.sh` script needs the symmetric detection so it removes from the right path.
+`uninstall.sh` runs the symmetric detection so it removes from the right path.
 
 ## What NOT to do
 

@@ -9,7 +9,7 @@
 **Tune your handheld without ever leaving your game.** Tap the overlay, dial in
 your TDP, flip on frame generation, check if a game runs well on Proton, launch
 your Epic library, install a recompiled N64 classic — then get straight back to
-playing. Two dozen plugins, one slick d-pad-friendly overlay.
+playing. Twenty-plus plugins, one slick d-pad-friendly overlay.
 
 [**Install →**](#install) · [Plugins](#plugins) · [Supported devices](#supported-devices--testing) · [Build from source](#build-from-source)
 
@@ -86,7 +86,9 @@ See [docs/os-compatibility.md](docs/os-compatibility.md) for per-distro notes
 ## Install
 
 One command — downloads the prebuilt binary + overlay, verifies SHA-256, and
-enables systemd **user** units. Nothing runs as root:
+sets up the services. The backend installs as a **system** service (one `sudo`
+prompt at install) so plugins can touch hardware without prompting you again;
+the overlay runs as your **user**:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/install.sh | sh
@@ -103,8 +105,10 @@ curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/unin
 
 The installer downloads the prebuilt `loadout` binary + Electrobun overlay
 into `~/.local/share/loadout/` and `~/.local/share/loadout-overlay/`, verifies
-SHA-256 against the release's `SHA256SUMS`, and writes + enables systemd
-**user** units.
+SHA-256 against the release's `SHA256SUMS`, and writes the systemd units: a
+**system** `loadout.service` (the backend, runs as root — hence the one-time
+`sudo`) and a **user** `loadout-overlay.service`. See
+[docs/install-locations.md](docs/install-locations.md) for exact paths.
 
 Runtime requirements: an X11/Xwayland display, membership in the `input` group
 (so the overlay can grab evdev devices), and a working Steam install. The CEF
@@ -139,7 +143,7 @@ libraries ship inside the overlay archive.
 git clone https://github.com/srsholmes/loadout
 cd loadout
 bun install
-bun run build-and-install    # compile + install to ~/.local/share/, enable user units
+bun run build-and-install    # compile + install to ~/.local/share/, enable services
 ```
 
 ### Developing
@@ -155,7 +159,7 @@ workflow that matches what users actually run: the patched wrapper, the real
 systemd user units, and production CEF flags. Re-run it after each change:
 
 ```sh
-bun run build-and-install               # compile + install + enable user units
+bun run build-and-install               # compile + install + enable services
 systemctl --user restart loadout-overlay   # restart the overlay to pick up the build
 journalctl --user -u loadout-overlay -f    # follow overlay logs
 ```
@@ -178,7 +182,7 @@ and none of the patched-wrapper behaviour. Always confirm a change with
 
 ## Plugins
 
-Two dozen and counting — every one TypeScript end-to-end. The screenshots below
+Twenty-plus and counting — every one TypeScript end-to-end. The screenshots below
 are captured live from the running overlay, so they always match the current
 build.
 
@@ -194,7 +198,7 @@ Browse, install, and play recompiled retro games natively
 
 #### [Store Bridge](plugins/store-bridge/README.md)
 
-Surface Epic, GOG, Amazon, Ubisoft and xCloud libraries as Steam shortcuts
+Surface your Epic Games library as Steam shortcuts (GOG, Amazon, Ubisoft, xCloud planned)
 
 ![Store Bridge](plugins/store-bridge/assets/screenshot.png)
 
@@ -259,7 +263,7 @@ Install and configure the LSFG-VK Vulkan frame generation layer
 - **[Sound Loader](plugins/sound-loader/README.md)** — Browse, install, and toggle community UI sound packs from deckthemes.com
 - **[SteamGridDB](plugins/steamgriddb/README.md)** — Browse and apply custom game art (grids, heroes, logos, icons) from SteamGridDB
 - **[Storage Cleaner](plugins/storage-cleaner/README.md)** — Shows disk usage, shader cache sizes, and lets users clean up space
-- **[Store Bridge](plugins/store-bridge/README.md)** — Surface Epic, GOG, Amazon, Ubisoft and xCloud libraries as Steam shortcuts
+- **[Store Bridge](plugins/store-bridge/README.md)** — Surface your Epic Games library as Steam shortcuts (GOG, Amazon, Ubisoft, xCloud planned)
 - **[TDP Control](plugins/tdp-control/README.md)** — Adjust CPU/APU TDP wattage with presets and a slider
 - **[Theme Loader](plugins/theme-loader/README.md)** — Browse, install, and toggle community CSS themes for Steam's Big Picture UI
 
@@ -275,29 +279,39 @@ methods), and a UI entry — `app.tsx` to render in the overlay (the default), o
 
 ## Architecture
 
-The overlay is an Electrobun (CEF) app at `packages/overlay-electrobun/`:
-`src/bun/` is the Bun + libc-FFI main process (the evdev read loop,
-`EVIOCGRAB`/`EVIOCSMASK`, Gamescope X11 atoms, NavController, and the typed RPC
-surface the webview talks to); `src/webview/` is the CEF UI boot shim that
-pulls in the shared React tree from `packages/overlay/`. The Bun loader server
-lives in `packages/loader/`. See [docs/architecture.md](docs/architecture.md)
-and
+The overlay is an Electrobun (CEF) app at `apps/loadout-overlay/`: `src/bun/`
+is the Bun + libc-FFI main process (the evdev read loop, `EVIOCGRAB`/`EVIOCSMASK`,
+Gamescope X11 atoms, NavController, and the typed RPC surface the webview talks
+to); `src/webview/` is the CEF UI boot shim that pulls in the shared React tree
+from `src/overlay/`. The Bun loader + CLI lives in `apps/loadout/`. See
+[docs/architecture.md](docs/architecture.md) and
 [docs/overlay-gamescope-integration.md](docs/overlay-gamescope-integration.md).
 
 ```
 loadout/
+├── apps/
+│   ├── loadout/              # Bun loader + CLI: HTTP/WS server, plugin manager, Steam injector
+│   └── loadout-overlay/      # Electrobun (CEF) overlay
+│       ├── src/bun/          #   Bun + libc-FFI main process (evdev, Gamescope atoms, RPC)
+│       ├── src/overlay/      #   Shared React tree (App, plugin host, sidebar, Settings)
+│       └── src/webview/      #   CEF UI boot shim
 ├── packages/
 │   ├── types/                # Shared interfaces (PluginBackend, RPC protocol)
 │   ├── ui/                   # @loadout/ui — React SDK + useBackend + spatial nav
-│   ├── exec/                 # Subprocess helpers
+│   ├── exec/                 # Subprocess helpers (command allow-list)
 │   ├── steam-paths/          # Steam install discovery
-│   ├── steam-cdp/            # Chrome DevTools Protocol client
-│   ├── injector/             # CEF remote-debug injection into Steam BPM
-│   ├── loader/               # HTTP/WS server, plugin manager
-│   ├── overlay/              # Shared React tree (App, plugin host, sidebar, Settings)
-│   ├── overlay-electrobun/   # CEF overlay shell — Bun/FFI main + webview boot
-│   └── dev-server/           # Dev entry point
-├── plugins/                  # Plugins (one example here; more migrating in)
+│   ├── steam-cdp/            # Chrome DevTools Protocol client (Steam CEF :8080)
+│   ├── steam-cef-badges/     # CEF remote-debug injection into Steam Big Picture
+│   ├── steam-shortcut/       # Steam shortcut writing
+│   ├── vdf/                  # Valve VDF parser
+│   ├── sgdb-art/             # SteamGridDB artwork fetch
+│   ├── game-library/         # Game library helpers
+│   ├── per-game-profiles/    # Per-game profile storage
+│   ├── plugin-storage/       # Plugin state persistence
+│   ├── external-cache/       # XDG cache helpers
+│   ├── file-picker/          # File picker
+│   └── deck-hid/             # HID device access
+├── plugins/                  # The plugin suite (one dir per plugin)
 ├── scripts/                  # Build/install + screenshot & README tooling
 └── docs/                     # Architecture, plugin dev, Steam injection, …
 ```
@@ -308,7 +322,7 @@ loadout/
 |---|---|
 | `bun run dev:overlay` | Loader dev server + Electrobun overlay with hot reload |
 | `bun run build` | Compile loader binary + Electrobun overlay tree |
-| `bun run build-and-install` | `build` + install into `~/.local/share/` and enable user units |
+| `bun run build-and-install` | `build` + install into `~/.local/share/` and enable services |
 | `bun run typecheck` | `tsc --noEmit` |
 | `bun run test` | Backend + UI tests |
 | `bun run lint` / `bun run format` | ESLint 9 flat config / Prettier |
