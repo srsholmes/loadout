@@ -373,6 +373,17 @@ export async function startServer(options: ServerOptions = {}) {
         return new Response("ok");
       }
 
+      // --- Show the overlay on demand (loopback-only, unauthenticated
+      //     like /up). Lets the installer — or a desktop launcher — pop
+      //     the overlay window for first-run wake-button setup without a
+      //     session token. The loader can't reach the overlay main
+      //     process directly, so it broadcasts to the webview, which calls
+      //     the overlay's show() RPC (see App.tsx __overlay listener).
+      if (url.pathname === "/show") {
+        broadcast({ type: "event", plugin: "__overlay", event: "show", data: {} });
+        return new Response("ok");
+      }
+
       // --- API (all /api/* routes require authentication) ---
 
       if (url.pathname.startsWith("/api/") && !validateRequest(req)) {
