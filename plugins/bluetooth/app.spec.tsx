@@ -6,6 +6,7 @@ import * as actualUi from "@loadout/ui";
 import { waitFor } from "../../test/render";
 
 const callMock = mock((_method: string) => Promise.resolve(null));
+const notifyMock = mock((_msg: string, _opts?: unknown) => {});
 const eventHandlers = new Map<string, (data: unknown) => void>();
 
 mock.module("@loadout/ui", () => {
@@ -14,6 +15,7 @@ mock.module("@loadout/ui", () => {
   };
   return {
     ...actualUi,
+    notify: notifyMock,
     // Stripped-down PluginProvider — keeps only the header-slot context
     // so `<PluginHeader>` portal-renders into the supplied slot. Backend
     // and focus context are mocked separately.
@@ -59,6 +61,7 @@ const mockDevices = [
 describe("bluetooth plugin", () => {
   beforeEach(() => {
     callMock.mockReset();
+    notifyMock.mockReset();
     eventHandlers.clear();
     callMock.mockImplementation((_method: string) => {
       if (_method === "getDevices") return Promise.resolve(mockDevices);
@@ -159,6 +162,90 @@ describe("bluetooth plugin", () => {
     mount(container);
     await waitFor(() => {
       expect(eventHandlers.has("deviceChanged")).toBe(true);
+    });
+  });
+
+  it("registers adapterChanged event handler", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => {
+      expect(eventHandlers.has("adapterChanged")).toBe(true);
+    });
+  });
+
+  it("updates the power chip when an adapterChanged event fires", async () => {
+    const container = document.createElement("div");
+    const headerSlot = document.createElement("div");
+    document.body.appendChild(container);
+    document.body.appendChild(headerSlot);
+    const { mount } = await import("./app");
+    mount(container, { headerSlot });
+    await waitFor(() => {
+      expect(headerSlot.textContent).toContain("POWERED ON");
+    });
+    // Adapter powered off externally → backend emits adapterChanged.
+    eventHandlers.get("adapterChanged")?.({ ...mockAdapter, powered: false });
+    await waitFor(() => {
+      expect(headerSlot.textContent).toContain("POWERED OFF");
+    });
+  });
+
+  it("reverts the power chip and notifies when togglePower fails", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getDevices") return Promise.resolve([]);
+      if (method === "getAdapterInfo")
+        return Promise.resolve({ ...mockAdapter, powered: false });
+      if (method === "togglePower") return Promise.reject(new Error("rfkill"));
+      return Promise.resolve(null);
+    });
+    const container = document.createElement("div");
+    const headerSlot = document.createElement("div");
+    document.body.appendChild(container);
+    document.body.appendChild(headerSlot);
+    const { mount } = await import("./app");
+    mount(container, { headerSlot });
+    await waitFor(() => {
+      expect(headerSlot.querySelector('[aria-label="Turn adapter on"]')).not.toBeNull();
+    });
+    headerSlot
+      .querySelector<HTMLButtonElement>('[aria-label="Turn adapter on"]')!
+      .click();
+    await waitFor(() => {
+      // Optimistic ON was reverted back to OFF, and the failure surfaced.
+      expect(headerSlot.textContent).toContain("POWERED OFF");
+      expect(notifyMock).toHaveBeenCalled();
+      expect(notifyMock.mock.calls[0]?.[1]).toMatchObject({ kind: "error" });
+    });
+  });
+
+  it("turns power ON and keeps it on when the adapter confirms", async () => {
+    let powered = false;
+    callMock.mockImplementation((method: string, ...args: unknown[]) => {
+      if (method === "getDevices") return Promise.resolve([]);
+      if (method === "getAdapterInfo")
+        return Promise.resolve({ ...mockAdapter, powered });
+      if (method === "togglePower") {
+        powered = args[0] as boolean;
+        return Promise.resolve("ok");
+      }
+      return Promise.resolve(null);
+    });
+    const container = document.createElement("div");
+    const headerSlot = document.createElement("div");
+    document.body.appendChild(container);
+    document.body.appendChild(headerSlot);
+    const { mount } = await import("./app");
+    mount(container, { headerSlot });
+    await waitFor(() => {
+      expect(headerSlot.querySelector('[aria-label="Turn adapter on"]')).not.toBeNull();
+    });
+    headerSlot
+      .querySelector<HTMLButtonElement>('[aria-label="Turn adapter on"]')!
+      .click();
+    await waitFor(() => {
+      expect(headerSlot.textContent).toContain("POWERED ON");
     });
   });
 });
