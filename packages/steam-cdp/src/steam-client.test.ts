@@ -157,6 +157,37 @@ describe("withSteamClient", () => {
     expect(result).toBe("done");
     expect(mockClose).toHaveBeenCalledTimes(1);
   });
+
+  it("serialises concurrent sessions so connections never overlap", async () => {
+    // Two simultaneous CDP connections to Steam's SharedJSContext crash
+    // the webhelper ("Collided with existing master response stream"), so
+    // overlapping sessions are the bug we're guarding against.
+    let active = 0;
+    let maxActive = 0;
+    const body = async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((r) => setTimeout(r, 5));
+      active--;
+    };
+    await Promise.all([
+      withSteamClient(body),
+      withSteamClient(body),
+      withSteamClient(body),
+    ]);
+    expect(maxActive).toBe(1);
+  });
+
+  it("keeps serialising after a session rejects", async () => {
+    // A failing session must not wedge the chain for the next caller.
+    await expect(
+      withSteamClient(async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    const result = await withSteamClient(async () => "after");
+    expect(result).toBe("after");
+  });
 });
 
 describe("SteamClient.apps.addShortcut", () => {

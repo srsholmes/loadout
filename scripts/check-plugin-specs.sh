@@ -91,9 +91,10 @@ is_type_only_module() {
 # the minimal PoC; re-add entries when those plugins are migrated back.
 EXEMPT_LIB=""
 
-# Empty: store-bridge/recomp are not part of the minimal PoC. Re-scope
-# when those plugins are migrated back.
-SPEC_SCOPED_LIB_DIRS=""
+# Scoped to the plugins whose lib/ trees have been ratcheted onto the
+# rule. recomp is back in scope — its lib modules now carry sibling
+# specs. store-bridge stays out until its lib coverage lands.
+SPEC_SCOPED_LIB_DIRS="plugins/recomp/lib"
 for dir in $SPEC_SCOPED_LIB_DIRS; do
   [ -d "$dir" ] || continue
   for lib in $(find "$dir" -type f -name '*.ts' 2>/dev/null); do

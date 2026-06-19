@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@recomp/sdk": ["./lib/sdk/index.ts"]
+    }
+  },
+  "include": [
+    "../../types/**/*.d.ts",
+    "lib/**/*.ts",
+    "games/*/setup.ts",
+    "games/*/mods/*/setup.ts",
+    "backend.ts",
+    "app.tsx"
+  ]
+}

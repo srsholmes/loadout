@@ -1,0 +1,71 @@
+{
+  "name": "@loadout/plugin-recomp",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-icons": "^5.6.0",
+    "@loadout/ui": "workspace:*",
+    "@loadout/types": "workspace:*",
+    "@loadout/exec": "workspace:*",
+    "@loadout/external-cache": "workspace:*",
+    "@loadout/file-picker": "workspace:*",
+    "@loadout/plugin-storage": "workspace:*",
+    "@loadout/sgdb-art": "workspace:*",
+    "@loadout/steam-cdp": "workspace:*",
+    "@loadout/steam-paths": "workspace:*",
+    "@loadout/steam-shortcut": "workspace:*",
+    "@loadout/vdf": "workspace:*",
+    "fuzzysort": "^3.1.0"
+  },
+  "plugin": {
+    "id": "recomp",
+    "name": "RecompHub",
+    "description": "Browse, install, and play recompiled retro games natively",
+    "category": "Game",
+    "subtitle": "Recompiled & decompiled native ports",
+    "target": { "type": "overlay" },
+    "permissions": {
+      "network": [
+        "api.github.com",
+        "github.com",
+        "objects.githubusercontent.com",
+        "codeload.github.com",
+        "raw.githubusercontent.com",
+        "cdn2.steamgriddb.com",
+        "www.steamgriddb.com",
+        "sm64pc.info",
+        "localhost"
+      ],
+      "filesystem": [
+        "read:~/.local/share/Steam",
+        "write:~/.local/share/Steam/userdata/*/config/grid",
+        "read:~/.config/loadout/plugins/steamgriddb.json",
+        "write:~/.config/loadout/plugins/recomp.json",
+        "write:~/.cache/loadout/recomp",
+        "write:~/.cache/loadout/sgdb-art",
+        "write:~/.local/share/recomp-hub",
+        "read:/run/media",
+        "read:/media",
+        "read:/mnt"
+      ],
+      "commands": [
+        "distrobox",
+        "podman",
+        "systemd-run",
+        "bash",
+        "gh",
+        "unzip",
+        "tar",
+        "chmod",
+        "zenity",
+        "kdialog",
+        "yad",
+        "extractor",
+        "gk"
+      ]
+    }
+  }
+}
