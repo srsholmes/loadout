@@ -5,6 +5,10 @@ import {
 } from "@loadout/steam-paths";
 import { SteamCefBadgeInjector } from "@loadout/steam-cef-badges";
 import {
+  SteamClientUnreachableError,
+  withSteamClient,
+} from "@loadout/steam-cdp";
+import {
   readPluginStorage,
   writePluginStorage,
 } from "@loadout/plugin-storage";
@@ -243,6 +247,65 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
    */
   async listInstalledGames(): Promise<InstalledGame[]> {
     return listInstalledGames();
+  }
+
+  /**
+   * Enumerate the user's *entire owned* Steam library (not just the
+   * installed titles) by reading `window.appStore.allApps` from Steam's
+   * SharedJSContext tab over CDP. Unlike `listInstalledGames`, this
+   * reaches owned-but-not-installed games — there's no
+   * `appmanifest_*.acf` on disk for those, so the CDP read is the only
+   * source.
+   *
+   * Returns the same `{ appId, name }` shape as `listInstalledGames`,
+   * sorted alphabetically by name so the grid order is stable. Throws
+   * `SteamClientUnreachableError` (surfaced to the overlay) when Steam
+   * isn't reachable on its CDP port — the overlay then falls back to
+   * the installed list.
+   */
+  async listAllGames(): Promise<InstalledGame[]> {
+    const apps = await withSteamClient((sc) => sc.apps.getAllApps());
+    return apps
+      .map((a) => ({ appId: a.appId, name: a.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Open a game in the Steam UI and navigate to its ProtonDB page —
+   * the same destination the injected library/store badge reaches when
+   * clicked. Invoked from the overlay grid after the overlay hides
+   * itself, so the user lands on the Steam app's details page with the
+   * ProtonDB site open in Steam's in-client browser.
+   *
+   * Two steps through one serialised `withSteamClient` session:
+   *   1. `steam://nav/games/details/<appId>` — focuses the game's
+   *      details page in the Steam UI.
+   *   2. `window.open("https://www.protondb.com/app/<appId>")` — opens
+   *      ProtonDB in Steam's built-in browser, mirroring the badge's
+   *      own `window.open` exactly.
+   */
+  async openProtonDb({ appId }: { appId: string }): Promise<void> {
+    if (typeof appId !== "string" || appId.length === 0) {
+      throw new Error("openProtonDb: appId must be a non-empty string");
+    }
+    try {
+      await withSteamClient(async (sc) => {
+        await sc.url.executeSteamURL(`steam://nav/games/details/${appId}`);
+        await sc.url.openWebUrl(`https://www.protondb.com/app/${appId}`);
+      });
+    } catch (err) {
+      if (err instanceof SteamClientUnreachableError) {
+        console.warn(
+          `[protondb-badges] openProtonDb: Steam unreachable for ${appId}: ${err.message}`,
+        );
+      } else {
+        console.error(
+          `[protondb-badges] openProtonDb failed for ${appId}:`,
+          err,
+        );
+      }
+      throw err;
+    }
   }
 
   async searchGames(query: string): Promise<SteamSearchResult[]> {
