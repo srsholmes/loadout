@@ -1,8 +1,26 @@
-import { useEffect, useState } from "react";
-import { useCurrentGame } from "@loadout/ui";
+import { useEffect, useState, type ReactNode } from "react";
+import { useCurrentGame } from "../sdk";
 import { steamArtworkUrls } from "@loadout/steam-paths/artwork";
 
-export function NowPlaying() {
+export interface NowPlayingProps {
+  /**
+   * Optional content rendered at the bottom of the right-hand metadata
+   * column — used by the PlayTime plugin to drop a live "elapsed"
+   * counter beside the artwork. The overlay home screen passes nothing,
+   * so its appearance is unchanged.
+   */
+  children?: ReactNode;
+}
+
+/**
+ * Hero card for the currently-running game: full-bleed artwork with the
+ * game logo (falling back to its title) and a "Now playing" label.
+ *
+ * Shared between the overlay home screen and the PlayTime plugin so the
+ * two stay visually identical. Reads the running game from
+ * `useCurrentGame()` and renders nothing when no game is active.
+ */
+export function NowPlaying({ children }: NowPlayingProps = {}) {
   const game = useCurrentGame();
   // Two-stage fallback: hero (1920×620) → header (460×215) → solid color.
   // Shortcuts without any local art fail every URL, so we have to drop
@@ -20,8 +38,7 @@ export function NowPlaying() {
   // running game *while the overlay is open*, the appId doesn't
   // change so the failed flags don't reset and the new art won't
   // appear until the user closes + reopens the overlay or switches
-  // games. Fixing that needs an SGDB-emitted "art applied" event the
-  // homepage subscribes to — out of scope for #113 / #115.
+  // games.
   const appId = game?.appId;
   useEffect(() => {
     setHeroFailed(false);
@@ -74,6 +91,7 @@ export function NowPlaying() {
           <span className="text-[11px] text-base-content/50 font-mono">
             AppID {game.appId}
           </span>
+          {children}
         </div>
       </div>
     </div>

@@ -154,6 +154,7 @@
       "name": "@loadout/ui",
       "version": "0.0.1",
       "dependencies": {
+        "@loadout/steam-paths": "workspace:*",
         "@loadout/types": "workspace:*",
         "@noriginmedia/norigin-spatial-navigation": "^3.0.0",
         "fuzzysort": "^3.1.0",
@@ -301,6 +302,7 @@
         "@loadout/steam-paths": "workspace:*",
         "@loadout/types": "workspace:*",
         "@loadout/ui": "workspace:*",
+        "@loadout/vdf": "workspace:*",
         "react": "^18.3.0",
         "react-dom": "^18.3.0",
       },
