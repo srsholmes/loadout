@@ -1,7 +1,7 @@
 # Overlay ↔ gamescope integration
 
 How the Loadout overlay (Electrobun/CEF, atoms in
-`packages/overlay-electrobun/src/bun/native/`) coexists with Steam Big
+`apps/loadout-overlay/src/bun/native/`) coexists with Steam Big
 Picture Mode and games under gamescope. Reflects the architecture as
 of PR #53. Read this first if you're touching `gamescope-atoms.ts`,
 `x11.ts`, or `steam-quick-access.ts`.
@@ -45,7 +45,7 @@ by our overlay code today. Mentioned here for diagnostic completeness
 
 ## Lifecycle
 
-### `prepare()` (once at boot, packages/overlay-electrobun/src/bun/native/gamescope-atoms.ts)
+### `prepare()` (once at boot, apps/loadout-overlay/src/bun/native/gamescope-atoms.ts)
 
 Sets the overlay-static atoms on our window:
 
@@ -274,7 +274,7 @@ settle delay), and event-driven model are gamescope's public protocol
 Run the full overlay test suite from the package directory:
 
 ```sh
-cd packages/overlay-electrobun
+cd apps/loadout-overlay
 bun test src/bun/native/gamescope-atoms.test.ts
 bun test src/bun/native/steam-quick-access.test.ts
 ```
