@@ -8,6 +8,7 @@
     "@loadout/ui": "workspace:*",
     "@loadout/types": "workspace:*",
     "@loadout/steam-paths": "workspace:*",
+    "@loadout/vdf": "workspace:*",
     "@loadout/plugin-storage": "workspace:*"
   },
   "plugin": {

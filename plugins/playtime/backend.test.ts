@@ -182,6 +182,56 @@ describe("PlaytimeBackend", () => {
     });
   });
 
+  // ── getSteamPlaytime ───────────────────────────────────────────────────────
+
+  describe("getSteamPlaytime", () => {
+    const LOCALCONFIG = `
+"UserLocalConfigStore"
+{
+	"Software"
+	{
+		"Valve"
+		{
+			"Steam"
+			{
+				"apps"
+				{
+					"240"
+					{
+						"Playtime"		"1005"
+					}
+				}
+			}
+		}
+	}
+}
+`;
+
+    it("parses lifetime playtime from each user's localconfig.vdf", async () => {
+      readdirSpy.mockImplementation(async (path: unknown) =>
+        String(path).includes("userdata") ? ["25139426", "anon"] : [],
+      );
+      readFileSpy.mockImplementation(async (path: unknown) => {
+        const p = String(path);
+        if (p.includes("25139426") && p.includes("localconfig.vdf")) {
+          return LOCALCONFIG;
+        }
+        throw new Error("ENOENT");
+      });
+
+      const games = await backend.getSteamPlaytime();
+      const cs = games.find((g) => g.appId === "240");
+      expect(cs).toBeDefined();
+      expect(cs?.totalMs).toBe(1005 * 60_000);
+    });
+
+    it("returns an empty list when no userdata is readable", async () => {
+      readdirSpy.mockResolvedValue([] as never);
+      const games = await backend.getSteamPlaytime();
+      expect(games).toEqual([]);
+    });
+  });
+
   // ── getGameSessions ────────────────────────────────────────────────────────
 
   describe("getGameSessions", () => {

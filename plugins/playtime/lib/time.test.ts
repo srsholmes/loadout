@@ -1,4 +1,5 @@
 import { describe, it, expect } from "bun:test";
+import { parseVdf } from "@loadout/vdf";
 import {
   startOfDay,
   startOfWeek,
@@ -6,6 +7,7 @@ import {
   aggregateSessions,
   getWeeklyBreakdown,
   getDailyGameBreakdown,
+  extractSteamPlaytimeMinutes,
   computeStats,
   formatHoursStr,
   formatElapsed,
@@ -13,6 +15,37 @@ import {
   daysForRange,
 } from "./time";
 import type { GameSession } from "./time";
+
+const LOCALCONFIG_VDF = `
+"UserLocalConfigStore"
+{
+	"Software"
+	{
+		"Valve"
+		{
+			"Steam"
+			{
+				"apps"
+				{
+					"240"
+					{
+						"LastPlayed"		"1336719600"
+						"Playtime"		"1005"
+					}
+					"220"
+					{
+						"Playtime"		"46"
+					}
+					"70"
+					{
+						"Playtime"		"0"
+					}
+				}
+			}
+		}
+	}
+}
+`;
 
 // ── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -230,6 +263,50 @@ describe("getDailyGameBreakdown", () => {
     const total = breakdown.reduce((s, d) => s + d.totalMs, 0);
     expect(total).toBe(0);
     expect(breakdown.every((d) => d.games.length === 0)).toBe(true);
+  });
+});
+
+// ── extractSteamPlaytimeMinutes ──────────────────────────────────────────────
+
+describe("extractSteamPlaytimeMinutes", () => {
+  it("reads per-app Playtime (minutes) from a localconfig structure", () => {
+    const map = extractSteamPlaytimeMinutes(parseVdf(LOCALCONFIG_VDF));
+    expect(map.get("240")).toBe(1005);
+    expect(map.get("220")).toBe(46);
+  });
+
+  it("drops apps with zero/absent playtime", () => {
+    const map = extractSteamPlaytimeMinutes(parseVdf(LOCALCONFIG_VDF));
+    expect(map.has("70")).toBe(false);
+  });
+
+  it("is case-insensitive across the key path", () => {
+    const lower = parseVdf(`
+"userlocalconfigstore"
+{
+	"software"
+	{
+		"valve"
+		{
+			"steam"
+			{
+				"apps"
+				{
+					"10"
+					{
+						"Playtime"		"5"
+					}
+				}
+			}
+		}
+	}
+}
+`);
+    expect(extractSteamPlaytimeMinutes(lower).get("10")).toBe(5);
+  });
+
+  it("returns empty when the apps path is missing", () => {
+    expect(extractSteamPlaytimeMinutes(parseVdf(`"x"\n{\n\t"y"\t\t"1"\n}\n`)).size).toBe(0);
   });
 });
 

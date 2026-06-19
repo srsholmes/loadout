@@ -5,6 +5,8 @@
  * backend or DOM setup.
  */
 
+import type { VdfObject, VdfNode } from "@loadout/vdf";
+
 // --- Types (shared between backend and UI) ---
 
 export interface GameSession {
@@ -264,6 +266,60 @@ export function computeStats(
       allTime: daysForRange("allTime", all, now),
     },
   };
+}
+
+// --- Steam lifetime playtime (localconfig.vdf) ---
+
+/** Case-insensitive single-level lookup — Steam casing drifts between
+ *  client versions (`Valve` vs `valve`), so don't hardcode it. */
+function vdfGet(obj: VdfObject, key: string): VdfNode | undefined {
+  const k = Object.keys(obj).find((x) => x.toLowerCase() === key.toLowerCase());
+  return k === undefined ? undefined : obj[k];
+}
+
+/** Walk a case-insensitive key path, returning the object at the end. */
+function vdfNavigate(root: VdfObject, path: string[]): VdfObject | null {
+  let cur: VdfNode = root;
+  for (const key of path) {
+    if (typeof cur !== "object") return null;
+    const next = vdfGet(cur, key);
+    if (next === undefined) return null;
+    cur = next;
+  }
+  return typeof cur === "object" ? cur : null;
+}
+
+/**
+ * Pull per-app lifetime playtime (minutes) out of a parsed
+ * localconfig.vdf. Path:
+ *   UserLocalConfigStore > Software > Valve > Steam > apps > <appId> > Playtime
+ *
+ * Returns appId → minutes. Steam stores this for every owned app it has
+ * ever launched, so it's the authoritative lifetime total (the same
+ * number the library UI shows) — available locally with no login.
+ */
+export function extractSteamPlaytimeMinutes(
+  root: VdfObject,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  const apps = vdfNavigate(root, [
+    "UserLocalConfigStore",
+    "Software",
+    "Valve",
+    "Steam",
+    "apps",
+  ]);
+  if (!apps) return out;
+
+  for (const [appId, node] of Object.entries(apps)) {
+    if (typeof node !== "object") continue;
+    const pt = vdfGet(node, "Playtime");
+    if (typeof pt !== "string") continue;
+    const minutes = Number(pt);
+    if (!Number.isFinite(minutes) || minutes <= 0) continue;
+    out.set(appId, minutes);
+  }
+  return out;
 }
 
 // --- Display formatting ---

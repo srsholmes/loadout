@@ -246,6 +246,7 @@ function PlayTime() {
 
   const [stats, setStats] = useState<Stats | null>(null);
   const [days, setDays] = useState<DailyBreakdown[]>([]);
+  const [steamGames, setSteamGames] = useState<GameStats[]>([]);
   const [currentSession, setCurrentSession] = useState<CurrentSession | null>(null);
   const [range, setRange] = useState<RangeKey>("week");
   // Day filters: all 7 rolling days selected by default. Indices map to
@@ -259,6 +260,9 @@ function PlayTime() {
       call("getStats").then((s) => setStats(s as Stats));
       call("getDailyBreakdown").then((d) =>
         setDays((d as DailyBreakdown[] | null) ?? []),
+      );
+      call("getSteamPlaytime").then((g) =>
+        setSteamGames((g as GameStats[] | null) ?? []),
       );
     },
     [call],
@@ -283,24 +287,12 @@ function PlayTime() {
 
   const period = stats ? (stats[range] as PeriodStats) : null;
 
-  const rangeLabel = useMemo(() => {
-    switch (range) {
-      case "today":
-        return "today";
-      case "week":
-        return "week";
-      case "month":
-        return "month";
-      case "allTime":
-        return "all time";
-    }
-  }, [range]);
-
-  const totalHours = period ? formatHoursNumber(period.totalMs) : 0;
-
   // Day-filter bars: heights are proportional to each day's total time.
+  // They only make sense for the rolling-week view, so we only show them
+  // (and apply their filtering) when range === "week".
   const maxBarMs = Math.max(1, ...days.map((d) => d.totalMs));
   const lastBarIdx = days.length - 1;
+  const showDayFilters = range === "week" && days.length > 0;
 
   const toggleDay = (i: number) => {
     setSelectedDays((prev) => {
@@ -311,9 +303,8 @@ function PlayTime() {
     });
   };
 
-  // "All games" grid: union the per-game totals across the selected
-  // days, then sort by most-played.
-  const filteredGames = useMemo(() => {
+  // Week view: union the per-game totals across the selected days.
+  const filteredWeekGames = useMemo(() => {
     const map = new Map<string, GameStats>();
     days.forEach((d, i) => {
       if (!selectedDays.has(i)) return;
@@ -326,23 +317,67 @@ function PlayTime() {
     return Array.from(map.values()).sort((a, b) => b.totalMs - a.totalMs);
   }, [days, selectedDays]);
 
-  const maxGameMs = Math.max(1, ...filteredGames.map((g) => g.totalMs));
+  // All-time view: merge Steam's lifetime totals (from localconfig.vdf)
+  // with our local session log. Steam's number wins for Steam games
+  // (it's the authoritative lifetime total); our log covers non-Steam
+  // games Steam never tracks.
+  const allTimeGames = useMemo(() => {
+    const map = new Map<string, GameStats>();
+    for (const g of stats?.allTime.games ?? []) map.set(g.appId, { ...g });
+    for (const g of steamGames) {
+      const existing = map.get(g.appId);
+      if (!existing) {
+        map.set(g.appId, { ...g });
+      } else {
+        existing.totalMs = Math.max(existing.totalMs, g.totalMs);
+        if (!existing.gameName || existing.gameName.startsWith("Steam App")) {
+          existing.gameName = g.gameName;
+        }
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.totalMs - a.totalMs);
+  }, [stats, steamGames]);
+
+  // The games shown in the grid, scoped by the active period selector.
+  const gridGames =
+    range === "allTime"
+      ? allTimeGames
+      : range === "week"
+        ? filteredWeekGames
+        : period?.games ?? [];
+
+  const maxGameMs = Math.max(1, ...gridGames.map((g) => g.totalMs));
   const allDaysSelected = selectedDays.size === days.length && days.length > 0;
 
-  const sessionsEstimate = period?.gamesPlayed ?? 0;
-  // Divisor for AVG/DAY varies by range: 1 for today, 7 for week, day-of-
-  // month for month, days-since-first-session for allTime. Backend
-  // computes this so we don't need the raw session list in the UI.
+  // Headline + Stats describe exactly what's in the grid, so switching
+  // the period selector visibly changes both the list and the numbers.
+  const gridTotalMs = gridGames.reduce((sum, g) => sum + g.totalMs, 0);
+  const totalHours = formatHoursNumber(gridTotalMs);
+  const gamesCount = gridGames.length;
+  const topGameMs = gridGames.length > 0 ? gridGames[0].totalMs : 0;
+
+  // AVG/DAY divisor: selected-day count for the week view, day-of-month
+  // for month, 1 for today. Hidden for all-time — lifetime Steam totals
+  // span years, so a per-day average off our local divisor is bogus.
   const divisor =
     range === "allTime"
-      ? stats?.daysInRange.allTime ?? null
-      : stats?.daysInRange[range] ?? null;
+      ? null
+      : range === "week"
+        ? selectedDays.size || 1
+        : stats?.daysInRange[range] ?? null;
   const avgPerDay =
-    period && divisor !== null && divisor > 0
-      ? formatHoursStr(period.totalMs / divisor, 1)
+    divisor !== null && divisor > 0
+      ? formatHoursStr(gridTotalMs / divisor, 1)
       : "—";
-  const topGameMs =
-    period && period.games.length > 0 ? period.games[0].totalMs : 0;
+
+  const periodHeadline =
+    range === "today"
+      ? "Today"
+      : range === "week"
+        ? "This week"
+        : range === "month"
+          ? "This month"
+          : "All time";
 
   const headerNode = (
     <PluginHeader>
@@ -393,7 +428,7 @@ function PlayTime() {
                 the topbar drives the headline; the day bars below double
                 as filters for the "All Games" grid. */}
             <div className="subsection">
-              <div className="subsection-label mb-0.5">This {rangeLabel}</div>
+              <div className="subsection-label mb-0.5">{periodHeadline}</div>
               <div className="metric-value mono" style={{ fontSize: 40 }}>
                 {totalHours.toFixed(1)}
                 <span
@@ -407,7 +442,7 @@ function PlayTime() {
                 </span>
               </div>
 
-              {days.length > 0 && (
+              {showDayFilters && (
                 <>
                   <div
                     className="subsection-label"
@@ -442,11 +477,20 @@ function PlayTime() {
               )}
             </div>
 
-            {/* ALL GAMES — grid of every game played on the selected
-                days, ordered by most-played, each with a time bar. */}
+            {/* ALL GAMES — grid scoped by the period selector, ordered
+                by most-played, each with a time bar. The all-time view
+                merges in Steam's own lifetime totals. */}
             <div className="subsection">
-              <div className="subsection-label">All Games</div>
-              {filteredGames.length === 0 ? (
+              <div className="subsection-label">
+                All Games
+                {range === "allTime" && steamGames.length > 0 && (
+                  <span style={{ color: "var(--fg-3)", fontWeight: 400 }}>
+                    {" "}
+                    · incl. Steam library
+                  </span>
+                )}
+              </div>
+              {gridGames.length === 0 ? (
                 <div
                   style={{
                     fontSize: 12.5,
@@ -454,13 +498,17 @@ function PlayTime() {
                     padding: "8px 2px",
                   }}
                 >
-                  {selectedDays.size === 0
+                  {range === "week" && selectedDays.size === 0
                     ? "No days selected — tap a day above to show its games."
-                    : "No games played on the selected days yet."}
+                    : range === "allTime"
+                      ? "No playtime recorded yet."
+                      : range === "today"
+                        ? "No games played today yet."
+                        : `No games played this ${range} yet.`}
                 </div>
               ) : (
                 <div className="grid grid-cols-4 sidebar-collapsed:grid-cols-6 gap-2.5">
-                  {filteredGames.map((g) => (
+                  {gridGames.map((g) => (
                     <GameGridCard key={g.appId} game={g} maxMs={maxGameMs} />
                   ))}
                 </div>
@@ -477,7 +525,7 @@ function PlayTime() {
                   gap: 8,
                 }}
               >
-                <InsetStat label="GAMES" value={sessionsEstimate} />
+                <InsetStat label="GAMES" value={gamesCount} />
                 <InsetStat label="TOTAL" value={totalHours.toFixed(1)} unit="h" />
                 <InsetStat
                   label="AVG / DAY"
