@@ -925,6 +925,36 @@ OVERLAYEOF
         systemctl --user daemon-reload
         systemctl --user enable loadout-overlay
         success "Overlay service enabled (starts with graphical session)"
+
+        # Start it right now (not just on next login) and pop the window so
+        # the user can set their wake button immediately — no reboot, no
+        # Steam restart needed for this (that's only for Gaming Mode focus).
+        # Needs a graphical session; import its env so the user manager can
+        # find the display. Skips cleanly on headless / SSH installs.
+        if [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+            systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY 2>/dev/null || true
+            if systemctl --user restart loadout-overlay 2>/dev/null; then
+                # Give the overlay a moment to come up and connect, then ask
+                # the loader to show it (loopback /show endpoint).
+                show_ok=0
+                for _ in 1 2 3 4 5 6 7 8 9 10; do
+                    if curl -fsS "http://localhost:$OVERLAY_PORT/show" >/dev/null 2>&1; then
+                        show_ok=1
+                        break
+                    fi
+                    sleep 1
+                done
+                if [ "$show_ok" = "1" ]; then
+                    success "Overlay opened — set your wake button, then close it."
+                else
+                    info "Overlay started; open it from your apps menu to set a wake button."
+                fi
+            else
+                warn "Couldn't start the overlay now; it'll start with your next graphical session."
+            fi
+        else
+            info "No graphical session detected — the overlay starts on your next login."
+        fi
     fi
 
     echo ""
