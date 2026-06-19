@@ -2,7 +2,9 @@
 
 > Battery level, charge rate, estimated time remaining, and charge history
 
-![Screenshot](./assets/screenshot.png)
+## Screenshots
+
+![Battery Tracker](./assets/screenshot.png)
 
 ## See also
 

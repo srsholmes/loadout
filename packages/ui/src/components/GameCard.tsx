@@ -276,12 +276,16 @@ export function GameCard({
   //     while mouse users still have the explicit Apply button.
   //   - non-interactive                → plain <div>, just receives
   //     focus outline as the user pans through the grid.
+  // `data-game-card` is a stable, render-neutral hook for tooling — the
+  // screenshot script clicks the first tile to reach a plugin's detail
+  // page regardless of each grid's bespoke class names.
   if (interactive && !action) {
     return (
       <button
         ref={setMergedRef}
         onClick={onPick}
         type="button"
+        data-game-card=""
         className={className}
         style={focusStyle}
       >
@@ -295,6 +299,7 @@ export function GameCard({
         ref={setMergedRef}
         onClick={onPick}
         role="button"
+        data-game-card=""
         className={className}
         style={focusStyle}
       >
@@ -303,7 +308,7 @@ export function GameCard({
     );
   }
   return (
-    <div ref={setMergedRef} className={className} style={focusStyle}>
+    <div ref={setMergedRef} data-game-card="" className={className} style={focusStyle}>
       {body}
     </div>
   );

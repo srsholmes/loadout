@@ -2,7 +2,19 @@
 
 > Injects HowLongToBeat completion times into Steam library and store pages
 
-![Screenshot](./assets/screenshot.png)
+## Screenshots
+
+### Overview
+
+![HLTB — Overview](./assets/screenshot.png)
+
+### Game detail
+
+![HLTB — Game detail](./assets/screenshot-detail.png)
+
+### Settings
+
+![HLTB — Settings](./assets/screenshot-settings.png)
 
 ## See also
 

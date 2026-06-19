@@ -2,7 +2,19 @@
 
 > Manage Steam game launch options and presets
 
-![Screenshot](./assets/screenshot.png)
+## Screenshots
+
+### Overview
+
+![Launch Options — Overview](./assets/screenshot.png)
+
+### Game detail
+
+![Launch Options — Game detail](./assets/screenshot-detail.png)
+
+### Presets
+
+![Launch Options — Presets](./assets/screenshot-presets.png)
 
 ## See also
 

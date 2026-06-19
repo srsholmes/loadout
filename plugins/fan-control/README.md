@@ -2,7 +2,9 @@
 
 > Monitor and control fan speed, temperature, and fan curve presets
 
-![Screenshot](./assets/screenshot.png)
+## Screenshots
+
+![Fan Control](./assets/screenshot.png)
 
 ## See also
 
