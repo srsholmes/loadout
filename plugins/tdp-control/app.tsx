@@ -76,7 +76,6 @@ function TdpControl() {
   const [applying, setApplying] = useState(false);
   const [perGameEnabled, setPerGameEnabled] = useState<boolean>(false);
   const [gameProfiles, setGameProfiles] = useState<SavedGameProfile[]>([]);
-  const [defaultGameTdp, setDefaultGameTdp] = useState<number>(15);
   const debounceTimer = useRef<Timer | null>(null);
   const slidingRef = useRef(false);
 
@@ -126,16 +125,11 @@ function TdpControl() {
   // Fetch per-game profile state on mount
   useEffect(() => {
     let alive = true;
-    Promise.all([
-      call("getPerGameEnabled"),
-      call("getGameProfiles"),
-      call("getGameDefaultTdp"),
-    ])
-      .then(([enabled, profiles, defaultTdp]) => {
+    Promise.all([call("getPerGameEnabled"), call("getGameProfiles")])
+      .then(([enabled, profiles]) => {
         if (!alive) return;
         setPerGameEnabled(Boolean(enabled));
         setGameProfiles((profiles as SavedGameProfile[]) ?? []);
-        setDefaultGameTdp(typeof defaultTdp === "number" ? defaultTdp : 15);
       })
       .catch(() => {});
     return () => {
@@ -215,9 +209,7 @@ function TdpControl() {
               watts,
             ).catch(() => {});
           } else {
-            call("setGameDefaultTdp", watts)
-              .then(() => setDefaultGameTdp(watts))
-              .catch(() => {});
+            call("setGameDefaultTdp", watts).catch(() => {});
           }
         }
       }, 500);
@@ -240,19 +232,6 @@ function TdpControl() {
     },
     [call],
   );
-
-  const handleRemoveActiveProfile = useCallback(async () => {
-    if (!currentGame) return;
-    await call("removeGameProfile", currentGame.appId).catch(() => {});
-    const profiles = (await call("getGameProfiles").catch(
-      () => [],
-    )) as SavedGameProfile[];
-    setGameProfiles(profiles);
-  }, [call, currentGame]);
-
-  const activeSavedProfile = currentGame
-    ? gameProfiles.find((p) => p.appId === currentGame.appId)
-    : undefined;
 
   const handleApplyProfile = useCallback(
     async (name: string) => {
@@ -435,78 +414,6 @@ function TdpControl() {
                 Apply a saved TDP automatically when a game launches. With this on,
                 moving the slider while a game is running saves that game's profile.
               </div>
-
-              {perGameEnabled && currentGame && (
-                <div
-                  style={{
-                    display: "flex",
-                    gap: 12,
-                    alignItems: "center",
-                    marginTop: 8,
-                  }}
-                >
-                  <img
-                    src={steamArtworkUrls(currentGame.appId).header}
-                    alt={currentGame.gameName}
-                    style={{
-                      width: 160,
-                      height: 75,
-                      objectFit: "cover",
-                      borderRadius: 8,
-                      background: "var(--bg-inset)",
-                      flexShrink: 0,
-                    }}
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).style.visibility = "hidden";
-                    }}
-                  />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div
-                      style={{
-                        fontSize: 14,
-                        fontWeight: 600,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {currentGame.gameName}
-                    </div>
-                    <div
-                      className="mono"
-                      style={{ fontSize: 11, color: "var(--fg-3)", marginTop: 2 }}
-                    >
-                      AppID {currentGame.appId}
-                    </div>
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        marginTop: 6,
-                      }}
-                    >
-                      <span className="row-value mono">
-                        {activeSavedProfile
-                          ? `${activeSavedProfile.tdpWatts}W saved`
-                          : `${defaultGameTdp}W (default)`}
-                      </span>
-                      {activeSavedProfile && (
-                        <Button onClick={handleRemoveActiveProfile} disabled={applying}>
-                          Remove
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {perGameEnabled && !currentGame && (
-                <div className="subsection-desc">
-                  No game running. Slider changes save to the default TDP
-                  ({defaultGameTdp}W).
-                </div>
-              )}
 
               {perGameEnabled && gameProfiles.length > 0 && (
                 <div style={{ marginTop: 8 }}>
