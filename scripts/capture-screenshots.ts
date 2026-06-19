@@ -105,6 +105,13 @@ const PAGE_RECIPES: Record<string, PageShot[]> = {
   ],
 };
 
+// Steps run on a plugin's LANDING view before its landing shot — to put a
+// plugin into the state that screenshots best. PlayTime defaults to the
+// week view; "All" shows the full library grid, which reads better.
+const LANDING_SETUP: Record<string, Step[]> = {
+  playtime: [{ kind: "text", label: "All" }],
+};
+
 const sleep = (ms: number) => Bun.sleep(ms);
 // Brief settle for the route swap + first paint before we poll for idle.
 const SETTLE_MS = 300;
@@ -191,19 +198,34 @@ class CDP {
   }
 }
 
+// "Busy" if any DaisyUI `.loading` spinner / `animate-spin` icon is
+// present, OR any *in-viewport* image hasn't finished decoding. The image
+// check is what stops us shooting game/detail art before it paints —
+// spinners alone don't cover lazy <img> loads. Off-screen lazy images are
+// ignored (they never load until scrolled to, so they'd never settle).
+const BUSY_EXPR = `(() => {
+  if (document.querySelectorAll('.loading, [class*="animate-spin"]').length) return true;
+  const vw = innerWidth, vh = innerHeight;
+  for (const img of document.images) {
+    const r = img.getBoundingClientRect();
+    const inView = r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw && r.width > 0 && r.height > 0;
+    if (inView && (!img.complete || img.naturalWidth === 0)) return true;
+  }
+  return false;
+})()`;
+
 /**
- * Wait until the overlay has no visible loading state — no DaisyUI
- * `.loading` spinners (the shared `<Spinner>`) and no `animate-spin`
- * icons — staying clear for `IDLE_STABLE_MS` so we don't fire in the
- * gap between two sequential fetches. Falls through after
- * `IDLE_TIMEOUT_MS` so a perpetually-spinning view still gets captured.
+ * Wait until the overlay has no visible loading state — no spinners and
+ * no in-viewport image still decoding — staying clear for `IDLE_STABLE_MS`
+ * so we don't fire in the gap between two sequential fetches. Falls
+ * through after `IDLE_TIMEOUT_MS` so a perpetually-loading view still gets
+ * captured.
  */
 async function waitForIdle(cdp: CDP): Promise<void> {
-  const expr = `document.querySelectorAll('.loading, [class*="animate-spin"]').length`;
   const start = Date.now();
   let idleSince: number | null = null;
   while (Date.now() - start < IDLE_TIMEOUT_MS) {
-    const busy = ((await cdp.eval(expr)) as number) > 0;
+    const busy = (await cdp.eval(BUSY_EXPR)) === true;
     if (busy) {
       idleSince = null;
     } else {
@@ -212,6 +234,42 @@ async function waitForIdle(cdp: CDP): Promise<void> {
     }
     await sleep(IDLE_POLL_MS);
   }
+}
+
+/**
+ * Scroll the plugin's main scroll container to a random position so the
+ * game grids don't show the identical first row in every shot. No-op when
+ * there's nothing meaningfully scrollable. Returns whether it scrolled
+ * (so the caller can wait for newly-revealed art to load).
+ */
+async function scrollRandom(cdp: CDP): Promise<boolean> {
+  const frac = Math.random(); // vary the view run-to-run
+  const expr = `(() => {
+    const els = [...document.querySelectorAll('.overflow-y-auto, [style*="overflow-y"]')];
+    const el = els.find((e) => e.scrollHeight - e.clientHeight > 80);
+    if (!el) return false;
+    el.scrollTop = Math.round((el.scrollHeight - el.clientHeight) * ${frac});
+    return true;
+  })()`;
+  return (await cdp.eval(expr)) === true;
+}
+
+/** Number of game-art tiles that counts as "a grid" worth scrolling. */
+const GRID_TILE_THRESHOLD = 6;
+
+/**
+ * Before a shot, randomly scroll grid views so each capture shows a
+ * different slice of the library — except RecompHub, which we keep pinned
+ * to the top (its hero row is the intended look). Then re-wait for the
+ * newly-revealed artwork to load.
+ */
+async function varyGridView(cdp: CDP, pluginId: string): Promise<void> {
+  if (pluginId === "recomp") return;
+  const tiles = (await cdp.eval(
+    `document.querySelectorAll('[data-game-card]').length`,
+  )) as number;
+  if (tiles < GRID_TILE_THRESHOLD) return;
+  if (await scrollRandom(cdp)) await waitForIdle(cdp);
 }
 
 async function navigate(cdp: CDP, hashPath: string): Promise<void> {
@@ -425,6 +483,8 @@ async function main(): Promise<void> {
     const pid = PLUGINS[idx]!;
     const nn = String(idx + 3).padStart(2, "0");
     await navigate(cdp, `#/plugin/${pid}`);
+    if (LANDING_SETUP[pid]) await runSteps(cdp, LANDING_SETUP[pid]);
+    await varyGridView(cdp, pid);
     await cdp.screenshot(join(OUT, theme, `${nn}-${pid}.png`));
 
     for (const page of PAGE_RECIPES[pid] ?? []) {
@@ -439,6 +499,7 @@ async function main(): Promise<void> {
         console.log(`  ↷ skip ${pid}-${page.name} (nav target not on screen)`);
         continue;
       }
+      await varyGridView(cdp, pid); // grid sub-pages (e.g. store tabs) vary too
       await cdp.screenshot(join(OUT, theme, `${nn}-${pid}-${page.name}.png`));
     }
   }

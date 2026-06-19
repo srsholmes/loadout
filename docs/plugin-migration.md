@@ -15,7 +15,7 @@ One plugin per issue, migrated one at a time.
   - Imports use the `@steam-loader/*` scope.
 - **TARGET** (new, "Loadout"): `/var/home/srsholmes/Work/loadout`
   - Port into: `plugins/{{PLUGIN_ID}}/`
-  - Reference example plugin: `plugins/steam-gamescope-ipc/`
+  - Reference example plugin: `plugins/bluetooth/` (a compact backend + `app.tsx` + `lib/` pattern)
   - Plugin dev guide: `docs/plugin-development.md` (note: parts predate the `package.json` `plugin` field — trust the reference plugin over the doc where they disagree)
   - Sandboxed fetch enforcement: `apps/loadout/src/loader/sandboxed-fetch.ts`
   - Plugin contract types: `packages/types/src/plugin.ts`
@@ -141,7 +141,7 @@ Loadout targets Linux gaming handhelds + gaming desktops. The reviewer classifie
 2. **Rename the scope** on every ported file: `sed -i 's#@steam-loader/#@loadout/#g'` (review the diff — only the four allowed packages should remain after step 4).
 3. **Fold `plugin.json` into `package.json`.** Move the manifest fields into the `plugin` field of `package.json`, set `name` to `@loadout/plugin-{{PLUGIN_ID}}`, add `"type": "module"` and the real `dependencies`. Delete the standalone `plugin.json`.
 4. **Resolve removed-package deps by inlining** (see the decision rule below). The packages `plugin-storage`, `vdf`, `external-cache`, `sgdb-art`, `steam-shortcut`, `file-picker`, and `per-game-profiles` DO NOT exist in the target — replace each import with inlined code in this plugin's `lib/` *by default*.
-5. **Adapt to the current SDK / manifest shape.** Reconcile any `@loadout/ui` / `@loadout/types` API drift against the reference plugin and `packages/types/src/plugin.ts`. The source repo's `panel.tsx` plugins (Steam-CEF injection) port to `app.tsx` — the Electrobun overlay is the surface; backends drive Steam's CEF via `@loadout/steam-cdp` when needed. Ensure the `mount` / `PluginProvider` / `icon` shape matches `plugins/steam-gamescope-ipc/app.tsx`.
+5. **Adapt to the current SDK / manifest shape.** Reconcile any `@loadout/ui` / `@loadout/types` API drift against the reference plugin and `packages/types/src/plugin.ts`. The source repo's `panel.tsx` plugins (Steam-CEF injection) port to `app.tsx` — the Electrobun overlay is the surface; backends drive Steam's CEF via `@loadout/steam-cdp` when needed. Ensure the `mount` / `PluginProvider` / `icon` shape matches `plugins/bluetooth/app.tsx`.
 6. **Port the tests to `bun:test`.** Convert the source's backend `*.spec.ts` → `*.test.ts` and keep UI tests as `*.spec.tsx`; rewrite any vitest API to `bun:test` (see **Tests** above). Add tests for any ≥100-LOC `lib/**` module.
 7. **Wire it into `plugins/`** so the workspace picks it up (it's a workspace via `plugins/*`). Confirm it loads (see Definition of Done).
 

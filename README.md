@@ -188,7 +188,6 @@ Install and configure the LSFG-VK Vulkan frame generation layer
 - **[RecompHub](plugins/recomp/README.md)** — Browse, install, and play recompiled retro games natively
 - **[RGB Control](plugins/rgb-control/README.md)** — RGB LED control for Linux handhelds — supports OpenRGB, sysfs LEDs, and platform-specific interfaces
 - **[Sound Loader](plugins/sound-loader/README.md)** — Browse, install, and toggle community UI sound packs from deckthemes.com
-- **[Gamescope IPC](plugins/steam-gamescope-ipc/README.md)** — Communicates with Steam Gaming Mode — shows current game and allows sending commands to Steam UI
 - **[SteamGridDB](plugins/steamgriddb/README.md)** — Browse and apply custom game art (grids, heroes, logos, icons) from SteamGridDB
 - **[Storage Cleaner](plugins/storage-cleaner/README.md)** — Shows disk usage, shader cache sizes, and lets users clean up space
 - **[Store Bridge](plugins/store-bridge/README.md)** — Surface Epic, GOG, Amazon, Ubisoft and xCloud libraries as Steam shortcuts
