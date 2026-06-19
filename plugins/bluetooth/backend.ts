@@ -24,6 +24,9 @@ export default class BluetoothBackend implements PluginBackend {
 
   private pollInterval?: Timer;
   private lastDeviceState = new Map<string, boolean>();
+  // Last adapter snapshot the poll loop saw, so it only emits
+  // `adapterChanged` on an actual power/discovering transition.
+  private lastAdapter: AdapterInfo | null = null;
   private scanProcess?: ReturnType<typeof spawn>;
   // Audit F-008: re-entrancy guard. `getDevices()` shells out N+1 times
   // (one `bluetoothctl devices` + one `info <mac>` per paired device).
@@ -35,36 +38,63 @@ export default class BluetoothBackend implements PluginBackend {
   async onLoad(): Promise<void> {
     console.log("[bluetooth] Plugin loaded");
 
-    // Start polling device status every 3 seconds
-    this.pollInterval = setInterval(async () => {
-      if (this.polling) return;
-      this.polling = true;
-      try {
-        const devices = await this.getDevices();
-        const seen = new Set<string>();
-        for (const device of devices) {
-          seen.add(device.mac);
-          const prevConnected = this.lastDeviceState.get(device.mac);
-          if (prevConnected !== undefined && prevConnected !== device.connected) {
-            this.emit?.({
-              event: "deviceChanged",
-              data: device,
-            });
-          }
-          this.lastDeviceState.set(device.mac, device.connected);
-        }
-        // Audit F-008: prune entries for devices that no longer appear
-        // in the paired list (user removed them via bluetoothctl or a
-        // sibling UI). Otherwise lastDeviceState grows monotonically.
-        for (const mac of this.lastDeviceState.keys()) {
-          if (!seen.has(mac)) this.lastDeviceState.delete(mac);
-        }
-      } catch {
-        // Silently ignore poll errors (e.g. adapter off)
-      } finally {
-        this.polling = false;
-      }
+    // Poll device + adapter status every 3 seconds.
+    this.pollInterval = setInterval(() => {
+      this._poll().catch(() => {});
     }, 3000);
+  }
+
+  /**
+   * One poll tick: refresh device connection states and adapter
+   * power/discovering, emitting `deviceChanged` / `adapterChanged` only
+   * on an actual transition. Extracted from the interval so it can be
+   * unit-tested directly. Guarded against overlapping runs.
+   */
+  private async _poll(): Promise<void> {
+    if (this.polling) return;
+    this.polling = true;
+    try {
+      const devices = await this.getDevices();
+      const seen = new Set<string>();
+      for (const device of devices) {
+        seen.add(device.mac);
+        const prevConnected = this.lastDeviceState.get(device.mac);
+        if (prevConnected !== undefined && prevConnected !== device.connected) {
+          this.emit?.({
+            event: "deviceChanged",
+            data: device,
+          });
+        }
+        this.lastDeviceState.set(device.mac, device.connected);
+      }
+      // Audit F-008: prune entries for devices that no longer appear
+      // in the paired list (user removed them via bluetoothctl or a
+      // sibling UI). Otherwise lastDeviceState grows monotonically.
+      for (const mac of this.lastDeviceState.keys()) {
+        if (!seen.has(mac)) this.lastDeviceState.delete(mac);
+      }
+
+      // Watch adapter power + discovering so the UI reflects changes made
+      // elsewhere (and the live scan indicator) without a manual refresh.
+      // Emit only on a real transition; skip the first read (the UI
+      // already fetches getAdapterInfo on mount, so a startup emit is
+      // redundant).
+      const adapter = await this.getAdapterInfo();
+      if (
+        this.lastAdapter === null ||
+        this.lastAdapter.powered !== adapter.powered ||
+        this.lastAdapter.discovering !== adapter.discovering
+      ) {
+        if (this.lastAdapter !== null) {
+          this.emit?.({ event: "adapterChanged", data: adapter });
+        }
+        this.lastAdapter = adapter;
+      }
+    } catch {
+      // Silently ignore poll errors (e.g. adapter off)
+    } finally {
+      this.polling = false;
+    }
   }
 
   async onUnload(): Promise<void> {
