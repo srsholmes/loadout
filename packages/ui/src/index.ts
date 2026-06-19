@@ -24,7 +24,8 @@ export { Badge } from "./components/Badge";
 export { GameCard, collectionBadgeVariant } from "./components/GameCard";
 export type { GameCardProps } from "./components/GameCard";
 export { NowPlaying } from "./components/NowPlaying";
-export type { NowPlayingProps } from "./components/NowPlaying";
+export { GameHero } from "./components/GameHero";
+export type { GameHeroProps } from "./components/GameHero";
 export {
   friendlyCollectionName,
   collectionSearchTokens,
