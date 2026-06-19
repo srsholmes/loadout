@@ -1,4 +1,4 @@
-import { writeFile, rm } from "node:fs/promises";
+import { rm, rename } from "node:fs/promises";
 import { spawn } from "@loadout/exec";
 
 // ── GitHub API error classification + retry ──────────────────────────
@@ -212,8 +212,33 @@ export async function downloadFile(
   const token = await githubToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(url, { headers, redirect: "follow" });
+  // Abort the transfer if no bytes arrive for IDLE_MS — the content-
+  // length truncation check below only fires when the connection
+  // *closes* short, not when it hangs mid-stream, so without this a
+  // stalled CDN connection would block `reader.read()` forever.
+  const IDLE_MS = 120_000;
+  // Hard ceiling so a hostile/mis-declared asset can't fill the disk.
+  // Recomp release assets are at most ~1 GB; source tarballs far less.
+  const MAX_BYTES = 16 * 1024 ** 3;
+  const controller = new AbortController();
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  const bumpIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => controller.abort(), IDLE_MS);
+  };
+
+  bumpIdle();
+  let res: Response;
+  try {
+    res = await fetch(url, { headers, redirect: "follow", signal: controller.signal });
+  } catch (err) {
+    if (idleTimer) clearTimeout(idleTimer);
+    throw new Error(
+      `Download failed: ${controller.signal.aborted ? `no response within ${IDLE_MS / 1000}s` : err}`,
+    );
+  }
   if (!res.ok) {
+    if (idleTimer) clearTimeout(idleTimer);
     throw new Error(`Download failed: HTTP ${res.status}`);
   }
   if (allowedHosts && allowedHosts.length > 0) {
@@ -221,9 +246,11 @@ export async function downloadFile(
     try {
       finalHost = new URL(res.url).host;
     } catch {
+      if (idleTimer) clearTimeout(idleTimer);
       throw new Error(`Download refused: couldn't parse final URL "${res.url}".`);
     }
     if (!allowedHosts.includes(finalHost)) {
+      if (idleTimer) clearTimeout(idleTimer);
       throw new Error(
         `Download refused: response redirected to host "${finalHost}", not in allowed list [${allowedHosts.join(", ")}]. Pin the mod's declared host (or the GitHub object CDN) on the manifest.`,
       );
@@ -231,41 +258,65 @@ export async function downloadFile(
   }
 
   const totalSize = Number(res.headers.get("content-length") ?? 0);
-  let downloaded = 0;
-
-  const body = res.body;
-  if (!body) throw new Error("No response body");
-
-  const chunks: Uint8Array[] = [];
-  const reader = body.getReader();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    downloaded += value.byteLength;
-    onProgress?.(downloaded, totalSize);
-  }
-
-  const totalLength = chunks.reduce((sum, c) => sum + c.byteLength, 0);
-
-  // Truncation guard: when the server declared a Content-Length, a
-  // body that ended short means the connection dropped mid-transfer.
-  // Fail fast — never hand a truncated file to the extractor (which
-  // would otherwise produce a half-extracted, corrupt install). We
-  // check before writing so no partial file is left on disk; also
-  // remove any stale file at `dest` from a previous attempt.
-  if (totalSize > 0 && totalLength !== totalSize) {
-    try { await rm(dest, { force: true }); } catch { /* ignore */ }
+  if (totalSize > MAX_BYTES) {
+    if (idleTimer) clearTimeout(idleTimer);
     throw new Error(
-      `Download incomplete: expected ${totalSize} bytes but received ${totalLength} (size mismatch — the transfer was likely truncated).`,
+      `Download refused: declared size ${totalSize} exceeds the ${MAX_BYTES}-byte cap.`,
     );
   }
 
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.byteLength;
+  const body = res.body;
+  if (!body) {
+    if (idleTimer) clearTimeout(idleTimer);
+    throw new Error("No response body");
   }
-  await writeFile(dest, result);
+
+  // Stream to a `.part` file (not a 2×-resident in-memory buffer — the
+  // old approach OOMed on multi-GB assets) and rename on success, so a
+  // truncated/aborted transfer never leaves a usable file at `dest`.
+  const tmp = `${dest}.part`;
+  const sink = Bun.file(tmp).writer();
+  let downloaded = 0;
+  let sinceFlush = 0;
+  const reader = body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bumpIdle();
+      downloaded += value.byteLength;
+      if (downloaded > MAX_BYTES) {
+        throw new Error(`Download refused: exceeded the ${MAX_BYTES}-byte cap mid-stream.`);
+      }
+      sink.write(value);
+      sinceFlush += value.byteLength;
+      if (sinceFlush >= 8 * 1024 * 1024) {
+        await sink.flush(); // bound in-flight memory (~8 MB)
+        sinceFlush = 0;
+      }
+      onProgress?.(downloaded, totalSize);
+    }
+    await sink.end();
+  } catch (err) {
+    try { await sink.end(); } catch { /* ignore */ }
+    try { await rm(tmp, { force: true }); } catch { /* ignore */ }
+    throw new Error(
+      controller.signal.aborted
+        ? `Download stalled: no data for ${IDLE_MS / 1000}s.`
+        : `Download failed: ${err instanceof Error ? err.message : err}`,
+    );
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer);
+  }
+
+  // Truncation guard: a body that ended short of the declared
+  // Content-Length means the connection dropped mid-transfer.
+  if (totalSize > 0 && downloaded !== totalSize) {
+    try { await rm(tmp, { force: true }); } catch { /* ignore */ }
+    throw new Error(
+      `Download incomplete: expected ${totalSize} bytes but received ${downloaded} (size mismatch — the transfer was likely truncated).`,
+    );
+  }
+
+  await rename(tmp, dest);
 }

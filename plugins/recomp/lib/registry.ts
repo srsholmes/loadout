@@ -26,7 +26,13 @@ import bundled from "../games.json" with { type: "json" };
  * complicates the loader's RPC bootstrap.
  */
 export function loadBundledRegistry(): GameEntry[] {
-  const fromJson = (bundled as Registry).games;
+  // Guard the bundled JSON shape: a malformed games.json (missing/non-
+  // array `games`) must not crash plugin init.
+  const raw = (bundled as Registry).games;
+  const fromJson = Array.isArray(raw) ? raw : [];
+  if (!Array.isArray(raw)) {
+    console.warn("[recomp] games.json has no `games` array — catalog is empty");
+  }
   const fromDir = scanGamesDirectory();
 
   const overridden = new Set(fromDir.map((g) => g.id));
@@ -34,11 +40,30 @@ export function loadBundledRegistry(): GameEntry[] {
     ...fromJson.filter((g) => !overridden.has(g.id)),
     ...fromDir,
   ];
+  // Drop structurally-invalid entries (missing id/name, non-array tags)
+  // BEFORE they reach getGames' sort (`name.localeCompare`) /
+  // franchiseRank (`for…of tags`), which would otherwise 500 the whole
+  // catalog on one bad hand-edited/merged entry.
+  const valid = merged.filter((entry) => {
+    if (isValidEntry(entry)) return true;
+    console.warn(
+      `[recomp] dropping malformed catalog entry: ${String((entry as { id?: unknown })?.id ?? "<no id>")}`,
+    );
+    return false;
+  });
   // Validate mods on every merged entry — the games.json path doesn't
   // go through validateManifest, so a fat-fingered mod entry would
   // otherwise reach the UI and 500 on install. Invalid entries are
   // dropped with a console warning; the rest of the game survives.
-  return merged.map((entry) => filterValidMods(entry));
+  return valid.map((entry) => filterValidMods(entry));
+}
+
+/** Minimal structural check for a catalog entry's required fields. */
+function isValidEntry(e: GameEntry): boolean {
+  if (!e || typeof e.id !== "string" || e.id === "") return false;
+  if (typeof e.name !== "string" || e.name === "") return false;
+  if (e.tags != null && !Array.isArray(e.tags)) return false;
+  return true;
 }
 
 /** Apply `validateModEntry` to every mod on `entry`, dropping

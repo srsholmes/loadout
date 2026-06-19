@@ -29,12 +29,20 @@ export async function loadState(): Promise<PersistedState> {
     const raw = await readFile(path, "utf-8");
     const parsed = JSON.parse(raw) as Partial<PersistedState>;
     const defaults = defaultState();
+    // Coerce the keyed maps to plain objects: a hand-edited state.json
+    // with `"games": []` or `"games": "x"` would otherwise flow a
+    // non-object through `{ ...current.games }` spreads and corrupt the
+    // file on the next write. `?? {}` only guards null/undefined.
+    const obj = <T>(v: unknown, fallback: T): T =>
+      v != null && typeof v === "object" && !Array.isArray(v)
+        ? (v as T)
+        : fallback;
     return {
       ...defaults,
       ...parsed,
-      settings: { ...defaults.settings, ...parsed.settings },
-      games: parsed.games ?? {},
-      romPaths: parsed.romPaths ?? {},
+      settings: { ...defaults.settings, ...obj(parsed.settings, {}) },
+      games: obj(parsed.games, {}),
+      romPaths: obj(parsed.romPaths, {}),
     };
   } catch {
     return defaultState();

@@ -81,6 +81,28 @@ function cLocaleEnv(): Record<string, string | undefined> {
 }
 
 /**
+ * Run a listing/inspection command and return its stdout. Drains BOTH
+ * stdout and stderr concurrently with exit: a tool that emits a lot of
+ * stderr (e.g. `tar` warning "implausibly old time stamp" on a foreign
+ * archive) would otherwise fill the OS pipe buffer and block before
+ * exiting → `proc.exited` never resolves → the root backend hangs.
+ */
+async function listingStdout(cmd: string[], archivePath: string): Promise<string> {
+  const proc = spawn(cmd, { stdout: "pipe", stderr: "pipe", env: cLocaleEnv() });
+  const [out, errText, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (code !== 0) {
+    throw new Error(
+      `Could not read archive listing for ${basename(archivePath)} (${cmd[0]} exit ${code}): ${errText}`,
+    );
+  }
+  return out;
+}
+
+/**
  * List a tar(.gz) archive's members with symlink AND hardlink targets.
  * Uses `tar -tv`; symlink lines carry ` -> target`, hardlink lines carry
  * ` link to target` (both localized — hence the C locale). The verbose
@@ -91,23 +113,7 @@ async function listTar(
   gzip: boolean,
 ): Promise<{ name: string; link?: string }[]> {
   const flag = gzip ? "tvzf" : "tvf";
-  const proc = spawn(["tar", flag, archivePath], {
-    stdout: "pipe",
-    stderr: "pipe",
-    env: cLocaleEnv(),
-  });
-  // Drain BOTH streams concurrently with exit: a tar that emits a lot of
-  // stderr warnings (e.g. "implausibly old time stamp" on a foreign
-  // archive) would otherwise fill the OS pipe buffer and block before
-  // exiting → `proc.exited` never resolves → the root backend hangs.
-  const [out, errText, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  if (code !== 0) {
-    throw new Error(`Could not read archive listing for ${basename(archivePath)} (tar exit ${code}): ${errText}`);
-  }
+  const out = await listingStdout(["tar", flag, archivePath], archivePath);
   const result: { name: string; link?: string }[] = [];
   for (const line of out.split("\n")) {
     if (line.trim() === "") continue;
@@ -129,53 +135,45 @@ async function listTar(
 }
 
 /**
- * List a zip archive's members with symlink targets. Uses `unzip -Z`
- * (zipinfo verbose) rather than `-Z1` (names only) so symlink entries —
- * which `-Z1` hides entirely, leaving the traversal/symlink guard
- * blind to them — surface with their `lrwx…` type and ` -> target`.
- * A symlink whose target we can't parse is rejected (fail-safe).
+ * List a zip archive's members with symlink targets.
+ *
+ *   - Names come from `unzip -Z1`: exactly one clean name per line for
+ *     EVERY zip host type. (The fixed-width `unzip -Z` columns vary by
+ *     host — a DOS/FAT zip has a short attribute field — so a column
+ *     regex would silently miss entries and blind the traversal guard.)
+ *   - Symlink targets: zipinfo (`unzip -Z`) flags symlinks with a
+ *     leading `l` in the perms column (only Unix-host zips carry
+ *     symlinks; `unzip` restores them iff that bit is set, so detecting
+ *     `l` matches extraction behavior). zipinfo does NOT print the
+ *     target, so we read each symlink's target from its entry CONTENT
+ *     via `unzip -p` and hand it to the same traversal check tar uses.
  */
 async function listZip(
   archivePath: string,
 ): Promise<{ name: string; link?: string }[]> {
-  const proc = spawn(["unzip", "-Z", archivePath], {
-    stdout: "pipe",
-    stderr: "pipe",
-    env: cLocaleEnv(),
-  });
-  const [out, errText, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  if (code !== 0) {
-    throw new Error(`Could not read archive listing for ${basename(archivePath)} (unzip exit ${code}): ${errText}`);
-  }
-  const result: { name: string; link?: string }[] = [];
-  for (const line of out.split("\n")) {
-    // zipinfo entry lines: a 10-char unix permission string (first char
-    // is the type: '-' file, 'd' dir, 'l' symlink), … then a
-    // `dd-Mon-yy HH:MM` timestamp, then the name [+ ` -> target`].
-    // Header ("Archive:", "Zip file size:") and footer ("N files, …")
-    // lines don't match and are skipped.
+  const namesOut = await listingStdout(["unzip", "-Z1", archivePath], archivePath);
+  const result: { name: string; link?: string }[] = namesOut
+    .split("\n")
+    .map((l) => l.replace(/\r$/, ""))
+    .filter((l) => l !== "")
+    .map((name) => ({ name }));
+  const byName = new Map(result.map((e) => [e.name, e]));
+
+  const zOut = await listingStdout(["unzip", "-Z", archivePath], archivePath);
+  for (const line of zOut.split("\n")) {
+    // Unix symlink entry: `lrwxrwxrwx … dd-Mon-yy HH:MM name`.
     const m = line.match(
-      /^([dl-])[rwxsStT-]{9}\s.*\s\d{2}-[A-Za-z]{3}-\d{2}\s+\d{2}:\d{2}\s+(.+)$/,
+      /^l[rwxsStT-]{9}\s.*\s\d{2}-[A-Za-z]{3}-\d{2}\s+\d{2}:\d{2}\s+(.+)$/,
     );
     if (!m) continue;
-    const type = m[1]!;
-    const tail = m[2]!;
-    const sym = tail.indexOf(" -> ");
-    if (sym !== -1) {
-      result.push({ name: tail.slice(0, sym), link: tail.slice(sym + 4) });
-    } else if (type === "l") {
-      // Symlink entry whose target we couldn't parse — never let it
-      // through unvalidated.
-      throw new Error(
-        `Refusing to extract ${basename(archivePath)}: could not parse symlink target for "${tail}".`,
-      );
-    } else {
-      result.push({ name: tail });
-    }
+    const name = m[1]!.replace(/\r$/, "");
+    // The symlink's content IS its target path.
+    const target = (
+      await listingStdout(["unzip", "-p", archivePath, name], archivePath)
+    ).replace(/\r?\n$/, "");
+    const e = byName.get(name);
+    if (e) e.link = target;
+    else result.push({ name, link: target });
   }
   return result;
 }

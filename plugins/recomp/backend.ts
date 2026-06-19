@@ -162,6 +162,10 @@ export default class RecompBackend implements PluginBackend {
   private state!: PersistedState;
   private registry: GameEntry[] = [];
   private operations = new Set<string>();
+  // Subset of `operations`: game ids with a base op (install/update/
+  // uninstall) in flight. Drives the game-wide "updating" status without
+  // a mod-only op tripping it.
+  private baseOps = new Set<string>();
 
   async onLoad(): Promise<void> {
     this.state = await loadState();
@@ -269,7 +273,7 @@ export default class RecompBackend implements PluginBackend {
    * allow-roots gate `listDirectory` / `importModFromDisk` use.
    */
   private async assertRomPathAllowed(romPath: string): Promise<void> {
-    const { realpath } = await import("node:fs/promises");
+    const { realpath, stat } = await import("node:fs/promises");
     let canonical: string;
     try {
       canonical = await realpath(romPath);
@@ -280,6 +284,11 @@ export default class RecompBackend implements PluginBackend {
       throw new Error(
         `ROM path '${canonical}' is outside the allowed roots (${allowedRootsErrorPhrase()}).`,
       );
+    }
+    // Must be a regular file — a directory/FIFO/device would pass realpath
+    // but then fail mid-install with an opaque EISDIR from `cp`.
+    if (!(await stat(canonical)).isFile()) {
+      throw new Error(`ROM path '${canonical}' is not a regular file.`);
     }
   }
 
@@ -541,10 +550,17 @@ export default class RecompBackend implements PluginBackend {
       throw new Error(`Operation already in progress for '${gameId}'`);
     }
     this.operations.add(gameId);
-    if (opKey !== gameId) this.operations.add(opKey);
+    const isBaseOp = opKey === gameId;
+    if (!isBaseOp) this.operations.add(opKey);
+    // Track base ops (install/update/uninstall) separately so getGames
+    // shows the game-wide "updating" status ONLY for those — a per-mod
+    // install holds the game lock for exclusion but shouldn't paint the
+    // whole game tile as updating.
+    if (isBaseOp) this.baseOps.add(gameId);
     return () => {
       this.operations.delete(gameId);
-      if (opKey !== gameId) this.operations.delete(opKey);
+      if (!isBaseOp) this.operations.delete(opKey);
+      if (isBaseOp) this.baseOps.delete(gameId);
     };
   }
 
@@ -564,9 +580,14 @@ export default class RecompBackend implements PluginBackend {
     }
 
     try {
-      this.state = await installGame(entry, this.state, effectiveRom, (event) => {
+      await installGame(entry, this.state, effectiveRom, (event) => {
         this.emitPipelineEvent(event);
       });
+      // Re-read from disk rather than trusting the returned snapshot:
+      // another game's concurrent install may have committed in between,
+      // and assigning a stale return here would drop it from in-memory
+      // state. The pipeline persists via mutateState, so disk is truth.
+      this.state = await loadState();
       this.emit?.({
         event: "gameStatusChanged",
         data: { gameId: id, status: "installed" },
@@ -583,9 +604,10 @@ export default class RecompBackend implements PluginBackend {
     const release = this.lockGameOp(id);
 
     try {
-      this.state = await updateGame(entry, this.state, (event) => {
+      await updateGame(entry, this.state, (event) => {
         this.emitPipelineEvent(event);
       });
+      this.state = await loadState();
       this.emit?.({
         event: "gameStatusChanged",
         data: { gameId: id, status: "installed" },
@@ -605,7 +627,8 @@ export default class RecompBackend implements PluginBackend {
       if (existing?.addedToSteam && existing.steamAppId != null) {
         await removeFromSteam(existing.steamAppId);
       }
-      this.state = await uninstallGame(id, this.state);
+      await uninstallGame(id, this.state);
+      this.state = await loadState();
       this.emit?.({
         event: "gameStatusChanged",
         data: { gameId: id, status: "available" },
@@ -704,11 +727,12 @@ export default class RecompBackend implements PluginBackend {
       const result = await installMod(entry, installed, mod, (event) =>
         this.emitPipelineEvent(event),
       );
-      this.state = await recordInstalledMod(this.state, gameId, modId, {
+      await recordInstalledMod(this.state, gameId, modId, {
         installedAt: result.installedAt,
         version: result.version,
         source: mod.source.kind,
       });
+      this.state = await loadState();
       this.emit?.({
         event: "gameStatusChanged",
         data: { gameId, status: "installed" },
@@ -789,11 +813,12 @@ export default class RecompBackend implements PluginBackend {
         absolute,
         (event) => this.emitPipelineEvent(event),
       );
-      this.state = await recordInstalledMod(this.state, gameId, modId, {
+      await recordInstalledMod(this.state, gameId, modId, {
         installedAt: result.installedAt,
         version: result.version,
         source: mod.source.kind,
       });
+      this.state = await loadState();
       this.emit?.({
         event: "gameStatusChanged",
         data: { gameId, status: "installed" },
@@ -890,7 +915,7 @@ export default class RecompBackend implements PluginBackend {
         (entry.installType === "build_from_source" &&
           !!entry.repo &&
           setupScriptPathFor(entry.id) !== null);
-      const isOperating = this.operations.has(entry.id);
+      const isOperating = this.baseOps.has(entry.id);
 
       // Authoritative latest = whatever GitHub returned (cached);
       // the registry's `latestVersion` is only the fallback for when

@@ -22,6 +22,27 @@ import {
 } from "@loadout/ui";
 import { steamArtworkUrls } from "@loadout/steam-paths";
 
+/**
+ * Archive formats the backend's `importModFromDisk` / extractor can
+ * actually unpack (single-token extensions for the file-browser filter:
+ * `.tar.gz` → `gz`). The mod catalog sometimes advertises `7z`/`rar`,
+ * which the extractor can't handle — filtering the import picker to the
+ * intersection with this set stops the user from picking a file that
+ * would fail with a confusing post-selection error. Native 7z/rar
+ * support is tracked separately.
+ */
+const BACKEND_ARCHIVE_EXTS = ["zip", "tar", "tgz", "gz"];
+
+function supportedImportExtensions(accept?: string[]): string[] {
+  const want = (accept ?? []).map((e) => e.replace(/^\./, "").toLowerCase());
+  const inter = want.filter((e) => BACKEND_ARCHIVE_EXTS.includes(e));
+  // If the mod only declared unsupported formats, still filter to the
+  // supported set so the browser shows "no matching entries" (with the
+  // supported list) up front rather than letting an unpickable file
+  // through to a backend rejection.
+  return inter.length > 0 ? inter : BACKEND_ARCHIVE_EXTS;
+}
+
 // ── Internal navigation ──────────────────────────────────────────────
 //
 // Replaces the QAM-only `navigateBack` / `navigateToPage` flow this
@@ -601,9 +622,11 @@ function RecompTile({
   useEffect(() => {
     if (localUrl) return; // installed → already have art
     let cancelled = false;
-    void call("getCatalogArt", game.id).then((url) => {
-      if (!cancelled && typeof url === "string") setSgdbUrl(url);
-    });
+    void call("getCatalogArt", game.id)
+      .then((url) => {
+        if (!cancelled && typeof url === "string") setSgdbUrl(url);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -1065,11 +1088,13 @@ function GameDetailPage({ gameId }: { gameId: string }) {
   useEffect(() => {
     if (!gameId) return;
     let cancelled = false;
-    void call("getRomPath", gameId).then((p) => {
-      if (cancelled) return;
-      const path = (p as string | null) ?? "";
-      if (path) setRomPath(path);
-    });
+    void call("getRomPath", gameId)
+      .then((p) => {
+        if (cancelled) return;
+        const path = (p as string | null) ?? "";
+        if (path) setRomPath(path);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -1089,10 +1114,12 @@ function GameDetailPage({ gameId }: { gameId: string }) {
       return;
     }
     setHeroUrl(null);
-    void call("getDetailHero", game.id).then((u) => {
-      if (cancelled) return;
-      setHeroUrl((u as string | null) ?? null);
-    });
+    void call("getDetailHero", game.id)
+      .then((u) => {
+        if (cancelled) return;
+        setHeroUrl((u as string | null) ?? null);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -1111,7 +1138,7 @@ function GameDetailPage({ gameId }: { gameId: string }) {
   const persistRomPath = useCallback(
     (path: string) => {
       if (!gameId) return;
-      void call("setRomPath", gameId, path || null);
+      void call("setRomPath", gameId, path || null).catch(() => {});
     },
     [call, gameId],
   );
@@ -1130,12 +1157,14 @@ function GameDetailPage({ gameId }: { gameId: string }) {
       && game.installType !== "toolchain") return;
     if (romPath) return; // user already has one — don't override
     let cancelled = false;
-    void call("suggestRomFiles", gameId).then((r) => {
-      if (cancelled) return;
-      setRomSuggestions(
-        (r as Array<{ path: string; basename: string }>) ?? [],
-      );
-    });
+    void call("suggestRomFiles", gameId)
+      .then((r) => {
+        if (cancelled) return;
+        setRomSuggestions(
+          (r as Array<{ path: string; basename: string }>) ?? [],
+        );
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -1151,10 +1180,12 @@ function GameDetailPage({ gameId }: { gameId: string }) {
       return;
     }
     let cancelled = false;
-    void call("checkBuildEnv", game.id).then((r) => {
-      if (cancelled) return;
-      setBuildEnv(r as BuildEnvProbe);
-    });
+    void call("checkBuildEnv", game.id)
+      .then((r) => {
+        if (cancelled) return;
+        setBuildEnv(r as BuildEnvProbe);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -1831,7 +1862,7 @@ function ModsPanel({ gameId, gameInstalled }: ModsPanelProps) {
         open={importingMod !== null}
         onClose={() => setImportingMod(null)}
         onPick={(path) => void onPickArchive(path)}
-        extensions={importingMod?.source.acceptExtensions ?? ["zip", "7z", "rar"]}
+        extensions={supportedImportExtensions(importingMod?.source.acceptExtensions)}
         startPath="~/Downloads"
         title={
           importingMod
@@ -2067,7 +2098,17 @@ function SettingsPage() {
             <div className="flex-1">
               <TextInput
                 value={settings.romDirectory ?? ""}
-                onChange={(v) => persist({ romDirectory: v || undefined })}
+                // Update locally per keystroke, persist once on blur —
+                // persisting on every character fired ~1 state.json
+                // read-modify-write RPC per keystroke (unordered).
+                onChange={(v) =>
+                  setSettings({ ...settings, romDirectory: v || undefined })
+                }
+                onBlur={() =>
+                  void call("updateSettings", {
+                    romDirectory: settings.romDirectory,
+                  }).catch(() => {})
+                }
                 placeholder="/home/<you>/Roms"
               />
             </div>

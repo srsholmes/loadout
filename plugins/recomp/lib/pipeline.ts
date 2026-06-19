@@ -1,6 +1,6 @@
 import { mkdir, rm, cp, rename, readdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, resolve, sep } from "node:path";
 import { spawn } from "@loadout/exec";
 import { createExternalCache } from "@loadout/external-cache";
 import {
@@ -687,6 +687,19 @@ export async function updateGame(
 
   const installDir = join(state.installPath || gamesDir(), gameId);
   const preservePaths = entry.preservePaths ?? [];
+  // Guard every preservePaths entry to the install dir: these are
+  // backed up and restored by the ROOT backend, so an absolute or
+  // `..`-escaping pattern would read/write arbitrary files outside the
+  // install. (Manifests are bundled today, but this matches the
+  // confinement the rest of the pipeline enforces.)
+  for (const pattern of preservePaths) {
+    const abs = resolve(installDir, pattern);
+    if (abs !== installDir && !abs.startsWith(installDir + sep)) {
+      throw new Error(
+        `preservePaths entry "${pattern}" escapes the install directory — refusing.`,
+      );
+    }
+  }
   // Timestamped backup dir next to the install so a previous failed
   // update's backup is never silently overwritten — the user can
   // always recover the most recent saves manually if anything weird
@@ -710,20 +723,22 @@ export async function updateGame(
     }
   }
 
-  // Remove old install
-  if (existsSync(installDir)) {
-    await rm(installDir, { recursive: true, force: true });
-  }
-
-  // Reinstall
+  // Do NOT remove the old install here. installGame stages the new
+  // build in `${installDir}.partial` and atomically `rename`s it over
+  // installDir only after a successful download+extract — so the live
+  // install survives the whole update and a mid-update crash leaves the
+  // previous working version intact (deleting up front made the update
+  // non-atomic: a failure left no install at all).
   const romPath = installed.romPath;
   let newState: PersistedState;
   try {
     newState = await installGame(entry, state, romPath, onEvent);
   } catch (err) {
-    // Reinstall failed: try to restore the backup over a fresh
-    // installDir. Always leave the backup on disk afterwards — if
-    // anything trips, the user still has their saves at `backupDir`.
+    // Reinstall failed. Because we no longer pre-delete installDir,
+    // installGame's atomic promotion never fired, so the OLD install is
+    // still intact. Re-copy the backed-up saves anyway (idempotent
+    // belt-and-braces) and always leave the backup on disk so the user
+    // can recover their saves manually if anything is off.
     if (existsSync(backupDir)) {
       try {
         await mkdir(installDir, { recursive: true });

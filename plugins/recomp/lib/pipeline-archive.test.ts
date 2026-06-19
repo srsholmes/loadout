@@ -127,4 +127,37 @@ describe("FIX 2 — path traversal / symlink escape rejected", () => {
     const { extractArchive } = await import("./pipeline-archive");
     await expect(extractArchive(archive, dest)).rejects.toThrow(/\.\.|traversal|escape|outside/i);
   });
+
+  it("rejects a zip entry whose symlink target is absolute / escapes dest", async () => {
+    // zipinfo doesn't print symlink targets, so the guard reads each
+    // symlink's target from its entry content via `unzip -p`. An
+    // absolute target must be rejected before extraction.
+    const stage = await mkdtemp(join(sandbox, "zsymstage-"));
+    await symlink("/etc/passwd", join(stage, "evil"));
+    const archive = join(sandbox, "zsymlink.zip");
+    // `zip -y` stores the symlink AS a symlink (not its target's bytes).
+    await run(["zip", "-y", "-q", archive, "evil"], stage);
+
+    const dest = join(sandbox, "zsymdest");
+    const { extractArchive } = await import("./pipeline-archive");
+    await expect(extractArchive(archive, dest)).rejects.toThrow(
+      /absolute|symlink|escape|outside|\.\./i,
+    );
+  });
+
+  it("allows a zip containing a safe in-tree relative symlink", async () => {
+    // Regression guard: a zip with a benign relative symlink must still
+    // extract. (A prior revision rejected EVERY symlink-bearing zip
+    // because zipinfo shows no target.)
+    const stage = await mkdtemp(join(sandbox, "zsafestage-"));
+    await writeFile(join(stage, "real.txt"), "hi");
+    await symlink("real.txt", join(stage, "link"));
+    const archive = join(sandbox, "zsafe.zip");
+    await run(["zip", "-y", "-q", archive, "real.txt", "link"], stage);
+
+    const dest = join(sandbox, "zsafedest");
+    const { extractArchive } = await import("./pipeline-archive");
+    await extractArchive(archive, dest); // must not throw
+    expect(existsSync(join(dest, "real.txt"))).toBe(true);
+  });
 });

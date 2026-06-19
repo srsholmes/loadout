@@ -85,10 +85,20 @@ async function walkForExtensions(
   extensions: ReadonlySet<string>,
   cap = 3000,
   maxDepth = 5,
+  dirBudget = 5000,
 ): Promise<string[]> {
   const found: string[] = [];
+  // Cap directories visited too, not just matched files: the `found`
+  // cap only grows on a match, so a large tree of NON-matching files
+  // (e.g. romDirectory pointed at $HOME or a big media library) would
+  // otherwise `readdir` every directory unbounded on each detail-page
+  // open. This bounds the traversal regardless of how few files match.
+  let dirsVisited = 0;
   const visit = async (dir: string, depth: number): Promise<void> => {
-    if (depth > maxDepth || found.length >= cap) return;
+    if (depth > maxDepth || found.length >= cap || dirsVisited >= dirBudget) {
+      return;
+    }
+    dirsVisited++;
     let entries;
     try {
       entries = await readdir(dir, { withFileTypes: true });
@@ -96,7 +106,7 @@ async function walkForExtensions(
       return; // unreadable / permission denied / not a dir → skip silently
     }
     for (const entry of entries) {
-      if (found.length >= cap) return;
+      if (found.length >= cap || dirsVisited >= dirBudget) return;
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
         // Skip hidden dirs and likely-noise containers
