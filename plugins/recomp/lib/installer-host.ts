@@ -11,6 +11,7 @@ import { shellQuote } from "./shell";
 import { downloadFile, extractArchive } from "./pipeline-archive";
 import { tempDir, type PlatformName } from "./platform";
 import { chownInstallDirToUser } from "./fs-owner";
+import { resolveWithinDir } from "./path-confine";
 import type { PipelineEvent } from "./types";
 import type { RecompSDK, RecompEnv, Platform, RecompRuntime } from "./sdk";
 
@@ -180,8 +181,13 @@ async function runSetupScriptInner(
     );
   }
 
-  // Phase D: verify the declared binary exists, chmod +x.
-  const fullBin = join(ctx.installDir, acc.outputBinary);
+  // Phase D: verify the declared binary exists, chmod +x. Confine the
+  // recipe-declared path to the install dir — we chmod it as root.
+  const fullBin = resolveWithinDir(
+    ctx.installDir,
+    acc.outputBinary,
+    "declareOutput path",
+  );
   if (!existsSync(fullBin)) {
     throw new Error(
       `Recipe declared output ${acc.outputBinary} but it doesn't exist ` +
@@ -349,7 +355,7 @@ function buildRuntime(
       if (!existsSync(ctx.romPath)) {
         throw new Error(`ROM file not found: ${ctx.romPath}`);
       }
-      const dest = join(ctx.installDir, destRel);
+      const dest = resolveWithinDir(ctx.installDir, destRel, "placeRom destination");
       await mkdir(join(dest, ".."), { recursive: true });
       await copyFile(ctx.romPath, dest);
       // Copied by the (root) backend → hand to the user so the build can

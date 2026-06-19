@@ -81,6 +81,22 @@ describe("state module", () => {
       expect(state.settings.updateCheckInterval).toBe(86400);
       expect(typeof state.installPath).toBe("string");
     });
+
+    it("coerces malformed games/romPaths/settings to safe defaults", async () => {
+      const { writeFile } = await import("node:fs/promises");
+      // Hand-edited junk: arrays/strings where objects are expected.
+      await writeFile(
+        sandboxedStatePath(),
+        JSON.stringify({ version: 1, games: [], romPaths: "nope", settings: 42 }),
+      );
+      const { loadState } = await import("./state");
+      const state = await loadState();
+      expect(state.games).toEqual({});
+      expect(state.romPaths).toEqual({});
+      // settings falls back to defaults (the bad value is dropped).
+      expect(state.settings.autoAddToSteam).toBe(true);
+      expect(state.settings.updateCheckInterval).toBe(86400);
+    });
   });
 
   describe("state data structure", () => {

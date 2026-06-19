@@ -8212,7 +8212,7 @@
           "description": "Reshade preset for color grading / sharpening. Setup script drops the .ini and toggles Reshade on in the engine config.",
           "source": {
             "kind": "manual-import",
-            "acceptExtensions": ["zip", "ini"]
+            "acceptExtensions": ["zip"]
           },
           "setupModule": "setup.ts",
           "externalUrl": "https://drive.google.com/file/d/1Vrxh66ru0Kijb_o0MHV0V7LUXxovrYax/view?usp=sharing"

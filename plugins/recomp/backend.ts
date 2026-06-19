@@ -329,8 +329,13 @@ export default class RecompBackend implements PluginBackend {
     try {
       const merged: RomSuggestion[] = [];
       const seen = new Set<string>();
+      // One shared traversal budget across all roots so scanning several
+      // mounts can't multiply into an unbounded walk.
+      const dirBudget = { remaining: 5000 };
       for (const root of roots) {
-        const hits = await suggestRomsForTitle(entry.name, root, exts);
+        const hits = await suggestRomsForTitle(entry.name, root, exts, {
+          dirBudget,
+        });
         for (const hit of hits) {
           if (seen.has(hit.path)) continue;
           seen.add(hit.path);

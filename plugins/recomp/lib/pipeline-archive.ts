@@ -167,9 +167,17 @@ async function listZip(
     );
     if (!m) continue;
     const name = m[1]!.replace(/\r$/, "");
-    // The symlink's content IS its target path.
+    // The symlink's content IS its target path. CRITICAL: `unzip -p`
+    // treats the member-name argument as its OWN wildcard pattern
+    // (`*`, `?`, `[…]`) — not a literal — even via argv. An attacker
+    // could name a symlink `link[x]` and add a benign decoy `linkx`;
+    // `unzip -p archive 'link[x]'` would then glob to the decoy and
+    // return ITS safe content, hiding the real (e.g. absolute) target
+    // from this guard. Escape unzip's glob metacharacters so the name
+    // matches literally.
+    const literal = name.replace(/([\\*?[\]])/g, "\\$1");
     const target = (
-      await listingStdout(["unzip", "-p", archivePath, name], archivePath)
+      await listingStdout(["unzip", "-p", archivePath, literal], archivePath)
     ).replace(/\r?\n$/, "");
     const e = byName.get(name);
     if (e) e.link = target;

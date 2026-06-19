@@ -272,9 +272,16 @@ async function makeExecutable(
   // any arguments live inside a launcher.sh wrapper. So we treat
   // the entire resolved string as the binary to chmod.
   const exe = resolveTemplate(launchCmd, installDir);
-  if (exe && existsSync(exe)) {
-    await spawn(["chmod", "+x", exe]).exited;
-  }
+  if (!exe || !existsSync(exe)) return;
+  // Confine before chmod: we run as root, and a catalog launchCommand
+  // that resolves outside the install dir (e.g. an absolute system path,
+  // or a `{installDir}/../../…` escape) must NOT have its exec bit
+  // touched. Skip silently rather than throw — a valid game binary is
+  // always inside the install dir.
+  const absExe = resolve(exe);
+  const base = resolve(installDir);
+  if (absExe !== base && !absExe.startsWith(base + sep)) return;
+  await spawn(["chmod", "+x", exe]).exited;
 }
 
 // ── Install ──────────────────────────────────────────────────────────

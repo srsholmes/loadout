@@ -160,4 +160,22 @@ describe("FIX 2 — path traversal / symlink escape rejected", () => {
     await extractArchive(archive, dest); // must not throw
     expect(existsSync(join(dest, "real.txt"))).toBe(true);
   });
+
+  it("rejects an evil symlink even when its name contains unzip glob metachars", async () => {
+    // `unzip -p` treats the member name as a wildcard; a symlink named
+    // `link[x]` plus a decoy `linkx` would make an unescaped `unzip -p`
+    // return the DECOY's safe content, hiding the real target. The guard
+    // must escape glob chars and still read /etc/passwd → reject.
+    const stage = await mkdtemp(join(sandbox, "zglobstage-"));
+    await symlink("/etc/passwd", join(stage, "link[x]"));
+    await writeFile(join(stage, "linkx"), "totally-safe-decoy-content");
+    const archive = join(sandbox, "zglob.zip");
+    await run(["zip", "-y", "-q", archive, "link[x]", "linkx"], stage);
+
+    const dest = join(sandbox, "zglobdest");
+    const { extractArchive } = await import("./pipeline-archive");
+    await expect(extractArchive(archive, dest)).rejects.toThrow(
+      /absolute|symlink|escape|outside|\.\./i,
+    );
+  });
 });

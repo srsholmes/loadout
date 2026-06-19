@@ -35,9 +35,9 @@ export async function install(_ctx: ModSDK): Promise<void> {
   for (const name of entries) {
     await modSdk.copy(join(modSdk.stagedDir, name), join(modSdk.installDir, name));
   }
-  // If the user pasted a bare .ini (some Drive packages ship the
-  // preset uncompressed), no .ini will be inside stagedDir but it'll
-  // already be at modSdk.installDir/<name>. That's the same shape.
+  // NOTE: the preset must be imported as a .zip — the manual-import
+  // pipeline always extracts an archive, so a bare uncompressed .ini
+  // can't be imported through the UI. Zip the preset first.
 
   // Best-effort config flip.
   modSdk.emit({ message: "Enabling Reshade in engine config…", percent: 70 });

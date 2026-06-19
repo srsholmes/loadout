@@ -58,8 +58,9 @@ export function loadBundledRegistry(): GameEntry[] {
   return valid.map((entry) => filterValidMods(entry));
 }
 
-/** Minimal structural check for a catalog entry's required fields. */
-function isValidEntry(e: GameEntry): boolean {
+/** Minimal structural check for a catalog entry's required fields.
+ *  Exported for tests. */
+export function isValidEntry(e: GameEntry): boolean {
   if (!e || typeof e.id !== "string" || e.id === "") return false;
   if (typeof e.name !== "string" || e.name === "") return false;
   if (e.tags != null && !Array.isArray(e.tags)) return false;

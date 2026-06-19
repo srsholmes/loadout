@@ -1,6 +1,31 @@
 import { describe, it, expect } from "bun:test";
-import { loadBundledRegistry, validateModEntry } from "./registry";
-import type { ModEntry } from "./types";
+import { loadBundledRegistry, validateModEntry, isValidEntry } from "./registry";
+import type { GameEntry, ModEntry } from "./types";
+
+describe("isValidEntry", () => {
+  const ok: GameEntry = {
+    id: "g",
+    name: "Game",
+    project: "P",
+    platform: "gc",
+    repo: "x/y",
+    description: "",
+    installType: "prebuilt",
+    releaseAssets: {},
+    launchCommand: {},
+    tags: [],
+  };
+  it("accepts a well-formed entry", () => {
+    expect(isValidEntry(ok)).toBe(true);
+  });
+  it("rejects missing/empty id or name", () => {
+    expect(isValidEntry({ ...ok, id: "" })).toBe(false);
+    expect(isValidEntry({ ...ok, name: undefined as unknown as string })).toBe(false);
+  });
+  it("rejects a non-array tags field", () => {
+    expect(isValidEntry({ ...ok, tags: "zelda" as unknown as string[] })).toBe(false);
+  });
+});
 
 describe("loadBundledRegistry", () => {
   it("returns a non-empty list of games", () => {

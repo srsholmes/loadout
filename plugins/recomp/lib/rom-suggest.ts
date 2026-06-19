@@ -85,7 +85,10 @@ async function walkForExtensions(
   extensions: ReadonlySet<string>,
   cap = 3000,
   maxDepth = 5,
-  dirBudget = 5000,
+  // Shared, mutable directories-visited budget. Passing one object
+  // across multiple roots (the backend scans several mounts) bounds the
+  // TOTAL traversal, not 5000-per-root.
+  budget: { remaining: number } = { remaining: 5000 },
 ): Promise<string[]> {
   const found: string[] = [];
   // Cap directories visited too, not just matched files: the `found`
@@ -93,12 +96,11 @@ async function walkForExtensions(
   // (e.g. romDirectory pointed at $HOME or a big media library) would
   // otherwise `readdir` every directory unbounded on each detail-page
   // open. This bounds the traversal regardless of how few files match.
-  let dirsVisited = 0;
   const visit = async (dir: string, depth: number): Promise<void> => {
-    if (depth > maxDepth || found.length >= cap || dirsVisited >= dirBudget) {
+    if (depth > maxDepth || found.length >= cap || budget.remaining <= 0) {
       return;
     }
-    dirsVisited++;
+    budget.remaining--;
     let entries;
     try {
       entries = await readdir(dir, { withFileTypes: true });
@@ -106,7 +108,7 @@ async function walkForExtensions(
       return; // unreadable / permission denied / not a dir → skip silently
     }
     for (const entry of entries) {
-      if (found.length >= cap || dirsVisited >= dirBudget) return;
+      if (found.length >= cap || budget.remaining <= 0) return;
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
         // Skip hidden dirs and likely-noise containers
@@ -134,6 +136,9 @@ export interface SuggestOptions {
    *  region/version annotations, tight enough that random files in
    *  the ROM dir don't bubble up). */
   threshold?: number;
+  /** Shared directories-visited budget, so a multi-root scan bounds its
+   *  TOTAL traversal rather than 5000 per root. */
+  dirBudget?: { remaining: number };
 }
 
 /**
@@ -158,7 +163,13 @@ export async function suggestRomsForTitle(
   const allowedExts = new Set(
     extensions.map((e) => e.toLowerCase().replace(/^\./, "")),
   );
-  const files = await walkForExtensions(romDirectory, allowedExts);
+  const files = await walkForExtensions(
+    romDirectory,
+    allowedExts,
+    3000,
+    5,
+    opts.dirBudget,
+  );
   if (files.length === 0) return [];
 
   // Build search targets from the basenames (no extension, no path

@@ -6,6 +6,7 @@ import { downloadFile } from "./github";
 import { extractArchive } from "./pipeline-archive";
 import { modCacheDir, tempDir } from "./platform";
 import { setupModulePathFor } from "./registry";
+import { resolveWithinDir } from "./path-confine";
 import type {
   GameEntry,
   GitHubAsset,
@@ -385,10 +386,12 @@ export function resolveModDest(
     }
     resolved = resolved.replaceAll("{userDataDir}", game.userDataDir);
   }
-  // Relative path: resolve under the plugin's install dir. That dir
-  // is the plugin's domain (recomp-hub) — no security gate needed.
+  // Relative path: resolve under the plugin's install dir — but still
+  // confine it. A `..`-bearing relative subdir (e.g. "../../etc/...")
+  // skips the $HOME gate below yet would escape installDir, and the
+  // root backend then cp's the mod there. Gate it like the others.
   if (!resolved.startsWith("/") && !resolved.startsWith("~/")) {
-    return resolvePath(installDir, resolved);
+    return resolveWithinDir(installDir, resolved, `Mod installSubdir`);
   }
   // Absolute / tilde-expanded path: gate it against $HOME.
   const raw = resolved.startsWith("~/")

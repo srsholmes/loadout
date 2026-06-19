@@ -275,9 +275,11 @@ export async function downloadFile(
   // old approach OOMed on multi-GB assets) and rename on success, so a
   // truncated/aborted transfer never leaves a usable file at `dest`.
   const tmp = `${dest}.part`;
-  const sink = Bun.file(tmp).writer();
+  // highWaterMark bounds the sink's internal buffer; `await sink.write`
+  // then applies real backpressure (it returns a Promise once the buffer
+  // is full), so a fast network + slow SD card can't grow memory.
+  const sink = Bun.file(tmp).writer({ highWaterMark: 8 * 1024 * 1024 });
   let downloaded = 0;
-  let sinceFlush = 0;
   const reader = body.getReader();
   try {
     while (true) {
@@ -288,12 +290,7 @@ export async function downloadFile(
       if (downloaded > MAX_BYTES) {
         throw new Error(`Download refused: exceeded the ${MAX_BYTES}-byte cap mid-stream.`);
       }
-      sink.write(value);
-      sinceFlush += value.byteLength;
-      if (sinceFlush >= 8 * 1024 * 1024) {
-        await sink.flush(); // bound in-flight memory (~8 MB)
-        sinceFlush = 0;
-      }
+      await sink.write(value);
       onProgress?.(downloaded, totalSize);
     }
     await sink.end();

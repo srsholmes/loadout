@@ -112,6 +112,49 @@ function makeInstalled(overrides?: Partial<InstalledGame>): InstalledGame {
   };
 }
 
+describe("resolveModDest", () => {
+  const installDir = join(sandbox || "/games", "install", "alba");
+
+  it("resolves a relative installSubdir under the install dir", async () => {
+    const { resolveModDest } = await import("./mods");
+    expect(resolveModDest(makeGame(), installDir, "textures/")).toBe(
+      join(installDir, "textures"),
+    );
+  });
+
+  it("rejects a relative installSubdir that escapes via ..", async () => {
+    const { resolveModDest } = await import("./mods");
+    expect(() =>
+      resolveModDest(makeGame(), installDir, "../../../../etc/cron.d"),
+    ).toThrow(/escapes the install directory/);
+  });
+
+  it("substitutes {userDataDir} and keeps it under $HOME", async () => {
+    const { resolveModDest } = await import("./mods");
+    const game = makeGame({
+      userDataDir: "~/.local/share/TwilitRealm/Dusklight",
+    });
+    const dest = resolveModDest(
+      game,
+      installDir,
+      "{userDataDir}/texture_replacements/",
+    );
+    expect(dest).toBe(
+      join(
+        process.env.HOME ?? "",
+        ".local/share/TwilitRealm/Dusklight/texture_replacements",
+      ),
+    );
+  });
+
+  it("rejects an absolute installSubdir outside $HOME", async () => {
+    const { resolveModDest } = await import("./mods");
+    expect(() => resolveModDest(makeGame(), installDir, "/etc/cron.d")).toThrow(
+      /outside \$HOME/,
+    );
+  });
+});
+
 describe("installMod — github-release default-copy path", () => {
   it("downloads release asset → extracts → copies into installSubdir, emitting mod:<id>:* stages", async () => {
     // Stub fetch for the release lookup.
