@@ -128,6 +128,11 @@ describe("CDPClient.send", () => {
   });
 });
 
+// evaluate() is now serialized per-target (the message isn't sent until
+// the per-URL chain reaches it), so the wire write happens a microtask
+// after the call. Flush before asserting on `sentMessages`.
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
 describe("CDPClient.evaluate", () => {
   let stub: StubWebSocket;
   let client: CDPClient;
@@ -139,6 +144,7 @@ describe("CDPClient.evaluate", () => {
 
   it("defaults to userGesture + returnByValue", async () => {
     const pending = client.evaluate("1+1");
+    await flush();
     const sent = JSON.parse(stub.sentMessages[0]);
     expect(sent.method).toBe("Runtime.evaluate");
     expect(sent.params.expression).toBe("1+1");
@@ -151,6 +157,7 @@ describe("CDPClient.evaluate", () => {
 
   it("passes awaitPromise through when requested", async () => {
     const pending = client.evaluate("Promise.resolve(42)", { awaitPromise: true });
+    await flush();
     const sent = JSON.parse(stub.sentMessages[0]);
     expect(sent.params.awaitPromise).toBe(true);
     stub.reply(sent.id, { result: { result: { value: 42 } } });
@@ -165,6 +172,7 @@ describe("CDPClient.evaluate", () => {
 
   it("surfaces a JS exception inside the evaluated expression", async () => {
     const pending = client.evaluate("throw new Error('boom')");
+    await flush();
     const sent = JSON.parse(stub.sentMessages[0]);
     stub.reply(sent.id, {
       result: {
@@ -177,8 +185,32 @@ describe("CDPClient.evaluate", () => {
 
   it("surfaces a CDP-level error response", async () => {
     const pending = client.evaluate("anything");
+    await flush();
     const sent = JSON.parse(stub.sentMessages[0]);
     stub.reply(sent.id, { error: { code: -1, message: "Session closed" } });
     await expect(pending).rejects.toThrow(/Session closed/);
+  });
+
+  it("serializes evaluates to the same target — no two in flight at once", async () => {
+    // Two overlapping evaluates on the SAME target (same ws URL) must
+    // not both hit the wire — the second waits for the first's reply.
+    // This is the guard against Steam's "Collided with existing master
+    // response stream" webhelper crash.
+    const p1 = client.evaluate("first");
+    const p2 = client.evaluate("second");
+    await flush();
+    expect(stub.sentMessages).toHaveLength(1); // only the first is in flight
+    const sent1 = JSON.parse(stub.sentMessages[0]);
+    expect(sent1.params.expression).toBe("first");
+
+    stub.reply(sent1.id, { result: { result: { value: 1 } } });
+    expect(await p1).toBe(1);
+    await flush();
+
+    expect(stub.sentMessages).toHaveLength(2); // now the second goes out
+    const sent2 = JSON.parse(stub.sentMessages[1]);
+    expect(sent2.params.expression).toBe("second");
+    stub.reply(sent2.id, { result: { result: { value: 2 } } });
+    expect(await p2).toBe(2);
   });
 });

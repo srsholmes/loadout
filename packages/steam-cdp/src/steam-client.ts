@@ -40,7 +40,21 @@ export interface SteamClientOptions extends FindTabOptions {
    * reference (e.g. the loader's SteamInjector).
    */
   tab?: CEFTab;
+  /**
+   * How many times to look for the SharedJSContext tab before giving up.
+   * Steam transiently publishes an EMPTY `/json` tab list during state
+   * transitions — most notably when entering/leaving Gaming Mode (Big
+   * Picture) or just after a non-Steam shortcut exits — so a single
+   * lookup can miss a tab that's there a moment later. Defaults to 3.
+   * Ignored when an explicit `tab` is supplied.
+   */
+  connectAttempts?: number;
+  /** Delay between SharedJSContext lookup attempts, ms. Defaults to 700. */
+  connectRetryDelayMs?: number;
 }
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Thrown when SteamClient methods are called but Steam's `window.SteamClient`
@@ -78,10 +92,25 @@ export class SteamClient {
   async connect(): Promise<void> {
     if (this.cdp?.connected) return;
 
-    const tab = this.opts.tab ?? (await findSharedJsTab(this.opts));
+    let tab = this.opts.tab ?? null;
+    if (!tab) {
+      // Retry the lookup: Steam can momentarily expose an empty tab list
+      // mid-transition (Gaming Mode ⇄ desktop, shortcut exit), so one miss
+      // doesn't mean the SharedJSContext is gone — it may just not be
+      // published yet this instant.
+      const attempts = Math.max(1, this.opts.connectAttempts ?? 3);
+      const delayMs = this.opts.connectRetryDelayMs ?? 700;
+      for (let i = 0; i < attempts && !tab; i++) {
+        if (i > 0) await sleep(delayMs);
+        tab = await findSharedJsTab(this.opts);
+      }
+    }
     if (!tab) {
       throw new SteamClientUnreachableError(
-        "No SharedJSContext tab found on Steam's CEF debug port — is Steam running with the debug port enabled?",
+        "No SharedJSContext tab found on Steam's CEF debug port. Steam may be " +
+          "mid-transition (e.g. entering/leaving Big Picture / Gaming Mode) or " +
+          "started without remote debugging enabled — retry in a moment, or " +
+          "switch Steam to desktop mode.",
       );
     }
 
@@ -662,17 +691,50 @@ class UrlApi {
 }
 
 /**
+ * Serialises every `withSteamClient` session. Steam's CEF IPC client
+ * asserts `"Collided with existing master response stream"`
+ * (chrome_ipc_client.cpp) and the whole `steamwebhelper` process aborts
+ * — taking the entire Steam UI down — if two CDP clients drive the
+ * SharedJSContext target's IPC at the same time. A one-shot
+ * `withSteamClient` opens a fresh connection per call, so a caller that
+ * fires several at once (e.g. recomp registering multiple non-Steam
+ * shortcuts + pushing artwork in the same tick) produces overlapping
+ * connections and crashes Steam.
+ *
+ * Chaining each session onto a single module-level promise guarantees at
+ * most one transient connection is live at a time. The chain swallows
+ * each session's outcome so one failing session never rejects the next
+ * waiter; the real result/rejection still flows back to that session's
+ * own caller.
+ */
+let steamClientChain: Promise<unknown> = Promise.resolve();
+
+/**
  * One-shot helper: connect → run callback → close. The right shape for
  * occasional, human-paced calls (e.g. clicking Apply once per game).
+ *
+ * Sessions are serialised globally — see `steamClientChain` — so
+ * concurrent callers can't open colliding CDP connections and crash
+ * Steam's webhelper.
  */
 export async function withSteamClient<T>(
   fn: (sc: SteamClient) => Promise<T>,
   opts: SteamClientOptions = {},
 ): Promise<T> {
-  const sc = new SteamClient(opts);
-  try {
-    return await fn(sc);
-  } finally {
-    await sc.close();
-  }
+  const run = async (): Promise<T> => {
+    const sc = new SteamClient(opts);
+    try {
+      return await fn(sc);
+    } finally {
+      await sc.close();
+    }
+  };
+  // Queue behind any in-flight session regardless of how it settled.
+  const result = steamClientChain.then(run, run);
+  // Keep the chain alive but isolated from this session's success/failure.
+  steamClientChain = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
 }
