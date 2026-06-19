@@ -75,11 +75,11 @@ interface PageShot {
 const PAGE_RECIPES: Record<string, PageShot[]> = {
   recomp: [{ name: "detail", steps: [{ kind: "tile" }] }],
   hltb: [{ name: "detail", steps: [{ kind: "tile" }] }],
+  // The landing shot is the Library (available games) tab; only the
+  // Installed tab is captured as a sub-page. Downloads/Detected/detail
+  // shots were dropped — they're empty/low-signal on a fresh install.
   "store-bridge": [
     { name: "installed", steps: [{ kind: "text", label: "Installed" }] },
-    { name: "downloads", steps: [{ kind: "text", label: "Downloads" }] },
-    { name: "detected", steps: [{ kind: "text", label: "Detected" }] },
-    { name: "detail", steps: [{ kind: "tile" }] },
   ],
   "launch-options": [
     { name: "detail", steps: [{ kind: "tile" }] },
