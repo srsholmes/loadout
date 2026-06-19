@@ -11,9 +11,6 @@ your TDP, flip on frame generation, check if a game runs well on Proton, launch
 your Epic library, install a recompiled N64 classic — then get straight back to
 playing. Two dozen plugins, one slick d-pad-friendly overlay.
 
-No desktop shell. No Python service. No fragile Steam-UI injection. Just one
-window layered over your game that *doesn't break* every time Steam updates.
-
 [**Install →**](#install) · [Plugins](#plugins) · [Supported devices](#supported-devices--testing) · [Build from source](#build-from-source)
 
 > 🚧 **Status: pre-launch.** Everything below works today on a Steam Deck — and
