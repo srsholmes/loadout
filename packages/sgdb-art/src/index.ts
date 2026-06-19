@@ -84,6 +84,18 @@ export interface ApplyAllArtworkResult {
 }
 
 /**
+ * Max raw image size we'll live-push via `setCustomArtwork`. The push
+ * inlines the image as a base64 JS literal through CDP into Steam's
+ * client IPC; a large payload stalls/overflows that pipe and crashes
+ * the whole webhelper (observed asserts: `stalled cross-thread pipe`,
+ * `bufRet.TellPut() == sizeof(uint8)`). A 968 KB push was safe; a
+ * 1.32 MB push crashed Steam — so we cap at ~1 MB. Oversized art is
+ * still written to the grid dir on disk, so it renders after Steam's
+ * next library refresh/restart; we just skip the risky instant push.
+ */
+const MAX_LIVE_ARTWORK_BYTES = 1_000_000;
+
+/**
  * The full pipeline. Soft-failures (network, one missing asset type,
  * Steam not running) do NOT throw — we apply what we can and report
  * a structured result the caller can log. Hard configuration issues
@@ -150,7 +162,14 @@ export async function applyAllArtwork(
     // 2) Push bytes into Steam's running state so the shortcut tile
     //    refreshes immediately. setCustomArtwork only accepts png/jpg.
     let instant = false;
-    if (steamFmt) {
+    if (steamFmt && buf.length > MAX_LIVE_ARTWORK_BYTES) {
+      // Too large to push live without risking a webhelper crash. The
+      // disk write above already persisted it, so it shows after Steam's
+      // next refresh — skip the instant push.
+      console.log(
+        `[sgdb-art] skipping live setCustomArtwork ${type} appId=${input.appId} (bytes=${buf.length} > ${MAX_LIVE_ARTWORK_BYTES} cap); written to disk, applies on Steam refresh`,
+      );
+    } else if (steamFmt) {
       try {
         await withSteamClient((sc) =>
           sc.apps.setCustomArtwork(
