@@ -2,7 +2,11 @@
 
 > Browse, install, and toggle community UI sound packs from deckthemes.com
 
-![Screenshot](./assets/screenshot.png)
+Browse, install, and switch community UI sound packs from deckthemes.com, giving Steam's interface sounds a personal touch from inside Gaming Mode.
+
+## Screenshots
+
+![Sound Loader](./assets/screenshot.png)
 
 ## See also
 
