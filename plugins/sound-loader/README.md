@@ -2,7 +2,9 @@
 
 > Browse, install, and toggle community UI sound packs from deckthemes.com
 
-![Screenshot](./assets/screenshot.png)
+## Screenshots
+
+![Sound Loader](./assets/screenshot.png)
 
 ## See also
 

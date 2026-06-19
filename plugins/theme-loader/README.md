@@ -2,7 +2,9 @@
 
 > Browse, install, and toggle community CSS themes for Steam's Big Picture UI
 
-![Screenshot](./assets/screenshot.png)
+## Screenshots
+
+![Theme Loader](./assets/screenshot.png)
 
 ## See also
 

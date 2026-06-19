@@ -2,7 +2,9 @@
 
 > Adjust CPU/APU TDP wattage with presets and a slider
 
-![Screenshot](./assets/screenshot.png)
+## Screenshots
+
+![TDP Control](./assets/screenshot.png)
 
 ## See also
 

@@ -2,7 +2,9 @@
 
 > Manage and update Flatpak applications without leaving your game
 
-![Screenshot](./assets/screenshot.png)
+## Screenshots
+
+![Flatpak Manager](./assets/screenshot.png)
 
 ## See also
 

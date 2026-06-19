@@ -2,7 +2,9 @@
 
 > RGB LED control for Linux handhelds — supports OpenRGB, sysfs LEDs, and platform-specific interfaces
 
-![Screenshot](./assets/screenshot.png)
+## Screenshots
+
+![RGB Control](./assets/screenshot.png)
 
 ## See also
 

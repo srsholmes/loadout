@@ -2,7 +2,9 @@
 
 > Track time spent playing games, including non-Steam games
 
-![Screenshot](./assets/screenshot.png)
+## Screenshots
+
+![PlayTime](./assets/screenshot.png)
 
 ## See also
 

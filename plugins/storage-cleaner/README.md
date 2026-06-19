@@ -2,7 +2,9 @@
 
 > Shows disk usage, shader cache sizes, and lets users clean up space
 
-![Screenshot](./assets/screenshot.png)
+## Screenshots
+
+![Storage Cleaner](./assets/screenshot.png)
 
 ## See also
 
