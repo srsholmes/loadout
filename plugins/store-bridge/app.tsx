@@ -557,10 +557,10 @@ function CatalogView() {
         <h2 className="text-lg font-semibold text-base-content m-0">Store Bridge</h2>
         <div className="ml-auto flex items-center gap-2">
           <SearchField value={search} onChange={setSearch} placeholder="Search games..." />
-          <IconButton aria-label="Refresh library" onClick={refresh} disabled={refreshing}>
+          <IconButton ariaLabel="Refresh library" onClick={refresh} disabled={refreshing}>
             <FaRotate />
           </IconButton>
-          <IconButton aria-label="Settings" onClick={nav.toSettings}>
+          <IconButton ariaLabel="Settings" onClick={nav.toSettings}>
             <FaGear />
           </IconButton>
         </div>
@@ -1681,7 +1681,7 @@ function SettingsView() {
                 className="flex items-center gap-2 py-1 border-b border-base-300/30 last:border-0"
               >
                 <Text style={{ flex: 1, fontFamily: "monospace" }}>{p}</Text>
-                <IconButton aria-label={`Remove ${p}`} onClick={() => removeScan(p)}>
+                <IconButton ariaLabel={`Remove ${p}`} onClick={() => removeScan(p)}>
                   <FaTrash />
                 </IconButton>
               </div>
@@ -1694,7 +1694,7 @@ function SettingsView() {
               placeholder="/absolute/path/to/games"
               style={{ flex: 1 }}
             />
-            <IconButton aria-label="Add scan path" onClick={addScan}>
+            <IconButton ariaLabel="Add scan path" onClick={addScan}>
               <FaPlus />
             </IconButton>
           </div>

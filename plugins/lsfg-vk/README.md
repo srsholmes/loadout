@@ -2,7 +2,15 @@
 
 > Install and configure the LSFG-VK Vulkan frame generation layer
 
-![Screenshot](./assets/screenshot.png)
+## Screenshots
+
+### Overview
+
+![LSFG-VK — Overview](./assets/screenshot.png)
+
+### Settings
+
+![LSFG-VK — Settings](./assets/screenshot-settings.png)
 
 ## See also
 

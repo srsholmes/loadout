@@ -13,6 +13,16 @@ User-added templates and per-game pins / custom links live in
 plugin storage; built-ins ship in `DEFAULT_TEMPLATES` and re-seed
 on every `onLoad()` so version bumps add new sites for free.
 
+## Screenshots
+
+### Overview
+
+![Quick Links — Overview](./assets/screenshot.png)
+
+### Settings
+
+![Quick Links — Settings](./assets/screenshot-settings.png)
+
 ## Browser shortcut management (was `gaming-mode-browser`)
 
 Quick Links owns the "register a desktop browser as a non-Steam game"

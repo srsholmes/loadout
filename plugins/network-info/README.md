@@ -2,7 +2,9 @@
 
 > Network information, WiFi details, and Cloudflare speed test
 
-![Screenshot](./assets/screenshot.png)
+## Screenshots
+
+![Network Info](./assets/screenshot.png)
 
 ## See also
 

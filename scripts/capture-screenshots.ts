@@ -1,18 +1,18 @@
 #!/usr/bin/env bun
 /**
- * Capture overlay screenshots in light + dark themes, across every plugin,
- * the homepage (sidebar expanded + collapsed), and the settings page.
+ * Capture overlay screenshots: the homepage (sidebar expanded + collapsed),
+ * the settings page, and every plugin — including each plugin's in-app pages
+ * (game detail, per-plugin settings/config, content tabs).
  *
- * Targets the overlay's own CDP session (filtered by title), drives the app
- * via `location.hash` for routing and flips the sidebar state by clicking
- * the toggle button. Theme is set via `document.documentElement`'s
- * `data-theme` attribute so we don't pollute the user's persisted
- * preference.
+ * Captures in whatever theme the overlay is CURRENTLY set to (read from
+ * `data-theme`); it never changes the theme. Switch themes manually and
+ * re-run to build a per-theme set under `screenshots/<theme>/`.
  *
- * Bun port of the original capture-screenshots.py — uses Bun's global
- * WebSocket for the CDP session and node:fs for the file shuffling, so it
- * runs with the same toolchain as the rest of the repo (no Python +
- * `websockets` dependency).
+ * The overlay shell only routes `#/`, `#/settings`, `#/plugin/<id>` — a
+ * plugin's sub-pages are internal React state with no URL. So sub-pages are
+ * reached by clicking DOM elements over CDP, driven by the per-plugin
+ * `PAGE_RECIPES` table below (the shared `<GameCard>` carries a stable
+ * `data-game-card` hook; gears/tabs/back are matched by aria-label / text).
  */
 import {
   readdirSync,
@@ -33,15 +33,11 @@ const rel = (p: string) => relative(ROOT, p);
 
 // Source of truth: every plugin directory under `plugins/` that has
 // a `package.json` OR a `plugin.json` (the standalone loader
-// manifest some plugins use). Skips stale `.cache`-only leftovers
-// like the `browser/` dir post-quick-links-fold. Sorted
-// alphabetically so the numbered output filenames are stable
-// across runs.
+// manifest some plugins use). Sorted alphabetically so the numbered
+// output filenames are stable across runs.
 //
 // Keep this filter in sync with `loadPluginMeta` in
-// `scripts/scaffold-plugin-readmes.ts` — both must agree on which
-// directories are "real plugins" so the per-theme numbered shots
-// and the per-plugin asset copies always cover the same set.
+// `scripts/scaffold-plugin-readmes.ts`.
 const PLUGINS = readdirSync(join(ROOT, "plugins"), { withFileTypes: true })
   .filter(
     (d) =>
@@ -52,7 +48,66 @@ const PLUGINS = readdirSync(join(ROOT, "plugins"), { withFileTypes: true })
   .map((d) => d.name)
   .sort();
 
+// ── Per-plugin sub-page recipes ────────────────────────────────────────────
+//
+// A `Step` is a single CDP-driven action. `tile` clicks the first shared
+// GameCard (`[data-game-card]`) to open a detail page; `aria`/`text` click a
+// control by aria-label / visible text (gears, tabs); `wait` adds settle time.
+//
+// Each page is captured from a freshly-(re)navigated plugin landing, so steps
+// describe the path from the landing — no need to back out between pages. If a
+// step's target isn't on screen (e.g. an empty library has no tile), the page
+// is skipped rather than producing a misleading shot.
+type Step =
+  | { kind: "tile" }
+  | { kind: "aria"; label: string }
+  | { kind: "text"; label: string }
+  | { kind: "wait"; ms: number };
+
+interface PageShot {
+  /** Suffix in the filename: `NN-<plugin>-<name>.png`. */
+  name: string;
+  steps: Step[];
+}
+
+const PAGE_RECIPES: Record<string, PageShot[]> = {
+  recomp: [
+    { name: "detail", steps: [{ kind: "tile" }] },
+    { name: "settings", steps: [{ kind: "aria", label: "RecompHub settings" }] },
+  ],
+  hltb: [
+    { name: "detail", steps: [{ kind: "tile" }] },
+    { name: "settings", steps: [{ kind: "aria", label: "Plugin preferences" }] },
+  ],
+  "store-bridge": [
+    { name: "installed", steps: [{ kind: "text", label: "Installed" }] },
+    { name: "downloads", steps: [{ kind: "text", label: "Downloads" }] },
+    { name: "detected", steps: [{ kind: "text", label: "Detected" }] },
+    { name: "detail", steps: [{ kind: "tile" }] },
+    { name: "settings", steps: [{ kind: "aria", label: "Settings" }] },
+  ],
+  "launch-options": [
+    { name: "detail", steps: [{ kind: "tile" }] },
+    { name: "presets", steps: [{ kind: "aria", label: "Manage presets" }] },
+  ],
+  "protondb-badges": [
+    { name: "settings", steps: [{ kind: "aria", label: "Plugin preferences" }] },
+  ],
+  steamgriddb: [
+    { name: "detail", steps: [{ kind: "tile" }] },
+    { name: "settings", steps: [{ kind: "aria", label: "Plugin preferences" }] },
+  ],
+  "quick-links": [
+    { name: "settings", steps: [{ kind: "aria", label: "Quick Links settings" }] },
+  ],
+  "lsfg-vk": [
+    { name: "settings", steps: [{ kind: "aria", label: "Plugin preferences" }] },
+  ],
+};
+
 const sleep = (ms: number) => Bun.sleep(ms);
+// Settle time after a navigation / click so the new view mounts + fetches.
+const SETTLE_MS = 700;
 
 async function cdpWs(): Promise<string> {
   const res = await fetch("http://localhost:9222/json");
@@ -128,23 +183,9 @@ class CDP {
   }
 }
 
-let currentTheme = "midnight";
-
-async function setTheme(cdp: CDP, theme: string): Promise<void> {
-  currentTheme = theme;
-  await cdp.eval(`document.documentElement.setAttribute('data-theme','${theme}')`);
-}
-
 async function navigate(cdp: CDP, hashPath: string): Promise<void> {
   await cdp.eval(`location.hash='${hashPath}'; void 0`);
-  await sleep(600); // let plugin mount + fetch data
-  // Re-apply the theme after navigation — Settings.tsx syncs theme
-  // from the persisted config on every mount, which would otherwise
-  // revert a capture-time theme swap.
-  await cdp.eval(
-    `document.documentElement.setAttribute('data-theme','${currentTheme}')`,
-  );
-  await sleep(100);
+  await sleep(SETTLE_MS); // let the view mount + fetch data
 }
 
 async function setSidebarCollapsed(cdp: CDP, collapsed: boolean): Promise<void> {
@@ -164,63 +205,137 @@ async function setSidebarCollapsed(cdp: CDP, collapsed: boolean): Promise<void> 
   await sleep(250);
 }
 
-function copyToPluginAssets(): void {
-  // After capture, copy each plugin's `midnight` shot into the
-  // per-plugin `assets/` dir so the plugin's README (and the root
-  // README's plugin gallery) can reference a stable path that lives
-  // next to the source.
-  //
-  // Per-theme dumps stay under top-level `screenshots/<theme>/` for
-  // development diff-checking; per-plugin assets are the single
-  // "default" shot the docs link to.
-  const srcDir = join(OUT, "midnight");
+// ── Recipe step execution ──────────────────────────────────────────────────
+
+/** Click the first element matching `selector`. Returns whether it existed. */
+async function clickSelector(cdp: CDP, selector: string): Promise<boolean> {
+  const expr = `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return false;
+    el.click();
+    return true;
+  })()`;
+  return (await cdp.eval(expr)) === true;
+}
+
+/** Click the first button/[role=button] whose text starts with `label`. */
+async function clickText(cdp: CDP, label: string): Promise<boolean> {
+  const expr = `(() => {
+    const els = [...document.querySelectorAll('button, [role="button"]')];
+    const el = els.find((e) => (e.textContent || "").trim().startsWith(${JSON.stringify(label)}));
+    if (!el) return false;
+    el.click();
+    return true;
+  })()`;
+  return (await cdp.eval(expr)) === true;
+}
+
+// A click target may not exist yet — plugin headers/grids that fetch data
+// (recomp, hltb, steamgriddb, launch-options) render their gear/tiles only
+// after the load resolves. Poll for the element before giving up so a slow
+// fetch doesn't read as "page absent".
+const CLICK_TRIES = 6;
+const CLICK_RETRY_MS = 500;
+
+async function clickWithRetry(
+  cdp: CDP,
+  fn: () => Promise<boolean>,
+): Promise<boolean> {
+  for (let i = 0; i < CLICK_TRIES; i++) {
+    if (await fn()) return true;
+    await sleep(CLICK_RETRY_MS);
+  }
+  return false;
+}
+
+/** Run a page recipe's steps. Returns false (page unreachable) if any
+ *  click target never appears. */
+async function runSteps(cdp: CDP, steps: Step[]): Promise<boolean> {
+  for (const step of steps) {
+    if (step.kind === "wait") {
+      await sleep(step.ms);
+      continue;
+    }
+    let ok = false;
+    if (step.kind === "tile")
+      ok = await clickWithRetry(cdp, () => clickSelector(cdp, "[data-game-card]"));
+    else if (step.kind === "aria")
+      ok = await clickWithRetry(cdp, () =>
+        clickSelector(cdp, `[aria-label="${step.label}"]`),
+      );
+    else if (step.kind === "text")
+      ok = await clickWithRetry(cdp, () => clickText(cdp, step.label));
+    if (!ok) return false;
+    await sleep(SETTLE_MS);
+  }
+  return true;
+}
+
+// ── Post-processing: copy to plugin assets + cull stale shots ──────────────
+
+function copyToPluginAssets(theme: string): void {
+  // Copy each plugin's shots (from the captured theme dir) into its
+  // tracked `assets/` dir so the plugin README + the root README gallery
+  // reference stable paths that live next to the source:
+  //   landing      NN-<id>.png        → assets/screenshot.png
+  //   sub-pages    NN-<id>-<page>.png → assets/screenshot-<page>.png
+  const srcDir = join(OUT, theme);
   if (!existsSync(srcDir)) {
-    console.error(`[copy] ${srcDir} missing — run a capture first`);
+    console.error(`[copy] ${rel(srcDir)} missing — run a capture first`);
     return;
   }
   PLUGINS.forEach((pid, idx) => {
-    const i = idx + 3;
-    const src = join(srcDir, `${String(i).padStart(2, "0")}-${pid}.png`);
-    if (!existsSync(src)) {
-      console.log(`[copy] skip ${pid}: ${src.split("/").pop()} not captured`);
+    const nn = String(idx + 3).padStart(2, "0");
+    const destDir = join(ROOT, "plugins", pid, "assets");
+
+    const landingSrc = join(srcDir, `${nn}-${pid}.png`);
+    if (!existsSync(landingSrc)) {
+      console.log(`[copy] skip ${pid}: ${nn}-${pid}.png not captured`);
       return;
     }
-    const destDir = join(ROOT, "plugins", pid, "assets");
     mkdirSync(destDir, { recursive: true });
-    const dest = join(destDir, "screenshot.png");
-    copyFileSync(src, dest);
-    console.log(`[copy] ${pid} → ${rel(dest)}`);
+    copyFileSync(landingSrc, join(destDir, "screenshot.png"));
+    console.log(`[copy] ${pid} → ${rel(join(destDir, "screenshot.png"))}`);
+
+    for (const page of PAGE_RECIPES[pid] ?? []) {
+      const src = join(srcDir, `${nn}-${pid}-${page.name}.png`);
+      if (!existsSync(src)) continue; // page was skipped during capture
+      const dest = join(destDir, `screenshot-${page.name}.png`);
+      copyFileSync(src, dest);
+      console.log(`[copy] ${pid} → ${rel(dest)}`);
+    }
   });
 }
 
 function expectedFilenames(): Set<string> {
   // The set of filenames every per-theme directory SHOULD have after a
-  // capture pass. Anything else is stale (plugin renamed, dropped, or
-  // replaced) and should be culled so the screenshots/ tree doesn't
-  // accrete dead shots from the alphabetical-renumber that lands when a
-  // new plugin is added in the middle of the list.
+  // capture pass — the global shots, each plugin's landing, and each
+  // plugin's recipe sub-pages. Anything else matching `NN-name.png` is
+  // stale (plugin renamed/dropped, recipe page removed) and is culled.
   const files = new Set([
     "00-home.png",
     "01-settings.png",
     "02-home-sidebar-collapsed.png",
   ]);
   PLUGINS.forEach((pid, idx) => {
-    files.add(`${String(idx + 3).padStart(2, "0")}-${pid}.png`);
+    const nn = String(idx + 3).padStart(2, "0");
+    files.add(`${nn}-${pid}.png`);
+    for (const page of PAGE_RECIPES[pid] ?? []) {
+      files.add(`${nn}-${pid}-${page.name}.png`);
+    }
   });
   return files;
 }
 
 // Filename shape this script owns. Anything matching `NN-name.png`
 // is potentially-stale capture output; anything NOT matching is left
-// alone (e.g. a contributor's debug `notes.png` dropped in a theme
-// dir won't be culled).
+// alone (e.g. a contributor's debug `notes.png` dropped in a theme dir).
 const CAPTURE_FILENAME = /^\d{2}-.*\.png$/;
 
 function cullStaleScreenshots(): void {
   // Remove screenshots/<theme>/<num>-<old-name>.png entries that don't
   // match the current expected filename set. Idempotent on a freshly-
-  // captured tree. Only touches files matching the `NN-name.png` shape
-  // this script generates — unrelated PNGs are left alone.
+  // captured tree. Only touches files matching the `NN-name.png` shape.
   if (!existsSync(OUT)) return;
   const expected = expectedFilenames();
   for (const themeDir of readdirSync(OUT, { withFileTypes: true })) {
@@ -237,57 +352,66 @@ function cullStaleScreenshots(): void {
 }
 
 async function main(): Promise<void> {
-  // `--copy-only` and `--cull-only` skip the capture pass entirely.
-  // They COMPOSE — running `--cull-only --copy-only` does both in
-  // sensible order (cull first so any newly-orphaned shots don't get
-  // propagated into the per-plugin assets dir). Without either flag, the
-  // full pass runs: capture → cull → copy.
+  // `--copy-only` and `--cull-only` skip the capture pass entirely and
+  // COMPOSE (cull first so newly-orphaned shots aren't propagated to
+  // assets). They don't connect to CDP, so they can't detect the live
+  // theme — pass `--theme=<name>` (default `midnight`) to pick the source
+  // theme dir for the asset copy.
   const args = new Set(process.argv.slice(2));
+  const themeArg = [...args]
+    .find((a) => a.startsWith("--theme="))
+    ?.split("=")[1];
   if (args.has("--copy-only") || args.has("--cull-only")) {
     if (args.has("--cull-only")) cullStaleScreenshots();
-    if (args.has("--copy-only")) copyToPluginAssets();
+    if (args.has("--copy-only")) copyToPluginAssets(themeArg ?? "midnight");
     return;
   }
 
   const cdp = await CDP.connect(await cdpWs());
-  const themes = [
-    "midnight",
-    "paper",
-    "synth",
-    "terminal",
-    "nord",
-    "dracula",
-    "gruvbox",
-    "tokyo",
-  ];
-  for (const theme of themes) {
-    console.log(`[${theme}]`);
-    await setTheme(cdp, theme);
-    // sidebar expanded
-    await setSidebarCollapsed(cdp, false);
-    // home
-    await navigate(cdp, "#/");
-    await cdp.screenshot(join(OUT, theme, "00-home.png"));
-    // settings
-    await navigate(cdp, "#/settings");
-    await cdp.screenshot(join(OUT, theme, "01-settings.png"));
-    // sidebar collapsed (on home)
-    await navigate(cdp, "#/");
-    await setSidebarCollapsed(cdp, true);
-    await cdp.screenshot(join(OUT, theme, "02-home-sidebar-collapsed.png"));
-    await setSidebarCollapsed(cdp, false);
-    // each plugin
-    for (let idx = 0; idx < PLUGINS.length; idx++) {
-      const pid = PLUGINS[idx]!;
+
+  // Capture whatever theme the overlay is currently in — never change it.
+  const theme =
+    ((await cdp.eval(
+      `document.documentElement.getAttribute('data-theme')`,
+    )) as string | null) ?? "midnight";
+  console.log(`[theme] capturing current theme: ${theme}`);
+
+  // Global surfaces.
+  await setSidebarCollapsed(cdp, false);
+  await navigate(cdp, "#/");
+  await cdp.screenshot(join(OUT, theme, "00-home.png"));
+  await navigate(cdp, "#/settings");
+  await cdp.screenshot(join(OUT, theme, "01-settings.png"));
+  await navigate(cdp, "#/");
+  await setSidebarCollapsed(cdp, true);
+  await cdp.screenshot(join(OUT, theme, "02-home-sidebar-collapsed.png"));
+  await setSidebarCollapsed(cdp, false);
+
+  // Each plugin: landing shot, then each recipe sub-page.
+  for (let idx = 0; idx < PLUGINS.length; idx++) {
+    const pid = PLUGINS[idx]!;
+    const nn = String(idx + 3).padStart(2, "0");
+    await navigate(cdp, `#/plugin/${pid}`);
+    await cdp.screenshot(join(OUT, theme, `${nn}-${pid}.png`));
+
+    for (const page of PAGE_RECIPES[pid] ?? []) {
+      // Reset to the plugin landing so each page starts from a clean base.
+      // A plugin's sub-pages are internal React state with no hash change,
+      // so re-setting the SAME `#/plugin/<id>` is a no-op — bounce through
+      // home to force a fresh remount back to the landing view.
+      await navigate(cdp, "#/");
       await navigate(cdp, `#/plugin/${pid}`);
-      await cdp.screenshot(
-        join(OUT, theme, `${String(idx + 3).padStart(2, "0")}-${pid}.png`),
-      );
+      const reached = await runSteps(cdp, page.steps);
+      if (!reached) {
+        console.log(`  ↷ skip ${pid}-${page.name} (nav target not on screen)`);
+        continue;
+      }
+      await cdp.screenshot(join(OUT, theme, `${nn}-${pid}-${page.name}.png`));
     }
   }
 
   cullStaleScreenshots();
-  copyToPluginAssets();
+  copyToPluginAssets(theme);
   process.exit(0);
 }
 

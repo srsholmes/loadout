@@ -1,8 +1,10 @@
 # Display Settings
 
-> Adjust display saturation, brightness, gamma, and color temperature
+> Adjust display brightness and saturation
 
-![Screenshot](./assets/screenshot.png)
+## Screenshots
+
+![Display Settings](./assets/screenshot.png)
 
 ## See also
 

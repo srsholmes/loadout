@@ -2,7 +2,9 @@
 
 > Quick connect/disconnect paired Bluetooth devices without leaving the game
 
-![Screenshot](./assets/screenshot.png)
+## Screenshots
+
+![Bluetooth](./assets/screenshot.png)
 
 ## See also
 
