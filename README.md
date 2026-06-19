@@ -1,8 +1,8 @@
 # Loadout
 
-> **Decky Loader, reimagined in one language.** A fast, beautiful plugin
-> platform and in-game overlay for Linux gaming handhelds — built end-to-end in
-> TypeScript.
+> **One language. One overlay. Every tweak your handheld was missing.** A fast,
+> beautiful plugin platform and in-game overlay for Linux gaming handhelds —
+> built end-to-end in TypeScript.
 
 ![Loadout home screen](docs/assets/home.png)
 
@@ -103,12 +103,7 @@ libraries ship inside the overlay archive.
 
 </details>
 
-## How it's different
-
-Decky Loader fills the same gap, but it's a Python service that injects into
-Steam's own CEF process and monkey-patches React internals — powerful, but
-fragile across Steam UI updates, with a two-language plugin API. Loadout takes a
-different path:
+## How it works
 
 - **One language, end to end.** The plugin host, every plugin backend, every
   plugin UI, and the overlay itself are TypeScript on [Bun](https://bun.sh). A
@@ -333,6 +328,47 @@ shortcuts, per-plugin state — live in `~/.config/loadout/config.json`
 | [Overlay / Gamescope](docs/overlay-gamescope-integration.md) | X11 atoms, input grab, display detection |
 | [Gamepad Navigation](docs/gamepad-navigation-guide.md) | Spatial navigation, focus management |
 | [OS Compatibility](docs/os-compatibility.md) | SteamOS, Bazzite, CachyOS specifics |
+
+## Thanks & acknowledgements
+
+Loadout stands on the shoulders of giants. It would not be anywhere near as good
+as it is without the people and projects below — please go star their work.
+
+**A huge thank-you to the [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader)
+community.** Years of hard work on the Linux handheld homebrew ecosystem — and
+the incredible plugins built on top of it — paved the way for everything here
+and continue to inspire it. 💛
+
+The platform is built on:
+
+- [Bun](https://bun.sh) — the TypeScript runtime + single-binary compiler.
+- [Electrobun](https://electrobun.dev) — CEF with Bun as the main process.
+- [React](https://react.dev), [Tailwind CSS](https://tailwindcss.com),
+  [daisyUI](https://daisyui.com) — the UI stack.
+- [norigin-spatial-navigation](https://github.com/NoriginMedia/Norigin-Spatial-Navigation)
+  — gamepad-friendly focus.
+
+And many plugins are thin, grateful wrappers around brilliant upstream projects:
+
+- [SteamGridDB](https://www.steamgriddb.com) — community game artwork.
+- [ProtonDB](https://www.protondb.com) — Proton compatibility ratings.
+- [HowLongToBeat](https://howlongtobeat.com) — game-length data.
+- [legendary](https://github.com/derrod/legendary) — the open-source Epic Games
+  launcher behind Store Bridge.
+- [lsfg-vk](https://github.com/PancakeTAS/lsfg-vk) &
+  [decky-lsfg-vk](https://github.com/xXJSONDeruloXx/decky-lsfg-vk) — Lossless
+  Scaling frame generation as a Vulkan layer.
+- [RyzenAdj](https://github.com/FlyGoat/RyzenAdj) — TDP control.
+- [InputPlumber](https://github.com/ShadowBlip/InputPlumber) — input routing.
+- [OpenRGB](https://openrgb.org) — RGB LED control.
+- [DeckThemes](https://deckthemes.com) &
+  [CSS Loader](https://github.com/DeckThemes/SDH-CssLoader) — community themes
+  and UI sound packs.
+- The N64/PC recompilation community ([N64: Recompiled](https://github.com/N64Recomp/N64Recomp),
+  [OpenGOAL](https://opengoal.dev), and friends) behind RecompHub.
+
+Built something Loadout relies on and not listed here? Open a PR — we want to
+credit you.
 
 ## License
 
