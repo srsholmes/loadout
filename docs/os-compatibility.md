@@ -13,21 +13,31 @@ the differences between the supported Linux distros.
 | **Bazzite** | Immutable via `rpm-ostree` (Fedora Silverblue lineage). Can layer system packages that persist across updates. | Growing community |
 | **CachyOS** | Traditional mutable Arch. No immutability constraints. | Easiest target, least representative |
 
-**Implication:** The user-service approach (`~/.config/systemd/user/`, binary in `~/.local/bin/`) is correct for all three.
+**Implication:** The binary, plugins, overlay, and user data live in the home
+partition and survive updates. The **backend** runs as a *system* service
+(`/etc/systemd/system/loadout.service`, root — so plugins can touch hardware
+without a password prompt); the **overlay** runs as a *user* service
+(`~/.config/systemd/user/loadout-overlay.service`). The binary installs to
+`~/.local/share/loadout/loadout` on SteamOS (writable home) or
+`/usr/local/bin/loadout` elsewhere, symlinked onto `PATH` at
+`~/.local/bin/loadout`. See [install-locations.md](install-locations.md) for the
+exact per-distro paths.
 
 ## SteamOS
 
 ### What Survives Updates (Home Partition)
 
-- `~/.config/systemd/user/loadout.service`
-- `~/.local/bin/loadout`
-- `~/.local/share/loadout/plugins/`
-- Any user data in `~/.local/`
+- `~/.local/share/loadout/loadout` (the binary) + `~/.local/bin/loadout` (PATH symlink)
+- `~/.config/systemd/user/loadout-overlay.service` (the overlay user service)
+- `~/.local/share/loadout/plugins/` and `~/.local/share/loadout-overlay/`
+- User config + data in `~/.config/loadout/` and `~/.local/`
 
 ### What Gets Wiped (System Partition)
 
 - `/usr/`, `/etc/`, `/opt/`
-- System-level systemd services in `/etc/systemd/system/`
+- System-level systemd services in `/etc/systemd/system/` — **including the
+  backend's `loadout.service`**, so after a major SteamOS update re-run the
+  installer to re-register it (the home-partition pieces above are untouched)
 - Packages installed with `pacman`
 
 ### Gotchas
@@ -105,20 +115,22 @@ async function findCEFPort(): Promise<number> {
 The standalone binary (`bun build --compile`) means no runtime dependencies:
 
 ```bash
-bun build ./src/loader.ts \
+bun build ./apps/loadout/src/index.ts \
   --compile \
   --target=bun-linux-x64 \
   --minify \
   --outfile ./dist/loadout-linux-x64
 ```
 
-Single ~95MB binary. Users don't need Bun, Node, or Python installed.
+(This is what `scripts/build.sh` / `bun run build` drives.) A single
+self-contained binary — users don't need Bun, Node, or Python installed.
 
 ## Compatibility Summary
 
 | Concern | SteamOS | Bazzite | CachyOS |
 |---|---|---|---|
-| Systemd user service | Survives updates | Survives updates | Always fine |
+| Overlay user service | Survives updates | Survives updates | Always fine |
+| Backend system service | Re-run installer after major update | Survives (layered) | Always fine |
 | Native Steam paths | Standard | Varies | Varies |
 | Flatpak Steam paths | Unlikely | Common | Common |
 | Hardware sysfs (PowerTools-style) | Deck paths exist | Deck only on Deck | No Deck paths |

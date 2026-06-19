@@ -1,8 +1,18 @@
 # Store Bridge
 
-> Surface Epic, GOG, Amazon, Ubisoft and xCloud libraries as Steam shortcuts
+> Surface your Epic Games library as Steam shortcuts (GOG, Amazon, Ubisoft, xCloud planned)
 
-![Screenshot](./assets/screenshot.png)
+Surfaces non-Steam storefront libraries and adds their games to Steam as shortcuts, so they install and launch right alongside everything else. **Epic Games is supported today**; GOG, Amazon, Ubisoft, and xCloud are on the roadmap.
+
+## Screenshots
+
+### Available games
+
+![Store Bridge — Available games](./assets/screenshot.png)
+
+### Installed games
+
+![Store Bridge — Installed games](./assets/screenshot-installed.png)
 
 ## See also
 
