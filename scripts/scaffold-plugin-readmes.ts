@@ -249,7 +249,7 @@ const PLUGIN_ABOUT: Record<string, string> = {
   "storage-cleaner":
     "Shows where your disk space is going, including shader-cache sizes, and lets you reclaim it in a couple of taps — useful on storage-tight handhelds before installing the next big game.",
   "store-bridge":
-    "Surfaces your Epic, GOG, Amazon, Ubisoft, and xCloud libraries and adds them to Steam as shortcuts, so non-Steam-store games install and launch right alongside everything else.",
+    "Surfaces non-Steam storefront libraries and adds their games to Steam as shortcuts, so they install and launch right alongside everything else. **Epic Games is supported today**; GOG, Amazon, Ubisoft, and xCloud are on the roadmap.",
   "tdp-control":
     "Set your CPU/APU power limit (TDP) with quick presets and a slider, optionally per game, to balance performance against battery life and heat — the single biggest knob for tuning a handheld.",
   "theme-loader":
