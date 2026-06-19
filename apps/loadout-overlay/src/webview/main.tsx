@@ -22,6 +22,7 @@ import { initBackend } from "@overlay/lib/backend";
 import { getConfigValue, loadUserConfig } from "@overlay/lib/userConfig";
 import { runStartupInits } from "@overlay/lib/pluginInit";
 import { ensureConnected, subscribe } from "@loadout/ui/ws-client";
+import { showOverlay } from "@overlay/lib/host";
 import {
   onOverlayAction,
   onOverlayOpenPlugin,
@@ -115,6 +116,18 @@ async function boot() {
         if (isReloadEvent(data) && (data.plugin === "__overlay" || data.plugin === "__sdk")) {
           location.reload();
         }
+      },
+    });
+
+    // Pop the overlay on demand: the loader broadcasts this when something
+    // hits its GET/POST /show endpoint (the installer's first-run setup,
+    // or a desktop launcher). The loader can't reach the overlay's Bun
+    // main process directly, so it routes through here → the show() RPC.
+    subscribe({
+      plugin: "__overlay",
+      event: "show",
+      handler: () => {
+        void showOverlay();
       },
     });
     runStartupInits().catch((err) => {
