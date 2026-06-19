@@ -225,11 +225,14 @@ function sendToWebview<K extends keyof WebviewMessages>(
   }
 }
 
-// Overlay window size, decided once at startup and *born at size* — the
-// window is never resized live, because under `GDK_GL=disable` the
-// software-rendered CEF surface segfaults on reallocation (PR #113).
+// Overlay window size, decided once at startup so the window is *born at
+// the right size*. Live resize is now safe: GDK_GL=disable was removed
+// from the unit (it forced software rendering, and reallocating the
+// software-rendered CEF surface on resize segfaulted — PR #113), so with
+// GL re-enabled the user can drag-resize the desktop window freely.
 //
 // Desktop: 1920×1080 so the overlay opens large on a monitor (issue #108).
+// The window stays resizable, so users on smaller panels can shrink it.
 //
 // Gaming Mode: size to the gamescope inner-X resolution so the X11 window
 // maps 1:1 to the visible output. Born too large (the 1920×1080 default on
