@@ -14,6 +14,13 @@ Pulls HowLongToBeat completion times into Steam's library and store pages, so yo
 
 ![HLTB — Game detail](./assets/screenshot-detail.png)
 
+### In Big Picture
+
+Completion times injected onto a game page in Gaming Mode — Main, Main +
+Extra, Completionist, and All Styles, at a glance:
+
+![HLTB — times in Big Picture](./assets/screenshot-big-picture.png)
+
 ## See also
 
 - [All plugins](../../README.md#plugins)
