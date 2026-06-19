@@ -1,8 +1,8 @@
 # Loadout
 
-> **One language. One overlay. Every tweak your handheld was missing.** A fast,
-> beautiful plugin platform and in-game overlay for Linux gaming handhelds —
-> built end-to-end in TypeScript.
+> **One overlay. Every tweak your handheld was missing.** A fast, beautiful
+> plugin platform and in-game overlay for Linux gaming handhelds — built
+> end-to-end in TypeScript.
 
 ![Loadout home screen](docs/assets/home.png)
 
@@ -13,8 +13,9 @@ playing. Twenty-plus plugins, one slick d-pad-friendly overlay.
 
 [**Install →**](#install) · [Plugins](#plugins) · [Supported devices](#supported-devices--testing) · [Build from source](#build-from-source)
 
-> 🚧 **Status: pre-launch.** Everything below works today on a Steam Deck — and
-> I'm [looking for testers](#supported-devices--testing) on other handhelds.
+> 🚧 **Status: pre-launch.** Developed and tested on OneXPlayer devices and
+> Valve's Steam Deck — and I'm [looking for testers](#supported-devices--testing)
+> on other handhelds.
 
 ## ✨ Highlights
 
@@ -122,9 +123,9 @@ libraries ship inside the overlay archive.
 
 ## How it works
 
-- **One language, end to end.** The plugin host, every plugin backend, every
-  plugin UI, and the overlay itself are TypeScript on [Bun](https://bun.sh). A
-  full plugin — backend + UI — is typically 150–300 lines.
+- **TypeScript end to end.** The plugin host, every plugin backend, every
+  plugin UI, and the overlay itself run on [Bun](https://bun.sh). A full
+  plugin — backend + UI — is typically 150–300 lines.
 - **Our own overlay surface.** A standalone CEF window layered over Gamescope
   via X11 atoms — not an injected panel, so Steam redesigns don't break it.
 - **Injection only when you want it.** Plugins *can* reach into Big Picture via
