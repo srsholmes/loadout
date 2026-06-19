@@ -1,62 +1,129 @@
 # Loadout
 
-A TypeScript-native plugin platform + on-screen overlay for Linux gaming
-handhelds and desktops running Gamescope. Think **Decky Loader re-imagined in
-one language**: the plugin host, plugin backends, plugin UIs, and the overlay
-itself are all TypeScript on Bun — no Python service, no multi-runtime interop.
+> **Decky Loader, reimagined in one language.** A fast, beautiful plugin
+> platform and in-game overlay for Linux gaming handhelds — built end-to-end in
+> TypeScript.
 
-**Linux only.** Loadout targets distros with Steam Gaming Mode — **SteamOS**,
-**Bazzite**, and **CachyOS**. There is no macOS or Windows build.
+![Loadout home screen](docs/assets/home.png)
 
-> **Status: pre-launch.** The platform ships with **two dozen plugins** — TDP &
-> fan control, RGB, Bluetooth, a recompiled-game installer, Epic/store
-> integration, ProtonDB & HowLongToBeat badges, SteamGridDB artwork, frame
-> generation, theming, playtime tracking, and more — every one written
-> end-to-end in TypeScript on Bun. Browse the [gallery](#plugins) below.
+**Tune your handheld without ever leaving your game.** Tap the overlay, dial in
+your TDP, flip on frame generation, check if a game runs well on Proton, launch
+your Epic library, install a recompiled N64 classic — then get straight back to
+playing. Two dozen plugins, one slick d-pad-friendly overlay.
 
-## What it is
+No desktop shell. No Python service. No fragile Steam-UI injection. Just one
+window layered over your game that *doesn't break* every time Steam updates.
 
-Linux-native handhelds (Steam Deck, ROG Ally, OXP, Ayaneo, …) lack a
-first-party way to tweak TDP, fan curves, RGB, launch options, and more
-without dropping to a desktop shell. Decky Loader fills that gap, but it's a
-Python service that injects into Steam's own CEF process and monkey-patches
-React internals — powerful, but fragile across Steam UI updates and a
-two-language plugin API.
+[**Install →**](#install) · [Plugins](#plugins) · [Supported devices](#supported-devices--testing) · [Build from source](#build-from-source)
 
-Loadout takes a different approach:
+> 🚧 **Status: pre-launch.** Everything below works today on a Steam Deck — and
+> I'm [looking for testers](#supported-devices--testing) on other handhelds.
 
-- **Bun main process** runs a small HTTP + WebSocket server. It discovers
-  plugin backends, routes typed RPC, and serves compiled plugin bundles.
-- **CEF overlay** (Electrobun) is a standalone composited window layered over
-  Gamescope via X11 atoms — our own surface, not an injected panel, so Steam
-  redesigns don't break it.
-- **Optional Steam UI injection** via CEF's remote-debug protocol is available
-  for plugins that *do* want to reach into Big Picture (compatibility badges,
-  overlays, CSS theming) — but it isn't the default path.
-- **Shared TypeScript SDK** (`@loadout/ui`) gives plugin authors typed RPC,
-  themed React components, gamepad-aware spatial navigation, and persistent
-  user settings out of the box.
+## ✨ Highlights
 
-A full plugin — backend + UI — is typically 150–300 lines of TypeScript.
+The greatest hits — and there are [a dozen more](#all-plugins) below:
+
+- 🕹️ **[RecompHub](plugins/recomp/README.md)** — Browse, install, and play
+  natively-recompiled classics (Zelda 64, Mario 64, and friends). No emulator,
+  one tap to play.
+- 🛒 **[Store Bridge](plugins/store-bridge/README.md)** — Your Epic Games
+  library, installed and launchable right alongside your Steam games.
+- 🖼️ **[SteamGridDB](plugins/steamgriddb/README.md)** — Gorgeous custom box
+  art, heroes, and logos for every game in your library.
+- ⚡ **[LSFG-VK](plugins/lsfg-vk/README.md)** — Lossless Scaling frame
+  generation as a Vulkan layer — more FPS, one toggle.
+- 🟢 **[ProtonDB Badges](plugins/protondb-badges/README.md)** — "Will it run?"
+  answered at a glance with a compatibility tier on every game tile.
+- 🔋 **[TDP](plugins/tdp-control/README.md)** & **[Fan
+  Control](plugins/fan-control/README.md)** — Find your perfect
+  battery-vs-performance balance with presets and live curves.
+- 🎨 **[Theme Loader](plugins/theme-loader/README.md)** & **[Sound
+  Loader](plugins/sound-loader/README.md)** — Reskin Big Picture with community
+  CSS themes and UI sound packs.
+- ⏱️ **[HowLongToBeat](plugins/hltb/README.md)** & **[PlayTime](plugins/playtime/README.md)** —
+  Know what you're signing up for, and where your hours actually go.
+
+## Supported devices & testing
+
+**Loadout is Linux-only by design** — it targets distros that ship Steam Gaming
+Mode. No Windows or macOS build.
+
+| OS | Status |
+|---|---|
+| **SteamOS** (Steam Deck) | ✅ Supported |
+| **Bazzite** | ✅ Supported |
+| **CachyOS** | ✅ Supported |
+
+**Hardware tested so far:**
+
+| Device | Status |
+|---|---|
+| Steam Deck | ✅ Daily-driven |
+| F1 Pro | ✅ Tested |
+| APEX | ✅ Tested |
+
+> 🙋 **Got a different handheld?** ROG Ally, Legion Go, OneXPlayer, GPD, AYANEO,
+> AOKZOE — I'd love your help. **I'm actively looking for testers on other
+> devices.** [Open an issue](https://github.com/srsholmes/loadout/issues) with
+> your hardware and let's get Loadout running on it.
+
+See [docs/os-compatibility.md](docs/os-compatibility.md) for per-distro notes
+(including the bundled-glibc caveat on stock SteamOS).
 
 ## Install
+
+One command — downloads the prebuilt binary + overlay, verifies SHA-256, and
+enables systemd **user** units. Nothing runs as root:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/install.sh | sh
 ```
 
-> If this repository is private, the command above will 404 until it is made
-> public; `install.sh` honours a `GITHUB_TOKEN` env var for authenticated
-> installs.
-
-The installer downloads the prebuilt `loadout` binary + Electrobun overlay
-into `~/.local/share/loadout/` and `~/.local/share/loadout-overlay/`, verifies
-SHA-256 against the release's `SHA256SUMS`, and writes + enables systemd
-**user** units. Nothing runs as root. To uninstall:
+Then open the overlay from Gaming Mode and you're set. To remove it:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/uninstall.sh | sh
 ```
+
+<details>
+<summary>Details & requirements</summary>
+
+The installer downloads the prebuilt `loadout` binary + Electrobun overlay
+into `~/.local/share/loadout/` and `~/.local/share/loadout-overlay/`, verifies
+SHA-256 against the release's `SHA256SUMS`, and writes + enables systemd
+**user** units.
+
+Runtime requirements: an X11/Xwayland display, membership in the `input` group
+(so the overlay can grab evdev devices), and a working Steam install. The CEF
+libraries ship inside the overlay archive.
+
+> If this repository is private, the install command will 404 until it's made
+> public; `install.sh` honours a `GITHUB_TOKEN` env var for authenticated
+> installs.
+
+</details>
+
+## How it's different
+
+Decky Loader fills the same gap, but it's a Python service that injects into
+Steam's own CEF process and monkey-patches React internals — powerful, but
+fragile across Steam UI updates, with a two-language plugin API. Loadout takes a
+different path:
+
+- **One language, end to end.** The plugin host, every plugin backend, every
+  plugin UI, and the overlay itself are TypeScript on [Bun](https://bun.sh). A
+  full plugin — backend + UI — is typically 150–300 lines.
+- **Our own overlay surface.** A standalone CEF window layered over Gamescope
+  via X11 atoms — not an injected panel, so Steam redesigns don't break it.
+- **Injection only when you want it.** Plugins *can* reach into Big Picture via
+  CEF's remote-debug protocol (badges, theming) — but it's opt-in, not the
+  default path.
+- **Batteries-included SDK.** `@loadout/ui` gives plugin authors typed RPC,
+  themed React components, gamepad-aware spatial navigation, and persistent
+  settings out of the box.
+
+<details>
+<summary>Build from source &amp; develop</summary>
 
 ### Build from source
 
@@ -99,19 +166,13 @@ Caveat: dev mode uses the **stock** native wrapper, so expect a busy CPU core
 and none of the patched-wrapper behaviour. Always confirm a change with
 `build-and-install` before trusting it.
 
-Runtime requirements: an X11/Xwayland display, membership in the `input` group
-(so the overlay can grab evdev devices), and a working Steam install. The CEF
-libraries ship inside the overlay archive. See
-[docs/os-compatibility.md](docs/os-compatibility.md) for SteamOS / Bazzite /
-CachyOS notes (including the bundled-glibc caveat on stock SteamOS).
+</details>
 
 ## Plugins
 
-Every plugin is TypeScript end-to-end — backend, UI, and typed RPC. Screenshots
-are captured from the live overlay via Chrome DevTools Protocol by
-[`scripts/capture-screenshots.ts`](scripts/capture-screenshots.ts), so they
-always reflect the current build. This section is regenerated by
-`bun scripts/scaffold-plugin-readmes.ts`.
+Two dozen and counting — every one TypeScript end-to-end. The screenshots below
+are captured live from the running overlay, so they always match the current
+build.
 
 ### Featured
 
