@@ -8,6 +8,11 @@ import { waitFor } from "../../test/render";
 const callMock = mock((_method: string) => Promise.resolve(null));
 const eventHandlers = new Map<string, (data: unknown) => void>();
 
+// Mutable so individual tests can simulate a running game — the shared
+// NowPlaying hero reads from useCurrentGame(), not the plugin's own
+// getCurrentSession.
+let mockCurrentGame: { appId: number; gameName: string } | null = null;
+
 const { PluginHeaderSlotProvider } = actualUi as unknown as {
   PluginHeaderSlotProvider: (props: { slot: HTMLElement | null; children: unknown }) => unknown;
 };
@@ -28,13 +33,24 @@ mock.module("@loadout/ui", () => ({
     },
     ready: true,
   }),
-  useCurrentGame: () => null,
+  useCurrentGame: () => mockCurrentGame,
 }));
 
 beforeEach(() => {
   callMock.mockReset();
   eventHandlers.clear();
+  mockCurrentGame = null;
   callMock.mockImplementation((method: string) => {
+    if (method === "getDailyBreakdown")
+      return Promise.resolve([
+        { day: "Mon", dayStart: 1, totalMs: 3_600_000, games: [{ appId: "730", gameName: "Counter-Strike 2", totalMs: 3_600_000 }] },
+        { day: "Tue", dayStart: 2, totalMs: 0, games: [] },
+        { day: "Wed", dayStart: 3, totalMs: 7_200_000, games: [{ appId: "570", gameName: "Dota 2", totalMs: 7_200_000 }] },
+        { day: "Thu", dayStart: 4, totalMs: 1_800_000, games: [{ appId: "730", gameName: "Counter-Strike 2", totalMs: 1_800_000 }] },
+        { day: "Fri", dayStart: 5, totalMs: 0, games: [] },
+        { day: "Sat", dayStart: 6, totalMs: 3_600_000, games: [{ appId: "440", gameName: "Team Fortress 2", totalMs: 3_600_000 }] },
+        { day: "Sun", dayStart: 7, totalMs: 1_800_000, games: [{ appId: "570", gameName: "Dota 2", totalMs: 1_800_000 }] },
+      ]);
     if (method === "getStats")
       return Promise.resolve({
         today: {
@@ -112,30 +128,37 @@ describe("playtime plugin", () => {
     });
   });
 
-  it("displays top games for the selected period", async () => {
+  it("displays the day-filtered All Games grid", async () => {
     const container = createContainer();
     const { mount } = await import("./app");
     mount(container);
     await waitFor(() => {
-      expect(container.textContent).toContain("Most Played");
+      expect(container.textContent).toContain("All Games");
+      // All days selected by default → every day's games appear.
+      expect(container.textContent).toContain("Counter-Strike 2");
+      expect(container.textContent).toContain("Dota 2");
+      expect(container.textContent).toContain("Team Fortress 2");
     });
   });
 
-  it("shows weekly breakdown chart with day labels", async () => {
+  it("shows day-filter bars with single-letter day labels", async () => {
     const container = createContainer();
     const { mount } = await import("./app");
     mount(container);
     await waitFor(() => {
-      // Chart uses single-letter day labels (M T W T F S S). The
+      // Day-filter bars use single-letter labels (M T W T F S S). The
       // headline reads "This week" (the active range) on first mount
       // since the default range is `week`.
       expect(container.textContent).toContain("This week");
+      expect(container.textContent).toContain("Filter by day");
       expect(container.textContent).toMatch(/M.*T.*W.*T.*F.*S.*S/);
     });
   });
 
   it("shows current session in the header subtitle when a game is running", async () => {
+    mockCurrentGame = { appId: 730, gameName: "Counter-Strike 2" };
     callMock.mockImplementation((method: string) => {
+      if (method === "getDailyBreakdown") return Promise.resolve([]);
       if (method === "getStats")
         return Promise.resolve({
           today: { totalMs: 0, gamesPlayed: 0, games: [] },
@@ -161,8 +184,10 @@ describe("playtime plugin", () => {
     const { mount } = await import("./app");
     mount(container, { headerSlot });
     await waitFor(() => {
+      // Header subtitle (from getCurrentSession) + the shared NowPlaying
+      // hero (from useCurrentGame) both surface the running game.
       expect(headerSlot.textContent).toContain("Now playing");
-      expect(container.textContent).toContain("NOW PLAYING");
+      expect(container.textContent).toContain("Now playing");
       expect(container.textContent).toContain("Counter-Strike 2");
     });
   });
