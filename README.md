@@ -121,7 +121,7 @@ Communicates with Steam Gaming Mode — shows current game and allows sending co
 <!-- PLUGINS_GALLERY_END -->
 
 > Screenshots are captured from the live overlay via Chrome DevTools Protocol
-> by [`scripts/capture-screenshots.py`](scripts/capture-screenshots.py), so
+> by [`scripts/capture-screenshots.ts`](scripts/capture-screenshots.ts), so
 > they always reflect the current build.
 
 ## Plugin model
