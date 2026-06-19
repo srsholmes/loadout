@@ -5,6 +5,35 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as pluginStorage from "@loadout/plugin-storage";
 
+// ── steam-cdp mock ──────────────────────────────────────────────────
+// The backend reaches into Steam over CDP for `listAllGames` (reads
+// appStore.allApps) and `openProtonDb` (navigates Steam + opens the
+// ProtonDB page). Mock the module so these paths are deterministic and
+// don't touch a real Steam debug port. `mock.module` is scoped to this
+// file's run; the suite runs in isolation (no cross-file bleed).
+class SteamClientUnreachableErrorMock extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SteamClientUnreachableError";
+  }
+}
+
+// Per-test handle so individual cases can stub behaviour.
+const steamCdpMock = {
+  /** Replaced per-test; receives the fake SteamClient surface. */
+  withSteamClient: mock(
+    async (_fn: (sc: unknown) => Promise<unknown>): Promise<unknown> => {
+      throw new SteamClientUnreachableErrorMock("Steam not reachable in test");
+    },
+  ),
+};
+
+mock.module("@loadout/steam-cdp", () => ({
+  withSteamClient: (fn: (sc: unknown) => Promise<unknown>) =>
+    steamCdpMock.withSteamClient(fn),
+  SteamClientUnreachableError: SteamClientUnreachableErrorMock,
+}));
+
 import ProtonDBBadgesBackend from "./backend";
 
 // ── Module-level fetch mock ─────────────────────────────────────────
@@ -36,6 +65,13 @@ describe("ProtonDBBadgesBackend", () => {
     process.env.XDG_CACHE_HOME = tmpCacheRoot;
 
     globalThis.fetch = mockFetch as unknown as typeof fetch;
+
+    // Default: Steam unreachable. Cases that need a connected client
+    // override `steamCdpMock.withSteamClient` themselves.
+    steamCdpMock.withSteamClient.mockReset();
+    steamCdpMock.withSteamClient.mockImplementation(async () => {
+      throw new SteamClientUnreachableErrorMock("Steam not reachable in test");
+    });
 
     // spyOn instead of mock.module — the backend imports from
     // @loadout/plugin-storage as a namespace, so a spy patches the
@@ -521,6 +557,67 @@ describe("ProtonDBBadgesBackend", () => {
     it("getCurrentRouteAppId returns null before any route is observed", async () => {
       const appId = await backend.getCurrentRouteAppId();
       expect(appId).toBeNull();
+    });
+  });
+
+  describe("listAllGames", () => {
+    it("reads, maps, and alphabetically sorts appStore.allApps over CDP", async () => {
+      const getAllApps = mock(async () => [
+        { appId: "730", name: "Counter-Strike 2" },
+        { appId: "440", name: "Team Fortress 2" },
+        { appId: "570", name: "Dota 2" },
+      ]);
+      steamCdpMock.withSteamClient.mockImplementation(
+        async (fn: (sc: unknown) => Promise<unknown>) =>
+          fn({ apps: { getAllApps } }),
+      );
+
+      const games = await backend.listAllGames();
+      expect(getAllApps).toHaveBeenCalledTimes(1);
+      expect(games).toEqual([
+        { appId: "730", name: "Counter-Strike 2" },
+        { appId: "570", name: "Dota 2" },
+        { appId: "440", name: "Team Fortress 2" },
+      ]);
+    });
+
+    it("propagates SteamClientUnreachableError when Steam is down", async () => {
+      // Default beforeEach impl already throws unreachable.
+      await expect(backend.listAllGames()).rejects.toBeInstanceOf(
+        SteamClientUnreachableErrorMock,
+      );
+    });
+  });
+
+  describe("openProtonDb", () => {
+    it("navigates Steam to the game then opens its ProtonDB page", async () => {
+      const executeSteamURL = mock(async (_url: string) => {});
+      const openWebUrl = mock(async (_url: string) => {});
+      steamCdpMock.withSteamClient.mockImplementation(
+        async (fn: (sc: unknown) => Promise<unknown>) =>
+          fn({ url: { executeSteamURL, openWebUrl } }),
+      );
+
+      await backend.openProtonDb({ appId: "620" });
+      expect(executeSteamURL).toHaveBeenCalledWith(
+        "steam://nav/games/details/620",
+      );
+      expect(openWebUrl).toHaveBeenCalledWith(
+        "https://www.protondb.com/app/620",
+      );
+    });
+
+    it("rejects on an empty appId", async () => {
+      await expect(backend.openProtonDb({ appId: "" })).rejects.toThrow(
+        /non-empty string/,
+      );
+      expect(steamCdpMock.withSteamClient).not.toHaveBeenCalled();
+    });
+
+    it("propagates SteamClientUnreachableError when Steam is down", async () => {
+      await expect(
+        backend.openProtonDb({ appId: "620" }),
+      ).rejects.toBeInstanceOf(SteamClientUnreachableErrorMock);
     });
   });
 });

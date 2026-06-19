@@ -5,12 +5,14 @@ import {
   fuzzySearchGames,
   GameCard,
   HeaderBackButton,
+  hideOverlay,
   IconButton,
   mountComponent,
   mountHeaderStub,
   PluginHeader,
   SearchField,
   SegmentedItem,
+  Select,
   Spinner,
   Toggle,
   useBackend,
@@ -65,6 +67,16 @@ interface BareInstalledGame {
   appId: string;
   name: string;
 }
+
+/** Which slice of the Steam library the grid shows. "installed" reads
+ *  `appmanifest_*.acf` off disk (fast, offline); "all" reads the full
+ *  owned library from `appStore.allApps` over CDP (needs Steam up). */
+type LibrarySource = "installed" | "all";
+
+const LIBRARY_SOURCE_OPTIONS: { value: LibrarySource; label: string }[] = [
+  { value: "installed", label: "Installed games" },
+  { value: "all", label: "All games" },
+];
 
 // --- Tier config ---
 
@@ -165,6 +177,13 @@ function ProtonDBBadges() {
   const [settings, setSettings] = useState<ProtonDBSettings | null>(null);
   const [status, setStatus] = useState<StatusInfo>({ connected: false, tabs: 0 });
   const [installed, setInstalled] = useState<GridGame[] | null>(null);
+  /** Which library slice the grid shows. Defaults to "installed" —
+   *  the plugin's original behaviour (disk-read appmanifests). */
+  const [librarySource, setLibrarySource] = useState<LibrarySource>("installed");
+  /** Set when the "All games" CDP read fails (Steam unreachable) so the
+   *  grid can show an actionable empty state instead of a bare "no
+   *  games". Cleared whenever a fetch starts. */
+  const [loadError, setLoadError] = useState<string | null>(null);
   /** Toggles between library grid and inline settings card. */
   const [showConfig, setShowConfig] = useState(false);
   /** Header search query — filters the grid in place. */
@@ -176,8 +195,20 @@ function ProtonDBBadges() {
   useEffect(() => {
     void call("getSettings").then((s) => setSettings(s as ProtonDBSettings));
     void call("getStatus").then((s) => setStatus(s as StatusInfo));
-    void call("listInstalledGames")
+  }, [call]);
+
+  // Load the grid's games for the selected source. "installed" reads
+  // appmanifests off disk; "all" pulls the full owned library from
+  // Steam over CDP (and can fail if Steam isn't reachable — surface
+  // that as `loadError` rather than a silent empty grid).
+  useEffect(() => {
+    let alive = true;
+    setInstalled(null);
+    setLoadError(null);
+    const rpc = librarySource === "all" ? "listAllGames" : "listInstalledGames";
+    call(rpc)
       .then((games) => {
+        if (!alive) return;
         const list = Array.isArray(games)
           ? (games as BareInstalledGame[])
           : [];
@@ -192,8 +223,34 @@ function ProtonDBBadges() {
           })),
         );
       })
-      .catch(() => setInstalled([]));
-  }, [call]);
+      .catch((err) => {
+        if (!alive) return;
+        setInstalled([]);
+        if (librarySource === "all") {
+          setLoadError(
+            "Couldn't read your full Steam library. Make sure Steam is running, then try again.",
+          );
+        }
+        console.warn(`[protondb-badges] ${rpc} failed:`, err);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [call, librarySource]);
+
+  // Open the game in Steam and land on its ProtonDB page — the same
+  // destination the injected library badge reaches. Hide the overlay
+  // first so the Steam UI / ProtonDB page isn't obscured, then drive
+  // Steam from the backend over CDP.
+  const handleOpenGame = useCallback(
+    (appId: string) => {
+      void hideOverlay().catch(() => {});
+      void call("openProtonDb", { appId }).catch((err) => {
+        console.warn("[protondb-badges] openProtonDb failed:", err);
+      });
+    },
+    [call],
+  );
 
   useEvent({
     event: "stateChanged",
@@ -292,7 +349,12 @@ function ProtonDBBadges() {
   const subtitle = (() => {
     if (showConfig) return "Plugin preferences";
     if (installed === null) return "Reading Steam library…";
-    if (installed.length === 0) return "No installed Steam games found";
+    if (loadError) return "Steam library unavailable";
+    if (installed.length === 0) {
+      return librarySource === "all"
+        ? "No Steam games found"
+        : "No installed Steam games found";
+    }
     const total = installed.length;
     const shown = visibleGames?.length ?? total;
     const filteringCopy =
@@ -322,6 +384,14 @@ function ProtonDBBadges() {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {!showConfig && (
+            <Select<LibrarySource>
+              value={librarySource}
+              options={LIBRARY_SOURCE_OPTIONS}
+              onChange={setLibrarySource}
+              size="sm"
+            />
+          )}
           {!showConfig && (
             <SearchField
               value={searchQuery}
@@ -392,9 +462,13 @@ function ProtonDBBadges() {
           {visibleGames && visibleGames.length === 0 ? (
             <div className="card">
               <div className="text-center py-10 text-[var(--fg-3)]">
-                {searchQuery.trim()
-                  ? `No installed games match "${searchQuery.trim()}".`
-                  : "No installed Steam games found. Install something via Steam first."}
+                {loadError
+                  ? loadError
+                  : searchQuery.trim()
+                    ? `No games match "${searchQuery.trim()}".`
+                    : librarySource === "all"
+                      ? "No Steam games found in your library."
+                      : "No installed Steam games found. Install something via Steam first."}
               </div>
             </div>
           ) : (
@@ -412,6 +486,7 @@ function ProtonDBBadges() {
                     String(currentGame.appId) === game.appId
                   }
                   onTier={reportTier}
+                  onPick={() => handleOpenGame(game.appId)}
                 />
               ))}
             </div>
@@ -434,10 +509,12 @@ function ProtonDBGameCard({
   game,
   isCurrent,
   onTier,
+  onPick,
 }: {
   game: GridGame;
   isCurrent: boolean;
   onTier: (appId: string, tier: TierKey | "pending" | null) => void;
+  onPick: () => void;
 }) {
   const { call } = useBackend("protondb-badges");
   const [report, setReport] = useState<ProtonDBReport | null>(null);
@@ -533,6 +610,7 @@ function ProtonDBGameCard({
       }
       highlighted={isCurrent}
       rootRef={handleRootRef}
+      onPick={onPick}
     />
   );
 }
