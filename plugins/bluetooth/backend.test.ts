@@ -345,6 +345,51 @@ describe("BluetoothBackend", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // _poll — adapter power/discovering watching
+  // ---------------------------------------------------------------------------
+
+  describe("_poll() adapter watching", () => {
+    const showOutput = (powered: boolean, discovering = false) =>
+      [
+        "Controller AA:BB:CC:DD:EE:FF (public)",
+        "\tName: Test Adapter",
+        `\tPowered: ${powered ? "yes" : "no"}`,
+        `\tDiscovering: ${discovering ? "yes" : "no"}`,
+      ].join("\n");
+
+    const poll = () =>
+      (backend as unknown as { _poll(): Promise<void> })._poll();
+
+    it("emits adapterChanged when adapter power flips between polls", async () => {
+      let powered = false;
+      mockRun.mockImplementation((cmd: string[]) => {
+        if (cmd.includes("show")) return Promise.resolve({ stdout: showOutput(powered) });
+        return Promise.resolve({ stdout: "" }); // devices → none
+      });
+
+      await poll(); // baseline read (powered:false) — no emit on first observation
+      expect(emittedEvents.filter((e) => e.event === "adapterChanged")).toHaveLength(0);
+
+      powered = true;
+      await poll(); // transition → emit
+      const evts = emittedEvents.filter((e) => e.event === "adapterChanged");
+      expect(evts).toHaveLength(1);
+      expect((evts[0].data as { powered: boolean }).powered).toBe(true);
+    });
+
+    it("does not emit adapterChanged when the adapter is unchanged", async () => {
+      mockRun.mockImplementation((cmd: string[]) => {
+        if (cmd.includes("show")) return Promise.resolve({ stdout: showOutput(true) });
+        return Promise.resolve({ stdout: "" });
+      });
+
+      await poll();
+      await poll();
+      expect(emittedEvents.filter((e) => e.event === "adapterChanged")).toHaveLength(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // startScan / stopScan
   // ---------------------------------------------------------------------------
 
