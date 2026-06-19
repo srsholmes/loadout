@@ -5,10 +5,11 @@ import { GameHero } from "./GameHero";
 
 /**
  * Home-screen hero for the currently-running game: the shared
- * `<GameHero>` banner fed by `useCurrentGame()`, with the game logo (or
- * its title) and a "Now playing" label. Renders nothing when no game is
- * active. Detail views use `<GameHero>` directly with the *selected*
- * game; this is the only surface that tracks the running one.
+ * `<GameHero>` banner fed by `useCurrentGame()`, showing just the game
+ * logo over its artwork — no "Now playing" label, title text, or AppID.
+ * Renders nothing when no game is active (or its logo fails to load).
+ * Detail views use `<GameHero>` directly with the *selected* game; this
+ * is the only surface that tracks the running one.
  */
 export function NowPlaying() {
   const game = useCurrentGame();
@@ -31,31 +32,14 @@ export function NowPlaying() {
       gameName={game.gameName}
       className="mb-6"
     >
-      {!logoFailed ? (
+      {!logoFailed && (
         <img
           src={art.logo}
           alt=""
           className="max-h-20 max-w-[40%] object-contain drop-shadow-lg"
           onError={() => setLogoFailed(true)}
         />
-      ) : (
-        <h2 className="text-2xl font-bold text-base-content drop-shadow-lg truncate">
-          {game.gameName || `App ${game.appId}`}
-        </h2>
       )}
-      <div className="flex flex-col gap-0.5 ml-auto text-right">
-        <span className="text-[10px] uppercase tracking-[0.12em] text-base-content/60 font-semibold">
-          Now playing
-        </span>
-        {!logoFailed && (
-          <span className="text-sm text-base-content/90 truncate max-w-[280px]">
-            {game.gameName || `App ${game.appId}`}
-          </span>
-        )}
-        <span className="text-[11px] text-base-content/50 font-mono">
-          AppID {game.appId}
-        </span>
-      </div>
     </GameHero>
   );
 }
