@@ -7,6 +7,7 @@ import {
   Button,
   fuzzySearchGames,
   GameCard,
+  GameHero,
   HeaderBackButton,
   IconButton,
   mountComponent,
@@ -743,56 +744,20 @@ function HltbHero({
   fallbackUrl: string;
   detail: GameDetail;
 }) {
-  const [src, setSrc] = useState(imageUrl);
-  // Reset whenever the upstream URL changes — switching detail games
-  // in quick succession would otherwise leave the previous hero
-  // pinned on a fallback-back-to-fallback chain.
-  useEffect(() => {
-    setSrc(imageUrl);
-  }, [imageUrl]);
-
+  // Shared hero banner (matches the home screen + other plugins'
+  // detail pages) showing the SELECTED game's art, with the four
+  // time-to-beat values overlaid as pill-badges along the bottom.
   return (
-    <div
-      className="relative rounded-lg overflow-hidden mb-4"
-      style={{
-        aspectRatio: "460 / 215",
-        background:
-          "linear-gradient(135deg, var(--bg-2) 0%, var(--bg-inset) 100%)",
-      }}
+    <GameHero
+      heroUrl={imageUrl}
+      fallbackHeroUrl={fallbackUrl}
+      gameName={gameName}
+      className="mb-4"
     >
-      {src ? (
-        <img
-          src={src}
-          alt={gameName}
-          className="absolute inset-0 w-full h-full object-cover block"
-          onError={() => {
-            if (src !== fallbackUrl) setSrc(fallbackUrl);
-            else setSrc("");
-          }}
-        />
-      ) : (
-        <div className="absolute inset-0 flex items-center justify-center text-[var(--fg-3)] italic">
-          {gameName}
-        </div>
-      )}
-
-      {/* Bottom gradient scrim so the badge row stays legible over
-          bright artwork without darkening the whole hero. Tall enough
-          (75%) to cover a wrapped 2-row badge layout on narrow
-          overlays where the 4 pills overflow into a second row. */}
-      <div
-        className="absolute inset-x-0 bottom-0 pointer-events-none"
-        style={{
-          height: "75%",
-          background:
-            "linear-gradient(to top, rgba(0,0,0,0.80) 0%, rgba(0,0,0,0.55) 60%, rgba(0,0,0,0) 100%)",
-        }}
-      />
-
       {/* Time badges. Solid `--bg-inset` backing matches the pill
           treatment used on game cards (chip-accent + badge-soft are
           translucent and would fade into the art). */}
-      <div className="absolute inset-x-2 bottom-2 flex flex-wrap gap-1.5 justify-start">
+      <div className="flex flex-wrap gap-1.5 justify-start w-full">
         {DETAIL_ROWS.map((row) => {
           const value = detail[row.key] as string;
           const hasValue = value && value !== "--";
@@ -821,7 +786,7 @@ function HltbHero({
           );
         })}
       </div>
-    </div>
+    </GameHero>
   );
 }
 
