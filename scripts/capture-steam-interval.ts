@@ -66,16 +66,23 @@ function slug(s: string): string {
   );
 }
 
+// In Gaming Mode the on-screen GamepadUI renders into a `page` tab with
+// this title — and it's the only one that returns real pixels (the
+// SharedJSContext is offscreen there). Prefer it for the auto-pick.
+const BIG_PICTURE_TITLE = "Steam Big Picture Mode";
+
 /**
  * Pick the tab(s) to capture this tick. With `--all`, every `page`-type
- * tab; with `--title`, the exact-title match; otherwise the Big Picture
- * SharedJSContext window, falling back to the first `page` tab so a
- * desktop-Steam / unfamiliar-UI run still produces something.
+ * tab; with `--title`, the exact-title match; otherwise the rendered Big
+ * Picture window, then the SharedJSContext (desktop Steam), falling back
+ * to the first `page` tab so an unfamiliar-UI run still produces something.
  */
 function pickTabs(tabs: CEFTab[]): CEFTab[] {
   const pages = tabs.filter((t) => t.type === "page");
   if (ALL) return pages;
   if (TITLE) return pages.filter((t) => t.title === TITLE);
+  const bpm = pages.find((t) => t.title === BIG_PICTURE_TITLE);
+  if (bpm) return [bpm];
   const shared = tabs.find(isSharedJSContextTab);
   if (shared) return [shared];
   return pages.slice(0, 1);
@@ -90,12 +97,8 @@ function pngSize(buf: Buffer): { w: number; h: number } {
 
 /** Connect, grab one PNG, write it, disconnect. Re-resolved per tick so
  *  Steam navigating to a new target mid-run doesn't strand us on a dead
- *  WebSocket. Returns the written frame's dimensions, or null if nothing
- *  came back. */
-async function captureTab(
-  tab: CEFTab,
-  file: string,
-): Promise<{ w: number; h: number } | null> {
+ *  WebSocket. Returns the raw PNG buffer, or null if nothing came back. */
+async function captureTab(tab: CEFTab): Promise<Buffer | null> {
   const ws = new WebSocket(tab.webSocketDebuggerUrl);
   try {
     await new Promise<void>((res, rej) => {
@@ -123,12 +126,23 @@ async function captureTab(
       setTimeout(() => res(undefined), 4000);
     });
     if (!data) return null;
-    const buf = Buffer.from(data, "base64");
-    writeFileSync(file, buf);
-    return pngSize(buf);
+    return Buffer.from(data, "base64");
   } finally {
     ws.close();
   }
+}
+
+/**
+ * Heuristic blank-frame test. CEF only re-rasters its offscreen surface
+ * when the page actually paints, so idle ticks come back as a near-empty
+ * (solid white/black) PNG that compresses to a few KB — useless noise in
+ * the review folder. A genuine ~2 MP UI shot is tens-to-hundreds of KB,
+ * so flag big-canvas frames whose byte size is implausibly small.
+ */
+function looksBlank(buf: Buffer, w: number, h: number): boolean {
+  const megapixels = (w * h) / 1_000_000;
+  if (megapixels < 0.1) return false; // tiny canvas — size test doesn't apply
+  return buf.length < 18_000;
 }
 
 async function main(): Promise<void> {
@@ -170,7 +184,10 @@ async function main(): Promise<void> {
   const start = Date.now();
   let seq = 0;
   let written = 0;
-  let empty = 0; // offscreen/unrendered frames (CEF 2×2 placeholder)
+  let skipped = 0; // blank / offscreen / duplicate frames we discarded
+  // Last kept frame's byte length per tab title — to drop consecutive
+  // identical frames (idle UI re-emits a byte-for-byte duplicate).
+  const lastLen = new Map<string, number>();
   while (Date.now() - start <= DURATION_MS) {
     const n = String(seq).padStart(3, "0");
     // Re-resolve tabs each tick: targets churn as Steam navigates.
@@ -188,16 +205,26 @@ async function main(): Promise<void> {
       const name = ALL ? `steam-${n}-${slug(tab.title)}.png` : `steam-${n}.png`;
       const file = join(OUT, name);
       try {
-        const size = await captureTab(tab, file);
-        if (!size) {
+        const buf = await captureTab(tab);
+        if (!buf) {
           console.log(`  [${n}] no frame from "${tab.title}"`);
-        } else if (size.w <= 2 && size.h <= 2) {
-          empty++;
-          console.log(`  [${n}] ${rel(file)} — ⚠ ${size.w}×${size.h} (tab not rendered/offscreen)`);
-        } else {
-          written++;
-          console.log(`  [${n}] → ${rel(file)} (${size.w}×${size.h})`);
+          continue;
         }
+        const { w, h } = pngSize(buf);
+        if ((w <= 2 && h <= 2) || looksBlank(buf, w, h)) {
+          skipped++;
+          console.log(`  [${n}] ⚠ blank/offscreen (${w}×${h}, ${buf.length}B) — discarded`);
+          continue;
+        }
+        if (lastLen.get(tab.title) === buf.length) {
+          skipped++;
+          console.log(`  [${n}] ↷ unchanged — discarded`);
+          continue;
+        }
+        lastLen.set(tab.title, buf.length);
+        writeFileSync(file, buf);
+        written++;
+        console.log(`  [${n}] → ${rel(file)} (${w}×${h})`);
       } catch (err) {
         console.log(`  [${n}] capture failed: ${err instanceof Error ? err.message : err}`);
       }
@@ -206,13 +233,16 @@ async function main(): Promise<void> {
     await sleep(INTERVAL_MS);
   }
 
-  console.log(`\nDone — ${written} real frame(s) in ${rel(OUT)}/`);
-  if (written === 0 && empty > 0) {
+  console.log(
+    `\nDone — ${written} usable frame(s) in ${rel(OUT)}/` +
+      (skipped ? ` (${skipped} blank/duplicate discarded)` : ""),
+  );
+  if (written === 0 && skipped > 0) {
     console.log(
-      "\n⚠ Every frame came back blank (2×2). The targeted tab isn't the\n" +
-        "  on-screen window — in DESKTOP Steam the SharedJSContext is offscreen.\n" +
-        "  Run this from GAMING MODE / Big Picture (where it's the rendered\n" +
-        "  window), or try --all and pick whichever tab captured real pixels.",
+      "\n⚠ Every frame was blank or offscreen. CEF only re-rasters when the\n" +
+        "  UI repaints — keep navigating while it captures. If you're in\n" +
+        "  DESKTOP Steam, the rendered window differs; try --all and keep\n" +
+        "  whichever tab produced real pixels.",
     );
   }
   process.exit(0);
