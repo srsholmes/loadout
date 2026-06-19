@@ -652,6 +652,53 @@ class AppsApi {
     }
     return result.data ?? null;
   }
+
+  /**
+   * Read the user's full *owned* Steam library — every app in
+   * `window.appStore.allApps`, not just the installed titles that
+   * `@loadout/steam-paths` can see on disk. This is the only source
+   * for owned-but-not-installed games (they have no
+   * `appmanifest_*.acf`).
+   *
+   * `appStore.allApps` is an array of MobX app-overview objects; we
+   * project each to a plain `{ appId, name }` inside the page so the
+   * structured-clone over CDP stays cheap and never trips on a
+   * non-cloneable MobX field. `app_type === 1` is Steam's "game" enum
+   * — it filters out tools, demos, soundtracks, videos, and config
+   * apps so the grid only shows real games.
+   *
+   * Throws `SteamClientUnreachableError` if `appStore` hasn't booted
+   * (Steam still starting, or the library UI never opened this
+   * session).
+   */
+  async getAllApps(): Promise<Array<{ appId: string; name: string }>> {
+    const expr = `(() => {
+      const store = window.appStore;
+      if (!store || !Array.isArray(store.allApps)) return { tag: "no-store" };
+      const apps = store.allApps
+        .filter((a) => a && a.app_type === 1)
+        .map((a) => ({
+          appId: String(a.appid),
+          name: a.display_name || String(a.appid),
+        }));
+      return { tag: "ok", apps };
+    })()`;
+    const result = (await this.client._evaluateAsync(expr)) as {
+      tag: string;
+      apps?: Array<{ appId: string; name: string }>;
+    };
+    if (result?.tag === "no-store") {
+      throw new SteamClientUnreachableError(
+        "window.appStore.allApps is not available on the SharedJSContext tab — is Steam's library UI booted?",
+      );
+    }
+    if (result?.tag !== "ok" || !Array.isArray(result.apps)) {
+      throw new Error(
+        `appStore.allApps read returned unexpected value: ${JSON.stringify(result)}`,
+      );
+    }
+    return result.apps;
+  }
 }
 
 // ─── URL namespace ────────────────────────────────────────────────────
@@ -685,6 +732,32 @@ class UrlApi {
     if (result !== "ok") {
       throw new Error(
         `SteamClient.URL.ExecuteSteamURL returned unexpected value: ${JSON.stringify(result)}`,
+      );
+    }
+  }
+
+  /**
+   * Open a web URL inside Steam's own in-client browser via
+   * `window.open(url, "_blank")` evaluated in the SharedJSContext tab.
+   *
+   * This is the exact path the injected ProtonDB badge takes when the
+   * user clicks it on a Steam library / store page — so driving it
+   * from here reproduces that behaviour (the page opens in Steam's
+   * built-in browser overlay) rather than spawning a desktop browser.
+   *
+   * Unlike `executeSteamURL`, `window.open` is always present, so
+   * there's no `no-api` branch; we only surface the standard
+   * unreachable error from the underlying connect/evaluate.
+   */
+  async openWebUrl(url: string): Promise<void> {
+    const expr = `(() => {
+      window.open(${JSON.stringify(url)}, "_blank");
+      return "ok";
+    })()`;
+    const result = await this.client._evaluateAsync(expr);
+    if (result !== "ok") {
+      throw new Error(
+        `window.open returned unexpected value: ${JSON.stringify(result)}`,
       );
     }
   }
