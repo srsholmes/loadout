@@ -2,6 +2,8 @@
 
 > Surface Epic, GOG, Amazon, Ubisoft and xCloud libraries as Steam shortcuts
 
+Surfaces your Epic, GOG, Amazon, Ubisoft, and xCloud libraries and adds them to Steam as shortcuts, so non-Steam-store games install and launch right alongside everything else.
+
 ## Screenshots
 
 ### Overview
