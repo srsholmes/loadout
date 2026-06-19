@@ -143,6 +143,95 @@ describe("PlaytimeBackend", () => {
     });
   });
 
+  // ── getDailyBreakdown ──────────────────────────────────────────────────────
+
+  describe("getDailyBreakdown", () => {
+    it("returns 7 days each carrying a per-game split", async () => {
+      const now = Date.now();
+      const todayStart = new Date(now);
+      todayStart.setHours(1, 0, 0, 0); // 1am today, safely inside the day
+      const t = todayStart.getTime();
+      const sessions = [
+        { appId: "730", gameName: "CS2", startTime: t, endTime: t + 3_600_000 },
+        { appId: "570", gameName: "Dota 2", startTime: t + 4_000_000, endTime: t + 5_800_000 },
+      ];
+      readFileSpy.mockResolvedValue(JSON.stringify({ sessions }));
+
+      await backend.onUnload();
+      const r = makeBackend();
+      backend = r.backend;
+      emittedEvents = r.emittedEvents;
+      await backend.onLoad();
+
+      const days = await backend.getDailyBreakdown();
+      expect(days).toHaveLength(7);
+      const today = days[days.length - 1];
+      expect(today.totalMs).toBe(3_600_000 + 1_800_000);
+      expect(today.games.map((g) => g.appId)).toEqual(["730", "570"]);
+    });
+
+    it("counts the active session toward today", async () => {
+      await backend.handleGameLaunch(999, "Live Game");
+      // Let a few ms accrue so the active session has non-zero duration
+      // (zero-duration slices are dropped from the breakdown).
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const days = await backend.getDailyBreakdown();
+      const today = days[days.length - 1];
+      expect(today.games.some((g) => g.appId === "999")).toBe(true);
+      expect(today.totalMs).toBeGreaterThan(0);
+    });
+  });
+
+  // ── getSteamPlaytime ───────────────────────────────────────────────────────
+
+  describe("getSteamPlaytime", () => {
+    const LOCALCONFIG = `
+"UserLocalConfigStore"
+{
+	"Software"
+	{
+		"Valve"
+		{
+			"Steam"
+			{
+				"apps"
+				{
+					"240"
+					{
+						"Playtime"		"1005"
+					}
+				}
+			}
+		}
+	}
+}
+`;
+
+    it("parses lifetime playtime from each user's localconfig.vdf", async () => {
+      readdirSpy.mockImplementation(async (path: unknown) =>
+        String(path).includes("userdata") ? ["25139426", "anon"] : [],
+      );
+      readFileSpy.mockImplementation(async (path: unknown) => {
+        const p = String(path);
+        if (p.includes("25139426") && p.includes("localconfig.vdf")) {
+          return LOCALCONFIG;
+        }
+        throw new Error("ENOENT");
+      });
+
+      const games = await backend.getSteamPlaytime();
+      const cs = games.find((g) => g.appId === "240");
+      expect(cs).toBeDefined();
+      expect(cs?.totalMs).toBe(1005 * 60_000);
+    });
+
+    it("returns an empty list when no userdata is readable", async () => {
+      readdirSpy.mockResolvedValue([] as never);
+      const games = await backend.getSteamPlaytime();
+      expect(games).toEqual([]);
+    });
+  });
+
   // ── getGameSessions ────────────────────────────────────────────────────────
 
   describe("getGameSessions", () => {

@@ -1,10 +1,13 @@
 import { describe, it, expect } from "bun:test";
+import { parseVdf } from "@loadout/vdf";
 import {
   startOfDay,
   startOfWeek,
   startOfMonth,
   aggregateSessions,
   getWeeklyBreakdown,
+  getDailyGameBreakdown,
+  extractSteamPlaytimeMinutes,
   computeStats,
   formatHoursStr,
   formatElapsed,
@@ -12,6 +15,37 @@ import {
   daysForRange,
 } from "./time";
 import type { GameSession } from "./time";
+
+const LOCALCONFIG_VDF = `
+"UserLocalConfigStore"
+{
+	"Software"
+	{
+		"Valve"
+		{
+			"Steam"
+			{
+				"apps"
+				{
+					"240"
+					{
+						"LastPlayed"		"1336719600"
+						"Playtime"		"1005"
+					}
+					"220"
+					{
+						"Playtime"		"46"
+					}
+					"70"
+					{
+						"Playtime"		"0"
+					}
+				}
+			}
+		}
+	}
+}
+`;
 
 // ── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -176,6 +210,103 @@ describe("getWeeklyBreakdown", () => {
     const breakdown = getWeeklyBreakdown(sessions, now);
     const total = breakdown.reduce((s, d) => s + d.totalMs, 0);
     expect(total).toBe(0);
+  });
+});
+
+// ── getDailyGameBreakdown ────────────────────────────────────────────────────
+
+describe("getDailyGameBreakdown", () => {
+  const now = new Date("2025-06-18T12:00:00").getTime();
+
+  it("returns exactly 7 entries, oldest first with today last", () => {
+    const breakdown = getDailyGameBreakdown([], now);
+    expect(breakdown).toHaveLength(7);
+    expect(breakdown[6].dayStart).toBe(startOfDay(now));
+    expect(breakdown[0].dayStart).toBeLessThan(breakdown[6].dayStart);
+  });
+
+  it("splits a day's time per game, sorted by most-played", () => {
+    const todayStart = startOfDay(now);
+    const sessions: GameSession[] = [
+      { appId: "730", gameName: "CS2", startTime: todayStart, endTime: todayStart + 1_800_000 },
+      { appId: "570", gameName: "Dota 2", startTime: todayStart + 2_000_000, endTime: todayStart + 5_600_000 },
+      { appId: "730", gameName: "CS2", startTime: todayStart + 6_000_000, endTime: todayStart + 6_600_000 },
+    ];
+    const today = getDailyGameBreakdown(sessions, now)[6];
+    expect(today.totalMs).toBe(1_800_000 + 3_600_000 + 600_000);
+    expect(today.games).toHaveLength(2);
+    // Dota 2 (3.6m... ms) outranks CS2's combined 2.4m.
+    expect(today.games[0].appId).toBe("570");
+    expect(today.games[0].totalMs).toBe(3_600_000);
+    expect(today.games[1].appId).toBe("730");
+    expect(today.games[1].totalMs).toBe(2_400_000);
+  });
+
+  it("clamps a session that spans midnight into both days", () => {
+    const todayStart = startOfDay(now);
+    const yesterdayNoon = todayStart - 12 * 3_600_000;
+    const sessions: GameSession[] = [
+      // 11pm yesterday → 1am today: 1h each side of midnight.
+      { appId: "730", gameName: "CS2", startTime: todayStart - 3_600_000, endTime: todayStart + 3_600_000 },
+    ];
+    void yesterdayNoon;
+    const breakdown = getDailyGameBreakdown(sessions, now);
+    expect(breakdown[5].totalMs).toBe(3_600_000); // yesterday's hour
+    expect(breakdown[6].totalMs).toBe(3_600_000); // today's hour
+  });
+
+  it("ignores sessions outside the 7-day window", () => {
+    const sessions: GameSession[] = [
+      { appId: "730", gameName: "CS2", startTime: now - 8 * 86_400_000, endTime: now - 7 * 86_400_000 },
+    ];
+    const breakdown = getDailyGameBreakdown(sessions, now);
+    const total = breakdown.reduce((s, d) => s + d.totalMs, 0);
+    expect(total).toBe(0);
+    expect(breakdown.every((d) => d.games.length === 0)).toBe(true);
+  });
+});
+
+// ── extractSteamPlaytimeMinutes ──────────────────────────────────────────────
+
+describe("extractSteamPlaytimeMinutes", () => {
+  it("reads per-app Playtime (minutes) from a localconfig structure", () => {
+    const map = extractSteamPlaytimeMinutes(parseVdf(LOCALCONFIG_VDF));
+    expect(map.get("240")).toBe(1005);
+    expect(map.get("220")).toBe(46);
+  });
+
+  it("drops apps with zero/absent playtime", () => {
+    const map = extractSteamPlaytimeMinutes(parseVdf(LOCALCONFIG_VDF));
+    expect(map.has("70")).toBe(false);
+  });
+
+  it("is case-insensitive across the key path", () => {
+    const lower = parseVdf(`
+"userlocalconfigstore"
+{
+	"software"
+	{
+		"valve"
+		{
+			"steam"
+			{
+				"apps"
+				{
+					"10"
+					{
+						"Playtime"		"5"
+					}
+				}
+			}
+		}
+	}
+}
+`);
+    expect(extractSteamPlaytimeMinutes(lower).get("10")).toBe(5);
+  });
+
+  it("returns empty when the apps path is missing", () => {
+    expect(extractSteamPlaytimeMinutes(parseVdf(`"x"\n{\n\t"y"\t\t"1"\n}\n`)).size).toBe(0);
   });
 });
 

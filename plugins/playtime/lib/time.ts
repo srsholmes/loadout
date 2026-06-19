@@ -5,6 +5,8 @@
  * backend or DOM setup.
  */
 
+import type { VdfObject, VdfNode } from "@loadout/vdf";
+
 // --- Types (shared between backend and UI) ---
 
 export interface GameSession {
@@ -57,6 +59,23 @@ export interface CurrentSession {
   gameName: string;
   startTime: number;
   elapsedMs: number;
+}
+
+/**
+ * One calendar day of the rolling 7-day window, carrying both the
+ * day's total and its per-game breakdown. The UI uses `totalMs` for
+ * the bar height and `games` to build the (day-filtered) "All games"
+ * grid underneath.
+ */
+export interface DailyBreakdown {
+  /** Short day label, e.g. "Mon". */
+  day: string;
+  /** Epoch ms at local start-of-day — stable React key + filter id. */
+  dayStart: number;
+  /** Sum of all game time on this day. */
+  totalMs: number;
+  /** Per-game totals for this day, sorted by totalMs descending. */
+  games: GameStats[];
 }
 
 // --- Date boundary helpers ---
@@ -156,6 +175,56 @@ export function getWeeklyBreakdown(
 }
 
 /**
+ * Build the rolling 7-day breakdown WITH per-game totals (oldest first,
+ * today last). Same day-clamping as `getWeeklyBreakdown`, but each day
+ * also carries the per-game split so the UI can union games across the
+ * user's selected days.
+ */
+export function getDailyGameBreakdown(
+  sessions: GameSession[],
+  now: number,
+): DailyBreakdown[] {
+  const days: DailyBreakdown[] = [];
+
+  for (let i = 6; i >= 0; i--) {
+    const dayStart = startOfDay(now - i * 86_400_000);
+    const dayEnd = dayStart + 86_400_000;
+    const date = new Date(dayStart);
+    const dayLabel = DAY_NAMES[date.getDay()];
+
+    const gameMap = new Map<string, GameStats>();
+    let totalMs = 0;
+    for (const s of sessions) {
+      const sEnd = s.endTime ?? now;
+      if (sEnd < dayStart || s.startTime >= dayEnd) continue;
+      const start = Math.max(s.startTime, dayStart);
+      const end = Math.min(sEnd, dayEnd);
+      const duration = Math.max(0, end - start);
+      if (duration <= 0) continue;
+
+      totalMs += duration;
+      const existing = gameMap.get(s.appId);
+      if (existing) {
+        existing.totalMs += duration;
+      } else {
+        gameMap.set(s.appId, {
+          appId: s.appId,
+          gameName: s.gameName,
+          totalMs: duration,
+        });
+      }
+    }
+
+    const games = Array.from(gameMap.values()).sort(
+      (a, b) => b.totalMs - a.totalMs,
+    );
+    days.push({ day: dayLabel, dayStart, totalMs, games });
+  }
+
+  return days;
+}
+
+/**
  * Compute full stats (today / week / month / allTime / weeklyBreakdown)
  * from a flat session list plus an optional active session.
  */
@@ -197,6 +266,61 @@ export function computeStats(
       allTime: daysForRange("allTime", all, now),
     },
   };
+}
+
+// --- Steam lifetime playtime (localconfig.vdf) ---
+
+/** Case-insensitive single-level lookup — Steam casing drifts between
+ *  client versions (`Valve` vs `valve`), so don't hardcode it. */
+function vdfGet(obj: VdfObject, key: string): VdfNode | undefined {
+  const k = Object.keys(obj).find((x) => x.toLowerCase() === key.toLowerCase());
+  return k === undefined ? undefined : obj[k];
+}
+
+/** Walk a case-insensitive key path, returning the object at the end. */
+function vdfNavigate(root: VdfObject, path: string[]): VdfObject | null {
+  let cur: VdfNode = root;
+  for (const key of path) {
+    if (typeof cur !== "object") return null;
+    const next = vdfGet(cur, key);
+    if (next === undefined) return null;
+    cur = next;
+  }
+  return typeof cur === "object" ? cur : null;
+}
+
+/**
+ * Pull per-app lifetime playtime (minutes) out of a parsed
+ * localconfig.vdf. Path:
+ *   UserLocalConfigStore > Software > Valve > Steam > apps > <appId> > Playtime
+ *
+ * Returns appId → minutes for apps that carry a recorded `Playtime`
+ * (apps with no playtime entry are skipped). It's Steam's authoritative
+ * lifetime total — the same number the library UI shows — available
+ * locally with no login.
+ */
+export function extractSteamPlaytimeMinutes(
+  root: VdfObject,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  const apps = vdfNavigate(root, [
+    "UserLocalConfigStore",
+    "Software",
+    "Valve",
+    "Steam",
+    "apps",
+  ]);
+  if (!apps) return out;
+
+  for (const [appId, node] of Object.entries(apps)) {
+    if (typeof node !== "object") continue;
+    const pt = vdfGet(node, "Playtime");
+    if (typeof pt !== "string") continue;
+    const minutes = Number(pt);
+    if (!Number.isFinite(minutes) || minutes <= 0) continue;
+    out.set(appId, minutes);
+  }
+  return out;
 }
 
 // --- Display formatting ---

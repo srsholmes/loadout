@@ -1,14 +1,19 @@
 import type { PluginBackend, EmitPayload } from "@loadout/types";
-import { getSteamAppsDir } from "@loadout/steam-paths";
+import { getSteamAppsDir, getUserdataDir } from "@loadout/steam-paths";
+import { parseVdf } from "@loadout/vdf";
 import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type GameSession,
+  type GameStats,
   type PlaytimeData,
   type Stats,
   type CurrentSession,
+  type DailyBreakdown,
   computeStats,
+  getDailyGameBreakdown,
+  extractSteamPlaytimeMinutes,
 } from "./lib/time";
 
 const PLUGIN_ID = "playtime";
@@ -163,6 +168,64 @@ export default class PlaytimeBackend implements PluginBackend {
   /** Return playtime stats: today, this week, this month, all time, weekly breakdown. */
   async getStats(): Promise<Stats> {
     return computeStats(this.data.sessions, this.activeSession, Date.now());
+  }
+
+  /**
+   * Return the rolling 7-day breakdown with per-game totals per day.
+   * Drives the day-filter bars and the day-filtered "All games" grid in
+   * the UI (which `getStats().weeklyBreakdown` can't, as it only carries
+   * per-day totals — no per-game split).
+   */
+  async getDailyBreakdown(): Promise<DailyBreakdown[]> {
+    const all = this.activeSession
+      ? [...this.data.sessions, this.activeSession]
+      : this.data.sessions;
+    return getDailyGameBreakdown(all, Date.now());
+  }
+
+  /**
+   * Return Steam's own lifetime playtime per game, parsed from each
+   * user's `localconfig.vdf`. No login/API key needed — Steam keeps
+   * this locally. Powers the all-time "All Games" grid so it reflects
+   * real library history, not just sessions since this plugin was
+   * installed. Returns minutes-as-ms totals, sorted most-played first.
+   */
+  async getSteamPlaytime(): Promise<GameStats[]> {
+    const totals = new Map<string, number>(); // appId -> minutes (max across users)
+    try {
+      const userdata = getUserdataDir();
+      const users = await readdir(userdata);
+      for (const user of users) {
+        let content: string;
+        try {
+          content = await readFile(
+            join(userdata, user, "config", "localconfig.vdf"),
+            "utf-8",
+          );
+        } catch {
+          continue; // not every userdata entry has a localconfig
+        }
+        let minutes: Map<string, number>;
+        try {
+          minutes = extractSteamPlaytimeMinutes(parseVdf(content));
+        } catch {
+          continue; // malformed VDF — skip this user
+        }
+        for (const [appId, m] of minutes) {
+          if (m > (totals.get(appId) ?? 0)) totals.set(appId, m);
+        }
+      }
+    } catch {
+      // userdata dir missing/unreadable — fall through to empty list
+    }
+
+    const games: GameStats[] = Array.from(totals, ([appId, minutes]) => ({
+      appId,
+      gameName: this.appManifests.get(appId) ?? `Steam App ${appId}`,
+      totalMs: minutes * 60_000,
+    }));
+    games.sort((a, b) => b.totalMs - a.totalMs);
+    return games;
   }
 
   /** Return recent game sessions, optionally filtered by appId. */
