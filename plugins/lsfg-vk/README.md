@@ -6,13 +6,7 @@ Installs and configures the LSFG-VK Vulkan frame-generation layer and applies it
 
 ## Screenshots
 
-### Overview
-
-![LSFG-VK — Overview](./assets/screenshot.png)
-
-### Settings
-
-![LSFG-VK — Settings](./assets/screenshot-settings.png)
+![LSFG-VK](./assets/screenshot.png)
 
 ## See also
 

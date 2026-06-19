@@ -14,10 +14,6 @@ Browse, install, and launch community recompilations and native ports of classic
 
 ![RecompHub — Game detail](./assets/screenshot-detail.png)
 
-### Settings
-
-![RecompHub — Settings](./assets/screenshot-settings.png)
-
 ## See also
 
 - [All plugins](../../README.md#plugins)

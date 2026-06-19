@@ -70,39 +70,22 @@ interface PageShot {
   steps: Step[];
 }
 
+// Per-plugin sub-pages to capture. Settings/config pages are deliberately
+// NOT captured — they're not interesting screenshots.
 const PAGE_RECIPES: Record<string, PageShot[]> = {
-  recomp: [
-    { name: "detail", steps: [{ kind: "tile" }] },
-    { name: "settings", steps: [{ kind: "aria", label: "RecompHub settings" }] },
-  ],
-  hltb: [
-    { name: "detail", steps: [{ kind: "tile" }] },
-    { name: "settings", steps: [{ kind: "aria", label: "Plugin preferences" }] },
-  ],
+  recomp: [{ name: "detail", steps: [{ kind: "tile" }] }],
+  hltb: [{ name: "detail", steps: [{ kind: "tile" }] }],
   "store-bridge": [
     { name: "installed", steps: [{ kind: "text", label: "Installed" }] },
     { name: "downloads", steps: [{ kind: "text", label: "Downloads" }] },
     { name: "detected", steps: [{ kind: "text", label: "Detected" }] },
     { name: "detail", steps: [{ kind: "tile" }] },
-    { name: "settings", steps: [{ kind: "aria", label: "Settings" }] },
   ],
   "launch-options": [
     { name: "detail", steps: [{ kind: "tile" }] },
     { name: "presets", steps: [{ kind: "aria", label: "Manage presets" }] },
   ],
-  "protondb-badges": [
-    { name: "settings", steps: [{ kind: "aria", label: "Plugin preferences" }] },
-  ],
-  steamgriddb: [
-    { name: "detail", steps: [{ kind: "tile" }] },
-    { name: "settings", steps: [{ kind: "aria", label: "Plugin preferences" }] },
-  ],
-  "quick-links": [
-    { name: "settings", steps: [{ kind: "aria", label: "Quick Links settings" }] },
-  ],
-  "lsfg-vk": [
-    { name: "settings", steps: [{ kind: "aria", label: "Plugin preferences" }] },
-  ],
+  steamgriddb: [{ name: "detail", steps: [{ kind: "tile" }] }],
 };
 
 // Steps run on a plugin's LANDING view before its landing shot — to put a
@@ -257,14 +240,18 @@ async function scrollRandom(cdp: CDP): Promise<boolean> {
 /** Number of game-art tiles that counts as "a grid" worth scrolling. */
 const GRID_TILE_THRESHOLD = 6;
 
+// Plugins whose grid we keep pinned to the top instead of random-
+// scrolling: their hero/top row is the intended look (RecompHub's hero
+// row, TDP's controls, PlayTime's headline + day filters).
+const NO_SCROLL = new Set(["recomp", "tdp-control", "playtime"]);
+
 /**
  * Before a shot, randomly scroll grid views so each capture shows a
- * different slice of the library — except RecompHub, which we keep pinned
- * to the top (its hero row is the intended look). Then re-wait for the
- * newly-revealed artwork to load.
+ * different slice of the library — except the `NO_SCROLL` plugins, which
+ * stay at the top. Then re-wait for newly-revealed artwork to load.
  */
 async function varyGridView(cdp: CDP, pluginId: string): Promise<void> {
-  if (pluginId === "recomp") return;
+  if (NO_SCROLL.has(pluginId)) return;
   const tiles = (await cdp.eval(
     `document.querySelectorAll('[data-game-card]').length`,
   )) as number;
@@ -403,11 +390,7 @@ function expectedFilenames(): Set<string> {
   // capture pass — the global shots, each plugin's landing, and each
   // plugin's recipe sub-pages. Anything else matching `NN-name.png` is
   // stale (plugin renamed/dropped, recipe page removed) and is culled.
-  const files = new Set([
-    "00-home.png",
-    "01-settings.png",
-    "02-home-sidebar-collapsed.png",
-  ]);
+  const files = new Set(["00-home.png", "02-home-sidebar-collapsed.png"]);
   PLUGINS.forEach((pid, idx) => {
     const nn = String(idx + 3).padStart(2, "0");
     files.add(`${nn}-${pid}.png`);
@@ -467,12 +450,10 @@ async function main(): Promise<void> {
     )) as string | null) ?? "midnight";
   console.log(`[theme] capturing current theme: ${theme}`);
 
-  // Global surfaces.
+  // Global surfaces (home only — the settings page isn't a useful shot).
   await setSidebarCollapsed(cdp, false);
   await navigate(cdp, "#/");
   await cdp.screenshot(join(OUT, theme, "00-home.png"));
-  await navigate(cdp, "#/settings");
-  await cdp.screenshot(join(OUT, theme, "01-settings.png"));
   await navigate(cdp, "#/");
   await setSidebarCollapsed(cdp, true);
   await cdp.screenshot(join(OUT, theme, "02-home-sidebar-collapsed.png"));
