@@ -12,11 +12,20 @@ import {
   Spinner,
   mountComponent,
   mountHeaderStub,
+  notify,
   useBackend,
 } from "@loadout/ui";
 import type { BluetoothDevice, AdapterInfo } from "./lib/parse";
 
 export const icon = FaBluetoothB;
+
+// After `bluetoothctl power on/off` returns, the adapter can take a
+// second or two to actually report the new state via `bluetoothctl
+// show`. Poll a handful of times rather than trusting a single early
+// read (which used to clobber the optimistic value straight back).
+const POWER_POLL_MS = 500;
+const POWER_POLL_TRIES = 6;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** Map device type to a text hint shown next to the name. */
 function deviceTypeLabel(type: BluetoothDevice["type"]): string {
@@ -37,11 +46,32 @@ function BluetoothManager() {
   const [scanning, setScanning] = useState(false);
   const [busyDevices, setBusyDevices] = useState<Set<string>>(new Set());
 
+  // Target power state of an in-flight togglePower, or null when idle.
+  // Used both to ignore contradictory adapterChanged ticks mid-toggle
+  // and to bail the confirm-poll if the user toggles again.
+  const pendingPowerRef = useRef<boolean | null>(null);
+  // Guards the awaited confirm-poll from setState-ing after unmount.
+  const mountedRef = useRef(true);
+
   useEvent({
     event: "deviceChanged",
     handler: (data) => {
       const changed = data as BluetoothDevice;
       setDevices((prev) => prev.map((d) => (d.mac === changed.mac ? changed : d)));
+    },
+  });
+
+  useEvent({
+    event: "adapterChanged",
+    handler: (data) => {
+      const info = data as AdapterInfo;
+      // While a power toggle is settling, ignore backend poll ticks that
+      // disagree with the requested state so a mid-transition read can't
+      // bounce the UI back.
+      if (pendingPowerRef.current !== null && info.powered !== pendingPowerRef.current) {
+        return;
+      }
+      setAdapter(info);
     },
   });
 
@@ -83,6 +113,7 @@ function BluetoothManager() {
   const scanStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(
     () => () => {
+      mountedRef.current = false;
       for (const id of timersRef.current) clearTimeout(id);
       timersRef.current.clear();
       if (scanStopTimerRef.current !== null) {
@@ -96,10 +127,55 @@ function BluetoothManager() {
   const handleTogglePower = useCallback(async () => {
     if (!adapter) return;
     const next = !adapter.powered;
+    pendingPowerRef.current = next;
     setAdapter((prev) => (prev ? { ...prev, powered: next } : prev));
-    await call("togglePower", next);
-    schedule(refresh, 500);
-  }, [adapter, call, refresh, schedule]);
+
+    try {
+      await call("togglePower", next);
+    } catch (err) {
+      // Command actually failed (e.g. rfkill block) — revert the
+      // optimistic flip and surface it rather than leaving a lie on screen.
+      console.error("[bluetooth] togglePower failed:", err);
+      pendingPowerRef.current = null;
+      setAdapter((prev) => (prev ? { ...prev, powered: !next } : prev));
+      notify(`Couldn't turn Bluetooth ${next ? "on" : "off"}`, { kind: "error" });
+      return;
+    }
+
+    // Poll until the adapter confirms the requested state. Keep the
+    // optimistic value visible meanwhile; a transient "not yet" read
+    // must not flip the UI back.
+    for (let i = 0; i < POWER_POLL_TRIES; i++) {
+      await sleep(POWER_POLL_MS);
+      // Bail if unmounted or the user toggled again (new target wins).
+      if (!mountedRef.current || pendingPowerRef.current !== next) return;
+      let info: AdapterInfo;
+      try {
+        info = (await call("getAdapterInfo")) as AdapterInfo;
+      } catch {
+        continue;
+      }
+      if (!mountedRef.current || pendingPowerRef.current !== next) return;
+      if (info.powered === next) {
+        pendingPowerRef.current = null;
+        setAdapter(info);
+        return;
+      }
+    }
+
+    // Never converged — accept reality and tell the user if it didn't power on.
+    pendingPowerRef.current = null;
+    try {
+      const finalInfo = (await call("getAdapterInfo")) as AdapterInfo;
+      if (!mountedRef.current) return;
+      setAdapter(finalInfo);
+      if (next && !finalInfo.powered) {
+        notify("Bluetooth didn't power on", { kind: "error" });
+      }
+    } catch {
+      /* leave the optimistic value in place */
+    }
+  }, [adapter, call]);
 
   const withBusy = useCallback(
     async (mac: string, fn: () => Promise<void>) => {
