@@ -3,11 +3,9 @@
 This file aggregates verbatim license text for upstream projects whose code,
 data, or templates have been incorporated into this repository.
 
-This branch is a minimal proof-of-concept: it ships the overlay platform plus
-a single example plugin (`steam-gamescope-ipc`, original code with no
-upstream). The only incorporated upstream is **Electrobun** (below). Per-plugin
-attribution will be added back alongside each plugin as it is migrated in —
-each plugin carries its own `NOTICE` file with the precise language.
+The overlay shell incorporates **Electrobun** (below). Each bundled plugin
+under `plugins/` carries its own `NOTICE` file with any per-plugin
+attribution.
 
 A separate audit is still needed for runtime/build-time dependencies (npm
 packages, Bun, daisyUI, react-icons, etc.).

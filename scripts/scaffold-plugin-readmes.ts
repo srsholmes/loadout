@@ -57,7 +57,6 @@ const DISPLAY_NAME_OVERRIDES: Record<string, string> = {
   "lsfg-vk": "LSFG-VK",
   "tdp-control": "TDP Control",
   "rgb-control": "RGB Control",
-  "steam-gamescope-ipc": "Gamescope IPC",
   steamgriddb: "SteamGridDB",
   "protondb-badges": "ProtonDB Badges",
   recomp: "RecompHub",
@@ -245,8 +244,6 @@ const PLUGIN_ABOUT: Record<string, string> = {
     "Control the RGB lighting on Linux handhelds via OpenRGB, sysfs LEDs, and platform-specific interfaces — set colours and effects, or kill the lights to save battery, without reaching for extra desktop tools.",
   "sound-loader":
     "Browse, install, and switch community UI sound packs from deckthemes.com, giving Steam's interface sounds a personal touch from inside Gaming Mode.",
-  "steam-gamescope-ipc":
-    "Talks to Steam's Gaming Mode (gamescope) to show the currently-running game and send commands back to the Steam UI — also the reference example for plugins that integrate directly with Steam.",
   steamgriddb:
     "Browse and apply custom artwork — grids, heroes, logos, icons — from SteamGridDB. The fix for non-Steam shortcuts and any title with missing or ugly library art.",
   "storage-cleaner":
