@@ -207,8 +207,61 @@ function pluginScreenshots(id: string): Shot[] {
   return shots;
 }
 
+/**
+ * A short "what it does + why it's useful" paragraph per plugin,
+ * rendered under the one-line description in each README. Plain-English
+ * and benefit-oriented — not exhaustive docs. Plugins without an entry
+ * just show their one-liner (and hand-tuned READMEs ignore this).
+ */
+const PLUGIN_ABOUT: Record<string, string> = {
+  "battery-tracker":
+    "Keeps an eye on your battery while you play — current charge, how fast it's draining or charging, estimated time left, and a short history of the session. On a handheld it answers the question that matters: will I reach a save point before I need the charger?",
+  bluetooth:
+    "Connect, disconnect, and scan for paired Bluetooth devices straight from the overlay, so swapping to headphones or a controller never means dropping back to the desktop — handy in Gaming Mode where Steam's own Bluetooth controls are fiddly.",
+  "disable-controller-input":
+    "Mutes a specific controller by asking InputPlumber to drop its virtual inputs — the fix for handhelds where the built-in gamepad steals player 1 from the controller you actually want to use. Toggle a pad off without unpairing or unplugging it.",
+  "display-settings":
+    "Adjust screen brightness and colour saturation from the overlay — a quick way to dim the panel at night or punch up washed-out colours without leaving your game.",
+  "fan-control":
+    "Monitor temperatures and fan speed and apply fan-curve presets, trading noise for cooling on demand. Useful for keeping a handheld quiet on the couch or cooler during a long session.",
+  "flatpak-manager":
+    "List and update your installed Flatpak apps without dropping to the desktop, so emulators and launchers stay current from inside Gaming Mode.",
+  hltb: "Pulls HowLongToBeat completion times into Steam's library and store pages, so you can see at a glance how long a game takes to finish and pick something that fits the time you have.",
+  "input-plumber":
+    "Installs the InputPlumber input-routing daemon that other controller features rely on, and quietly does nothing if it's already present. Mostly a one-time setup helper so the rest 'just works'.",
+  "launch-options":
+    "Edit Steam launch options per game and save reusable presets, turning common flags and environment variables into a couple of clicks instead of typed-out strings — great for applying the same tweak across many games.",
+  "lsfg-vk":
+    "Installs and configures the LSFG-VK Vulkan frame-generation layer and applies it per game, boosting perceived frame rate on titles that run below your display's refresh. Set it up once and toggle it where it actually helps.",
+  "network-info":
+    "Shows your connection details — WiFi signal, addresses — and runs a Cloudflare speed test from the overlay, so you can quickly tell whether the network (not the game) is the problem.",
+  playtime:
+    "Tracks how long you play each game, including non-Steam titles, with per-day breakdowns and an all-time view that merges in Steam's own lifetime hours — so you can actually see where your time goes.",
+  "protondb-badges":
+    "Adds ProtonDB compatibility ratings to your Steam library — a tier badge on every game tile plus per-game detail in the home widget — so you know whether something is likely to run well on Linux/Proton before you install it.",
+  recomp:
+    "Browse, install, and launch community recompilations and native ports of classic games — you supply your own game files and it handles the rest, turning supported retro titles into properly native Linux builds.",
+  "rgb-control":
+    "Control the RGB lighting on Linux handhelds via OpenRGB, sysfs LEDs, and platform-specific interfaces — set colours and effects, or kill the lights to save battery, without reaching for extra desktop tools.",
+  "sound-loader":
+    "Browse, install, and switch community UI sound packs from deckthemes.com, giving Steam's interface sounds a personal touch from inside Gaming Mode.",
+  "steam-gamescope-ipc":
+    "Talks to Steam's Gaming Mode (gamescope) to show the currently-running game and send commands back to the Steam UI — also the reference example for plugins that integrate directly with Steam.",
+  steamgriddb:
+    "Browse and apply custom artwork — grids, heroes, logos, icons — from SteamGridDB. The fix for non-Steam shortcuts and any title with missing or ugly library art.",
+  "storage-cleaner":
+    "Shows where your disk space is going, including shader-cache sizes, and lets you reclaim it in a couple of taps — useful on storage-tight handhelds before installing the next big game.",
+  "store-bridge":
+    "Surfaces your Epic, GOG, Amazon, Ubisoft, and xCloud libraries and adds them to Steam as shortcuts, so non-Steam-store games install and launch right alongside everything else.",
+  "tdp-control":
+    "Set your CPU/APU power limit (TDP) with quick presets and a slider, optionally per game, to balance performance against battery life and heat — the single biggest knob for tuning a handheld.",
+  "theme-loader":
+    "Browse, install, and toggle community CSS themes for Steam's Big Picture UI, restyling the interface to taste from inside Gaming Mode.",
+};
+
 function templateFor(meta: PluginMeta): string {
   const shots = pluginScreenshots(meta.id);
+  const about = PLUGIN_ABOUT[meta.id];
   // One screenshot → show it untitled (a heading would be noise). More
   // than one → title each so the reader knows which view they're seeing.
   const shotBlock =
@@ -228,6 +281,7 @@ function templateFor(meta: PluginMeta): string {
     "",
     `> ${meta.description}`,
     "",
+    ...(about ? [about, ""] : []),
     "## Screenshots",
     "",
     ...shotBlock,

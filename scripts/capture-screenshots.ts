@@ -106,8 +106,16 @@ const PAGE_RECIPES: Record<string, PageShot[]> = {
 };
 
 const sleep = (ms: number) => Bun.sleep(ms);
-// Settle time after a navigation / click so the new view mounts + fetches.
-const SETTLE_MS = 700;
+// Brief settle for the route swap + first paint before we poll for idle.
+const SETTLE_MS = 300;
+// Async-loading wait: many plugins fetch over the network on mount
+// (ProtonDB, HLTB, SteamGridDB, store libraries), so a fixed sleep either
+// over-waits or fires mid-spinner. Poll until no loading indicators remain.
+const IDLE_TIMEOUT_MS = 8000;
+const IDLE_POLL_MS = 200;
+// The DOM must stay idle this long before we trust it — guards the gap
+// between one fetch's spinner clearing and the next appearing.
+const IDLE_STABLE_MS = 400;
 
 async function cdpWs(): Promise<string> {
   const res = await fetch("http://localhost:9222/json");
@@ -183,9 +191,33 @@ class CDP {
   }
 }
 
+/**
+ * Wait until the overlay has no visible loading state — no DaisyUI
+ * `.loading` spinners (the shared `<Spinner>`) and no `animate-spin`
+ * icons — staying clear for `IDLE_STABLE_MS` so we don't fire in the
+ * gap between two sequential fetches. Falls through after
+ * `IDLE_TIMEOUT_MS` so a perpetually-spinning view still gets captured.
+ */
+async function waitForIdle(cdp: CDP): Promise<void> {
+  const expr = `document.querySelectorAll('.loading, [class*="animate-spin"]').length`;
+  const start = Date.now();
+  let idleSince: number | null = null;
+  while (Date.now() - start < IDLE_TIMEOUT_MS) {
+    const busy = ((await cdp.eval(expr)) as number) > 0;
+    if (busy) {
+      idleSince = null;
+    } else {
+      idleSince ??= Date.now();
+      if (Date.now() - idleSince >= IDLE_STABLE_MS) return;
+    }
+    await sleep(IDLE_POLL_MS);
+  }
+}
+
 async function navigate(cdp: CDP, hashPath: string): Promise<void> {
   await cdp.eval(`location.hash='${hashPath}'; void 0`);
-  await sleep(SETTLE_MS); // let the view mount + fetch data
+  await sleep(SETTLE_MS); // let the route swap + mount begin
+  await waitForIdle(cdp); // then wait out any async loading
 }
 
 async function setSidebarCollapsed(cdp: CDP, collapsed: boolean): Promise<void> {
@@ -267,6 +299,7 @@ async function runSteps(cdp: CDP, steps: Step[]): Promise<boolean> {
       ok = await clickWithRetry(cdp, () => clickText(cdp, step.label));
     if (!ok) return false;
     await sleep(SETTLE_MS);
+    await waitForIdle(cdp); // sub-page may fetch on open (detail pages)
   }
   return true;
 }
