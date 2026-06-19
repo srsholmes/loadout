@@ -59,8 +59,8 @@ Mode. No Windows or macOS build.
 | Device | Status |
 |---|---|
 | Steam Deck | ✅ Daily-driven |
-| F1 Pro | ✅ Tested |
-| APEX | ✅ Tested |
+| OneXPlayer F1 Pro | ✅ Tested |
+| OneXPlayer APEX | ✅ Tested |
 
 > 🙋 **Got a different handheld?** ROG Ally, Legion Go, OneXPlayer, GPD, AYANEO,
 > AOKZOE — I'd love your help. **I'm actively looking for testers on other
