@@ -19,7 +19,7 @@
   "plugin": {
     "id": "store-bridge",
     "name": "Store Bridge",
-    "description": "Surface Epic, GOG, Amazon, Ubisoft and xCloud libraries as Steam shortcuts",
+    "description": "Surface your Epic Games library as Steam shortcuts (GOG, Amazon, Ubisoft, xCloud planned)",
     "permissions": {
       "network": [
         "api.github.com",

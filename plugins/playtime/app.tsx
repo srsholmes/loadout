@@ -3,7 +3,6 @@ import {
   PluginHeader,
   SegmentedItem,
   GameCard,
-  NowPlaying,
   useFocusable,
   mountComponent,
   mountHeaderStub,
@@ -46,29 +45,6 @@ const RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
 const DAY_BAR_AREA_PX = 84;
 
 // --- Subcomponents ---
-
-/** Live "Nm elapsed" counter for the running session, dropped into the
- *  shared NowPlaying hero's metadata slot. */
-function SessionElapsed({ session }: { session: CurrentSession }) {
-  const [elapsed, setElapsed] = useState(() => Date.now() - session.startTime);
-
-  useEffect(() => {
-    setElapsed(Date.now() - session.startTime);
-    const id = setInterval(() => {
-      setElapsed(Date.now() - session.startTime);
-    }, 1000);
-    return () => clearInterval(id);
-  }, [session.startTime]);
-
-  return (
-    <span
-      className="mono"
-      style={{ fontSize: 12, color: "var(--color-success)" }}
-    >
-      {formatElapsed(elapsed)} elapsed
-    </span>
-  );
-}
 
 /** A single day in the filter row: a proportional-height bar that
  *  toggles whether that day's games count toward the grid below. */
@@ -427,14 +403,6 @@ function PlayTime() {
       <div className="p-7 h-full overflow-y-auto">
         <div className="page-content">
           <div className="card">
-            {/* NOW PLAYING — shared hero (artwork + logo) with a live
-                elapsed counter. Self-hides when no game is running. */}
-            <NowPlaying>
-              {currentSession ? (
-                <SessionElapsed session={currentSession} />
-              ) : null}
-            </NowPlaying>
-
             {/* HEADLINE METRIC + DAY FILTER BARS. The period selector in
                 the topbar drives the headline; the day bars below double
                 as filters for the "All Games" grid. */}

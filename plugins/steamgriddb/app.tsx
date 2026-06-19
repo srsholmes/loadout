@@ -12,6 +12,7 @@ import {
 import {
   Button,
   fuzzySearchGames,
+  useCurrentGame,
   GameCard,
   HeaderBackButton,
   IconButton,
@@ -272,6 +273,8 @@ function SteamGridDB() {
    * matches, so typing "Mario" surfaces Mario games before games
    * tagged with a Mario-named collection.
    */
+  const currentAppId = useCurrentGame()?.appId ?? null;
+
   const visibleGames = useMemo(() => {
     let list = library;
     if (filter === STEAM_ONLY) {
@@ -281,8 +284,18 @@ function SteamGridDB() {
     } else if (filter !== ALL_GAMES) {
       list = list.filter((g) => g.tags?.includes(filter));
     }
-    return fuzzySearchGames(list, searchQuery);
-  }, [library, filter, searchQuery]);
+    const ranked = [...fuzzySearchGames(list, searchQuery)];
+    // With no active search, float the currently-running game to the
+    // front — it's the one you're most likely here to art up. During a
+    // search, leave the fuzzy ranking untouched.
+    if (!searchQuery && currentAppId != null) {
+      const idx = ranked.findIndex(
+        (g) => String(g.appId) === String(currentAppId),
+      );
+      if (idx > 0) ranked.unshift(ranked.splice(idx, 1)[0]);
+    }
+    return ranked;
+  }, [library, filter, searchQuery, currentAppId]);
 
   /**
    * Dropdown options: the three Steam/non-Steam sentinels first, then

@@ -1,17 +1,21 @@
 # Steam UI Components Reference
 
-Steam's Big Picture Mode uses React internally with a full set of UI components. Loadout discovers these components at runtime from Steam's webpack bundle and exposes them as typed, lazy-loaded proxies via `@loadout/ui`.
+Steam's Big Picture Mode uses React internally with a full set of UI components. Loadout discovers these components at runtime from Steam's webpack bundle and exposes them as typed, lazy-loaded proxies via `@loadout/ui` (`import { Steam } from "@loadout/ui"`).
+
+> **Where these resolve.** The `Steam.*` proxies only return real components inside a **CEF-injected Steam context** — i.e. when Loadout's injector has run the discovery script inside Steam's `SharedJSContext` and populated `globalThis.__STEAM_COMPONENTS`. This is the path used for badge/CSS injection into Steam's own UI (see `packages/steam-cef-badges`, used by `plugins/protondb-badges` and `plugins/hltb`).
+>
+> In a normal overlay plugin `app.tsx` — which renders in the Electrobun (CEF) overlay window, **not** inside Steam's UI — `globalThis.__STEAM_COMPONENTS` is absent, so every `Steam.*` proxy resolves to `null` (rendering nothing) and logs a one-time warning. For overlay UI, use the built-in `@loadout/ui` components (`Button`, `Toggle`, `Slider`, `Select`, `TextInput`, `Field`, `TabBar`, `Panel`, etc.) instead. No plugin in this repo currently renders `Steam.*` components directly.
 
 ## How It Works
 
 Steam's production JS is fully minified — variable names, function names, and module IDs are all hashed. But **prop names survive minification** because they're part of the component API, and **CSS module keys** retain readable names like `DialogButton` or `Focusable`.
 
-Loadout uses two discovery strategies:
+The injector (`apps/loadout/src/injector/steam-components.ts`) builds a discovery script that runs inside Steam's CEF context and uses two strategies:
 
-1. **Code pattern matching** — searches webpack modules for functions with unique prop destructuring patterns (e.g., `onActivate` + `onCancel` + `focusClassName` identifies `Focusable`)
+1. **Code pattern matching** — searches webpack modules for functions with unique prop destructuring patterns (e.g., `onActivate` + `onCancel` + `focusClassName` + `focusWithinClassName` identifies `Focusable`)
 2. **CSS key usage** — finds React functions that reference `.ComponentName` on CSS module imports
 
-Discovered components are stored as `globalThis.__STEAM_COMPONENTS` and accessed through typed Proxy objects that defer resolution until first render.
+Discovered components are stored on `globalThis.__STEAM_COMPONENTS` (a plain `name → component` map). The proxies in `packages/ui/src/steam.ts` are backed by a JS `Proxy` whose traps lazily read `globalThis.__STEAM_COMPONENTS?.[name]` on first render. If the global is missing or the name isn't found, the proxy caches `null`, warns once, and renders nothing — so a missing component only affects the code that uses it, never the rest of the UI.
 
 ## Usage
 
@@ -424,15 +428,14 @@ const [tab, setTab] = useState("general");
 | `onShowTab` | `(tabId: string) => void` | Tab selection handler |
 | `className` | `string` | CSS class |
 
-#### `Steam.Navigation`
-
-Steam's internal navigation controller. Provides route navigation methods.
-
-| Prop | Type | Description |
-|------|------|-------------|
-| `Navigate` | `(path: string) => void` | Navigate to a route |
-| `NavigateBack` | `() => void` | Go back in history |
-| `NavigationManager` | `unknown` | Internal navigation manager |
+> **Note:** There is no `Steam.Navigation` component. Steam's route navigation is a singleton API object (not a React component), discovered separately and stored on `globalThis.__LOADOUT_NAVIGATION`. It is exposed through plain function exports from `@loadout/ui`, not the `Steam.*` namespace:
+>
+> ```tsx
+> import { navigate, navigateBack, navigateToPage, closeSideMenus } from "@loadout/ui";
+>
+> navigate("/library/home"); // Steam route path
+> navigateBack();
+> ```
 
 ---
 
@@ -482,57 +485,49 @@ Top-level GamepadUI component. Generally not used directly by plugins.
 
 ## SteamClient API
 
-`window.SteamClient` is available in the CEF context and provides access to Steam's native APIs. It has 48 namespaces:
+`window.SteamClient` is Steam's native API surface, available inside Steam's own CEF context (the `SharedJSContext` tab), **not** inside the Electrobun overlay. Loadout reaches it over Steam's CEF debug port via CDP. There are two ways to use it:
 
-| Namespace | Description |
-|-----------|-------------|
-| `Apps` | Game/app management, shortcuts, launch options |
-| `Auth` | Authentication and login |
-| `Browser` | CEF browser control |
-| `Broadcast` | Steam Broadcasting |
-| `Cloud` | Steam Cloud save management |
-| `CloudStorage` | Cloud storage operations |
-| `Compat` | Proton/compatibility layer |
-| `Console` | Developer console |
-| `Customization` | Profile customization |
-| `Downloads` | Download management |
-| `FamilySharing` | Family sharing controls |
-| `Friends` | Friends list and social |
-| `GameNotes` | In-game notes |
-| `GameRecording` | Game recording/clips |
-| `GameSessions` | Active game session tracking |
-| `Input` | Controller/input configuration |
-| `InstallFolder` | Steam library folder management |
-| `Installs` | Installation management |
-| `Messaging` | Steam chat messages |
-| `Music` | Steam music player |
-| `Notifications` | Steam notifications |
-| `Overlay` | Steam overlay control |
-| `Parental` | Parental controls |
-| `RemotePlay` | Steam Remote Play |
-| `Screenshots` | Screenshot management |
-| `Settings` | Steam client settings |
-| `Storage` | Local storage |
-| `RoamingStorage` | Roaming storage (synced) |
-| `MachineStorage` | Machine-local storage |
-| `Streaming` | Steam Link streaming |
-| `System` | System info, sleep, restart |
-| `UI` | UI state and window management |
-| `Updates` | Client updates |
-| `User` | Current user info |
+- **Typed wrapper (preferred, backend-side):** `SteamClient` / `withSteamClient` in `packages/steam-cdp/src/steam-client.ts`. This only wraps the handful of methods Loadout actually consumes — namely `apps.*` (set/clear launch options, add/remove/rename shortcuts, custom artwork, compat tool, user tags, collections, read shortcut/app data) and `url.executeSteamURL` / `url.openWebUrl`. Adding a new method is one new wrapper per Steam call.
+- **Raw `window.SteamClient.*`:** evaluated inside the CEF tab (e.g. via the injector or CDP `evaluate`). Used directly in a few places — observed calls in this repo are limited to `SteamClient.Apps.*`, `SteamClient.URL.ExecuteSteamURL`, `SteamClient.GameSessions`, and `SteamClient.System` (e.g. `patch.ts` patches `SteamClient.System.OpenInBrowser`).
 
-Access SteamClient in your plugin's backend or directly in the CEF context:
+The full namespace surface is declared (as `unknown` placeholders) in the `SteamClientAPI` type in `packages/ui/src/steam-types.ts`. As of that type there are **47 namespaces** — listed below as observed at runtime, not an exhaustive or method-level spec:
 
-```tsx
-// In panel.tsx (runs in CEF context)
-const shortcuts = await window.SteamClient.Apps.GetAllShortcuts();
-const user = await window.SteamClient.User.GetLoginUsers();
+| Namespace | Namespace | Namespace |
+|-----------|-----------|-----------|
+| `Apps` | `Auth` | `Broadcast` |
+| `Browser` | `BrowserView` | `ClientNotifications` |
+| `Cloud` | `CloudStorage` | `CommunityItems` |
+| `Compat` | `Console` | `Customization` |
+| `Downloads` | `FamilySharing` | `Friends` |
+| `FriendSettings` | `GameNotes` | `GameRecording` |
+| `GameSessions` | `Input` | `InstallFolder` |
+| `Installs` | `MachineStorage` | `Messaging` |
+| `Music` | `Notifications` | `OpenVR` |
+| `Overlay` | `Parental` | `RemotePlay` |
+| `RoamingStorage` | `Screenshots` | `ServerBrowser` |
+| `Settings` | `SharedConnection` | `Stats` |
+| `SteamChina` | `Storage` | `Streaming` |
+| `System` | `UI` | `Updates` |
+| `URL` | `User` | `WebChat` |
+| `WebUITransport` | `Window` | |
+
+From the backend, use the typed wrapper:
+
+```ts
+import { withSteamClient } from "@loadout/steam-cdp";
+
+await withSteamClient(async (sc) => {
+  await sc.apps.setAppLaunchOptions(appId, "%command% -foo");
+  await sc.url.executeSteamURL(`steam://rungameid/${appId}`);
+});
 ```
+
+`SteamClient` methods throw `SteamClientUnreachableError` when Steam isn't reachable (debug port down, no `SharedJSContext` tab, or the API not yet bound while Steam is still booting), so callers can fall back gracefully.
 
 ---
 
 ## Discovery Status
 
-Component discovery depends on the Steam client version. Some components may not be found if Steam changes their code patterns. Use `Steam.has()` to check availability.
+Component discovery depends on the Steam client version. Some components may not be found if Steam changes their code patterns. Use `Steam.has()` / `Steam.listAll()` to check availability at runtime.
 
-Browse discovered components live at `http://localhost:33820/components` when the dev server is running with `--inject`.
+There is no standalone "components" dev endpoint. To inspect what was discovered, attach to Steam's CEF DevTools and read the global directly — e.g. evaluate `Object.keys(globalThis.__STEAM_COMPONENTS)` in Steam's `SharedJSContext` tab. (The discovery script also POSTs its metadata to the loader at `/api/steam-components/register`, but that is a one-way report, not a browsable list.)

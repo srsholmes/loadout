@@ -10,6 +10,7 @@ import {
   Badge,
   Button,
   GameCard,
+  GameHero,
   HeaderBackButton,
   IconButton,
   Panel,
@@ -557,10 +558,10 @@ function CatalogView() {
         <h2 className="text-lg font-semibold text-base-content m-0">Store Bridge</h2>
         <div className="ml-auto flex items-center gap-2">
           <SearchField value={search} onChange={setSearch} placeholder="Search games..." />
-          <IconButton aria-label="Refresh library" onClick={refresh} disabled={refreshing}>
+          <IconButton ariaLabel="Refresh library" onClick={refresh} disabled={refreshing}>
             <FaRotate />
           </IconButton>
-          <IconButton aria-label="Settings" onClick={nav.toSettings}>
+          <IconButton ariaLabel="Settings" onClick={nav.toSettings}>
             <FaGear />
           </IconButton>
         </div>
@@ -1103,13 +1104,25 @@ function DetailView({ storeId, gameId }: { storeId: StoreId; gameId: string }) {
       </PluginHeader>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
-        {game.heroUrl && (
-          <img
-            src={game.heroUrl}
-            alt=""
-            className="w-full rounded-lg object-cover max-h-64"
-          />
-        )}
+        {/* Shared hero banner — the selected game's art + logo/title,
+            matching the home screen and other plugins' detail pages. */}
+        <GameHero
+          heroUrl={game.heroUrl}
+          fallbackHeroUrl={game.coverUrl}
+          gameName={game.title}
+        >
+          {game.logoUrl ? (
+            <img
+              src={game.logoUrl}
+              alt=""
+              className="max-h-20 max-w-[45%] object-contain drop-shadow-lg"
+            />
+          ) : (
+            <h2 className="text-2xl font-bold text-base-content drop-shadow-lg truncate">
+              {game.title}
+            </h2>
+          )}
+        </GameHero>
 
         <Panel title="Actions">
           {installPct !== null && (
@@ -1681,7 +1694,7 @@ function SettingsView() {
                 className="flex items-center gap-2 py-1 border-b border-base-300/30 last:border-0"
               >
                 <Text style={{ flex: 1, fontFamily: "monospace" }}>{p}</Text>
-                <IconButton aria-label={`Remove ${p}`} onClick={() => removeScan(p)}>
+                <IconButton ariaLabel={`Remove ${p}`} onClick={() => removeScan(p)}>
                   <FaTrash />
                 </IconButton>
               </div>
@@ -1694,7 +1707,7 @@ function SettingsView() {
               placeholder="/absolute/path/to/games"
               style={{ flex: 1 }}
             />
-            <IconButton aria-label="Add scan path" onClick={addScan}>
+            <IconButton ariaLabel="Add scan path" onClick={addScan}>
               <FaPlus />
             </IconButton>
           </div>
