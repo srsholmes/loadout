@@ -15,13 +15,7 @@ on every `onLoad()` so version bumps add new sites for free.
 
 ## Screenshots
 
-### Overview
-
-![Quick Links — Overview](./assets/screenshot.png)
-
-### Settings
-
-![Quick Links — Settings](./assets/screenshot-settings.png)
+![Quick Links](./assets/screenshot.png)
 
 ## Browser shortcut management (was `gaming-mode-browser`)
 

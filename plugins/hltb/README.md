@@ -14,10 +14,6 @@ Pulls HowLongToBeat completion times into Steam's library and store pages, so yo
 
 ![HLTB — Game detail](./assets/screenshot-detail.png)
 
-### Settings
-
-![HLTB — Settings](./assets/screenshot-settings.png)
-
 ## See also
 
 - [All plugins](../../README.md#plugins)
