@@ -272,9 +272,10 @@ Install and configure the LSFG-VK Vulkan frame generation layer
 ## Plugin model
 
 A plugin is a directory under `plugins/` with a `package.json` (carrying a
-`plugin` field), an optional `backend.ts` (a `PluginBackend` class exposing RPC
-methods), and a UI entry — `app.tsx` to render in the overlay (the default), or
-`panel.tsx` to inject into Steam's own UI. See
+`plugin` field — the manifest), an optional `backend.ts` (a `PluginBackend`
+class exposing RPC methods), and an `app.tsx` UI entry that renders in the
+overlay. Plugins that want to reach into Steam's own Big Picture UI (badges,
+CSS) drive it from their backend via `@loadout/steam-cdp`. See
 [docs/plugin-development.md](docs/plugin-development.md) for the full API.
 
 ## Architecture
