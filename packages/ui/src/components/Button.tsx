@@ -19,6 +19,7 @@ export function Button({
   children,
   variant = "default",
   size = "md",
+  fullWidth = false,
   onClick,
   disabled,
   style,
@@ -31,6 +32,12 @@ export function Button({
    * be visually heavy — replaces the old `chip` / `btn-sm` plugin callsites.
    */
   size?: ButtonSize;
+  /**
+   * Stretch the button to fill its container's width. Used by the game-card
+   * tiles (store-bridge, recomp, LSFG-VK) so the action button spans the
+   * full tile rather than hugging its label.
+   */
+  fullWidth?: boolean;
   onClick?: () => void;
   disabled?: boolean;
   style?: CSSProperties;
@@ -83,11 +90,12 @@ export function Button({
     : style ?? {};
 
   const sizeClass = size === "sm" ? "btn-sm text-xs" : "min-h-[44px] text-sm";
+  const widthClass = fullWidth ? "w-full" : "";
 
   return (
     <button
       ref={ref}
-      className={`btn ${cls} ${sizeClass} transition-transform duration-100 ${scaleClass}`}
+      className={`btn ${cls} ${sizeClass} ${widthClass} transition-transform duration-100 ${scaleClass}`}
       style={focusStyle}
       onClick={onClick}
       disabled={disabled}

@@ -14,6 +14,7 @@ import {
   fuzzySearchGames,
   useCurrentGame,
   GameCard,
+  GameCardGrid,
   HeaderBackButton,
   IconButton,
   mountComponent,
@@ -728,7 +729,7 @@ function SteamGridDB() {
     <>
       {headerNode}
       <div className="p-7 h-full overflow-y-auto">
-        <div className="page-content">
+        <div className="page-content full">
         {/* Preferences popover (inline card, not modal). Toasts are
             the source of truth for success/failure — see `notify()`
             calls below. */}
@@ -767,8 +768,7 @@ function SteamGridDB() {
             cog live in the portaled topbar header above. The body
             renders the caption + the game grid only. */}
         {!selectedGame && (
-          <div className="card">
-            <div className="subsection">
+          <>
               {/* Loading / error / empty-result branches, in priority
                   order. `libraryStatus === null` is the initial state
                   before the first getGames attempt resolves. */}
@@ -794,12 +794,7 @@ function SteamGridDB() {
               )}
 
               {visibleGames.length > 0 && (
-                // 4 cols when the shell sidebar is open, 6 when it
-                // collapses — driven by the `sidebar-open` /
-                // `sidebar-collapsed` custom Tailwind variants
-                // registered in overlay/src/index.css, which read
-                // `<html data-sidebar="…">`.
-                <div className="grid grid-cols-4 sidebar-collapsed:grid-cols-6 gap-2.5">
+                <GameCardGrid>
                   {visibleGames.map((game) => (
                     <SgdbGameTile
                       key={game.appId}
@@ -808,7 +803,7 @@ function SteamGridDB() {
                       onPick={() => handleSelectGame(game)}
                     />
                   ))}
-                </div>
+                </GameCardGrid>
               )}
 
               {libraryStatus === "ok" &&
@@ -822,8 +817,7 @@ function SteamGridDB() {
                         : "No games match this filter."}
                   </div>
                 )}
-            </div>
-          </div>
+          </>
         )}
 
         {selectedGame && (
