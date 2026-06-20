@@ -46,6 +46,7 @@ import {
   systemReboot,
   systemShutdown,
 } from "./system-actions";
+import { exportLogs } from "./export-logs";
 
 export interface RpcHandlerDeps {
   /** Triple-flag overlay state — read by getOverlayVisibility, mutated
@@ -114,6 +115,14 @@ export function buildRpcHandlers(deps: RpcHandlerDeps) {
       // systemctl shell-out.
       restartServer: async (): Promise<{ success: boolean; error?: string }> =>
         restartServer(),
+      // Dump the overlay UI's captured console logs (sent over in the
+      // payload) plus the backend server log file into a timestamped
+      // file in the user's Downloads folder. See export-logs.ts. Used
+      // to collect diagnostics from users reporting issues (#130).
+      exportLogs: async (
+        params?: unknown,
+      ): Promise<{ success: boolean; error?: string; path?: string }> =>
+        exportLogs(params),
       // Emergency SIGCONT — finds the "steam" comm PID and resumes it.
       // Exposed as a maintenance button so a user stuck with frozen
       // Steam (e.g. crashed overlay left it TASK_STOPPED, or the
