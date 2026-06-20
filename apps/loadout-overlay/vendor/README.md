@@ -81,12 +81,12 @@ Both are in `nativeWrapper.cpp.patch` alongside the CPU-spin fix.
 
 ## Provenance
 
-- Upstream: `github.com/blackboardsh/electrobun` tag **v1.16.0**
-  (commit `73519358cdcb50f02c1df3ecc80c33faedfb9ad4`).
+- Upstream: `github.com/blackboardsh/electrobun` tag **v1.18.1**
+  (rebased to v1.18.1; patch = upstream PRs #473 CPU-spin + #477 move/resize).
 - Patched file: `package/src/native/linux/nativeWrapper.cpp`.
 - Build marker (printed at startup, grep the journal to confirm it's live):
-  `=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2-loadout-cefloop ===`
-- Built against CEF **145.0.23+g3e7fe1c / chromium 145.0.7632.68** (must match
+  `=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2-loadout-cef147 ===`
+- Built against CEF **147.0.10+gd58e84d / chromium 147.0.7727.118** (must match
   the `libcef.so` Electrobun bundles; `dlopen`'d at runtime).
 
 ## Rebuilding (when bumping Electrobun or CEF)
