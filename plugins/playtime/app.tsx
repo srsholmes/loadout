@@ -3,6 +3,7 @@ import {
   PluginHeader,
   SegmentedItem,
   GameCard,
+  GameCardGrid,
   useFocusable,
   mountComponent,
   mountHeaderStub,
@@ -401,7 +402,7 @@ function PlayTime() {
     <>
       {headerNode}
       <div className="p-7 h-full overflow-y-auto">
-        <div className="page-content">
+        <div className="page-content full">
           <div className="card">
             {/* HEADLINE METRIC + DAY FILTER BARS. The period selector in
                 the topbar drives the headline; the day bars below double
@@ -486,11 +487,11 @@ function PlayTime() {
                         : `No games played this ${range} yet.`}
                 </div>
               ) : (
-                <div className="grid grid-cols-4 sidebar-collapsed:grid-cols-6 gap-2.5">
+                <GameCardGrid>
                   {gridGames.map((g) => (
                     <GameGridCard key={g.appId} game={g} maxMs={maxGameMs} />
                   ))}
-                </div>
+                </GameCardGrid>
               )}
             </div>
 

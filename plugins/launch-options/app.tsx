@@ -18,6 +18,7 @@ import {
   friendlyCollectionName,
   fuzzySearchGames,
   GameCard,
+  GameCardGrid,
   HeaderBackButton,
   IconButton,
   PluginHeader,
@@ -416,7 +417,7 @@ function LaunchOptionsManager() {
       <>
         {headerNode}
         <div className="p-7 h-full overflow-y-auto">
-          <div className="page-content">
+          <div className="page-content full">
             <div className="card">
               <div className="subsection">
                 <div className="flex items-center justify-between mb-2">
@@ -635,45 +636,35 @@ function LaunchOptionsManager() {
     <>
       {headerNode}
       <div className="p-7 h-full overflow-y-auto">
-        <div className="page-content">
-          {/* Library picker — portrait `<GameCard>` grid, matching the
-              card pattern used across HLTB / ProtonDB / SteamGridDB.
-              Each tile is the artwork; an "Options →" affordance on
-              the card opens the detail view for that game. */}
-          <div className="card">
-            <div className="subsection">
-              <div className="subsection-label">
-                {searchQuery.trim() || collectionFilter !== ALL_COLLECTIONS
-                  ? "Filtered library"
-                  : "Your library"}
-              </div>
-              {visibleLibrary.length === 0 ? (
-                <div className="subsection-desc mt-1">
-                  {library.length === 0
-                    ? "No installed games found. Library data comes from __core:game-library — the loader's single source of truth."
-                    : "No games match the current filter."}
-                </div>
-              ) : (
-                <div className="grid grid-cols-4 sidebar-collapsed:grid-cols-6 gap-2.5">
-                  {visibleLibrary.map((game) => {
-                    const lo = launchOptsByApp.get(game.appId) ?? "";
-                    const isCurrent =
-                      currentGame !== null &&
-                      String(currentGame.appId) === game.appId;
-                    return (
-                      <LaunchOptionsCard
-                        key={game.appId}
-                        game={game}
-                        launchOpts={lo}
-                        isCurrent={isCurrent}
-                        onPick={() => handleSelect(game.appId)}
-                      />
-                    );
-                  })}
-                </div>
-              )}
+        <div className="page-content full">
+          {/* Library picker — portrait `<GameCard>` grid, sitting flush
+              like the SGDB / ProtonDB / HLTB pickers. Each tile is the
+              artwork; an "Options →" affordance opens the detail view. */}
+          {visibleLibrary.length === 0 ? (
+            <div className="subsection-desc mt-1">
+              {library.length === 0
+                ? "No installed games found. Library data comes from __core:game-library — the loader's single source of truth."
+                : "No games match the current filter."}
             </div>
-          </div>
+          ) : (
+            <GameCardGrid>
+              {visibleLibrary.map((game) => {
+                const lo = launchOptsByApp.get(game.appId) ?? "";
+                const isCurrent =
+                  currentGame !== null &&
+                  String(currentGame.appId) === game.appId;
+                return (
+                  <LaunchOptionsCard
+                    key={game.appId}
+                    game={game}
+                    launchOpts={lo}
+                    isCurrent={isCurrent}
+                    onPick={() => handleSelect(game.appId)}
+                  />
+                );
+              })}
+            </GameCardGrid>
+          )}
         </div>
       </div>
     </>
