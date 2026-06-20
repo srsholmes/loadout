@@ -22,6 +22,7 @@ import {
   Button,
   fuzzySearchGames,
   GameCard,
+  GameCardGrid,
   Spinner,
   useBackend,
   useCurrentGame,
@@ -103,7 +104,7 @@ function GameRow({
           disabled={isBusy || disabled}
           variant={applied ? "default" : "primary"}
           size="sm"
-          style={{ width: "100%" }}
+          fullWidth
         >
           {isBusy ? <Spinner size={12} /> : applied ? "Remove" : "Apply"}
         </Button>
@@ -294,11 +295,7 @@ export function GamePicker({
             : "No games match that search."}
         </div>
       ) : (
-        // 4 cols when the shell sidebar is open, 6 when it
-        // collapses — driven by the `sidebar-open` /
-        // `sidebar-collapsed` custom Tailwind variants
-        // registered in overlay/src/index.css.
-        <div className="grid grid-cols-4 sidebar-collapsed:grid-cols-6 gap-2.5">
+        <GameCardGrid>
           {visible.map((g) => {
             const lo = launchOptsByApp.get(g.appId) ?? "";
             const applied = wrapperToken
@@ -322,7 +319,7 @@ export function GamePicker({
               />
             );
           })}
-        </div>
+        </GameCardGrid>
       )}
 
       <div className="subsection-desc" style={{ marginTop: 8 }}>

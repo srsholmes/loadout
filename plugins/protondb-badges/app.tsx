@@ -4,6 +4,7 @@ import {
   Button,
   fuzzySearchGames,
   GameCard,
+  GameCardGrid,
   HeaderBackButton,
   hideOverlay,
   IconButton,
@@ -472,11 +473,7 @@ function ProtonDBBadges() {
               </div>
             </div>
           ) : (
-            // 4 cols when the shell sidebar is open, 6 when it
-            // collapses — driven by the `sidebar-open` /
-            // `sidebar-collapsed` custom Tailwind variants
-            // registered in overlay/src/index.css.
-            <div className="grid grid-cols-4 sidebar-collapsed:grid-cols-6 gap-2.5">
+            <GameCardGrid>
               {visibleGames!.map((game) => (
                 <ProtonDBGameCard
                   key={game.appId}
@@ -489,7 +486,7 @@ function ProtonDBBadges() {
                   onPick={() => handleOpenGame(game.appId)}
                 />
               ))}
-            </div>
+            </GameCardGrid>
           )}
         </div>
       </div>

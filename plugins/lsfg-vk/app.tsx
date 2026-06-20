@@ -104,7 +104,7 @@ function LsfgVkManager() {
       <>
         {headerNode}
         <div className="p-7 h-full overflow-y-auto">
-          <div className="page-content">
+          <div className="page-content full">
             <StatusBanner message={statusMsg} />
 
             {!install.installed ? (
