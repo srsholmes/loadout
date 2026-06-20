@@ -1,423 +1,340 @@
-import { describe, it, expect, mock, beforeEach, spyOn } from "bun:test";
+import { describe, it, expect, mock, beforeEach } from "bun:test";
 import type { EmitPayload } from "@loadout/types";
 
-// Mock @loadout/exec — must come before importing the SUT.
-// Use mock.module (not spyOn) for a third-party package; capture the
-// mock fn first so we can control its return value per-test.
-const mockRun = mock(() => Promise.resolve({ stdout: "", exitCode: 0 }));
+// Mock @loadout/exec — must come before importing the SUT. The backend
+// drives BlueZ through `busctl` (and rfkill) via runFull; scanning uses
+// spawn. Capture the mock fns so each test can script bus responses.
+const mockRunFull = mock(() =>
+  Promise.resolve({ stdout: "", stderr: "", exitCode: 0 }),
+);
+const mockSpawn = mock(() => ({ kill() {} }));
 mock.module("@loadout/exec", () => ({
-  run: mockRun,
-  // spawn is used by startScan — let tests override Bun.spawn directly
-  spawn: (...args: any[]) => Bun.spawn(...args),
+  runFull: mockRunFull,
+  spawn: mockSpawn,
 }));
 
 import BluetoothBackend from "./backend";
 
-describe("BluetoothBackend", () => {
+// ---- bus response builders -------------------------------------------------
+
+const ADAPTER = "/org/bluez/hci0";
+const DEV = (mac: string) => `${ADAPTER}/dev_${mac.replace(/:/g, "_")}`;
+
+const ok = (stdout: string) => Promise.resolve({ stdout, stderr: "", exitCode: 0 });
+const fail = (stderr: string, code = 1) =>
+  Promise.resolve({ stdout: "", stderr, exitCode: code });
+
+/** True if a busctl invocation's args contain all of `needles`. */
+const has = (cmd: string[], ...needles: string[]) =>
+  needles.every((n) => cmd.includes(n));
+
+/**
+ * Build a runFull implementation from a small fixture describing the
+ * adapter + devices, so individual tests only override what they care
+ * about.
+ */
+function fakeBus(opts: {
+  /** Device MACs present under the adapter (in tree order). */
+  macs?: string[];
+  adapter?: { powered: boolean; discovering: boolean; name: string; address: string };
+  /** Per-MAC device props. */
+  devices?: Record<
+    string,
+    { connected: boolean; paired: boolean; name?: string; icon?: string }
+  >;
+  /** No adapter on the bus at all. */
+  noAdapter?: boolean;
+}) {
+  const macs = opts.macs ?? [];
+  return (cmd: string[]) => {
+    // tree --list
+    if (has(cmd, "tree", "--list")) {
+      if (opts.noAdapter) return ok("/\n/org\n/org/bluez");
+      const lines = ["/", "/org", "/org/bluez", ADAPTER, ...macs.map(DEV)];
+      return ok(lines.join("\n"));
+    }
+    // adapter get-property (Powered Discovering Name Address)
+    if (has(cmd, "get-property", "org.bluez.Adapter1")) {
+      const a = opts.adapter ?? {
+        powered: true,
+        discovering: false,
+        name: "steamdeck",
+        address: "AA:BB:CC:DD:EE:0A",
+      };
+      return ok(
+        [
+          `b ${a.powered}`,
+          `b ${a.discovering}`,
+          `s "${a.name}"`,
+          `s "${a.address}"`,
+        ].join("\n"),
+      );
+    }
+    // device get-property
+    if (has(cmd, "get-property", "org.bluez.Device1")) {
+      const path = cmd[cmd.indexOf("get-property") + 2];
+      const mac = macs.find((m) => DEV(m) === path);
+      const d = mac ? opts.devices?.[mac] : undefined;
+      if (has(cmd, "Connected", "Paired")) {
+        return ok([`b ${d?.connected ?? false}`, `b ${d?.paired ?? false}`].join("\n"));
+      }
+      if (has(cmd, "Name")) return ok(`s "${d?.name ?? "Device"}"`);
+      if (has(cmd, "Icon")) {
+        return d?.icon ? ok(`s "${d.icon}"`) : fail("No such property", 1);
+      }
+    }
+    return ok("");
+  };
+}
+
+// ---------------------------------------------------------------------------
+
+describe("BluetoothBackend (busctl / D-Bus)", () => {
   let backend: BluetoothBackend;
-  let emittedEvents: EmitPayload[];
+  let emitted: EmitPayload[];
 
   beforeEach(() => {
     backend = new BluetoothBackend();
-    emittedEvents = [];
-    backend.emit = (payload: EmitPayload) => {
-      emittedEvents.push(payload);
-    };
-    mockRun.mockClear();
-    // Tests never call onLoad(), so pollInterval is never armed — no
-    // need to clearInterval here.
+    emitted = [];
+    backend.emit = (p: EmitPayload) => emitted.push(p);
+    mockRunFull.mockClear();
+    mockSpawn.mockClear();
+    mockRunFull.mockImplementation(() => ok(""));
   });
 
-  // ---------------------------------------------------------------------------
-  // getDevices — bluetoothctl output parsing
-  // ---------------------------------------------------------------------------
-
-  describe("getDevices()", () => {
-    it("returns empty array when bluetoothctl returns empty output", async () => {
-      mockRun.mockImplementation(() => Promise.resolve({ stdout: "" }));
-      const devices = await backend.getDevices();
-      expect(devices).toEqual([]);
-    });
-
-    it("parses a single paired device", async () => {
-      mockRun.mockImplementation((cmd: string[]) => {
-        if (cmd.includes("devices")) {
-          return Promise.resolve({
-            stdout: "Device AA:BB:CC:DD:EE:FF Sony WH-1000XM5\n",
-          });
-        }
-        if (cmd.includes("info")) {
-          return Promise.resolve({
-            stdout: [
-              "Device AA:BB:CC:DD:EE:FF (public)",
-              "\tName: Sony WH-1000XM5",
-              "\tAlias: Sony WH-1000XM5",
-              "\tClass: 0x00240404",
-              "\tIcon: audio-headset",
-              "\tPaired: yes",
-              "\tBonded: yes",
-              "\tTrusted: yes",
-              "\tBlocked: no",
-              "\tConnected: yes",
-              "\tLegacyPairing: no",
-            ].join("\n"),
-          });
-        }
-        return Promise.resolve({ stdout: "" });
-      });
-
-      const devices = await backend.getDevices();
-      expect(devices).toHaveLength(1);
-      expect(devices[0]).toEqual({
-        mac: "AA:BB:CC:DD:EE:FF",
-        name: "Sony WH-1000XM5",
-        connected: true,
-        paired: true,
-        type: "audio",
-      });
-    });
-
-    it("parses multiple devices with different types", async () => {
-      mockRun.mockImplementation((cmd: string[]) => {
-        if (cmd.includes("devices")) {
-          return Promise.resolve({
-            stdout: [
-              "Device AA:BB:CC:DD:EE:01 Xbox Controller",
-              "Device AA:BB:CC:DD:EE:02 Keychron K2",
-              "Device AA:BB:CC:DD:EE:03 Unknown Gadget",
-            ].join("\n"),
-          });
-        }
-        if (cmd.includes("info")) {
-          const mac = cmd[cmd.length - 1];
-          if (mac === "AA:BB:CC:DD:EE:01") {
-            return Promise.resolve({
-              stdout: "Icon: input-gaming\nPaired: yes\nConnected: yes\n",
-            });
-          }
-          if (mac === "AA:BB:CC:DD:EE:02") {
-            return Promise.resolve({
-              stdout: "Icon: input-keyboard\nPaired: yes\nConnected: no\n",
-            });
-          }
-          return Promise.resolve({
-            stdout: "Icon: phone\nPaired: no\nConnected: no\n",
-          });
-        }
-        return Promise.resolve({ stdout: "" });
-      });
-
-      const devices = await backend.getDevices();
-      expect(devices).toHaveLength(3);
-
-      expect(devices[0].type).toBe("input");
-      expect(devices[0].connected).toBe(true);
-
-      expect(devices[1].type).toBe("keyboard");
-      expect(devices[1].connected).toBe(false);
-      expect(devices[1].paired).toBe(true);
-
-      expect(devices[2].type).toBe("unknown");
-      expect(devices[2].paired).toBe(false);
-    });
-
-    it("skips lines that don't match the Device pattern", async () => {
-      mockRun.mockImplementation((cmd: string[]) => {
-        if (cmd.includes("devices")) {
-          return Promise.resolve({
-            stdout: [
-              "Device AA:BB:CC:DD:EE:FF Headphones",
-              "some garbage line",
-              "",
-              "not a device line at all",
-            ].join("\n"),
-          });
-        }
-        if (cmd.includes("info")) {
-          return Promise.resolve({
-            stdout: "Icon: audio-headphone\nPaired: yes\nConnected: no\n",
-          });
-        }
-        return Promise.resolve({ stdout: "" });
-      });
-
-      const devices = await backend.getDevices();
-      expect(devices).toHaveLength(1);
-      expect(devices[0].mac).toBe("AA:BB:CC:DD:EE:FF");
-    });
-
-    it("handles info fetch failure gracefully", async () => {
-      mockRun.mockImplementation((cmd: string[]) => {
-        if (cmd.includes("devices")) {
-          return Promise.resolve({
-            stdout: "Device AA:BB:CC:DD:EE:FF Test Device\n",
-          });
-        }
-        if (cmd.includes("info")) {
-          return Promise.reject(new Error("bluetoothctl not found"));
-        }
-        return Promise.resolve({ stdout: "" });
-      });
-
-      const devices = await backend.getDevices();
-      expect(devices).toHaveLength(1);
-      expect(devices[0]).toEqual({
-        mac: "AA:BB:CC:DD:EE:FF",
-        name: "Test Device",
-        connected: false,
-        paired: false,
-        type: "unknown",
-      });
-    });
-
-    it("preserves previously-cached connection state on transient info failure", async () => {
-      // Seed the cache with connected=true (simulates a healthy prior tick).
-      (backend as any).lastDeviceState.set("AA:BB:CC:DD:EE:FF", true);
-      mockRun.mockImplementation((cmd: string[]) => {
-        if (cmd.includes("devices")) {
-          return Promise.resolve({
-            stdout: "Device AA:BB:CC:DD:EE:FF Test Device\n",
-          });
-        }
-        if (cmd.includes("info")) {
-          return Promise.reject(new Error("DBus hiccup"));
-        }
-        return Promise.resolve({ stdout: "" });
-      });
-
-      const devices = await backend.getDevices();
-      // Connected stays true so the poll loop's prev-vs-current
-      // compare is a no-op and no phantom deviceChanged is emitted.
-      expect(devices[0].connected).toBe(true);
-      expect(devices[0].type).toBe("unknown");
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // getAdapterInfo — adapter output parsing
-  // ---------------------------------------------------------------------------
+  // ---- getAdapterInfo -----------------------------------------------------
 
   describe("getAdapterInfo()", () => {
-    it("parses adapter info correctly when powered on", async () => {
-      mockRun.mockImplementation(() =>
-        Promise.resolve({
-          stdout: [
-            "Controller AA:BB:CC:DD:EE:FF BlueZ 5.66 [default]",
-            "\tName: deck-bluetooth",
-            "\tAlias: deck-bluetooth",
-            "\tClass: 0x000000",
-            "\tPowered: yes",
-            "\tDiscoverable: no",
-            "\tDiscovering: yes",
-            "\tPairable: yes",
-          ].join("\n"),
-        }),
+    it("reads adapter state over D-Bus (this is the fix: bluetoothctl returned empty)", async () => {
+      mockRunFull.mockImplementation(
+        fakeBus({
+          adapter: {
+            powered: true,
+            discovering: true,
+            name: "steamdeck",
+            address: "AA:BB:CC:DD:EE:0A",
+          },
+        }) as any,
       );
-
       const info = await backend.getAdapterInfo();
-      expect(info.powered).toBe(true);
-      expect(info.discovering).toBe(true);
-      expect(info.name).toBe("deck-bluetooth");
-      expect(info.address).toBe("AA:BB:CC:DD:EE:FF");
+      expect(info).toEqual({
+        powered: true,
+        discovering: true,
+        name: "steamdeck",
+        address: "AA:BB:CC:DD:EE:0A",
+      });
     });
 
-    it("returns defaults when output is empty", async () => {
-      mockRun.mockImplementation(() => Promise.resolve({ stdout: "" }));
-
+    it("detects powered off", async () => {
+      mockRunFull.mockImplementation(
+        fakeBus({
+          adapter: { powered: false, discovering: false, name: "steamdeck", address: "AA:BB:CC:DD:EE:FF" },
+        }) as any,
+      );
       const info = await backend.getAdapterInfo();
       expect(info.powered).toBe(false);
-      expect(info.discovering).toBe(false);
-      expect(info.name).toBe("Unknown");
-      expect(info.address).toBe("Unknown");
     });
 
-    it("detects powered off and not discovering", async () => {
-      mockRun.mockImplementation(() =>
-        Promise.resolve({
-          stdout: [
-            "Controller 00:11:22:33:44:55 BlueZ",
-            "\tName: my-adapter",
-            "\tPowered: no",
-            "\tDiscovering: no",
-          ].join("\n"),
-        }),
-      );
-
+    it("returns Unknown defaults when no adapter is on the bus", async () => {
+      mockRunFull.mockImplementation(fakeBus({ noAdapter: true }) as any);
       const info = await backend.getAdapterInfo();
-      expect(info.powered).toBe(false);
-      expect(info.discovering).toBe(false);
+      expect(info).toEqual({
+        powered: false,
+        discovering: false,
+        name: "Unknown",
+        address: "Unknown",
+      });
     });
   });
 
-  // ---------------------------------------------------------------------------
-  // connectDevice / disconnectDevice — cache updates
-  // ---------------------------------------------------------------------------
+  // ---- getDevices ---------------------------------------------------------
 
-  describe("connectDevice()", () => {
-    it("updates the cache to connected=true", async () => {
-      mockRun.mockImplementation(() =>
-        Promise.resolve({ stdout: "Connection successful" }),
-      );
-
-      const result = await backend.connectDevice("AA:BB:CC:DD:EE:FF");
-      expect(result).toBe("Connection successful");
-      expect((backend as any).lastDeviceState.get("AA:BB:CC:DD:EE:FF")).toBe(true);
+  describe("getDevices()", () => {
+    it("returns [] when no adapter is present", async () => {
+      mockRunFull.mockImplementation(fakeBus({ noAdapter: true }) as any);
+      expect(await backend.getDevices()).toEqual([]);
     });
 
-    it("throws and does NOT cache when bluetoothctl reports a failure", async () => {
-      // bluetoothctl exits 0 even on bluez-side failures; we have to
-      // grep stdout to surface a real error and avoid a lying cache.
-      mockRun.mockImplementation(() =>
-        Promise.resolve({
-          stdout: "Attempting to connect to AA:BB:CC:DD:EE:FF\nFailed to connect: org.bluez.Error.Failed",
-        }),
+    it("parses devices with type from Icon", async () => {
+      mockRunFull.mockImplementation(
+        fakeBus({
+          macs: ["AA:BB:CC:DD:EE:0B", "AA:BB:CC:DD:EE:02"],
+          devices: {
+            "AA:BB:CC:DD:EE:0B": { connected: true, paired: true, name: "Xbox Controller", icon: "input-gaming" },
+            "AA:BB:CC:DD:EE:02": { connected: false, paired: true, name: "Keychron", icon: "input-keyboard" },
+          },
+        }) as any,
       );
-
-      await expect(backend.connectDevice("AA:BB:CC:DD:EE:FF")).rejects.toThrow(
-        /connect failed/i,
-      );
-      expect((backend as any).lastDeviceState.has("AA:BB:CC:DD:EE:FF")).toBe(false);
-    });
-  });
-
-  describe("disconnectDevice()", () => {
-    it("updates the cache to connected=false", async () => {
-      mockRun.mockImplementation(() =>
-        Promise.resolve({ stdout: "Successful disconnected" }),
-      );
-
-      const result = await backend.disconnectDevice("AA:BB:CC:DD:EE:FF");
-      expect(result).toBe("Successful disconnected");
-      expect((backend as any).lastDeviceState.get("AA:BB:CC:DD:EE:FF")).toBe(false);
+      const devices = await backend.getDevices();
+      expect(devices).toHaveLength(2);
+      expect(devices[0]).toEqual({
+        mac: "AA:BB:CC:DD:EE:0B",
+        name: "Xbox Controller",
+        connected: true,
+        paired: true,
+        type: "input",
+      });
+      expect(devices[1].type).toBe("keyboard");
+      expect(devices[1].connected).toBe(false);
     });
 
-    it("throws and does NOT cache when bluetoothctl reports a failure", async () => {
+    it("tolerates a missing Icon (type unknown)", async () => {
+      mockRunFull.mockImplementation(
+        fakeBus({
+          macs: ["AA:BB:CC:DD:EE:FF"],
+          devices: { "AA:BB:CC:DD:EE:FF": { connected: true, paired: true, name: "BLE Tag" } },
+        }) as any,
+      );
+      const [dev] = await backend.getDevices();
+      expect(dev.type).toBe("unknown");
+      expect(dev.connected).toBe(true);
+    });
+
+    it("preserves cached connection state on a transient device read error", async () => {
       (backend as any).lastDeviceState.set("AA:BB:CC:DD:EE:FF", true);
-      mockRun.mockImplementation(() =>
-        Promise.resolve({ stdout: "Failed to disconnect: Not connected" }),
-      );
-
-      await expect(
-        backend.disconnectDevice("AA:BB:CC:DD:EE:FF"),
-      ).rejects.toThrow(/disconnect failed/i);
-      // Cache untouched — still true from before the failed call.
-      expect((backend as any).lastDeviceState.get("AA:BB:CC:DD:EE:FF")).toBe(true);
+      mockRunFull.mockImplementation((cmd: string[]) => {
+        if (has(cmd, "tree", "--list")) return ok(["/org/bluez", ADAPTER, DEV("AA:BB:CC:DD:EE:FF")].join("\n"));
+        if (has(cmd, "get-property", "org.bluez.Device1")) return fail("DBus hiccup", 1);
+        return ok("");
+      });
+      const [dev] = await backend.getDevices();
+      expect(dev.connected).toBe(true); // cache preserved → no phantom deviceChanged
+      expect(dev.type).toBe("unknown");
     });
   });
 
-  // ---------------------------------------------------------------------------
-  // togglePower
-  // ---------------------------------------------------------------------------
+  // ---- togglePower --------------------------------------------------------
 
   describe("togglePower()", () => {
-    it("calls bluetoothctl power on", async () => {
-      mockRun.mockImplementation(() =>
-        Promise.resolve({ stdout: "Changing power on succeeded" }),
-      );
-
+    it("clears the rfkill soft block before setting Powered=true", async () => {
+      mockRunFull.mockImplementation(fakeBus({}) as any);
       await backend.togglePower(true);
-      expect(mockRun).toHaveBeenCalled();
-      const callArgs = mockRun.mock.calls[0][0] as string[];
-      expect(callArgs).toContain("power");
-      expect(callArgs).toContain("on");
+
+      const cmds = mockRunFull.mock.calls.map((c) => c[0] as string[]);
+      const rfkillIdx = cmds.findIndex((a) => a[0] === "rfkill" && a.includes("unblock"));
+      const setIdx = cmds.findIndex(
+        (a) => has(a, "set-property", "org.bluez.Adapter1", "Powered", "true"),
+      );
+      expect(rfkillIdx).toBeGreaterThanOrEqual(0);
+      expect(setIdx).toBeGreaterThanOrEqual(0);
+      expect(rfkillIdx).toBeLessThan(setIdx);
     });
 
-    it("calls bluetoothctl power off", async () => {
-      mockRun.mockImplementation(() =>
-        Promise.resolve({ stdout: "Changing power off succeeded" }),
-      );
-
+    it("does NOT touch rfkill when powering off", async () => {
+      mockRunFull.mockImplementation(fakeBus({}) as any);
       await backend.togglePower(false);
-      const callArgs = mockRun.mock.calls[0][0] as string[];
-      expect(callArgs).toContain("power");
-      expect(callArgs).toContain("off");
+      const usedRfkill = mockRunFull.mock.calls.some((c) => (c[0] as string[])[0] === "rfkill");
+      expect(usedRfkill).toBe(false);
     });
 
-    it("throws when bluetoothctl reports a failure", async () => {
-      mockRun.mockImplementation(() =>
-        Promise.resolve({
-          stdout: "Failed to set property Powered: Blocked through rfkill",
-        }),
+    it("still powers on when rfkill is unavailable", async () => {
+      mockRunFull.mockImplementation((cmd: string[]) => {
+        if (cmd[0] === "rfkill") return Promise.reject(new Error("no rfkill"));
+        return fakeBus({})(cmd);
+      });
+      await backend.togglePower(true);
+      const setOn = mockRunFull.mock.calls.some((c) =>
+        has(c[0] as string[], "set-property", "Powered", "true"),
       );
+      expect(setOn).toBe(true);
+    });
 
+    it("throws when BlueZ rejects the power change", async () => {
+      mockRunFull.mockImplementation((cmd: string[]) => {
+        if (has(cmd, "tree", "--list")) return ok(["/org/bluez", ADAPTER].join("\n"));
+        if (has(cmd, "set-property")) return fail("org.bluez.Error.Blocked", 1);
+        return ok("");
+      });
       await expect(backend.togglePower(true)).rejects.toThrow(/power on failed/i);
     });
   });
 
-  // ---------------------------------------------------------------------------
-  // _poll — adapter power/discovering watching
-  // ---------------------------------------------------------------------------
+  // ---- connect / disconnect ----------------------------------------------
 
-  describe("_poll() adapter watching", () => {
-    const showOutput = (powered: boolean, discovering = false) =>
-      [
-        "Controller AA:BB:CC:DD:EE:FF (public)",
-        "\tName: Test Adapter",
-        `\tPowered: ${powered ? "yes" : "no"}`,
-        `\tDiscovering: ${discovering ? "yes" : "no"}`,
-      ].join("\n");
+  describe("connectDevice() / disconnectDevice()", () => {
+    it("connects via Device1.Connect and caches connected=true", async () => {
+      mockRunFull.mockImplementation((cmd: string[]) => {
+        if (has(cmd, "tree", "--list")) return ok(["/org/bluez", ADAPTER].join("\n"));
+        if (has(cmd, "call", "Connect")) return ok("");
+        return ok("");
+      });
+      const res = await backend.connectDevice("AA:BB:CC:DD:EE:FF");
+      expect(res).toBe("Connection successful");
+      expect((backend as any).lastDeviceState.get("AA:BB:CC:DD:EE:FF")).toBe(true);
+      const connectCall = mockRunFull.mock.calls.find((c) => has(c[0] as string[], "call", "Connect"));
+      expect((connectCall![0] as string[])).toContain(DEV("AA:BB:CC:DD:EE:FF"));
+    });
 
-    const poll = () =>
-      (backend as unknown as { _poll(): Promise<void> })._poll();
+    it("throws and does NOT cache when Connect fails (non-zero exit)", async () => {
+      mockRunFull.mockImplementation((cmd: string[]) => {
+        if (has(cmd, "tree", "--list")) return ok(["/org/bluez", ADAPTER].join("\n"));
+        if (has(cmd, "call", "Connect")) return fail("org.bluez.Error.Failed", 1);
+        return ok("");
+      });
+      await expect(backend.connectDevice("AA:BB:CC:DD:EE:FF")).rejects.toThrow(/connect failed/i);
+      expect((backend as any).lastDeviceState.has("AA:BB:CC:DD:EE:FF")).toBe(false);
+    });
 
-    it("emits adapterChanged when adapter power flips between polls", async () => {
+    it("disconnects via Device1.Disconnect and caches connected=false", async () => {
+      mockRunFull.mockImplementation((cmd: string[]) => {
+        if (has(cmd, "tree", "--list")) return ok(["/org/bluez", ADAPTER].join("\n"));
+        return ok("");
+      });
+      await backend.disconnectDevice("AA:BB:CC:DD:EE:FF");
+      expect((backend as any).lastDeviceState.get("AA:BB:CC:DD:EE:FF")).toBe(false);
+    });
+  });
+
+  // ---- scanning -----------------------------------------------------------
+
+  describe("scan", () => {
+    it("startScan spawns a long-lived bluetoothctl process", async () => {
+      await backend.startScan();
+      const cmd = mockSpawn.mock.calls[0][0] as unknown as string[];
+      expect(cmd).toEqual(["bluetoothctl", "scan", "on"]);
+    });
+
+    it("stopScan kills the scan process", async () => {
+      let killed = false;
+      mockSpawn.mockImplementation(() => ({ kill: () => { killed = true; } }) as any);
+      await backend.startScan();
+      await backend.stopScan();
+      expect(killed).toBe(true);
+    });
+  });
+
+  // ---- poll loop emits ----------------------------------------------------
+
+  describe("_poll()", () => {
+    const poll = () => (backend as unknown as { _poll(): Promise<void> })._poll();
+
+    it("emits adapterChanged when power flips between polls", async () => {
       let powered = false;
-      mockRun.mockImplementation((cmd: string[]) => {
-        if (cmd.includes("show")) return Promise.resolve({ stdout: showOutput(powered) });
-        return Promise.resolve({ stdout: "" }); // devices → none
-      });
-
-      await poll(); // baseline read (powered:false) — no emit on first observation
-      expect(emittedEvents.filter((e) => e.event === "adapterChanged")).toHaveLength(0);
-
-      powered = true;
-      await poll(); // transition → emit
-      const evts = emittedEvents.filter((e) => e.event === "adapterChanged");
-      expect(evts).toHaveLength(1);
-      expect((evts[0].data as { powered: boolean }).powered).toBe(true);
-    });
-
-    it("does not emit adapterChanged when the adapter is unchanged", async () => {
-      mockRun.mockImplementation((cmd: string[]) => {
-        if (cmd.includes("show")) return Promise.resolve({ stdout: showOutput(true) });
-        return Promise.resolve({ stdout: "" });
-      });
-
-      await poll();
-      await poll();
-      expect(emittedEvents.filter((e) => e.event === "adapterChanged")).toHaveLength(0);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // startScan / stopScan
-  // ---------------------------------------------------------------------------
-
-  describe("startScan()", () => {
-    it("returns scanning started message", async () => {
-      const mockSpawn = spyOn(Bun, "spawn").mockReturnValue({
-        kill: () => {},
-        exited: Promise.resolve(0),
-      } as any);
-
-      const result = await backend.startScan();
-      expect(result).toBe("Scanning started");
-
-      mockSpawn.mockRestore();
-    });
-  });
-
-  describe("stopScan()", () => {
-    it("calls bluetoothctl scan off", async () => {
-      mockRun.mockImplementation(() =>
-        Promise.resolve({ stdout: "Discovery stopped" }),
+      mockRunFull.mockImplementation((cmd: string[]) =>
+        fakeBus({
+          adapter: { powered, discovering: false, name: "steamdeck", address: "AA:BB:CC:DD:EE:FF" },
+        })(cmd),
       );
+      await poll(); // first read: powered=false, seeds lastAdapter, no emit
+      expect(emitted.find((e) => e.event === "adapterChanged")).toBeUndefined();
+      powered = true;
+      await poll();
+      expect(emitted.find((e) => e.event === "adapterChanged")).toBeDefined();
+    });
 
-      const result = await backend.stopScan();
-      expect(result).toBe("Discovery stopped");
-      const callArgs = mockRun.mock.calls[0][0] as string[];
-      expect(callArgs).toContain("scan");
-      expect(callArgs).toContain("off");
+    it("emits deviceChanged when a device's connected state flips", async () => {
+      let connected = false;
+      mockRunFull.mockImplementation((cmd: string[]) =>
+        fakeBus({
+          macs: ["AA:BB:CC:DD:EE:FF"],
+          devices: { "AA:BB:CC:DD:EE:FF": { connected, paired: true, name: "Pad", icon: "input-gaming" } },
+        })(cmd),
+      );
+      await poll(); // seed
+      connected = true;
+      await poll();
+      const ev = emitted.find((e) => e.event === "deviceChanged");
+      expect(ev).toBeDefined();
     });
   });
 });
