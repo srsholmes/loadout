@@ -5,14 +5,6 @@ const ENABLED_KEY = "enabledPlugins";
 const WELCOME_KEY = "welcomeCompleted";
 
 /**
- * Plugins that are pre-toggled on the welcome screen and treated as the
- * implicit allow-list if a user closes the welcome without saving a choice.
- * Matches the brief in #120 — tdp, fan, rgb on by default so a first-boot
- * user lands on a working set of controls.
- */
-export const DEFAULT_ENABLED_PLUGINS = ["tdp-control", "fan-control", "rgb-control"];
-
-/**
  * Persisted enable list for the sidebar / homepage. `undefined` means the
  * user hasn't picked yet (pre-welcome), in which case every plugin is
  * surfaced — the welcome modal sits on top regardless, so this only

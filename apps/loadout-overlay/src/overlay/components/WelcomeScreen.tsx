@@ -9,7 +9,7 @@ import {
 } from "@loadout/ui";
 import { Focusable, useFocusable, FocusContext } from "./GamepadNav";
 import type { PluginInfo } from "../hooks/usePlugins";
-import { DEFAULT_ENABLED_PLUGINS, setWelcomeCompleted } from "../hooks/useEnabledPlugins";
+import { setWelcomeCompleted } from "../hooks/useEnabledPlugins";
 import { setConfigValue, getConfigValue } from "../lib/userConfig";
 import { applyTheme, LOADOUT_THEMES } from "./Settings";
 import {
@@ -116,20 +116,30 @@ export function WelcomeScreen({
   }
 
   // Seed plugin selection from the current persisted list when re-opening,
-  // or from the spec'd defaults (tdp/fan/rgb) on first boot.
+  // or — on first boot — turn every discovered plugin on by default.
   const [selected, setSelected] = useState<Set<string>>(() => {
-    const base = initialEnabled ?? DEFAULT_ENABLED_PLUGINS;
-    return new Set(base);
+    return new Set(initialEnabled ?? plugins.map((p) => p.id));
   });
 
-  // Re-seed when `initialEnabled` resolves after async config load.
+  // Re-seed when `initialEnabled` resolves after async config load, or when
+  // the plugin list streams in on first boot (no persisted choice yet).
   const sentinelRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    const key = initialEnabled ? initialEnabled.join("|") : "__defaults__";
+    if (initialEnabled) {
+      const key = `saved:${initialEnabled.join("|")}`;
+      if (sentinelRef.current === key) return;
+      sentinelRef.current = key;
+      setSelected(new Set(initialEnabled));
+      return;
+    }
+    // First boot: enable all discovered plugins once they've loaded.
+    if (plugins.length === 0) return;
+    const ids = plugins.map((p) => p.id);
+    const key = `all:${[...ids].sort().join("|")}`;
     if (sentinelRef.current === key) return;
     sentinelRef.current = key;
-    setSelected(new Set(initialEnabled ?? DEFAULT_ENABLED_PLUGINS));
-  }, [initialEnabled]);
+    setSelected(new Set(ids));
+  }, [initialEnabled, plugins]);
 
   const [shortcuts, setShortcuts] = useState<ControllerShortcuts | null>(null);
   useEffect(() => {
@@ -177,6 +187,11 @@ export function WelcomeScreen({
       else next.add(id);
       return next;
     });
+  }
+
+  // Master switch on the Plugins step — flip everything on, or everything off.
+  function setAllPlugins(on: boolean) {
+    setSelected(on ? new Set(sortedPlugins.map((p) => p.id)) : new Set());
   }
 
   function goNext() {
@@ -298,6 +313,7 @@ export function WelcomeScreen({
                   loading={loading}
                   selected={selected}
                   toggle={togglePlugin}
+                  setAll={setAllPlugins}
                 />
               )}
               {stepId === "shortcuts" && (
@@ -396,7 +412,7 @@ function StepHeader({
     },
     plugins: {
       title: "Choose your plugins",
-      sub: `${totalPlugins} plugins discovered. Enable what you'll use — disabled plugins are hidden from the sidebar and homepage. Re-toggle any time from Settings → Plugins.`,
+      sub: `${totalPlugins} plugins discovered, all enabled by default. Turn off any you won't use — disabled plugins are hidden from the sidebar and homepage. Re-toggle any time from Settings → Plugins.`,
     },
     shortcuts: {
       title: "Controller shortcuts",
@@ -1282,11 +1298,13 @@ function StepPlugins({
   loading,
   selected,
   toggle,
+  setAll,
 }: {
   plugins: PluginInfo[];
   loading: boolean;
   selected: Set<string>;
   toggle: (id: string) => void;
+  setAll: (on: boolean) => void;
 }) {
   if (loading && plugins.length === 0) {
     return (
@@ -1302,8 +1320,36 @@ function StepPlugins({
       </div>
     );
   }
+  const allOn = plugins.every((p) => selected.has(p.id));
   return (
     <div className="flex flex-col gap-1">
+      {/* Master switch — flips every plugin on or off together. */}
+      <Focusable
+        focusKey="welcome-plugin-all"
+        onActivate={() => setAll(!allOn)}
+      >
+        <div
+          role="button"
+          tabIndex={-1}
+          onClick={() => setAll(!allOn)}
+          className="flex items-center gap-3 px-3 py-2.5 rounded-xl min-h-[56px] cursor-pointer transition-colors border border-base-300/60 bg-base-200/60 hover:bg-base-200 mb-1"
+        >
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center text-base font-bold shrink-0 bg-base-300/70 text-base-content/70">
+            ★
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold text-base-content truncate">
+              {allOn ? "Disable all plugins" : "Enable all plugins"}
+            </div>
+            <div className="text-xs text-base-content/50 line-clamp-2">
+              Toggle every plugin at once.
+            </div>
+          </div>
+          <div className="shrink-0">
+            <Toggle checked={allOn} onChange={() => setAll(!allOn)} />
+          </div>
+        </div>
+      </Focusable>
       {plugins.map((plugin) => {
         const on = selected.has(plugin.id);
         return (
