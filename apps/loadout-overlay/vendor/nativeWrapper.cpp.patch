@@ -1,8 +1,6 @@
-diff --git a/package/src/native/linux/nativeWrapper.cpp b/package/src/native/linux/nativeWrapper.cpp
-index 36310d6..87818a6 100644
---- a/package/src/native/linux/nativeWrapper.cpp
-+++ b/package/src/native/linux/nativeWrapper.cpp
-@@ -802,8 +802,7 @@ public:
+--- a/package/src/native/linux/nativeWrapper.cpp	2026-06-20 23:05:57.612319441 +0100
++++ b/package/src/native/linux/nativeWrapper.cpp	2026-06-20 23:07:06.899297213 +0100
+@@ -802,8 +802,7 @@
          // In multi-process mode, return nullptr so render process uses the helper
          return nullptr;
      }
@@ -12,7 +10,7 @@ index 36310d6..87818a6 100644
      void OnContextInitialized() override {
          CefRegisterSchemeHandlerFactory("views", "", new ViewsSchemeHandlerFactory());
      }
-@@ -2046,6 +2045,7 @@ bool initializeCEF() {
+@@ -2046,6 +2045,7 @@
      CefSettings settings;
      settings.no_sandbox = true;
      settings.windowless_rendering_enabled = true;  // Required for OSR/transparent windows
@@ -20,7 +18,94 @@ index 36310d6..87818a6 100644
      settings.log_severity = LOGSEVERITY_ERROR;  // Change to WARNING to see more CEF logs
      // settings.remote_debugging_port = 9222;
      
-@@ -5882,20 +5882,38 @@ gboolean process_x11_events(gpointer data) {
+@@ -5307,6 +5307,17 @@
+     {
+         std::unique_lock<std::mutex> lock(g_gtkInitMutex);
+         if (!g_gtkInitialized) {
++            // loadout fix (electrobun #426): Xlib is driven from multiple
++            // threads — ElectrobunClient::OnPaint (CEF UI thread) does
++            // XCreateImage/XPutImage/XFlush on the SAME Display* that
++            // process_x11_events (main/GTK thread) drains events from. With
++            // no XInitThreads() those concurrent Xlib calls corrupt Xlib's
++            // internal request heap during a move/resize storm → random
++            // SIGSEGV/SIGABRT surfacing in unrelated (JSC GC) threads. This
++            // must run before gtk_init() and any XOpenDisplay(), so it is the
++            // very first call here.
++            XInitThreads();
++
+             // Force X11 backend on Wayland systems
+             setenv("GDK_BACKEND", "x11", 1);
+             
+@@ -5795,35 +5806,49 @@
+                     }
+                     break;
+                     
+-                case ConfigureNotify:
++                case ConfigureNotify: {
+                     // Only process ConfigureNotify events for the actual main window, not CEF child windows
+                     if (event.xconfigure.window != x11win->window) {
+                         break;
+                     }
+-                    
+-                    if (event.xconfigure.width != x11win->width || event.xconfigure.height != x11win->height ||
+-                        event.xconfigure.x != x11win->x || event.xconfigure.y != x11win->y) {
+-                        
+-                        
+-                        x11win->x = event.xconfigure.x;
+-                        x11win->y = event.xconfigure.y;
+-                        x11win->width = event.xconfigure.width;
+-                        x11win->height = event.xconfigure.height;
+-                        
+-                        // Call move callback when position changes
+-                        if (x11win->moveCallback) {
+-                            x11win->moveCallback(x11win->windowId, x11win->x, x11win->y);
+-                        }
+-                        
++
++                    // loadout fix (electrobun #426): a drag or monitor-cross
++                    // emits a STORM of ConfigureNotify events. Firing the JS
++                    // move/resize callbacks and a CEF WasResized()/OnPaint
++                    // re-render for every one floods both the JS worker and
++                    // the OSR pipeline and corrupts the heap. Coalesce the
++                    // whole pending burst down to the LATEST geometry first.
++                    XEvent latest = event;
++                    XEvent peek;
++                    while (XCheckTypedWindowEvent(x11win->display, x11win->window, ConfigureNotify, &peek)) {
++                        latest = peek;
++                    }
++
++                    bool moved   = (latest.xconfigure.x != x11win->x) || (latest.xconfigure.y != x11win->y);
++                    bool resized = (latest.xconfigure.width != x11win->width) || (latest.xconfigure.height != x11win->height);
++
++                    x11win->x = latest.xconfigure.x;
++                    x11win->y = latest.xconfigure.y;
++                    x11win->width = latest.xconfigure.width;
++                    x11win->height = latest.xconfigure.height;
++
++                    // Fire move only when the position actually changed.
++                    if (moved && x11win->moveCallback) {
++                        x11win->moveCallback(x11win->windowId, x11win->x, x11win->y);
++                    }
++
++                    // Fire resize + OSR re-layout only when the SIZE actually
++                    // changed. A pure move (same w/h) must NOT trigger a CEF
++                    // WasResized()/OnPaint storm — that was the move-crash.
++                    if (resized) {
+                         if (x11win->resizeCallback) {
+-                            x11win->resizeCallback(x11win->windowId, x11win->x, x11win->y, 
++                            x11win->resizeCallback(x11win->windowId, x11win->x, x11win->y,
+                                                     x11win->width, x11win->height);
+                         }
+-                        
+-                        // Auto-resize webviews in this window
+                         resizeAutoSizingWebviewsInWindow(x11win->windowId, x11win->width, x11win->height);
+                     }
+                     break;
++                }
+                     
+                 case Expose:
+                     // Handle expose events if needed
+@@ -5882,20 +5907,38 @@
  void runCEFEventLoop() {
      // Initialize GTK on the main thread (this MUST be done here)
      initializeGTK();
@@ -68,7 +153,7 @@ index 36310d6..87818a6 100644
      // Cleanup CEF on shutdown
  
      if (g_cefInitialized) {
-@@ -8938,9 +8956,15 @@ ELECTROBUN_EXPORT void stopEventLoop() {
+@@ -8938,9 +8981,15 @@
      g_shuttingDown.store(true);
      printf("[stopEventLoop] Initiating clean event loop exit\n");
  

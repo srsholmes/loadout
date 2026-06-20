@@ -1,10 +1,15 @@
 # Patched Electrobun native wrapper (`libNativeWrapper.so`)
 
 This directory vendors a **patched build of Electrobun's Linux native wrapper**
-that fixes a 100%-CPU busy-loop in the overlay's CEF browser process. The build
-step (`scripts/build.sh`) copies `libNativeWrapper.so` from here over the stock
-one that `electrobun build --release` downloads, so clones and CI releases get
-the fix automatically.
+that fixes two bugs in the overlay's CEF browser process:
+
+1. A **100%-CPU busy-loop** (the original reason this vendor exists).
+2. A **multithreaded-Xlib crash on window move/resize** (upstream electrobun
+   #426) — see "The move/resize crash" below.
+
+The build step (`scripts/build.sh`) copies `libNativeWrapper.so` from here over
+the stock one that `electrobun build --release` downloads, so clones and CI
+releases get both fixes automatically.
 
 ## The bug it fixes
 
@@ -45,6 +50,34 @@ Verified on-device: overlay renders, opens/closes, window maps/unmaps, clean
 shutdown, no regressions.
 
 See `nativeWrapper.cpp.patch` for the exact diff.
+
+## The move/resize crash (electrobun #426)
+
+Dragging the overlay window — resizing from a corner, or moving it between
+monitors — crashed the whole app with `Signal 11` (and sometimes `SIGABRT`),
+with non-deterministic backtraces in JSC's GC. Reproducible in a **pristine
+`electrobun init` CEF app** on 1.16.0 **and** 1.18.1, so it's an upstream bug,
+not ours (filed upstream as #426).
+
+Root cause: **Xlib is driven from two threads with no `XInitThreads()`**.
+`ElectrobunClient::OnPaint` (CEF UI thread) does `XCreateImage` / `XPutImage` /
+`XFlush` on the **same `Display*`** that `process_x11_events` (the main/GTK
+thread) drains events from. Without `XInitThreads()` those concurrent Xlib
+calls corrupt Xlib's internal request heap during a move/resize event storm —
+the corruption then surfaces as a SIGSEGV/SIGABRT in an unrelated thread
+(usually JSC GC), which is why the backtraces looked random.
+
+The fix is two changes in `runCEFEventLoop`/`process_x11_events`:
+
+- **`XInitThreads()`** as the first call in `initializeGTK()` (before
+  `gtk_init` and any `XOpenDisplay`), so Xlib serializes cross-thread calls.
+- **Coalesce `ConfigureNotify`**: a drag emits a storm of them; we collapse the
+  pending burst to the latest geometry (`XCheckTypedWindowEvent`) and fire the
+  JS move/resize callbacks + the CEF `WasResized()`/OSR re-render **at most once
+  per tick**, and only when x/y (move) or w/h (resize) actually changed — a pure
+  move no longer triggers an OSR repaint storm.
+
+Both are in `nativeWrapper.cpp.patch` alongside the CPU-spin fix.
 
 ## Provenance
 

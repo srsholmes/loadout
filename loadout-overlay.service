@@ -26,18 +26,18 @@ ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do curl -sf "http://localhost:${L
 # src/bun/native/display-detect.ts).
 Environment=HOME=%h
 
-# Disable GDK's GLX path. libNativeWrapper hosts CEF inside a GTK3 window;
-# on the gamescope X server (:0) GTK's GLX probe throws a recurring
-# "X11 Error: GLXBadWindow (code 170)" at startup (the GL surface targets a
-# window that's invalid under gamescope/desktop-mode compositing). CEF
-# renders the actual UI itself, so the GTK host window needs no GL — forcing
-# GDK to its software/cairo path removes the error cleanly with no visual
-# change. Must be set in the unit env: libNativeWrapper opens X in
-# startEventLoop() before our worker thread runs, so JS can't set it in time
-# (same reason DISPLAY is resolved in the ExecStart wrapper below).
-# NOTE: this clears the GLXBadWindow noise only; it does NOT fix the separate
-# CEF/GTK event-loop 100%-CPU spin (tracked elsewhere).
-Environment=GDK_GL=disable
+# NOTE: GDK_GL=disable was removed here. It only silenced a cosmetic
+# "X11 Error: GLXBadWindow (code 170)" GTK GLX-probe warning under
+# gamescope (CEF renders the UI itself, so the GTK host window needs no
+# GL). But forcing GDK to its software/cairo path made the CEF host
+# surface segfault when reallocated on a window resize — so in desktop
+# mode, dragging a resize handle crashed the overlay (the window is
+# created resizable; see BrowserWindow in src/bun/index.ts). Re-enabling
+# GL restores safe live resize. The GLXBadWindow line returns as harmless
+# log noise under gamescope; if it ever needs suppressing again, scope it
+# to gamescope mode only (e.g. export GDK_GL=disable from the ExecStart
+# wrapper when a gamescope display is detected) rather than setting it
+# unconditionally here.
 
 # CEF remote DevTools — attach Chrome to http://localhost:9222 on the
 # device or over SSH tunnel. Port is baked into the build via
