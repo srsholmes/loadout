@@ -3,6 +3,7 @@ import {
   PluginHeader,
   SegmentedItem,
   GameCard,
+  GameCardGrid,
   useFocusable,
   mountComponent,
   mountHeaderStub,
@@ -486,11 +487,11 @@ function PlayTime() {
                         : `No games played this ${range} yet.`}
                 </div>
               ) : (
-                <div className="grid grid-cols-4 sidebar-collapsed:grid-cols-6 gap-2.5">
+                <GameCardGrid>
                   {gridGames.map((g) => (
                     <GameGridCard key={g.appId} game={g} maxMs={maxGameMs} />
                   ))}
-                </div>
+                </GameCardGrid>
               )}
             </div>
 

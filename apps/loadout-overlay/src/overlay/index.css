@@ -752,6 +752,12 @@ body {
   gap: 16px;
 }
 .page-content.wide { max-width: 1080px; }
+/* Full-bleed variant for media-grid list views (SGDB, store-bridge,
+   recomp, and the library pickers). Drops the centered reading column so
+   the flowing GameCardGrid can use the whole content area on wide /
+   external displays instead of leaving big gutters either side. Detail
+   and settings views keep the capped width. */
+.page-content.full { max-width: none; }
 
 /* Subsection inside a card — groups related settings without splitting
    into multiple cards. */

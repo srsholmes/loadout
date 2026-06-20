@@ -10,6 +10,7 @@ import {
   Badge,
   Button,
   GameCard,
+  GameCardGrid,
   GameHero,
   HeaderBackButton,
   IconButton,
@@ -724,7 +725,7 @@ function CatalogView() {
               </Text>
             )}
             {!loading && filteredGames.length > 0 && (
-              <div className="grid grid-cols-4 sidebar-collapsed:grid-cols-6 gap-2.5">
+              <GameCardGrid>
                 {filteredGames.map((g) => (
                   <CatalogTile
                     key={`${g.storeId}:${g.id}`}
@@ -733,7 +734,7 @@ function CatalogView() {
                     onOpen={() => nav.toDetail(g.storeId, g.id)}
                   />
                 ))}
-              </div>
+              </GameCardGrid>
             )}
           </>
         )}
@@ -844,6 +845,7 @@ function CatalogTile({
         <div className="w-full" onClick={(e) => e.stopPropagation()}>
           <Button
             size="sm"
+            fullWidth
             variant={action.variant}
             disabled={action.disabled || busy}
             onClick={runAction}
