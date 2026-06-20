@@ -6,11 +6,13 @@
 // cursor only reaches a corner of the window and clicks land far from
 // where they're drawn (issue #106).
 //
-// We can't fix this by resizing the live CEF window — under
-// `GDK_GL=disable` the GTK/CEF surface is software-rendered and
-// reallocating it on resize segfaults CEF (see PR #113). So the size has
-// to be known *before* `new BrowserWindow(...)`, which is why the probe
-// here is synchronous: it runs once, inline, at startup.
+// We size the window correctly up front rather than resizing it live on
+// show(): the gamescope pointer-mapping fix needs the right size *before*
+// `new BrowserWindow(...)`, which is why the probe here is synchronous —
+// it runs once, inline, at startup. (Historically live resize was also
+// unsafe because `GDK_GL=disable` forced software rendering and
+// reallocating that surface segfaulted CEF — PR #113; that flag has since
+// been removed, so user-driven resize is fine.)
 //
 // xrandr is the right source (not /sys/class/drm): we want the inner X
 // server's screen size — the same space `_positionOnPrimary` queries —
