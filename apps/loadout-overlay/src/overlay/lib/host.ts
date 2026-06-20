@@ -60,6 +60,27 @@ export async function restartServer(): Promise<{ success: boolean; error?: strin
   return result as { success: boolean; error?: string };
 }
 
+/**
+ * Dump the overlay UI's captured console logs and the backend server
+ * log into a timestamped file in the user's Downloads folder (#130).
+ * The UI logs are collected here from the in-webview ring buffer and
+ * shipped to the Bun host, which combines them with the server log on
+ * disk and writes the file. No-op (returns `{ success: false }`)
+ * outside Electrobun — there's no host to write the file.
+ */
+export async function exportLogs(): Promise<{
+  success: boolean;
+  error?: string;
+  path?: string;
+}> {
+  const { getCapturedLogs } = await import("./logBuffer");
+  const result = await rpcInvoke("exportLogs", { uiLogs: getCapturedLogs() });
+  if (!result || typeof result !== "object") {
+    return { success: false, error: "Host did not respond" };
+  }
+  return result as { success: boolean; error?: string; path?: string };
+}
+
 async function rpcResultOrError(
   cmd: string,
 ): Promise<{ success: boolean; error?: string }> {
