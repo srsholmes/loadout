@@ -7,7 +7,7 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 cd /work/package
 
-CEF_URL="https://cef-builds.spotifycdn.com/cef_binary_145.0.23+g3e7fe1c%2Bchromium-145.0.7632.68_linux64_minimal.tar.bz2"
+CEF_URL="https://cef-builds.spotifycdn.com/cef_binary_147.0.10+gd58e84d%2Bchromium-147.0.7727.118_linux64_minimal.tar.bz2"
 
 echo "::: 1. apt deps"
 apt-get update -qq
