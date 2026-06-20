@@ -34,7 +34,16 @@ const SERVICE = "org.shadowblip.InputPlumber";
 const COMPOSITE_IFACE = "org.shadowblip.Input.CompositeDevice";
 const TARGET_IFACE = "org.shadowblip.Input.Target";
 
-const RECONCILE_INTERVAL_MS = 2_000;
+// Reconcile cadence. The loop only has real work when at least one
+// device is disabled — its silence must be re-asserted promptly if it
+// re-appears on the bus (hotplug, InputPlumber restart). With nothing
+// disabled there's nothing to re-assert, so we back off from the fast
+// cadence to an idle one; this drops the bulk of the plugin's busctl
+// traffic (the common case is zero disabled controllers, where it used
+// to poll every 2s forever). The UI still gets fresh data on demand via
+// refreshControllers(), independent of this cadence.
+const RECONCILE_FAST_MS = 2_000;
+const RECONCILE_IDLE_MS = 30_000;
 
 // What we hand to SetTargetDevices to silence a controller. InputPlumber
 // recognises "null" as a no-op sink kind.
@@ -211,7 +220,11 @@ export default class DisableControllerInputBackend implements PluginBackend {
 
   private state: State = { version: 1, devices: [] };
   private unavailable = false;
-  private reconcileTimer?: ReturnType<typeof setInterval>;
+  private reconcileTimer?: ReturnType<typeof setTimeout>;
+  // Cadence the next reconcile is scheduled at. Drives the "connected"
+  // freshness window so it tracks the actual poll rate (a device seen
+  // within the last two ticks counts as present) instead of a fixed 2s.
+  private currentIntervalMs = RECONCILE_FAST_MS;
   /**
    * `_reconcile` skip-if-busy flag — keeps the 2 s timer from piling up
    * extra ticks behind a slow walk (e.g. busctl back-pressure on a host
@@ -247,15 +260,41 @@ export default class DisableControllerInputBackend implements PluginBackend {
     }
 
     await this._reconcile();
-    this.reconcileTimer = setInterval(() => {
-      this._reconcile().catch((e) =>
-        console.error("[disable-controller-input] reconcile error:", e),
-      );
-    }, RECONCILE_INTERVAL_MS);
+    this._scheduleReconcile();
+  }
+
+  /** True if the reconcile loop has work to do — i.e. at least one
+   *  device the user has disabled, whose silence we must keep asserting. */
+  private _hasPendingWork(): boolean {
+    return this.state.devices.some((d) => d.disabled);
+  }
+
+  /** "Connected" freshness window: a device seen within the last two
+   *  poll ticks counts as present. Tracks the live cadence so it stays
+   *  meaningful when we back off to the idle rate. */
+  private _connectedWindowMs(): number {
+    return this.currentIntervalMs * 2;
+  }
+
+  /** Schedule the next reconcile, picking fast vs idle cadence from
+   *  whether there's pending work. Self-reschedules after each run so the
+   *  cadence re-evaluates every tick. */
+  private _scheduleReconcile(): void {
+    clearTimeout(this.reconcileTimer);
+    this.currentIntervalMs = this._hasPendingWork()
+      ? RECONCILE_FAST_MS
+      : RECONCILE_IDLE_MS;
+    this.reconcileTimer = setTimeout(() => {
+      this._reconcile()
+        .catch((e) =>
+          console.error("[disable-controller-input] reconcile error:", e),
+        )
+        .finally(() => this._scheduleReconcile());
+    }, this.currentIntervalMs);
   }
 
   async onUnload(): Promise<void> {
-    clearInterval(this.reconcileTimer);
+    clearTimeout(this.reconcileTimer);
     // Deliberately do NOT release silenced devices — the whole point is
     // for the silence to persist across plugin reloads. Cache on disk
     // is the source of truth; next onLoad reconciles.
@@ -285,7 +324,7 @@ export default class DisableControllerInputBackend implements PluginBackend {
         name: d.name,
         // Heuristic: a device is "connected" if reconcile observed it
         // within the last two ticks. Avoids a per-call bus walk.
-        connected: Date.now() - d.lastSeenMs < RECONCILE_INTERVAL_MS * 2,
+        connected: Date.now() - d.lastSeenMs < this._connectedWindowMs(),
         disabled: d.disabled,
         savedKinds: d.savedKinds,
       })),
@@ -306,7 +345,7 @@ export default class DisableControllerInputBackend implements PluginBackend {
       if (!dev) return { ok: false, error: "Unknown device" };
 
       const connected =
-        Date.now() - dev.lastSeenMs < RECONCILE_INTERVAL_MS * 2;
+        Date.now() - dev.lastSeenMs < this._connectedWindowMs();
 
       if (disabled) {
         if (connected) {
@@ -336,6 +375,9 @@ export default class DisableControllerInputBackend implements PluginBackend {
       }
 
       await this._persist();
+      // Disabling/enabling changes whether the loop has work — re-pick
+      // the cadence now instead of waiting up to a full idle interval.
+      this._scheduleReconcile();
       this.emit?.({ event: "controllersChanged", data: undefined });
       return { ok: true };
     });
@@ -358,7 +400,7 @@ export default class DisableControllerInputBackend implements PluginBackend {
       // something needs cleanup.
       const connected =
         !this.unavailable &&
-        Date.now() - dev.lastSeenMs < RECONCILE_INTERVAL_MS * 2;
+        Date.now() - dev.lastSeenMs < this._connectedWindowMs();
       if (dev.disabled && connected) {
         const kinds = dev.savedKinds.length > 0 ? dev.savedKinds : DEFAULT_KINDS;
         const r = await setTargetKinds(dev.lastDbusPath, kinds);
@@ -371,6 +413,9 @@ export default class DisableControllerInputBackend implements PluginBackend {
 
       this.state.devices.splice(idx, 1);
       await this._persist();
+      // Forgetting a disabled device may remove the loop's last bit of
+      // work — re-pick the cadence.
+      this._scheduleReconcile();
       this.emit?.({ event: "controllersChanged", data: undefined });
       return { ok: true };
     });
@@ -451,7 +496,7 @@ export default class DisableControllerInputBackend implements PluginBackend {
           }
           // lastSeenMs always changes — track topology separately so we
           // don't churn disk every 2 s when nothing meaningful moved.
-          if (now - dev.lastSeenMs > RECONCILE_INTERVAL_MS * 2) {
+          if (now - dev.lastSeenMs > this._connectedWindowMs()) {
             // Was previously offline; transition is interesting.
             topologyChanged = true;
           }
@@ -489,7 +534,7 @@ export default class DisableControllerInputBackend implements PluginBackend {
       for (const dev of this.state.devices) {
         if (
           !seenHashes.has(dev.hash) &&
-          now - dev.lastSeenMs < RECONCILE_INTERVAL_MS * 2
+          now - dev.lastSeenMs < this._connectedWindowMs()
         ) {
           // Just-vanished. Don't touch lastSeenMs — letting it age out
           // naturally is what the `connected` heuristic relies on.
