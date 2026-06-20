@@ -57,12 +57,19 @@ export function withCommandPolicy<T>(
  * message naming the offending binary and the exact manifest edit to
  * allow it.
  */
-function enforceCommandPolicy(cmd: string[]): void {
+function enforceCommandPolicy(cmd: string[], quiet = false): void {
   const policy = policyStorage.getStore();
   if (!policy) return; // unscoped (core/overlay) — unrestricted
 
   const bin = basename(cmd[0] ?? "");
-  policy.log?.(`[exec] plugin "${policy.pluginId}" runs: ${cmd.join(" ")}`);
+  // `quiet` suppresses the per-call audit line for high-frequency polling
+  // commands (e.g. the bluetooth plugin re-reads adapter/device state
+  // every 3s) that would otherwise flood the log with thousands of
+  // identical lines per session. Denials are still logged below — a
+  // blocked command is a signal worth keeping regardless.
+  if (!quiet) {
+    policy.log?.(`[exec] plugin "${policy.pluginId}" runs: ${cmd.join(" ")}`);
+  }
 
   if (!policy.allowed.includes(bin)) {
     const msg =
@@ -93,6 +100,10 @@ export interface RunOptions {
   env?: Record<string, string | undefined>;
   /** Working directory. Defaults to the process cwd. */
   cwd?: string;
+  /** Skip the command-policy audit log line for this call (the policy is
+   *  still enforced — denials are still logged). Set on routine, high-
+   *  frequency polling commands so they don't flood the session log. */
+  quiet?: boolean;
 }
 
 export interface RunResult {
@@ -159,7 +170,7 @@ export async function runFull(
   cmd: string[],
   opts: RunOptions = {},
 ): Promise<RunResult> {
-  enforceCommandPolicy(cmd);
+  enforceCommandPolicy(cmd, opts.quiet);
   const proc = Bun.spawn(cmd, buildOpts(opts));
   let timer: ReturnType<typeof setTimeout> | null = null;
   let timedOut = false;
