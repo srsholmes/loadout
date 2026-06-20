@@ -1,42 +1,25 @@
---- a/package/src/native/linux/nativeWrapper.cpp	2026-06-20 23:05:57.612319441 +0100
-+++ b/package/src/native/linux/nativeWrapper.cpp	2026-06-20 23:07:06.899297213 +0100
-@@ -802,8 +802,7 @@
-         // In multi-process mode, return nullptr so render process uses the helper
-         return nullptr;
-     }
--    
--    
-+
-     void OnContextInitialized() override {
-         CefRegisterSchemeHandlerFactory("views", "", new ViewsSchemeHandlerFactory());
-     }
-@@ -2046,6 +2045,7 @@
-     CefSettings settings;
-     settings.no_sandbox = true;
-     settings.windowless_rendering_enabled = true;  // Required for OSR/transparent windows
-+    settings.external_message_pump = false;  // loadout CPU-spin fix: drive CEF's own MessagePumpGlib via CefRunMessageLoop() (see runCEFEventLoop)
-     settings.log_severity = LOGSEVERITY_ERROR;  // Change to WARNING to see more CEF logs
-     // settings.remote_debugging_port = 9222;
-     
-@@ -5307,6 +5307,17 @@
+--- a/package/src/native/linux/nativeWrapper.cpp	2026-06-20 23:28:36.845337675 +0100
++++ b/package/src/native/linux/nativeWrapper.cpp	2026-06-20 23:31:45.684809100 +0100
+@@ -5643,6 +5643,18 @@
      {
          std::unique_lock<std::mutex> lock(g_gtkInitMutex);
          if (!g_gtkInitialized) {
-+            // loadout fix (electrobun #426): Xlib is driven from multiple
-+            // threads — ElectrobunClient::OnPaint (CEF UI thread) does
-+            // XCreateImage/XPutImage/XFlush on the SAME Display* that
-+            // process_x11_events (main/GTK thread) drains events from. With
-+            // no XInitThreads() those concurrent Xlib calls corrupt Xlib's
-+            // internal request heap during a move/resize storm → random
-+            // SIGSEGV/SIGABRT surfacing in unrelated (JSC GC) threads. This
-+            // must run before gtk_init() and any XOpenDisplay(), so it is the
-+            // very first call here.
++            // Xlib is driven from multiple threads: ElectrobunClient::OnPaint
++            // (CEF UI thread) does XCreateImage/XPutImage/XFlush on the OSR
++            // buffer using the SAME Display* that process_x11_events (the
++            // main/GTK thread) drains events from. Without XInitThreads()
++            // those concurrent Xlib calls corrupt Xlib's internal request
++            // buffer during a window move/resize event storm, and the
++            // corruption later surfaces as a SIGSEGV/SIGABRT in an unrelated
++            // thread (typically the JS engine's GC) — see the linked issues.
++            // XInitThreads() must run before gtk_init() and any XOpenDisplay(),
++            // so it is the very first call here.
 +            XInitThreads();
 +
              // Force X11 backend on Wayland systems
              setenv("GDK_BACKEND", "x11", 1);
              
-@@ -5795,35 +5806,49 @@
+@@ -6185,35 +6197,49 @@
                      }
                      break;
                      
@@ -62,12 +45,12 @@
 -                        }
 -                        
 +
-+                    // loadout fix (electrobun #426): a drag or monitor-cross
-+                    // emits a STORM of ConfigureNotify events. Firing the JS
-+                    // move/resize callbacks and a CEF WasResized()/OnPaint
-+                    // re-render for every one floods both the JS worker and
-+                    // the OSR pipeline and corrupts the heap. Coalesce the
-+                    // whole pending burst down to the LATEST geometry first.
++                    // A drag (resize from a corner, or moving the window between
++                    // monitors) emits a STORM of ConfigureNotify events. Firing
++                    // the JS move/resize callbacks and a CEF WasResized()/OSR
++                    // re-render for every one floods the JS side and the OSR
++                    // paint pipeline. Coalesce the whole pending burst down to
++                    // the LATEST geometry first.
 +                    XEvent latest = event;
 +                    XEvent peek;
 +                    while (XCheckTypedWindowEvent(x11win->display, x11win->window, ConfigureNotify, &peek)) {
@@ -82,14 +65,14 @@
 +                    x11win->width = latest.xconfigure.width;
 +                    x11win->height = latest.xconfigure.height;
 +
-+                    // Fire move only when the position actually changed.
++                    // Fire the move callback only when the position changed.
 +                    if (moved && x11win->moveCallback) {
 +                        x11win->moveCallback(x11win->windowId, x11win->x, x11win->y);
 +                    }
 +
-+                    // Fire resize + OSR re-layout only when the SIZE actually
-+                    // changed. A pure move (same w/h) must NOT trigger a CEF
-+                    // WasResized()/OnPaint storm — that was the move-crash.
++                    // Fire the resize callback + OSR re-layout only when the
++                    // SIZE actually changed. A pure move (same w/h) must not
++                    // trigger a CEF WasResized()/OnPaint storm.
 +                    if (resized) {
                          if (x11win->resizeCallback) {
 -                            x11win->resizeCallback(x11win->windowId, x11win->x, x11win->y, 
@@ -105,12 +88,12 @@
                      
                  case Expose:
                      // Handle expose events if needed
-@@ -5882,20 +5907,38 @@
+@@ -6271,20 +6297,37 @@
  void runCEFEventLoop() {
      // Initialize GTK on the main thread (this MUST be done here)
      initializeGTK();
 -    printf("=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2 === CEF EVENT LOOP STARTED ===\n");
-+    printf("=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2-loadout-cefloop === CEF EVENT LOOP STARTED ===\n");
++    printf("=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2-loadout-cef147 === CEF EVENT LOOP STARTED ===\n");
      fflush(stdout);
 -        
 -    // Set up a timer to periodically call CefDoMessageLoopWork()
@@ -119,17 +102,6 @@
 -        
 -    
 +
-+    // CPU-spin fix: drive the loop with CEF's own CefRunMessageLoop() instead of
-+    // a raw gtk_main(). CEF installs its MessagePumpGlib + Ozone X11 GSources on
-+    // the default GMainContext; their prepare() returns a 0ms timeout unless
-+    // MessagePumpGlib::Run has set up its RunState. A vanilla g_main_loop_run
-+    // (gtk_main) iterates those sources WITHOUT that state, so prepare keeps
-+    // returning timeout 0, the loop never blocks in poll(), and one core pins at
-+    // 100% (this is the spin, NOT CEF #2809's external-pump path). CefRunMessageLoop
-+    // runs MessagePumpGlib::Run, which blocks correctly when idle. It still services
-+    // the default context, so our GTK dialogs/tray and the X11 timer below keep
-+    // working. Quit via CefQuitMessageLoop() in stopEventLoop().
-+
      // Set up X11 event processing
      g_timeout_add(10, process_x11_events, nullptr); // Process X11 events every 10ms
  
@@ -137,30 +109,49 @@
 -    gtk_main();
 -    
 +
-+    // Initialize CEF eagerly here so CefRunMessageLoop() below actually runs CEF's
-+    // message loop. CEF was previously initialized lazily on first webview creation;
-+    // if we call CefRunMessageLoop() before CefInitialize() it returns immediately
-+    // (no UI thread loop to run) and the process exits. Eager init is safe — CEF
-+    // needs no browser to initialize, and the lazy call sites are guarded by
-+    // g_cefInitialized so they become no-ops. startEventLoop() has already set the
-+    // identifier/channel globals used for the cache path.
++    // Initialize CEF eagerly so CefRunMessageLoop() below has a loop to run. CEF
++    // was previously initialized lazily on first webview creation; calling
++    // CefRunMessageLoop() before CefInitialize() returns immediately and the
++    // process exits. Eager init is safe — CEF needs no browser to initialize and
++    // the lazy call sites are guarded by g_cefInitialized so they become no-ops.
 +    if (!g_cefInitialized.load()) {
 +        initializeCEF();
 +    }
 +
++    // Drive the loop with CEF's own CefRunMessageLoop() rather than a raw
++    // gtk_main(). On Linux CEF installs its MessagePumpGlib work source and the
++    // Ozone X11 event source on the default GMainContext. Their prepare() returns
++    // a 0ms timeout unless MessagePumpGlib::Run has set up its RunState; a vanilla
++    // g_main_loop_run (gtk_main) iterates those sources WITHOUT that state, so
++    // prepare keeps reporting "work ready, timeout 0", the loop never blocks in
++    // poll(), and one CPU core pins at 100% continuously (even idle/hidden/blank
++    // page). CefRunMessageLoop runs MessagePumpGlib::Run, which blocks correctly
++    // when idle while still servicing the default context, so GTK dialogs/tray
++    // and the X11 timer above keep working. The old 10ms cef_timer_callback that
++    // manually called CefDoMessageLoopWork() is no longer needed and is removed.
++    // Torn down via CefQuitMessageLoop() in stopEventLoop().
 +    CefRunMessageLoop();
 +
      // Cleanup CEF on shutdown
  
      if (g_cefInitialized) {
-@@ -8938,9 +8981,15 @@
+@@ -6296,7 +6339,7 @@
+ void runGTKEventLoop() {
+     // Initialize GTK on the main thread (this MUST be done here)
+     initializeGTK();
+-    printf("=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2 === GTK EVENT LOOP STARTED ===\n");
++    printf("=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2-loadout-cef147 === GTK EVENT LOOP STARTED ===\n");
+ 
+     // Note: GDK_BACKEND=x11 forced for Wayland compatibility
+ 
+@@ -9480,9 +9523,15 @@
      g_shuttingDown.store(true);
      printf("[stopEventLoop] Initiating clean event loop exit\n");
  
 -    // gtk_main_quit should be called from the GTK thread
-+    // Quit on the main loop thread. In CEF mode the loop is CefRunMessageLoop()
++    // Quit on the GTK thread. In CEF mode the loop is CefRunMessageLoop()
 +    // (MessagePumpGlib), so it must be torn down with CefQuitMessageLoop();
-+    // gtk_main_quit() would no-op there and the process would hang on shutdown.
++    // gtk_main_quit() would no-op under CEF's loop and shutdown would hang.
      g_idle_add([](gpointer) -> gboolean {
 -        gtk_main_quit();
 +        if (isCEFAvailable()) {
