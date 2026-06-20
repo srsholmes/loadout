@@ -11,6 +11,7 @@ import {
   forceUnfreezeSteam,
   systemShutdown,
   systemReboot,
+  exportLogs,
   type ControllerShortcuts,
   type ShortcutAction,
 } from "../lib/host";
@@ -256,6 +257,16 @@ function MaintenanceActionRow({ action }: { action: MaintenanceAction }) {
     </div>
   );
 }
+
+const EXPORT_LOGS_ACTION: MaintenanceAction = {
+  title: "Save logs to file",
+  description:
+    "Dumps the UI and server logs into a timestamped file in your Downloads folder — attach it when reporting an issue.",
+  idleLabel: "Save logs",
+  runningLabel: "Saving...",
+  successLabel: "Saved to Downloads",
+  invoke: exportLogs,
+};
 
 const RESTART_SERVER_ACTION: MaintenanceAction = {
   title: "Restart plugin server",
@@ -536,6 +547,7 @@ function SettingsInner({
             <section className="mb-6">
               <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">Maintenance</h3>
               <div className="bg-base-200 rounded-2xl border border-base-300 p-5 space-y-4 divide-y divide-base-300 [&>*]:pt-4 [&>*:first-child]:pt-0">
+                <MaintenanceActionRow action={EXPORT_LOGS_ACTION} />
                 <ClearDataCachesActionRow />
                 <MaintenanceActionRow action={RESTART_SERVER_ACTION} />
                 <MaintenanceActionRow action={RESTART_STEAM_ACTION} />

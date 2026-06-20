@@ -15,6 +15,12 @@ import { Electroview } from "electrobun/view";
 import "@overlay/shared-modules";
 import "@overlay/index.css";
 
+// Mirror console output into an in-memory ring buffer so the Settings
+// "Save logs" action can ship the UI's logs alongside the server log
+// (#130). Installed before boot() so the most output is captured.
+import { installLogCapture } from "@overlay/lib/logBuffer";
+installLogCapture();
+
 import { createRoot } from "react-dom/client";
 import { App, navigateOverlay } from "@overlay/App";
 import { applyTheme } from "@overlay/components/Settings";
