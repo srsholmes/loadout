@@ -4,6 +4,7 @@ import {
   Button,
   fuzzySearchGames,
   GameCard,
+  GameCardGrid,
   HeaderBackButton,
   hideOverlay,
   IconButton,
@@ -19,6 +20,7 @@ import {
   useCurrentGame,
   useIntersectionGate,
 } from "@loadout/ui";
+import { steamArtworkUrls } from "@loadout/steam-paths/artwork";
 
 export { FaAward as icon } from "react-icons/fa6";
 import { FaGear } from "react-icons/fa6";
@@ -133,19 +135,6 @@ const STYLE_OPTIONS: { value: ProtonDBSettings["size"]; label: string }[] = [
   { value: "small", label: "Tile border tint" },
 ];
 
-// Steam CDN art URLs — predictable by appId. The library portrait
-// (capsuleUrl) is the primary tile thumb; the landscape header is the
-// fallback when the portrait 404s for older titles. The loader's
-// sandboxed-fetch only blocks `fetch()` calls — `<img src>` is
-// unrestricted, so we don't need to declare steamcdn here.
-const STEAM_CDN = "https://steamcdn-a.akamaihd.net/steam/apps";
-function buildCapsuleUrl(appId: string): string {
-  return `${STEAM_CDN}/${appId}/library_600x900.jpg`;
-}
-function buildHeaderUrl(appId: string): string {
-  return `${STEAM_CDN}/${appId}/header.jpg`;
-}
-
 // --- Inline tier chip ---
 
 function TierChip({ tier, dense }: { tier: TierKey; dense?: boolean }) {
@@ -212,15 +201,21 @@ function ProtonDBBadges() {
         const list = Array.isArray(games)
           ? (games as BareInstalledGame[])
           : [];
-        // Synthesise Steam-CDN art URLs by appId; falls back from the
+        // Resolve art through the loader's local steam-grid route (same
+        // as every other plugin) so the user's SteamGridDB / custom-
+        // artwork overrides are honoured — a raw Steam-CDN URL never
+        // sees those and shows the default capsule. Falls back from the
         // portrait capsule to the landscape header inside <GameCard>.
         setInstalled(
-          list.map((g) => ({
-            appId: g.appId,
-            name: g.name,
-            capsuleUrl: buildCapsuleUrl(g.appId),
-            headerUrl: buildHeaderUrl(g.appId),
-          })),
+          list.map((g) => {
+            const art = steamArtworkUrls(g.appId);
+            return {
+              appId: g.appId,
+              name: g.name,
+              capsuleUrl: art.capsule,
+              headerUrl: art.header,
+            };
+          }),
         );
       })
       .catch((err) => {
@@ -458,7 +453,7 @@ function ProtonDBBadges() {
     <>
       {headerNode}
       <div className="p-7 h-full overflow-y-auto">
-        <div className="page-content">
+        <div className="page-content full">
           {visibleGames && visibleGames.length === 0 ? (
             <div className="card">
               <div className="text-center py-10 text-[var(--fg-3)]">
@@ -472,11 +467,7 @@ function ProtonDBBadges() {
               </div>
             </div>
           ) : (
-            // 4 cols when the shell sidebar is open, 6 when it
-            // collapses — driven by the `sidebar-open` /
-            // `sidebar-collapsed` custom Tailwind variants
-            // registered in overlay/src/index.css.
-            <div className="grid grid-cols-4 sidebar-collapsed:grid-cols-6 gap-2.5">
+            <GameCardGrid>
               {visibleGames!.map((game) => (
                 <ProtonDBGameCard
                   key={game.appId}
@@ -489,7 +480,7 @@ function ProtonDBBadges() {
                   onPick={() => handleOpenGame(game.appId)}
                 />
               ))}
-            </div>
+            </GameCardGrid>
           )}
         </div>
       </div>

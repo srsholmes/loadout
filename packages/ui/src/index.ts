@@ -23,6 +23,8 @@ export { SearchField } from "./components/SearchField";
 export { Badge } from "./components/Badge";
 export { GameCard, collectionBadgeVariant } from "./components/GameCard";
 export type { GameCardProps } from "./components/GameCard";
+export { GameCardGrid } from "./components/GameCardGrid";
+export type { GameCardGridProps } from "./components/GameCardGrid";
 export { NowPlaying } from "./components/NowPlaying";
 export { GameHero } from "./components/GameHero";
 export type { GameHeroProps } from "./components/GameHero";

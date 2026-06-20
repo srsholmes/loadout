@@ -7,6 +7,7 @@ import {
   Button,
   fuzzySearchGames,
   GameCard,
+  GameCardGrid,
   GameHero,
   HeaderBackButton,
   IconButton,
@@ -386,7 +387,7 @@ function HltbPlugin() {
     <>
       {headerNode}
       <div className="p-7 h-full overflow-y-auto">
-        <div className="page-content">
+        <div className="page-content full">
           {sortedGames && sortedGames.length === 0 ? (
             <div className="card">
               <div className="text-center py-10 text-[var(--fg-3)]">
@@ -396,11 +397,7 @@ function HltbPlugin() {
               </div>
             </div>
           ) : (
-            // 4 cols when the shell sidebar is open, 6 when it
-            // collapses — driven by the `sidebar-open` /
-            // `sidebar-collapsed` custom Tailwind variants
-            // registered in overlay/src/index.css.
-            <div className="grid grid-cols-4 sidebar-collapsed:grid-cols-6 gap-2.5">
+            <GameCardGrid>
               {sortedGames!.map((game) => (
                 <HltbGameCard
                   key={game.appId}
@@ -416,7 +413,7 @@ function HltbPlugin() {
                   onOpen={() => setDetailGame(game)}
                 />
               ))}
-            </div>
+            </GameCardGrid>
           )}
         </div>
       </div>

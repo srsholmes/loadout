@@ -7,6 +7,7 @@ import {
   Button,
   Badge,
   GameCard,
+  GameCardGrid,
   Spinner,
   Slider,
   SegmentedItem,
@@ -421,11 +422,10 @@ function TdpControl() {
                     Saved profiles ({gameProfiles.length})
                   </div>
                   {/* Cover grid — mirrors the HLTB / ProtonDB game grids
-                      (issue #105). 4 cols when the shell sidebar is open,
-                      6 when collapsed. Each tile shows the game's capsule
-                      art, its saved TDP as an overlay badge, and a Remove
+                      (issue #105). Each tile shows the game's capsule art,
+                      its saved TDP as an overlay badge, and a Remove
                       action. */}
-                  <div className="grid grid-cols-4 sidebar-collapsed:grid-cols-6 gap-2.5">
+                  <GameCardGrid>
                     {gameProfiles.map((p) => {
                       const isCurrent =
                         currentGame !== null && currentGame.appId === p.appId;
@@ -467,10 +467,10 @@ function TdpControl() {
                           action={
                             <Button
                               size="sm"
+                              fullWidth
                               variant="danger"
                               onClick={removeProfile}
                               disabled={applying}
-                              style={{ width: "100%" }}
                             >
                               Remove
                             </Button>
@@ -478,7 +478,7 @@ function TdpControl() {
                         />
                       );
                     })}
-                  </div>
+                  </GameCardGrid>
                 </div>
               )}
             </div>
