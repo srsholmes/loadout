@@ -20,7 +20,7 @@
     "@loadout/ui": "workspace:*",
     "@loadout/steam-paths": "workspace:*",
     "daisyui": "^5.5.19",
-    "electrobun": "^1.0.0",
+    "electrobun": "1.18.1",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "react-grid-layout": "^2.2.3",
