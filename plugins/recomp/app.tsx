@@ -4,6 +4,7 @@ import {
   Badge,
   Button,
   GameCard,
+  GameCardGrid,
   GameHero,
   HeaderBackButton,
   IconButton,
@@ -522,7 +523,7 @@ function CatalogView() {
   }
 
   return (
-    <>
+    <div className="flex flex-col h-full">
       <PluginHeader>
         <div className="flex items-center justify-between gap-4 w-full min-w-0">
           <div className="flex flex-col gap-0.5 min-w-0">
@@ -550,37 +551,39 @@ function CatalogView() {
           </div>
         </div>
       </PluginHeader>
-      <div className="p-6 h-full overflow-y-auto">
-        <div className="max-w-5xl mx-auto">
-          {/* Tabs + platform-filter chrome — TabBar for tabs (matches
-              every other plugin's tab UI) and Select for the platform
-              filter (6 entries, compact dropdown beats a chip row). */}
-          <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
-            <TabBar
-              tabs={TAB_IDS.map((id) => ({ id, label: tabLabels[id] }))}
-              activeTab={activeTab}
-              onTabChange={(id) => setActiveTab(id as TabId)}
-            />
-            <Select
-              value={platformFilter}
-              options={FILTER_PLATFORMS.map((p) => ({
-                value: p,
-                label:
-                  p === "all"
-                    ? "All platforms"
-                    : (PLATFORM_DISPLAY[p] ?? p.toUpperCase()),
-              }))}
-              onChange={(v) => setPlatformFilter(v)}
-            />
-          </div>
 
-          {/* Cover-art grid */}
+      {/* Tabs + platform-filter chrome — sits in a tight row directly
+          under the header (matching store-bridge) rather than inside the
+          scrolling body, so the tabs aren't pushed down by the body's
+          padding. TabBar for tabs; Select for the platform filter (6
+          entries, compact dropdown beats a chip row). */}
+      <div className="px-3 pt-2 flex flex-wrap items-center justify-between gap-3">
+        <TabBar
+          tabs={TAB_IDS.map((id) => ({ id, label: tabLabels[id] }))}
+          activeTab={activeTab}
+          onTabChange={(id) => setActiveTab(id as TabId)}
+        />
+        <Select
+          value={platformFilter}
+          options={FILTER_PLATFORMS.map((p) => ({
+            value: p,
+            label:
+              p === "all"
+                ? "All platforms"
+                : (PLATFORM_DISPLAY[p] ?? p.toUpperCase()),
+          }))}
+          onChange={(v) => setPlatformFilter(v)}
+        />
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto p-4">
+        {/* Cover-art grid */}
         {filtered.length === 0 ? (
           <div className="py-12 text-center">
             <Text variant="secondary">No games match.</Text>
           </div>
         ) : (
-          <div className="grid grid-cols-4 sidebar-collapsed:grid-cols-6 gap-2.5">
+          <GameCardGrid>
             {filtered.map((game) => (
               <RecompTile
                 key={game.id}
@@ -589,11 +592,10 @@ function CatalogView() {
                 onAction={dispatchAction}
               />
             ))}
-          </div>
+          </GameCardGrid>
         )}
-        </div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -674,6 +676,7 @@ function RecompTile({
         >
           <Button
             size="sm"
+            fullWidth
             variant={tileAction.variant === "danger" ? "danger" : tileAction.variant}
             disabled={tileAction.disabled}
             onClick={() => onAction(game, tileAction.action)}

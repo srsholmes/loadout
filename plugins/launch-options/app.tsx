@@ -18,6 +18,7 @@ import {
   friendlyCollectionName,
   fuzzySearchGames,
   GameCard,
+  GameCardGrid,
   HeaderBackButton,
   IconButton,
   PluginHeader,
@@ -654,7 +655,7 @@ function LaunchOptionsManager() {
                     : "No games match the current filter."}
                 </div>
               ) : (
-                <div className="grid grid-cols-4 sidebar-collapsed:grid-cols-6 gap-2.5">
+                <GameCardGrid>
                   {visibleLibrary.map((game) => {
                     const lo = launchOptsByApp.get(game.appId) ?? "";
                     const isCurrent =
@@ -670,7 +671,7 @@ function LaunchOptionsManager() {
                       />
                     );
                   })}
-                </div>
+                </GameCardGrid>
               )}
             </div>
           </div>
