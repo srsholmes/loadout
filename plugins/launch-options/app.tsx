@@ -417,7 +417,7 @@ function LaunchOptionsManager() {
       <>
         {headerNode}
         <div className="p-7 h-full overflow-y-auto">
-          <div className="page-content">
+          <div className="page-content full">
             <div className="card">
               <div className="subsection">
                 <div className="flex items-center justify-between mb-2">

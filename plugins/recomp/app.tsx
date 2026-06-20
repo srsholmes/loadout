@@ -576,7 +576,7 @@ function CatalogView() {
         />
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-4">
+      <div className="flex-1 min-h-0 overflow-y-auto p-7">
         {/* Cover-art grid */}
         {filtered.length === 0 ? (
           <div className="py-12 text-center">

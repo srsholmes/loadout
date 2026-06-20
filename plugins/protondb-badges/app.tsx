@@ -459,7 +459,7 @@ function ProtonDBBadges() {
     <>
       {headerNode}
       <div className="p-7 h-full overflow-y-auto">
-        <div className="page-content">
+        <div className="page-content full">
           {visibleGames && visibleGames.length === 0 ? (
             <div className="card">
               <div className="text-center py-10 text-[var(--fg-3)]">

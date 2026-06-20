@@ -402,7 +402,7 @@ function PlayTime() {
     <>
       {headerNode}
       <div className="p-7 h-full overflow-y-auto">
-        <div className="page-content">
+        <div className="page-content full">
           <div className="card">
             {/* HEADLINE METRIC + DAY FILTER BARS. The period selector in
                 the topbar drives the headline; the day bars below double
