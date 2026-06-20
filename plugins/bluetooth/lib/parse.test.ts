@@ -1,202 +1,131 @@
 import { describe, it, expect } from "bun:test";
 import {
-  parseDeviceType,
-  parseDeviceList,
-  parseDeviceInfo,
-  parseAdapterInfo,
-  assertBluetoothctlOk,
+  deviceTypeFromIcon,
+  parseBoolProp,
+  parseStringProp,
+  splitPropLines,
+  macFromDevicePath,
+  devicePathFromMac,
+  pickAdapterPath,
+  pickDevicePaths,
 } from "./parse";
 
-// ---------------------------------------------------------------------------
-// parseDeviceType
-// ---------------------------------------------------------------------------
-
-describe("parseDeviceType()", () => {
-  it("classifies audio-headset as audio", () => {
-    expect(parseDeviceType("Icon: audio-headset")).toBe("audio");
+describe("deviceTypeFromIcon", () => {
+  it("maps audio icons", () => {
+    expect(deviceTypeFromIcon("audio-headset")).toBe("audio");
+    expect(deviceTypeFromIcon("audio-headphones")).toBe("audio");
   });
-
-  it("classifies audio-headphone as audio", () => {
-    expect(parseDeviceType("Icon: audio-headphone")).toBe("audio");
+  it("maps gaming input icons", () => {
+    expect(deviceTypeFromIcon("input-gaming")).toBe("input");
   });
-
-  it("classifies headset (bare) as audio", () => {
-    expect(parseDeviceType("Icon: headset")).toBe("audio");
+  it("maps keyboard icons", () => {
+    expect(deviceTypeFromIcon("input-keyboard")).toBe("keyboard");
   });
-
-  it("classifies input-gaming as input", () => {
-    expect(parseDeviceType("Icon: input-gaming")).toBe("input");
-  });
-
-  it("classifies joystick as input", () => {
-    expect(parseDeviceType("Icon: joystick")).toBe("input");
-  });
-
-  it("classifies gamepad as input", () => {
-    expect(parseDeviceType("Icon: gamepad")).toBe("input");
-  });
-
-  it("classifies input-keyboard as keyboard", () => {
-    expect(parseDeviceType("Icon: input-keyboard")).toBe("keyboard");
-  });
-
-  it("classifies keyboard (bare) as keyboard", () => {
-    expect(parseDeviceType("Icon: keyboard")).toBe("keyboard");
-  });
-
-  it("classifies phone as unknown", () => {
-    expect(parseDeviceType("Icon: phone")).toBe("unknown");
-  });
-
-  it("returns unknown when no Icon field present", () => {
-    expect(parseDeviceType("Paired: yes\nConnected: no\n")).toBe("unknown");
+  it("falls back to unknown", () => {
+    expect(deviceTypeFromIcon("phone")).toBe("unknown");
+    expect(deviceTypeFromIcon("")).toBe("unknown");
   });
 });
 
-// ---------------------------------------------------------------------------
-// parseDeviceList
-// ---------------------------------------------------------------------------
-
-describe("parseDeviceList()", () => {
-  it("returns empty array for empty output", () => {
-    expect(parseDeviceList("")).toEqual([]);
+describe("parseBoolProp", () => {
+  it("parses true / false", () => {
+    expect(parseBoolProp("b true")).toBe(true);
+    expect(parseBoolProp("b false")).toBe(false);
+    expect(parseBoolProp("  b true  ")).toBe(true);
   });
-
-  it("parses a single Device line", () => {
-    const result = parseDeviceList("Device AA:BB:CC:DD:EE:FF Sony WH-1000XM5\n");
-    expect(result).toHaveLength(1);
-    expect(result[0]).toEqual({ mac: "AA:BB:CC:DD:EE:FF", name: "Sony WH-1000XM5" });
-  });
-
-  it("parses multiple Device lines", () => {
-    const output = [
-      "Device AA:BB:CC:DD:EE:01 Xbox Controller",
-      "Device AA:BB:CC:DD:EE:02 Keychron K2",
-    ].join("\n");
-    const result = parseDeviceList(output);
-    expect(result).toHaveLength(2);
-    expect(result[0].mac).toBe("AA:BB:CC:DD:EE:01");
-    expect(result[1].mac).toBe("AA:BB:CC:DD:EE:02");
-  });
-
-  it("skips non-Device lines", () => {
-    const output = [
-      "Device AA:BB:CC:DD:EE:FF Headphones",
-      "some garbage line",
-      "",
-      "not a device line at all",
-    ].join("\n");
-    const result = parseDeviceList(output);
-    expect(result).toHaveLength(1);
-    expect(result[0].mac).toBe("AA:BB:CC:DD:EE:FF");
-  });
-
-  it("skips malformed Device lines (short MAC)", () => {
-    const result = parseDeviceList("Device AA:BB:CC Short\n");
-    expect(result).toHaveLength(0);
+  it("returns null for non-bool lines", () => {
+    expect(parseBoolProp('s "x"')).toBeNull();
+    expect(parseBoolProp("")).toBeNull();
+    expect(parseBoolProp("b maybe")).toBeNull();
   });
 });
 
-// ---------------------------------------------------------------------------
-// parseDeviceInfo
-// ---------------------------------------------------------------------------
-
-describe("parseDeviceInfo()", () => {
-  it("detects connected=true, paired=true, type=audio", () => {
-    const info = [
-      "Icon: audio-headset",
-      "Paired: yes",
-      "Connected: yes",
-    ].join("\n");
-    const device = parseDeviceInfo("AA:BB:CC:DD:EE:FF", "Sony WH-1000XM5", info);
-    expect(device).toEqual({
-      mac: "AA:BB:CC:DD:EE:FF",
-      name: "Sony WH-1000XM5",
-      connected: true,
-      paired: true,
-      type: "audio",
-    });
+describe("parseStringProp", () => {
+  it("parses a quoted string", () => {
+    expect(parseStringProp('s "steamdeck"')).toBe("steamdeck");
+    expect(parseStringProp('s "Xbox Wireless Controller"')).toBe(
+      "Xbox Wireless Controller",
+    );
   });
-
-  it("detects connected=false, paired=false, type=unknown for empty info", () => {
-    const device = parseDeviceInfo("11:22:33:44:55:66", "Gadget", "");
-    expect(device.connected).toBe(false);
-    expect(device.paired).toBe(false);
-    expect(device.type).toBe("unknown");
+  it("unescapes quotes and backslashes", () => {
+    expect(parseStringProp('s "a\\"b"')).toBe('a"b');
+  });
+  it("returns null for non-string lines", () => {
+    expect(parseStringProp("b true")).toBeNull();
+    expect(parseStringProp("")).toBeNull();
   });
 });
 
-// ---------------------------------------------------------------------------
-// parseAdapterInfo
-// ---------------------------------------------------------------------------
-
-describe("parseAdapterInfo()", () => {
-  it("parses powered=true, discovering=true", () => {
-    const output = [
-      "Controller AA:BB:CC:DD:EE:FF BlueZ 5.66 [default]",
-      "\tName: deck-bluetooth",
-      "\tPowered: yes",
-      "\tDiscovering: yes",
-    ].join("\n");
-    const info = parseAdapterInfo(output);
-    expect(info.powered).toBe(true);
-    expect(info.discovering).toBe(true);
-    expect(info.name).toBe("deck-bluetooth");
-    expect(info.address).toBe("AA:BB:CC:DD:EE:FF");
-  });
-
-  it("returns defaults for empty output", () => {
-    const info = parseAdapterInfo("");
-    expect(info.powered).toBe(false);
-    expect(info.discovering).toBe(false);
-    expect(info.name).toBe("Unknown");
-    expect(info.address).toBe("Unknown");
-  });
-
-  it("detects powered=false, discovering=false", () => {
-    const output = [
-      "Controller 00:11:22:33:44:55 BlueZ",
-      "\tName: my-adapter",
-      "\tPowered: no",
-      "\tDiscovering: no",
-    ].join("\n");
-    const info = parseAdapterInfo(output);
-    expect(info.powered).toBe(false);
-    expect(info.discovering).toBe(false);
-  });
-
-  it("strips trailing CR from name on CRLF input", () => {
-    const output = "Controller AA:BB:CC:DD:EE:FF BlueZ\r\n\tName: deck-bluetooth\r\n\tPowered: yes\r\n";
-    const info = parseAdapterInfo(output);
-    expect(info.name).toBe("deck-bluetooth");
+describe("splitPropLines", () => {
+  it("splits multi-property output in order, dropping blanks", () => {
+    expect(splitPropLines('b true\nb false\ns "steamdeck"\n\n')).toEqual([
+      "b true",
+      "b false",
+      's "steamdeck"',
+    ]);
   });
 });
 
-// ---------------------------------------------------------------------------
-// assertBluetoothctlOk
-// ---------------------------------------------------------------------------
-
-describe("assertBluetoothctlOk()", () => {
-  it("returns silently on success output", () => {
-    expect(() => assertBluetoothctlOk("Connection successful", "connect")).not.toThrow();
-    expect(() => assertBluetoothctlOk("Changing power on succeeded", "power on")).not.toThrow();
+describe("macFromDevicePath", () => {
+  it("extracts and colon-formats the MAC", () => {
+    expect(macFromDevicePath("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_0B")).toBe(
+      "AA:BB:CC:DD:EE:0B",
+    );
   });
-
-  it("throws when stdout contains a `Failed` marker", () => {
-    expect(() =>
-      assertBluetoothctlOk(
-        "Attempting to connect to AA:BB:CC:DD:EE:FF\nFailed to connect: org.bluez.Error.Failed",
-        "connect",
-      ),
-    ).toThrow(/connect failed/i);
+  it("upper-cases lowercase hex", () => {
+    expect(macFromDevicePath("/org/bluez/hci0/dev_aa_bb_cc_dd_ee_ff")).toBe(
+      "AA:BB:CC:DD:EE:FF",
+    );
   });
+  it("returns null for non-device paths", () => {
+    expect(macFromDevicePath("/org/bluez/hci0")).toBeNull();
+    expect(macFromDevicePath("/org/bluez")).toBeNull();
+  });
+});
 
-  it("includes the action name in the error message", () => {
-    try {
-      assertBluetoothctlOk("Failed to set property Powered", "power on");
-      throw new Error("should have thrown");
-    } catch (err) {
-      expect((err as Error).message).toMatch(/power on failed/i);
-    }
+describe("devicePathFromMac", () => {
+  it("builds the object path under an adapter", () => {
+    expect(devicePathFromMac("/org/bluez/hci0", "AA:BB:CC:DD:EE:0B")).toBe(
+      "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_0B",
+    );
+  });
+  it("upper-cases the MAC", () => {
+    expect(devicePathFromMac("/org/bluez/hci0", "aa:bb:cc:dd:ee:ff")).toBe(
+      "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF",
+    );
+  });
+});
+
+describe("pickAdapterPath", () => {
+  const tree = [
+    "/",
+    "/org",
+    "/org/bluez",
+    "/org/bluez/hci0",
+    "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_0B",
+  ].join("\n");
+
+  it("returns the first adapter path", () => {
+    expect(pickAdapterPath(tree)).toBe("/org/bluez/hci0");
+  });
+  it("returns null when no adapter is present", () => {
+    expect(pickAdapterPath("/\n/org\n/org/bluez")).toBeNull();
+  });
+});
+
+describe("pickDevicePaths", () => {
+  it("returns only device object paths", () => {
+    const tree = [
+      "/org/bluez/hci0",
+      "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_0B",
+      "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF",
+    ].join("\n");
+    expect(pickDevicePaths(tree)).toEqual([
+      "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_0B",
+      "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF",
+    ]);
+  });
+  it("returns [] when there are no devices", () => {
+    expect(pickDevicePaths("/org/bluez/hci0")).toEqual([]);
   });
 });

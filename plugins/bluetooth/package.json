@@ -16,7 +16,9 @@
     "subtitle": "Pair devices without leaving the game",
     "permissions": {
       "commands": [
-        "bluetoothctl"
+        "busctl",
+        "bluetoothctl",
+        "rfkill"
       ]
     }
   }

@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 import { homedir } from "node:os";
 import { parseArgs } from "node:util";
 import { startServer } from "./loader";
-import { log, LOG_PATH } from "./loader/logger";
+import { log, LOG_PATH, startLogSession } from "./loader/logger";
 import { setTargetUser, chownToTarget } from "./loader/target-user";
 
 // Compile-time defines from scripts/build.sh (--define
@@ -65,6 +65,12 @@ if (values.help) {
 const projectRoot = resolve(import.meta.dir, "../../..");
 const port = Number(values.port);
 const pluginsDir = process.env.PLUGINS_DIR || resolve(projectRoot, "plugins");
+
+// Rotate last run's log aside and start a fresh one so the log + "Save
+// logs" export are scoped to this session, not every launch since
+// install. Placed after the --version/--help exits above so a smoke
+// check doesn't wipe a real session's log.
+startLogSession();
 
 // Record the target user (if any) BEFORE the first log line so the logger
 // chowns its file on the first write. Then chown the whole config tree —
