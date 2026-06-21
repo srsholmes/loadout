@@ -320,6 +320,25 @@ describe("startInputIntercept — grab / release", () => {
     h.shutdown();
   });
 
+  it("re-syncs real hardware state on grab (EVIOCGKEY per grabbed controller)", async () => {
+    // On grab we read the kernel's actual button bitmap (EVIOCGKEY) so a
+    // guide/select release lost across the grab transition can't leave a
+    // stale "held". One read per grabbed controller, none for keyboards.
+    devicesOnSystem = [
+      mkDevice("/dev/input/event5", "Pad", { isController: true }),
+      mkDevice("/dev/input/event6", "KB", { isKeyboard: true }),
+    ];
+    const h = await startInputIntercept({ onWake: () => {}, onAction: () => {} });
+    expect(
+      ffiCalls.filter((c) => c.kind === "ioctl" && c.request === 0x80604518n),
+    ).toHaveLength(0); // no re-sync before grab
+    h.grab();
+    expect(
+      ffiCalls.filter((c) => c.kind === "ioctl" && c.request === 0x80604518n),
+    ).toHaveLength(1); // only the controller fd
+    h.shutdown();
+  });
+
   it("double-grab is a no-op (generation still advances once)", async () => {
     devicesOnSystem = [mkDevice("/dev/input/event5", "Pad", { isController: true })];
     const h = await startInputIntercept({ onWake: () => {}, onAction: () => {} });
@@ -467,6 +486,38 @@ describe("__testing__.processCombo", () => {
     processCombo(s, 0x13a /* BTN_SELECT */, 1, 0);
     processCombo(s, BTN_B, 1, 10);
     expect(processCombo(s, BTN_B, 0, 50)).toBe("GuideB");
+  });
+
+  it("regression: a stuck guideHeld turns a lone B into GuideB; a fresh state does not", () => {
+    // The reported bug: a missed BTN_MODE *release* leaves guideHeld stuck,
+    // so every subsequent lone B is misread as Guide+B → re-toggles overlay.
+    const stuck = newComboState();
+    processCombo(stuck, BTN_MODE, 1, 0); // guide down…
+    // …guide-up event lost across the grab/ungrab transition (never delivered).
+    processCombo(stuck, BTN_B, 1, 10);
+    expect(processCombo(stuck, BTN_B, 0, 20)).toBe("GuideB"); // the bug
+
+    // The fix resets per-device combo state on every grab/release, so the
+    // next cycle starts from a fresh state where lone B is just B.
+    const fresh = newComboState();
+    processCombo(fresh, BTN_B, 1, 10);
+    expect(processCombo(fresh, BTN_B, 0, 20)).toBeNull();
+  });
+});
+
+describe("__testing__.eviocgkey", () => {
+  it("encodes _IOC(_IOC_READ, 'E', 0x18, len)", () => {
+    // dir=READ(2)<<30 | len<<16 | 'E'(0x45)<<8 | 0x18
+    expect(__testing__.eviocgkey(96)).toBe(0x80604518n);
+  });
+});
+
+describe("__testing__.absCodeToAxis", () => {
+  it("maps hat + stick codes and rejects unknowns", () => {
+    expect(__testing__.absCodeToAxis(0x10)).toBe("HatX");
+    expect(__testing__.absCodeToAxis(0x11)).toBe("HatY");
+    expect(__testing__.absCodeToAxis(0x00)).toBe("LeftStickX");
+    expect(__testing__.absCodeToAxis(0x99)).toBeNull();
   });
 });
 
