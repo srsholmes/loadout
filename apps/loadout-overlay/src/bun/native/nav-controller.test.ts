@@ -286,6 +286,28 @@ describe("NavController — reset + multi-controller", () => {
     expect(f.emitted).toEqual(["a"]);
   });
 
+  it("reset() emits x_up for a still-held X so long-press isn't stranded", () => {
+    const f = fxController();
+    f.nav.processEvents("ctrl1", [
+      { kind: "button", button: "X", pressed: true },
+    ]);
+    expect(f.emitted).toEqual(["x"]); // press seen, release pending
+    // Overlay tears down mid-hold (open/close → reset). The release half
+    // must still fire or a frontend long-press handler hangs forever.
+    f.nav.reset();
+    expect(f.emitted).toEqual(["x", "x_up"]);
+  });
+
+  it("reset() does NOT emit a phantom 'b' for a still-held B", () => {
+    const f = fxController();
+    f.nav.processEvents("ctrl1", [
+      { kind: "button", button: "B", pressed: true },
+    ]);
+    f.nav.reset();
+    // Emitting "b" here would inject a spurious Escape into the webview.
+    expect(f.emitted).toEqual([]);
+  });
+
   it("separate controllerIds maintain independent held state", () => {
     const f = fxController();
     // Ctrl1 holds A, ctrl2 is in modifier suppression.

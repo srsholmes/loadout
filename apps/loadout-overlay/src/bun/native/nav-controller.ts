@@ -249,8 +249,19 @@ export class NavController {
 
   /** Reset all per-controller state. Called when the overlay opens or
    *  closes so a half-held button from last session doesn't spam the
-   *  first frame of the new one. */
+   *  first frame of the new one.
+   *
+   *  Before clearing, emit the release half of any still-held press-AND-
+   *  release action so downstream listeners don't get stranded mid-hold. The
+   *  only NavAction with a distinct release is X ("x" press / "x_up" release):
+   *  a frontend long-press handler waiting on x_up would otherwise hang if the
+   *  overlay tore down between the press and release. Directions/A/Y/bumpers
+   *  only have a keydown in the webview map, and B already fires on release,
+   *  so emitting a phantom "b" here would risk a spurious Escape — skip those. */
   reset(): void {
+    for (const st of this.controllers.values()) {
+      if (st.held.has("x")) this.emit("x_up");
+    }
     this.controllers.clear();
   }
 

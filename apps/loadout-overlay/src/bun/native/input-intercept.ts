@@ -50,7 +50,11 @@ import {
   enumerateDevices,
   type InputDevice,
 } from "./devices";
-import { NavController, type InputEvent } from "./nav-controller";
+import {
+  NavController,
+  type InputEvent,
+  type GamepadAxis,
+} from "./nav-controller";
 import { trace } from "./trace";
 import {
   startDeviceHotplug,
@@ -367,6 +371,71 @@ function normalizeAxis(code: number, raw: number, cal: Map<number, AxisCal>): nu
   return Math.min(1, Math.max(0, n)) * 2 - 1;
 }
 
+/** Map an EV_ABS code to the NavController axis name, or null if it's an
+ *  axis we don't forward. Shared by toInputEvents (live stream) and the
+ *  grab-time re-sync below. */
+function absCodeToAxis(code: number): GamepadAxis | null {
+  switch (code) {
+    case ABS_X: return "LeftStickX";
+    case ABS_Y: return "LeftStickY";
+    case ABS_RX: return "RightStickX";
+    case ABS_RY: return "RightStickY";
+    case ABS_HAT0X: return "HatX";
+    case ABS_HAT0Y: return "HatY";
+    default: return null;
+  }
+}
+
+// ---- Hardware state re-sync (EVIOCGKEY + EVIOCGABS value) -------------------
+//
+// EVIOCGRAB/EVIOCSMASK only deliver *edge* events; if a button-up or
+// axis-center is lost across a grab/ungrab or mask switch (or dropped over a
+// flaky BT link), the edge-derived held-state desyncs and a control appears
+// stuck "held". On every grab we read the device's ACTUAL current state
+// straight from the kernel so a lost release can never survive the cycle.
+
+/** EVIOCGKEY(len) = _IOC(_IOC_READ, 'E', 0x18, len) — returns a bitmap of the
+ *  current pressed/released state of every key/button on the device. */
+function eviocgkey(len: number): bigint {
+  return (2n << 30n) | (BigInt(len) << 16n) | (0x45n << 8n) | 0x18n;
+}
+
+/** Current pressed-state of the combo modifier buttons, read from the kernel
+ *  key bitmap. Buffer of 96 bytes covers codes 0..767 (well past BTN_MODE). */
+function readModifierState(fd: number): { guide: boolean; select: boolean } {
+  const buf = new Uint8Array(96);
+  const rc = libc.symbols.ioctl(fd, eviocgkey(buf.length), ptr(buf));
+  if (rc < 0) return { guide: false, select: false };
+  const bit = (code: number) => (buf[code >> 3] & (1 << (code & 7))) !== 0;
+  return { guide: bit(BTN_MODE), select: bit(BTN_SELECT) };
+}
+
+/** Current directional-axis positions as InputEvents, so NavController can be
+ *  primed to physical reality on grab. Right-stick (continuous analog scroll)
+ *  is skipped — only the dpad/stick *directions* matter for the stuck-held
+ *  pathology. */
+function readDirectionalAxisState(
+  fd: number,
+  cal: Map<number, AxisCal>,
+): InputEvent[] {
+  const out: InputEvent[] = [];
+  for (const code of NAV_AXIS_CODES) {
+    if (code === ABS_RX || code === ABS_RY) continue;
+    const axis = absCodeToAxis(code);
+    if (!axis) continue;
+    const buf = new Uint8Array(24);
+    const rc = libc.symbols.ioctl(fd, eviocgabs(code), ptr(buf));
+    if (rc !== 0) continue;
+    const raw = new DataView(buf.buffer).getInt32(0, true);
+    out.push({
+      kind: "axis",
+      axis,
+      value: cal.has(code) ? normalizeAxis(code, raw, cal) : raw,
+    });
+  }
+  return out;
+}
+
 // ---- Combo detection (guide+button + ctrl+3/4) -----------------------------
 
 /** How long the combo modifier + button must overlap. Matches
@@ -468,14 +537,7 @@ function toInputEvents(
         null;
       if (btn) out.push({ kind: "button", button: btn, pressed: e.value !== 0 });
     } else if (e.type === EV_ABS) {
-      const axis =
-        e.code === ABS_X ? "LeftStickX" :
-        e.code === ABS_Y ? "LeftStickY" :
-        e.code === ABS_RX ? "RightStickX" :
-        e.code === ABS_RY ? "RightStickY" :
-        e.code === ABS_HAT0X ? "HatX" :
-        e.code === ABS_HAT0Y ? "HatY" :
-        null;
+      const axis = absCodeToAxis(e.code);
       if (axis) {
         out.push({
           kind: "axis",
@@ -705,6 +767,21 @@ export async function startInputIntercept(
   }
   startTimer();
 
+  // Re-sync a freshly-grabbed device's combo + NavController state to the
+  // kernel's ACTUAL current button/axis state. EVIOCGRAB/EVIOCSMASK only
+  // deliver edge events, so a button-up or axis-center lost across the
+  // grab/mask transition would otherwise leave a control stuck "held".
+  function resyncDeviceState(t: TrackedDevice): void {
+    if (t.grabOnly) return;
+    const mods = readModifierState(t.fd);
+    t.combo.guideHeld = mods.guide;
+    t.combo.selectHeld = mods.select;
+    const axisEvents = readDirectionalAxisState(t.fd, t.cal);
+    if (axisEvents.length > 0) {
+      nav.processEvents(`${t.dev.hash}_${generation}`, axisEvents);
+    }
+  }
+
   function doGrab(): void {
     if (intercepting) return;
     intercepting = true;
@@ -712,6 +789,12 @@ export async function startInputIntercept(
     nav.reset();
     for (const t of tracked) {
       if (!t.dev.flags.isController) continue;
+      // Fresh modifier state each cycle: a guide/select/ctrl release missed
+      // last session must not leave guideHeld stuck (→ every B reads as
+      // Guide+B → re-toggles the overlay). resyncDeviceState below then
+      // re-seeds from real hardware.
+      t.combo = newComboState();
+      t.shortcut = newShortcutState();
       if (!t.grabOnly) applyInterceptMasks(t.fd);
       if (!t.grabbed) {
         const intBuf = new Int32Array([1]);
@@ -729,6 +812,7 @@ export async function startInputIntercept(
           );
         }
       }
+      resyncDeviceState(t);
     }
     startTimer();
   }
@@ -749,6 +833,11 @@ export async function startInputIntercept(
         t.grabbed = false;
       }
       if (!t.grabOnly) applyIdleMasks(t.fd, t.dev);
+      // Clear modifier state so it can't carry into the next idle cycle and
+      // fire a phantom Guide+B / Ctrl+4 wake. Idle-mode combo detection
+      // rebuilds guideHeld from fresh BTN_MODE presses.
+      t.combo = newComboState();
+      t.shortcut = newShortcutState();
     }
     nav.reset();
     console.log(
@@ -806,6 +895,7 @@ export async function startInputIntercept(
           `[input-intercept] hotplug grab failed for ${t.path} (rc=${rc})`,
         );
       }
+      resyncDeviceState(t);
     }
   }
 
@@ -880,6 +970,7 @@ export async function startInputIntercept(
             `[input-intercept] reconcile grabbed ${t.path} '${t.dev.name}'${t.grabOnly ? " (virtual, grab-only)" : ""}`,
           );
         }
+        resyncDeviceState(t);
       }
     }
   }
@@ -920,4 +1011,6 @@ export const __testing__ = {
   toInputEvents,
   normalizeAxis,
   eviocgabs,
+  eviocgkey,
+  absCodeToAxis,
 };
