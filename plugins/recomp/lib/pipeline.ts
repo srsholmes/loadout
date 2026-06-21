@@ -81,6 +81,38 @@ async function rewritePartialPathsInScripts(
 // can be cleared / invalidated independently.
 const releaseCache = createExternalCache("recomp");
 
+// ── Non-GitHub mirror downloads ──────────────────────────────────────
+
+/**
+ * Local filename to save a prebuilt entry's downloaded asset as.
+ * Prefers the entry's explicit `downloadFilename` over the asset URL's
+ * basename: a ModDB/IndieDB mirror URL ends in an opaque hash token with
+ * no extension, and `extractArchive` selects the unpacker by extension —
+ * so without the override the extract step would reject a perfectly good
+ * `.zip` as an "unsupported format". GitHub-hosted entries (the majority)
+ * leave the field unset and fall back to the URL basename. Exported for
+ * unit tests.
+ */
+export function resolveDownloadFilename(
+  entry: GameEntry,
+  assetUrl: string,
+): string {
+  return entry.downloadFilename ?? (assetUrl.split("/").pop() || "download");
+}
+
+/**
+ * Hostnames the download's FINAL (post-redirect) URL is allowed to
+ * resolve to. Always includes the GitHub object-CDN defaults; an entry
+ * that downloads from a non-GitHub mirror (ModDB/IndieDB) widens the
+ * list with its own declared `downloadHosts` so `downloadFile`'s host
+ * gate doesn't refuse the legitimate mirror. Exported for unit tests.
+ */
+export function resolveDownloadHosts(entry: GameEntry): string[] {
+  return entry.downloadHosts && entry.downloadHosts.length > 0
+    ? [...GITHUB_DOWNLOAD_HOSTS, ...entry.downloadHosts]
+    : GITHUB_DOWNLOAD_HOSTS;
+}
+
 // ── Template Resolution ──────────────────────────────────────────────
 
 export function resolveTemplate(
@@ -433,14 +465,24 @@ export async function installGame(
       const assetUrl = resolved.url;
       const expectedSha256 = resolved.sha256;
 
-    // Download
-    const filename = assetUrl.split("/").pop() ?? "download";
+    // Download. The local filename comes from the entry's explicit
+    // `downloadFilename` when set (extension-less mirror URLs need it so
+    // the extractor can dispatch), else the asset URL's basename.
+    const filename = resolveDownloadFilename(entry, assetUrl);
     const downloadPath = join(tmpGameDir, filename);
 
     onEvent({
       type: "progress", gameId, stage: "downloading",
       percent: 0, message: "Starting download...",
     });
+
+    // Validate the post-redirect host: a release asset URL on
+    // github.com legitimately 302s to GitHub's object CDN, but bytes
+    // must not be fetched from any other (attacker-controlled) redirect
+    // target. A non-GitHub mirror entry (ModDB/IndieDB) widens the
+    // allowlist with its own declared hosts. Mirrors store-bridge's
+    // github-release allowlist.
+    const allowedDownloadHosts = resolveDownloadHosts(entry);
 
     await downloadFile(
       assetUrl,
@@ -454,11 +496,7 @@ export async function installGame(
           percent, message: `${mbDown} / ${mbTotal} MB`,
         });
       },
-      // Validate the post-redirect host: a release asset URL on
-      // github.com legitimately 302s to GitHub's object CDN, but bytes
-      // must not be fetched from any other (attacker-controlled)
-      // redirect target. Mirrors store-bridge's github-release allowlist.
-      GITHUB_DOWNLOAD_HOSTS,
+      allowedDownloadHosts,
     );
 
     // Checksum gate (FIX 4): if the manifest pinned an expected
