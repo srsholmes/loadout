@@ -8218,6 +8218,42 @@
           "externalUrl": "https://drive.google.com/file/d/1Vrxh66ru0Kijb_o0MHV0V7LUXxovrYax/view?usp=sharing"
         }
       ]
+    },
+    {
+      "id": "timesplitters-rewind",
+      "name": "TimeSplitters Rewind",
+      "project": "TimeSplitters Rewind",
+      "platform": "pc",
+      "repo": "",
+      "description": "Fan-made remake of the TimeSplitters trilogy in Unreal Engine — one 'greatest hits' game with 28 maps, 96 characters, 41 weapons, solo/co-op story mode, 51 arcade leagues, and up to 10-player online multiplayer. Free and blessed by IP holders Crytek/THQ Nordic. Not a recompilation, but lives alongside the recomps. Windows build, launched via Proton.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "TimeSplittersRewind*.zip"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/TimeSplittersRewind.exe"
+      },
+      "latestAssetUrl": {
+        "windows": "https://www.indiedb.com/downloads/mirror/300077/131/c2449553645f48392837f03b19a2ee15"
+      },
+      "latestVersion": "Early Access v0.3",
+      "downloadHosts": [
+        "www.indiedb.com",
+        "indiedb.com",
+        "www.moddb.com",
+        "moddb.com",
+        "media.indiedb.com",
+        "media.moddb.com"
+      ],
+      "downloadFilename": "TimeSplittersRewind.zip",
+      "tags": [
+        "timesplitters",
+        "fps",
+        "shooter",
+        "remake",
+        "pc"
+      ],
+      "website": "https://www.timesplittersrewind.com/"
     }
   ]
 }

@@ -266,6 +266,23 @@ export interface GameEntry {
   status?: string;
   latestVersion?: string;
   latestAssetUrl?: PlatformAssets;
+  /**
+   * Extra hostnames the download pipeline accepts as the FINAL
+   * (post-redirect) host of a release-asset download, ON TOP of the
+   * GitHub defaults. Only needed for non-GitHub `latestAssetUrl`
+   * downloads — e.g. a ModDB / IndieDB mirror link, which 302s to a
+   * DBolical-hosted file server. Leave unset for the GitHub-hosted
+   * majority; the pipeline always allows the GitHub object CDN.
+   */
+  downloadHosts?: string[];
+  /**
+   * Local filename to save the downloaded asset as, overriding the
+   * default (the basename of the resolved asset URL). Required when
+   * that URL ends in an opaque token with no file extension — ModDB /
+   * IndieDB mirror links look like `/downloads/mirror/<id>/<n>/<hash>`
+   * — because `extractArchive` picks the unpacker by file extension.
+   */
+  downloadFilename?: string;
   /** Engine's per-user data dir on Linux. See `Manifest.userDataDir`. */
   userDataDir?: string;
   /** Optional mods/extras catalog for this game (see `Manifest.mods`). */
