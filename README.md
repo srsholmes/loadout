@@ -115,6 +115,13 @@ Runtime requirements: an X11/Xwayland display, membership in the `input` group
 (so the overlay can grab evdev devices), and a working Steam install. The CEF
 libraries ship inside the overlay archive.
 
+On **SteamOS** the installer additionally builds a small `libwebkit2gtk-4.1`
+library closure (the overlay's native wrapper dlopens it) from a Fedora
+container via `podman` — shipped in SteamOS Holo 3.7+ — the first time, then
+caches it. This is kept out of the download on purpose so the release stays
+small; Bazzite/CachyOS/Fedora already provide these libraries and skip the step
+entirely.
+
 > If this repository is private, the install command will 404 until it's made
 > public; `install.sh` honours a `GITHUB_TOKEN` env var for authenticated
 > installs.
