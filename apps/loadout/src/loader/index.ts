@@ -204,6 +204,17 @@ export async function startServer(options: ServerOptions = {}) {
   // --- WebSocket client tracking ---
   const wsClients = new Set<WsClient>();
 
+  // Sticky first-run show. The installer hits /show right after enabling the
+  // overlay unit, which routinely beats the overlay's first (slow) CEF boot —
+  // so the broadcast goes to zero clients and is lost, and the window never
+  // opens on a fresh install. When /show arrives with nobody connected we
+  // remember it and replay once a webview connects.
+  let pendingShow = false;
+
+  function broadcastShow() {
+    broadcast({ type: "event", plugin: "__overlay", event: "show", data: {} });
+  }
+
   function broadcast(msg: RpcEvent) {
     const data = JSON.stringify(msg);
     for (const ws of wsClients) {
@@ -380,7 +391,12 @@ export async function startServer(options: ServerOptions = {}) {
       //     process directly, so it broadcasts to the webview, which calls
       //     the overlay's show() RPC (see App.tsx __overlay listener).
       if (url.pathname === "/show") {
-        broadcast({ type: "event", plugin: "__overlay", event: "show", data: {} });
+        if (wsClients.size > 0) {
+          broadcastShow();
+        } else {
+          // No overlay connected yet — replay on the next connect.
+          pendingShow = true;
+        }
         return new Response("ok");
       }
 
@@ -411,6 +427,14 @@ export async function startServer(options: ServerOptions = {}) {
       open(ws: WsClient) {
         wsClients.add(ws);
         log.debug(`WebSocket client connected (total: ${wsClients.size})`);
+        if (pendingShow) {
+          pendingShow = false;
+          // The socket is open, but the webview registers its
+          // __overlay/show subscription a tick later in its boot() chain.
+          // A short delay lets it attach so the replayed event isn't
+          // dropped a second time.
+          setTimeout(broadcastShow, 500);
+        }
       },
       async message(ws: WsClient, message: string | Buffer) {
         const msg = typeof message === "string" ? message : message.toString();
