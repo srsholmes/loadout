@@ -38,10 +38,16 @@ const rel = (p: string) => relative(ROOT, p);
 //
 // Keep this filter in sync with `loadPluginMeta` in
 // `scripts/scaffold-plugin-readmes.ts`.
+// Plugins whose UI renders real, identifying device data (MAC addresses,
+// SSIDs, IPs) that must never be committed to a public repo. They're skipped
+// entirely rather than captured — see the network-info MAC-leak incident.
+const PRIVACY_SKIP = new Set(["network-info"]);
+
 const PLUGINS = readdirSync(join(ROOT, "plugins"), { withFileTypes: true })
   .filter(
     (d) =>
       d.isDirectory() &&
+      !PRIVACY_SKIP.has(d.name) &&
       (existsSync(join(ROOT, "plugins", d.name, "package.json")) ||
         existsSync(join(ROOT, "plugins", d.name, "plugin.json"))),
   )

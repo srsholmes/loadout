@@ -140,6 +140,11 @@ interface GameInfo {
   // The actual ModInfo shape (with install state) is fetched lazily
   // via the `getMods` RPC inside the panel.
   mods?: unknown[];
+  // Manual-import descriptor — present only for games whose release
+  // can't be fetched headless (IndieDB/ModDB). Mirrors backend
+  // `GameManualImport`; drives the detail page's "Open download page"
+  // + "Import from disk" buttons.
+  manualImport?: { pageUrl: string; acceptExtensions?: string[] };
 }
 
 interface BuildEnvProbe {
@@ -1040,6 +1045,10 @@ function RomSuggestionRow({
 function GameDetailPage({ gameId }: { gameId: string }) {
   const nav = useRecompNav();
   const { call, useEvent } = useBackend("recomp");
+  // quick-links exposes `launchUrl(url)` — the cross-plugin RPC the
+  // manual-import "Open download page" button routes through, same as
+  // the mods panel's "Open page".
+  const browser = useBackend("quick-links");
   const [game, setGame] = useState<GameInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -1047,6 +1056,9 @@ function GameDetailPage({ gameId }: { gameId: string }) {
   const [romPath, setRomPath] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [browserOpen, setBrowserOpen] = useState(false);
+  // Manual-import file-picker modal (separate from the ROM `browserOpen`
+  // so a game can't have both open at once and they don't share state).
+  const [manualImportOpen, setManualImportOpen] = useState(false);
   // Auto-suggested ROM matches from settings.romDirectory. Populated
   // once per game on first load (when no saved path exists); cleared
   // when the user picks anything, so we don't keep nagging them.
@@ -1322,6 +1334,48 @@ function GameDetailPage({ gameId }: { gameId: string }) {
     }
   };
 
+  // Manual-import: open the upstream download page in the user's browser
+  // shortcut. The release can't be fetched headless (browser challenge +
+  // expiring signed URLs), so the user downloads it themselves, then
+  // imports the file below.
+  const handleOpenDownloadPage = async () => {
+    const url = game.manualImport?.pageUrl;
+    if (!url) return;
+    try {
+      const r = (await browser.call("launchUrl", url)) as LaunchUrlResult;
+      if (r.launched) {
+        // Get out of the way so the user sees the browser we raised.
+        dismissOverlay();
+        return;
+      }
+      notify(
+        r.message ??
+          "No browser is registered. Open the Quick Links plugin and install one first.",
+        { kind: "error" },
+      );
+    } catch (err) {
+      notify(
+        `Couldn't open download page — ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    }
+  };
+
+  // Manual-import: the file picker resolved — run the install pipeline
+  // with the picked archive. Mirrors handleInstall's busy/error flow
+  // (the pipeline's terminal event clears `busy`).
+  const onPickGameArchive = async (path: string) => {
+    setManualImportOpen(false);
+    setBusy(true);
+    setError(null);
+    try {
+      await call("importGameFromDisk", game.id, path);
+    } catch (err) {
+      setBusy(false);
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const platformLabel = PLATFORM_DISPLAY[game.platform] ?? game.platform.toUpperCase();
   // build_from_source counts as needing the ROM picker only when
   // its manifest declares `requiresRom`.
@@ -1379,7 +1433,25 @@ function GameDetailPage({ gameId }: { gameId: string }) {
             Install / Play / Update is above the fold without scrolling
             past panels. */}
         <div className="flex flex-wrap gap-2 mb-3">
-          {game.gameStatus === "available" ? (
+          {game.gameStatus === "available" && game.manualImport ? (
+            <>
+              <Button
+                variant="primary"
+                disabled={busy}
+                onClick={() => setManualImportOpen(true)}
+              >
+                {busy ? <Spinner size={12} /> : null}
+                Import from disk
+              </Button>
+              <Button
+                variant="neutral"
+                disabled={busy}
+                onClick={handleOpenDownloadPage}
+              >
+                Open download page
+              </Button>
+            </>
+          ) : game.gameStatus === "available" ? (
             <Button
               variant="primary"
               disabled={
@@ -1639,6 +1711,20 @@ function GameDetailPage({ gameId }: { gameId: string }) {
               game.gameStatus === "installed" ||
               game.gameStatus === "update_available"
             }
+          />
+        ) : null}
+
+        {/* Manual-import picker — reuses the in-overlay FileBrowser (no
+            zenity hand-off → no Gamescope focus-fight), starting at
+            ~/Downloads where the user's browser dropped the archive. */}
+        {game.manualImport ? (
+          <FileBrowser
+            open={manualImportOpen}
+            onClose={() => setManualImportOpen(false)}
+            onPick={(path) => void onPickGameArchive(path)}
+            extensions={supportedImportExtensions(game.manualImport.acceptExtensions)}
+            startPath="~/Downloads"
+            title={`Import "${game.name}" from disk`}
           />
         ) : null}
         </div>

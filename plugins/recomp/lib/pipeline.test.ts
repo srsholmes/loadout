@@ -75,6 +75,57 @@ describe("resolveTemplate", () => {
   });
 });
 
+// ── non-GitHub mirror download helpers ───────────────────────────────
+
+describe("resolveDownloadFilename", () => {
+  it("prefers the entry's downloadFilename over the URL basename", async () => {
+    const { resolveDownloadFilename } = await import("./pipeline");
+    // A ModDB/IndieDB mirror URL ends in an opaque, extension-less token;
+    // without the override the extractor couldn't pick an unpacker.
+    const entry = makeGameEntry({ downloadFilename: "TimeSplittersRewind.zip" });
+    const name = resolveDownloadFilename(
+      entry,
+      "https://www.indiedb.com/downloads/mirror/300077/131/c2449553645f48",
+    );
+    expect(name).toBe("TimeSplittersRewind.zip");
+  });
+
+  it("falls back to the asset URL basename when downloadFilename is unset", async () => {
+    const { resolveDownloadFilename } = await import("./pipeline");
+    const entry = makeGameEntry();
+    expect(
+      resolveDownloadFilename(entry, "https://example.com/path/test-linux.zip"),
+    ).toBe("test-linux.zip");
+  });
+
+  it("falls back to 'download' when the URL has no usable basename", async () => {
+    const { resolveDownloadFilename } = await import("./pipeline");
+    expect(resolveDownloadFilename(makeGameEntry(), "https://example.com/")).toBe(
+      "download",
+    );
+  });
+});
+
+describe("resolveDownloadHosts", () => {
+  it("returns the GitHub defaults when the entry declares no downloadHosts", async () => {
+    const { resolveDownloadHosts } = await import("./pipeline");
+    const hosts = resolveDownloadHosts(makeGameEntry());
+    expect(hosts).toContain("github.com");
+    expect(hosts).not.toContain("www.indiedb.com");
+  });
+
+  it("widens the allowlist with the entry's downloadHosts, keeping the GitHub defaults", async () => {
+    const { resolveDownloadHosts } = await import("./pipeline");
+    const entry = makeGameEntry({
+      downloadHosts: ["www.indiedb.com", "media.indiedb.com"],
+    });
+    const hosts = resolveDownloadHosts(entry);
+    expect(hosts).toContain("github.com");
+    expect(hosts).toContain("www.indiedb.com");
+    expect(hosts).toContain("media.indiedb.com");
+  });
+});
+
 // ── resolveAssetUrl tests ────────────────────────────────────────────
 
 describe("resolveAssetUrl", () => {

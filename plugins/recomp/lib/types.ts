@@ -230,6 +230,25 @@ export interface InstalledModEntry {
   source: ModSource["kind"];
 }
 
+/**
+ * Manual-import descriptor for a game whose release can't be fetched
+ * headless — the upstream gates downloads behind a browser challenge
+ * and/or expiring signed URLs (IndieDB / ModDB via DBolical). The
+ * catalog UI replaces the Install button with "Open download page"
+ * (handed to quick-links) + "Import from disk" (the in-overlay file
+ * picker), and the install pipeline extracts the user-picked archive
+ * instead of downloading `latestAssetUrl`. `installType` stays
+ * "prebuilt" — only the bytes' provenance differs.
+ */
+export interface GameManualImport {
+  /** URL the "Open download page" button hands to quick-links so the
+   *  user's browser shortcut opens the upstream download page. */
+  pageUrl: string;
+  /** Archive extensions the import file picker filters to. Defaults to
+   *  all extractor-supported formats when unset. */
+  acceptExtensions?: string[];
+}
+
 export interface GameEntry {
   id: string;
   name: string;
@@ -266,6 +285,30 @@ export interface GameEntry {
   status?: string;
   latestVersion?: string;
   latestAssetUrl?: PlatformAssets;
+  /**
+   * Extra hostnames the download pipeline accepts as the FINAL
+   * (post-redirect) host of a release-asset download, ON TOP of the
+   * GitHub defaults. Only needed for non-GitHub `latestAssetUrl`
+   * downloads — e.g. a ModDB / IndieDB mirror link, which 302s to a
+   * DBolical-hosted file server. Leave unset for the GitHub-hosted
+   * majority; the pipeline always allows the GitHub object CDN.
+   */
+  downloadHosts?: string[];
+  /**
+   * Local filename to save the downloaded asset as, overriding the
+   * default (the basename of the resolved asset URL). Required when
+   * that URL ends in an opaque token with no file extension — ModDB /
+   * IndieDB mirror links look like `/downloads/mirror/<id>/<n>/<hash>`
+   * — because `extractArchive` picks the unpacker by file extension.
+   */
+  downloadFilename?: string;
+  /**
+   * When set, the game has no headless-downloadable asset; the user
+   * supplies the archive via the in-overlay importer. See
+   * `GameManualImport`. The install pipeline branches on this before
+   * resolving any `latestAssetUrl` / GitHub download.
+   */
+  manualImport?: GameManualImport;
   /** Engine's per-user data dir on Linux. See `Manifest.userDataDir`. */
   userDataDir?: string;
   /** Optional mods/extras catalog for this game (see `Manifest.mods`). */
