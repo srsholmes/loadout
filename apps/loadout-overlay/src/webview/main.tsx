@@ -113,7 +113,21 @@ async function boot() {
     // available. Re-apply theme after load in case the on-disk value
     // differed from the mirror (post-reinstall first boot, etc.).
     loadUserConfig()
-      .then(() => applyTheme(getConfigValue<string>("theme", "dark")))
+      .then(() => {
+        applyTheme(getConfigValue<string>("theme", "dark"));
+        // First run (fresh install): the user hasn't completed the welcome
+        // flow or set a wake button, so open the overlay ourselves to show
+        // it. The installer also pokes the loader's /show, but that races
+        // the webview's first (slow) CEF boot and is silently dropped if it
+        // fires before the __overlay subscription below is registered — the
+        // window then stays mapped-hidden. Triggering it here, once the
+        // webview is provably up and config is loaded, guarantees the
+        // welcome screen appears. Gated on welcomeCompleted so it never
+        // auto-opens on normal logins after setup is done.
+        if (!getConfigValue<boolean>("welcomeCompleted", false)) {
+          void showOverlay();
+        }
+      })
       .catch((err) => console.warn("[main] loadUserConfig failed:", err));
     subscribe({
       plugin: "__system",
