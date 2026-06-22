@@ -602,6 +602,66 @@ export default class RecompBackend implements PluginBackend {
     }
   }
 
+  /**
+   * Install a `manualImport` game from a user-picked local archive.
+   * The upstream (IndieDB / ModDB) gates downloads behind a browser
+   * challenge + expiring signed URLs we can't fetch headless, so the
+   * user downloads the zip in their browser (via the detail page's
+   * "Open download page" button → quick-links) and imports it here.
+   * Mirrors `importModFromDisk`'s realpath + allow-root + extension
+   * gate, then runs the normal install pipeline with the archive
+   * supplied in place of a download URL.
+   */
+  async importGameFromDisk(gameId: string, filePath: string): Promise<void> {
+    const entry = this.registry.find((g) => g.id === gameId);
+    if (!entry) throw new Error(`Game '${gameId}' not found in registry`);
+    if (!entry.manualImport) {
+      throw new Error(
+        `Game '${gameId}' isn't a manual-import game — use installGame instead.`,
+      );
+    }
+    // Validate the user-supplied path before the pipeline opens it with
+    // extractArchive (which would otherwise try to interpret any
+    // backend-readable file as an archive). realpath first so a symlink
+    // is gated on its canonical target. Same dance as importModFromDisk.
+    const { resolve: resolvePath } = await import("node:path");
+    const { realpath } = await import("node:fs/promises");
+    let absolute: string;
+    try {
+      absolute = await realpath(resolvePath(filePath));
+    } catch {
+      throw new Error(`importGameFromDisk: file '${filePath}' not found.`);
+    }
+    if (!pathRootAllowed(absolute)) {
+      throw new Error(
+        `importGameFromDisk: path '${absolute}' is outside the allowed roots (${allowedRootsErrorPhrase()}).`,
+      );
+    }
+    if (!hasAllowedArchiveExtension(absolute)) {
+      throw new Error(
+        `importGameFromDisk: '${absolute}' doesn't have a supported archive extension (${ALLOWED_ARCHIVE_EXTENSIONS.join(", ")}).`,
+      );
+    }
+
+    const release = this.lockGameOp(gameId);
+    try {
+      await installGame(
+        entry,
+        this.state,
+        undefined,
+        (event) => this.emitPipelineEvent(event),
+        absolute,
+      );
+      this.state = await loadState();
+      this.emit?.({
+        event: "gameStatusChanged",
+        data: { gameId, status: "installed" },
+      });
+    } finally {
+      release();
+    }
+  }
+
   async updateGame(id: string): Promise<void> {
     const entry = this.registry.find((g) => g.id === id);
     if (!entry) throw new Error(`Game '${id}' not found in registry`);
@@ -880,7 +940,10 @@ export default class RecompBackend implements PluginBackend {
       new Set(
         this.registry
           .filter((e) => this.state.games[e.id])
-          .map((e) => e.repo),
+          .map((e) => e.repo)
+          // manualImport games carry `repo: ""` — skip the GitHub probe
+          // for them (an empty repo would just 404 a wasted request).
+          .filter((repo) => repo.length > 0),
       ),
     );
     const liveLatestByRepo = new Map<string, string>();
