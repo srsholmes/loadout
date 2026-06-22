@@ -426,6 +426,13 @@ phase1() {
     # Download the overlay binary
     download_overlay "$ARCH"
 
+    # SteamOS-only: fetch the webkit2gtk closure the overlay's native wrapper
+    # dlopens at startup. Kept OUT of the release archive on purpose — it's
+    # ~100 MB and only SteamOS needs it (Bazzite/CachyOS/Fedora ship the libs
+    # system-wide), so bundling it would bloat every download. Built locally
+    # via podman instead, then cached. See setup_overlay_deps().
+    setup_overlay_deps
+
     # Download and stage plugins. The loader binary expects every plugin's
     # backend + workspace deps on disk; without this step the public installer
     # leaves $INSTALL_DIR/plugins/ empty and nothing renders. Audit 2026-05 H-002.
@@ -536,6 +543,65 @@ download_overlay() {
         return
     fi
     success "Overlay installed to $OVERLAY_INSTALL_DIR"
+}
+
+# Fetch the runtime libraries the overlay's native wrapper needs but the
+# release archive deliberately omits. Electrobun's libNativeWrapper.so dlopens
+# libwebkit2gtk-4.1 / libjavascriptcoregtk-4.1 / libayatana-appindicator3 at
+# startup. Bazzite, CachyOS and Fedora-ostree ship those in the base image;
+# SteamOS Holo does not. Rather than fatten every download with a ~100 MB
+# closure only SteamOS uses, we build it on the device at install time:
+# fetch-deck-overlay-libs.sh is a near-instant no-op where the system already
+# provides webkit2gtk-4.1, and builds + caches the closure from a Fedora
+# container via podman (shipped in Holo 3.7+) on SteamOS.
+#
+# Non-fatal: if the helper can't be fetched or the build can't run we warn and
+# continue. The binary, plugins and services still install; only the overlay
+# window is blocked until the closure is in place (re-run, or build from clone).
+setup_overlay_deps() {
+    [ -x "$OVERLAY_LAUNCHER" ] || return 0
+
+    # Prefer a sibling copy on disk (running from a clone); otherwise download
+    # it from the repo — the curl|sh path has no checkout. curl_gh/wget_gh add
+    # the GITHUB_TOKEN auth header so this works against a private repo too.
+    DEPS_SCRIPT=""
+    case "$0" in
+        */*)
+            _deps_dir="$(dirname "$0")"
+            [ -f "$_deps_dir/fetch-deck-overlay-libs.sh" ] && \
+                DEPS_SCRIPT="$_deps_dir/fetch-deck-overlay-libs.sh"
+            ;;
+    esac
+
+    _deps_tmp=""
+    if [ -z "$DEPS_SCRIPT" ]; then
+        _deps_tmp="$(mktemp)"
+        DEPS_URL="https://raw.githubusercontent.com/$REPO/main/scripts/fetch-deck-overlay-libs.sh"
+        if command -v curl >/dev/null 2>&1; then
+            curl_gh -fsSL -o "$_deps_tmp" "$DEPS_URL" 2>/dev/null || rm -f "$_deps_tmp"
+        elif command -v wget >/dev/null 2>&1; then
+            wget_gh -q -O "$_deps_tmp" "$DEPS_URL" 2>/dev/null || rm -f "$_deps_tmp"
+        fi
+        if [ ! -s "$_deps_tmp" ]; then
+            rm -f "$_deps_tmp"
+            warn "Could not fetch fetch-deck-overlay-libs.sh from $DEPS_URL."
+            warn "On SteamOS the overlay won't launch until its webkit2gtk closure is present."
+            warn "Build from a clone instead: bun run build-and-install"
+            return 0
+        fi
+        DEPS_SCRIPT="$_deps_tmp"
+    fi
+
+    info "Preparing overlay runtime libraries (no-op unless on SteamOS)..."
+    if sh "$DEPS_SCRIPT" "$OVERLAY_INSTALL_DIR/bin"; then
+        success "Overlay runtime libraries ready."
+    else
+        warn "Overlay dependency setup did not complete (see the message above)."
+        warn "The overlay won't launch until it does. On SteamOS install podman,"
+        warn "then re-run this installer; or build from a clone: bun run build-and-install"
+    fi
+
+    [ -n "$_deps_tmp" ] && rm -f "$_deps_tmp"
 }
 
 # Download and extract the plugin tree built by release.yml. Tarball
