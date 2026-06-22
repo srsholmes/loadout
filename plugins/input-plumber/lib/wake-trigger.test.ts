@@ -16,6 +16,7 @@ import {
   clearWakeButton,
   captureWakeButton,
   reloadPersistedProfile,
+  restartInputPlumber,
 } from "./wake-trigger";
 import { PROFILE_PATH } from "./profile";
 
@@ -232,6 +233,27 @@ describe("wake-trigger orchestration", () => {
     expect(r.ok).toBe(true);
     expect(writtenFiles.get(PROFILE_PATH)).toContain("button: RightPaddle1");
     expect(calls.find((c) => has(c, "LoadProfilePath"))).toBeDefined();
+  });
+
+  it("restartInputPlumber resets the start-limit before restarting (so rapid presses can't brick IP)", async () => {
+    const { stub, calls } = makeSpawnStub(happyPathExpectations());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
+
+    const r = await restartInputPlumber();
+    expect(r.ok).toBe(true);
+
+    const resetIdx = calls.findIndex(
+      (c) => c[0] === "systemctl" && has(c, "reset-failed") && has(c, "inputplumber"),
+    );
+    const restartIdx = calls.findIndex(
+      (c) => c[0] === "systemctl" && has(c, "restart") && has(c, "inputplumber"),
+    );
+    expect(resetIdx).toBeGreaterThanOrEqual(0);
+    expect(restartIdx).toBeGreaterThanOrEqual(0);
+    // reset-failed must precede the restart, else a start-limit-hit state stays
+    // stuck and the recovery button can't recover.
+    expect(resetIdx).toBeLessThan(restartIdx);
   });
 
   it("captureWakeButton restores the previous binding when the catch-all load fails", async () => {

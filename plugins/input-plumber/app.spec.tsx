@@ -258,6 +258,7 @@ describe("input-plumber plugin", () => {
       if (method === "getWakeStatus") return Promise.resolve(wake);
       if (method === "setWakeButton") return Promise.resolve({ ok: true });
       if (method === "clearWakeButton") return Promise.resolve({ ok: true });
+      if (method === "restartInputPlumber") return Promise.resolve({ ok: true });
       if (method === "prepareWake") return Promise.resolve(wake);
       return Promise.resolve(null);
     });
@@ -349,6 +350,44 @@ describe("input-plumber plugin", () => {
         b.textContent?.trim() === "Set wake button",
       ) as HTMLButtonElement;
       expect(reSetBtn.disabled).toBe(false);
+    });
+  });
+
+  it("restart button confirms the controller is back, then enters a cooldown", async () => {
+    // restartInputPlumber → ok, and getWakeStatus reports a composite device,
+    // so the confirm poll succeeds on the first attempt (no delay).
+    rpcWithWake(wakeActive);
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Restart InputPlumber");
+    });
+
+    const restartBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Restart InputPlumber"),
+    )!;
+    fireEvent.click(restartBtn);
+
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("restartInputPlumber");
+    });
+
+    // Reports confirmed detection — not a bare "should be back" — because a
+    // composite device re-appeared via getWakeStatus.
+    await waitFor(() => {
+      expect(container.textContent).toContain("controller detected");
+    });
+
+    // The button is now in cooldown: disabled and showing a countdown, so the
+    // user can't immediately re-fire it.
+    await waitFor(() => {
+      const btn = Array.from(container.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Restart InputPlumber"),
+      ) as HTMLButtonElement;
+      expect(btn.textContent).toContain("s)");
+      expect(btn.disabled).toBe(true);
     });
   });
 
