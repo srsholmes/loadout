@@ -230,6 +230,25 @@ export interface InstalledModEntry {
   source: ModSource["kind"];
 }
 
+/**
+ * Manual-import descriptor for a game whose release can't be fetched
+ * headless — the upstream gates downloads behind a browser challenge
+ * and/or expiring signed URLs (IndieDB / ModDB via DBolical). The
+ * catalog UI replaces the Install button with "Open download page"
+ * (handed to quick-links) + "Import from disk" (the in-overlay file
+ * picker), and the install pipeline extracts the user-picked archive
+ * instead of downloading `latestAssetUrl`. `installType` stays
+ * "prebuilt" — only the bytes' provenance differs.
+ */
+export interface GameManualImport {
+  /** URL the "Open download page" button hands to quick-links so the
+   *  user's browser shortcut opens the upstream download page. */
+  pageUrl: string;
+  /** Archive extensions the import file picker filters to. Defaults to
+   *  all extractor-supported formats when unset. */
+  acceptExtensions?: string[];
+}
+
 export interface GameEntry {
   id: string;
   name: string;
@@ -283,6 +302,13 @@ export interface GameEntry {
    * — because `extractArchive` picks the unpacker by file extension.
    */
   downloadFilename?: string;
+  /**
+   * When set, the game has no headless-downloadable asset; the user
+   * supplies the archive via the in-overlay importer. See
+   * `GameManualImport`. The install pipeline branches on this before
+   * resolving any `latestAssetUrl` / GitHub download.
+   */
+  manualImport?: GameManualImport;
   /** Engine's per-user data dir on Linux. See `Manifest.userDataDir`. */
   userDataDir?: string;
   /** Optional mods/extras catalog for this game (see `Manifest.mods`). */

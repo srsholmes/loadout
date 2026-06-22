@@ -8233,19 +8233,11 @@
       "launchCommand": {
         "windows": "{installDir}/TimeSplittersRewind.exe"
       },
-      "latestAssetUrl": {
-        "windows": "https://www.indiedb.com/downloads/mirror/300077/131/c2449553645f48392837f03b19a2ee15"
+      "latestVersion": "Early Access v0.3.3",
+      "manualImport": {
+        "pageUrl": "https://www.indiedb.com/downloads/start/300077/all",
+        "acceptExtensions": ["zip"]
       },
-      "latestVersion": "Early Access v0.3",
-      "downloadHosts": [
-        "www.indiedb.com",
-        "indiedb.com",
-        "www.moddb.com",
-        "moddb.com",
-        "media.indiedb.com",
-        "media.moddb.com"
-      ],
-      "downloadFilename": "TimeSplittersRewind.zip",
       "tags": [
         "timesplitters",
         "fps",
