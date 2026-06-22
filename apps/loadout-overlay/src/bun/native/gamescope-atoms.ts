@@ -374,6 +374,50 @@ export class GamescopeAtoms {
   }
 
   /**
+   * Overwrite the window's WM_CLASS. Electrobun's prebuilt native wrapper
+   * hardcodes its template class ("ElectrobunKitchenSink-dev"), which leaks
+   * into X11 WM_CLASS — so our `.desktop` `StartupWMClass=Loadout` never
+   * matches and WMs label/group the overlay as the kitchen-sink demo. We
+   * can't fix it at the source without rebuilding the vendored blob, so we
+   * set WM_CLASS ourselves once the window exists. WM_CLASS is two
+   * NUL-terminated strings: instance ("loadout") then class ("Loadout").
+   */
+  async setWmClass(instance: string, cls: string): Promise<void> {
+    if (!this.windowId) await this.findWindow();
+    if (!this.windowId) return;
+
+    // Fast path: libxcb. WM_CLASS is an XA_STRING holding the two
+    // NUL-terminated parts back to back.
+    if (this.x11) {
+      const idNum = this._windowIdNumFor("own");
+      if (idNum !== null) {
+        this.x11.setString(idNum, "WM_CLASS", `${instance}\0${cls}\0`);
+        this._flush();
+        return;
+      }
+    }
+
+    // Fallback: xdotool, which is already a hard dependency of findWindow
+    // (so it's present whenever we resolved a window id). Sets both
+    // res_name + res_class correctly.
+    try {
+      await run([
+        "env",
+        `DISPLAY=${this.display}`,
+        "xdotool",
+        "set_window",
+        "--classname",
+        instance,
+        "--class",
+        cls,
+        this.windowId,
+      ]);
+    } catch (err) {
+      console.warn("[gamescope-atoms] setWmClass failed:", err);
+    }
+  }
+
+  /**
    * One-time setup — sets atoms that mark this window as a Loadout
    * overlay. Defaults to hidden (opacity 0) so Gamescope doesn't render
    * it until the user toggles.
@@ -391,6 +435,9 @@ export class GamescopeAtoms {
     await this._set("STEAM_OVERLAY", 0);
     await this._set("STEAM_INPUT_FOCUS", 0);
     this._flush();
+    // Overwrite Electrobun's template WM_CLASS so the taskbar/WM labels us
+    // "Loadout" and `.desktop` StartupWMClass=Loadout matches.
+    await this.setWmClass("loadout", "Loadout");
     // Warm the Steam window cache so the first show() doesn't pay a
     // ~40ms cold xdotool/xprop survey. Best-effort: if Steam isn't up
     // yet at boot, show() still falls back to a lazy resolve.
