@@ -316,6 +316,38 @@ async function makeExecutable(
   await spawn(["chmod", "+x", exe]).exited;
 }
 
+// ── Manual import helpers ────────────────────────────────────────────
+
+/**
+ * Platform key to install a `manualImport` entry under. Prefer a native
+ * Linux build when the entry declares one; otherwise Windows (run via
+ * Proton). Drives the Steam compat-tool registration in addToSteam.
+ */
+function manualImportPlatform(entry: GameEntry): PlatformName {
+  return entry.launchCommand.linux ? "linux" : "windows";
+}
+
+/**
+ * If `dir` holds exactly one entry and it's a directory, hoist that
+ * directory's contents up into `dir` and drop the now-empty wrapper.
+ *
+ * Manual-import archives (IndieDB / ModDB) routinely wrap the whole
+ * build in a single versioned top-level folder (e.g.
+ * `TimeSplittersRewind_EarlyAccess_V03.3/…`), which would otherwise
+ * push the launch binary one level below where the entry's
+ * `launchCommand` (`{installDir}/Foo.exe`) expects it. No-op when the
+ * archive extracted flat or has multiple top-level entries.
+ */
+async function flattenSingleRoot(dir: string): Promise<void> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  if (entries.length !== 1 || !entries[0].isDirectory()) return;
+  const inner = join(dir, entries[0].name);
+  for (const name of await readdir(inner)) {
+    await rename(join(inner, name), join(dir, name));
+  }
+  await rm(inner, { recursive: true, force: true });
+}
+
 // ── Install ──────────────────────────────────────────────────────────
 
 export async function installGame(
@@ -323,6 +355,9 @@ export async function installGame(
   state: PersistedState,
   romPath: string | undefined,
   onEvent: EventCallback,
+  /** For `manualImport` games: the user-picked, already-validated local
+   *  archive to extract instead of resolving + downloading an asset. */
+  manualArchivePath?: string,
 ): Promise<PersistedState> {
   const gameId = entry.id;
 
@@ -454,65 +489,91 @@ export async function installGame(
       // prebuilt branch guards against below.
       await chownInstallDirToUser(installDir);
     } else {
-      // Resolve asset URL
-      onEvent({
-        type: "progress", gameId, stage: "resolving",
-        percent: 0, message: "Finding latest release...",
-      });
-      const resolved = await resolveAssetUrl(entry);
-      version = resolved.version;
-      resolvedPlatform = resolved.platform;
-      const assetUrl = resolved.url;
-      const expectedSha256 = resolved.sha256;
+      // Resolve the archive to extract. Two provenances:
+      //   - manualImport: the user already downloaded it in a browser
+      //     (the upstream gates downloads behind a Cloudflare challenge
+      //     + expiring signed URLs we can't fetch headless — IndieDB /
+      //     ModDB). We extract the picked file as-is.
+      //   - everything else: resolve `latestAssetUrl` / GitHub Releases
+      //     and download into temp first.
+      let downloadPath: string;
+      if (entry.manualImport) {
+        if (!manualArchivePath) {
+          throw new Error(
+            `${entry.name} is a manual-import game — import the downloaded ` +
+              `archive from disk instead of installing directly.`,
+          );
+        }
+        resolvedPlatform = manualImportPlatform(entry);
+        // No upstream tag to read; the catalog's hand-curated
+        // `latestVersion` is the source of truth (kept in sync with
+        // `mergeGamesWithState`'s update check so no false Update badge).
+        version = entry.latestVersion ?? new Date().toISOString();
+        downloadPath = manualArchivePath;
+        onEvent({
+          type: "progress", gameId, stage: "importing",
+          percent: 100, message: `Using ${basename(manualArchivePath)}`,
+        });
+      } else {
+        onEvent({
+          type: "progress", gameId, stage: "resolving",
+          percent: 0, message: "Finding latest release...",
+        });
+        const resolved = await resolveAssetUrl(entry);
+        version = resolved.version;
+        resolvedPlatform = resolved.platform;
+        const assetUrl = resolved.url;
+        const expectedSha256 = resolved.sha256;
 
-    // Download. The local filename comes from the entry's explicit
-    // `downloadFilename` when set (extension-less mirror URLs need it so
-    // the extractor can dispatch), else the asset URL's basename.
-    const filename = resolveDownloadFilename(entry, assetUrl);
-    const downloadPath = join(tmpGameDir, filename);
+        // Download. The local filename comes from the entry's explicit
+        // `downloadFilename` when set (extension-less mirror URLs need it
+        // so the extractor can dispatch), else the asset URL's basename.
+        const filename = resolveDownloadFilename(entry, assetUrl);
+        downloadPath = join(tmpGameDir, filename);
 
-    onEvent({
-      type: "progress", gameId, stage: "downloading",
-      percent: 0, message: "Starting download...",
-    });
-
-    // Validate the post-redirect host: a release asset URL on
-    // github.com legitimately 302s to GitHub's object CDN, but bytes
-    // must not be fetched from any other (attacker-controlled) redirect
-    // target. A non-GitHub mirror entry (ModDB/IndieDB) widens the
-    // allowlist with its own declared hosts. Mirrors store-bridge's
-    // github-release allowlist.
-    const allowedDownloadHosts = resolveDownloadHosts(entry);
-
-    await downloadFile(
-      assetUrl,
-      downloadPath,
-      (downloaded, total) => {
-        const percent = total > 0 ? (downloaded / total) * 100 : 0;
-        const mbDown = (downloaded / 1_048_576).toFixed(1);
-        const mbTotal = (total / 1_048_576).toFixed(1);
         onEvent({
           type: "progress", gameId, stage: "downloading",
-          percent, message: `${mbDown} / ${mbTotal} MB`,
+          percent: 0, message: "Starting download...",
         });
-      },
-      allowedDownloadHosts,
-    );
 
-    // Checksum gate (FIX 4): if the manifest pinned an expected
-    // sha256 for this platform, verify the downloaded bytes BEFORE
-    // extraction and abort (the helper removes the file) on mismatch.
-    // Absent ⇒ a one-line "unverified" notice, then proceed — existing
-    // games carry no checksums yet.
-    onEvent({
-      type: "progress", gameId, stage: "verifying",
-      percent: 0, message: "Verifying download...",
-    });
-    await verifyDownloadChecksum(downloadPath, expectedSha256, (m) =>
-      onEvent({
-        type: "progress", gameId, stage: "verifying", percent: 100, message: m,
-      }),
-    );
+        // Validate the post-redirect host: a release asset URL on
+        // github.com legitimately 302s to GitHub's object CDN, but bytes
+        // must not be fetched from any other (attacker-controlled)
+        // redirect target. A non-GitHub mirror entry widens the allowlist
+        // with its own declared hosts. Mirrors store-bridge's
+        // github-release allowlist.
+        const allowedDownloadHosts = resolveDownloadHosts(entry);
+
+        await downloadFile(
+          assetUrl,
+          downloadPath,
+          (downloaded, total) => {
+            const percent = total > 0 ? (downloaded / total) * 100 : 0;
+            const mbDown = (downloaded / 1_048_576).toFixed(1);
+            const mbTotal = (total / 1_048_576).toFixed(1);
+            onEvent({
+              type: "progress", gameId, stage: "downloading",
+              percent, message: `${mbDown} / ${mbTotal} MB`,
+            });
+          },
+          allowedDownloadHosts,
+        );
+
+        // Checksum gate (FIX 4): if the manifest pinned an expected
+        // sha256 for this platform, verify the downloaded bytes BEFORE
+        // extraction and abort (the helper removes the file) on mismatch.
+        // Absent ⇒ a one-line "unverified" notice, then proceed —
+        // existing games carry no checksums yet.
+        onEvent({
+          type: "progress", gameId, stage: "verifying",
+          percent: 0, message: "Verifying download...",
+        });
+        await verifyDownloadChecksum(downloadPath, expectedSha256, (m) =>
+          onEvent({
+            type: "progress", gameId, stage: "verifying", percent: 100, message: m,
+          }),
+        );
+      }
 
     // Stage extraction in `${installDir}.partial`. On success we
     // atomically `rename(partialDir, installDir)` at the end of the
@@ -531,6 +592,11 @@ export async function installGame(
         ? basename(resolveTemplate(launchCmd, partialDir))
         : undefined;
     await extractArchive(downloadPath, partialDir, appimageBasename);
+    // Manual-import archives commonly wrap the build in one versioned
+    // top-level folder; hoist it so `{installDir}/<binary>` resolves.
+    if (entry.manualImport) {
+      await flattenSingleRoot(partialDir);
+    }
     onEvent({
       type: "progress", gameId, stage: "extracting",
       percent: 100, message: "Extraction complete",
