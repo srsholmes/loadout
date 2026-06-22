@@ -29,6 +29,17 @@ import type {
 
 const CAPTURE_TIMEOUT_MS = 10_000;
 
+// Restart-recovery pacing. The backend already resets systemd's start-limit
+// before each restart, so a fast click can't brick IP anymore — but we still
+// hold the button down until we've *confirmed* the controller came back, then
+// keep it disabled for a short cooldown. Together these stop the "looks dead so
+// I'll click again" loop that piled up restarts in the first place: the user
+// can't re-fire while we're still checking, and there's a beat afterwards to
+// see whether it worked before trying again.
+const RESTART_CONFIRM_ATTEMPTS = 6;
+const RESTART_CONFIRM_DELAY_MS = 1000;
+const RESTART_COOLDOWN_S = 5;
+
 export const icon = FaPlug;
 
 // Hard cap on retained install-log lines. Chatty installs (pacman/dnf
@@ -340,6 +351,7 @@ function WakeButtonSection() {
   const [info, setInfo] = useState<string | null>(null);
   const [legacyAck, setLegacyAck] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [restartCooldown, setRestartCooldown] = useState(0);
 
   // Mounted-ref guard so awaited callbacks don't `setState` after the user
   // navigates away mid-capture (10s windows are long enough to leave on).
@@ -374,6 +386,18 @@ function WakeButtonSection() {
     }, 1000);
     return () => clearInterval(tick);
   }, [capturing]);
+
+  // Post-restart cooldown ticker — keeps the Restart button disabled for a few
+  // seconds after a restart resolves so a frustrated user can't immediately
+  // re-fire it (which is how a single dead controller turned into a restart
+  // storm).
+  useEffect(() => {
+    if (restartCooldown <= 0) return;
+    const tick = setInterval(() => {
+      setRestartCooldown((c) => (c > 0 ? c - 1 : 0));
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [restartCooldown]);
 
   const startCapture = useCallback(async () => {
     safeSet(setError, null);
@@ -417,21 +441,52 @@ function WakeButtonSection() {
   // Recovery: restart the InputPlumber daemon (rebuilds composite devices) and
   // re-load the wake profile. Slower than the other ops (daemon restart + a few
   // retries for re-enumeration), so it has its own busy state + spinner.
+  //
+  // Confirm-before-re-enable: the daemon coming back ≠ the controller being
+  // usable, so after the restart we poll getWakeStatus until a composite device
+  // re-appears (or we give up), and only then report success. The button stays
+  // disabled (`restarting`) for the whole poll, then a cooldown, so the user
+  // can't stack restarts while the controller is still re-enumerating — the
+  // exact pile-up that tripped systemd's start-limit and bricked IP.
   const restartIp = useCallback(async () => {
     safeSet(setRestarting, true);
     safeSet(setError, null);
     safeSet(setInfo, null);
     try {
       const r = (await call("restartInputPlumber")) as WakeOpResult;
-      if (r.ok) safeSet(setInfo, "InputPlumber restarted — controllers should be back.");
-      else safeSet(setError, r.error ?? "Restart failed.");
-      await refresh();
+      if (!r.ok) {
+        safeSet(setError, r.error ?? "Restart failed.");
+        return;
+      }
+      // Poll until the controller re-appears, refreshing the UI as we go.
+      let back = false;
+      for (let attempt = 0; attempt < RESTART_CONFIRM_ATTEMPTS; attempt++) {
+        const s = (await call("getWakeStatus")) as WakeStatus;
+        if (mountedRef.current) setWake(s);
+        if (s.ipActive && s.devices.length > 0) {
+          back = true;
+          break;
+        }
+        if (attempt < RESTART_CONFIRM_ATTEMPTS - 1) {
+          await new Promise((res) => setTimeout(res, RESTART_CONFIRM_DELAY_MS));
+        }
+      }
+      if (back) {
+        safeSet(setInfo, "InputPlumber restarted — controller detected.");
+      } else {
+        safeSet(
+          setError,
+          "InputPlumber restarted, but no controller showed up. Try re-plugging it, then restart again.",
+        );
+      }
     } catch (e) {
       safeSet(setError, e instanceof Error ? e.message : String(e));
     } finally {
       safeSet(setRestarting, false);
+      // Brief cooldown before the button can fire again, even after success.
+      safeSet(setRestartCooldown, RESTART_COOLDOWN_S);
     }
-  }, [call, refresh, safeSet]);
+  }, [call, safeSet]);
 
   const cardWrap = (body: React.ReactNode) => (
     <div className="card mt-3.5">
@@ -583,12 +638,17 @@ function WakeButtonSection() {
         </div>
         <FocusButton
           onClick={() => void restartIp()}
-          disabled={busy || capturing || restarting}
+          disabled={busy || capturing || restarting || restartCooldown > 0}
           variant="ghost"
         >
           {restarting ? (
             <>
               <Spinner size={14} /> <span className="ml-1.5">Restarting…</span>
+            </>
+          ) : restartCooldown > 0 ? (
+            <>
+              <FaArrowsRotate className="w-3 h-3 mr-1" /> Restart InputPlumber (
+              {restartCooldown}s)
             </>
           ) : (
             <>

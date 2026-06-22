@@ -533,6 +533,15 @@ const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  * wake button would silently fail to reload right after the restart.
  */
 export async function restartInputPlumber(): Promise<WakeOpResult> {
+  // Clear systemd's restart bookkeeping before every restart. This is the one
+  // change that makes the button safe AND able to recover. (a) It resets the
+  // start-limit counter (StartLimitBurst=5 / 10s), so repeated presses — which
+  // happen naturally when the controller is still dead and the user clicks
+  // again — can never trip "start-limit-hit" and brick IP. (b) If IP is already
+  // in a failed state (e.g. a prior burst already tripped the limit), a plain
+  // `restart` keeps failing; reset-failed first lets the button dig IP back out.
+  // Best-effort: a non-zero exit just means there was nothing to reset.
+  await exec(["systemctl", "reset-failed", "inputplumber"]);
   const r = await exec(["systemctl", "restart", "inputplumber"]);
   if (!r.ok) {
     return { ok: false, error: `Failed to restart InputPlumber: ${r.err || "unknown error"}` };
