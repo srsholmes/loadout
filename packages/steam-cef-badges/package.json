@@ -7,7 +7,7 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "license": "MIT",
+  "license": "BSD-3-Clause",
   "dependencies": {
     "@loadout/steam-cdp": "workspace:*",
     "@loadout/steam-paths": "workspace:*"

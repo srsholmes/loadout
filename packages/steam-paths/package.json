@@ -8,5 +8,5 @@
     ".": "./src/index.ts",
     "./artwork": "./src/artwork.ts"
   },
-  "license": "MIT"
+  "license": "BSD-3-Clause"
 }

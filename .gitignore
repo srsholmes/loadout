@@ -60,3 +60,7 @@ screenshot-review/
 
 # recomp build artifacts (created in install dir, never the repo)
 plugins/*/_deps/
+
+# Internal AI planning/spec docs — never publish (kept local only)
+docs/superpowers/
+docs/plugin-migration.md

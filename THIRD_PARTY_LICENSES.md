@@ -44,3 +44,30 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+---
+
+## CEF / Chromium (bundled in the Electrobun overlay)
+
+Source: <https://bitbucket.org/chromiumembedded/cef> · <https://www.chromium.org>
+SPDX: `BSD-3-Clause` (CEF itself), with bundled Chromium components under
+their respective licenses (predominantly `BSD-3-Clause`; some components under
+`MPL-2.0`, `LGPL-2.1` — notably the bundled FFmpeg — and others).
+
+The overlay ships the CEF runtime produced by the Electrobun build — `libcef.so`,
+the `Resources/` and `locales/` trees, ICU data, and the helper processes — in
+the `loadout-overlay-*.tar.xz` release asset. The Chromium Embedded Framework
+is distributed under the BSD 3-Clause license; the underlying Chromium project
+bundles numerous third-party components under their own licenses.
+
+Per those licenses, the full attribution text is reproduced in the
+materials shipped with the CEF binary distribution rather than inlined here:
+
+- CEF binary distribution `LICENSE.txt` and the bundled `about_credits.html`
+  (Chromium's full credits), included alongside `libcef.so` in the overlay tree.
+- Upstream references:
+  - CEF binaries: <https://cef-builds.spotifycdn.com/index.html>
+  - Chromium license: <https://chromium.googlesource.com/chromium/src/+/main/LICENSE>
+
+If you redistribute the overlay tree, keep the CEF `LICENSE.txt` /
+`about_credits.html` alongside the binaries.
