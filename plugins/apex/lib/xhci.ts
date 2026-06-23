@@ -68,6 +68,9 @@ export interface RecoverResult {
   controller: string;
   steps: string[];
   gamepadPresent: boolean;
+  /** True when recover() found the gamepad already enumerating and did
+   *  nothing — no rebind was needed. */
+  alreadyHealthy?: boolean;
   error?: string;
 }
 
@@ -175,16 +178,34 @@ async function rebind(deps: XhciDeps, pci: string, steps: string[]): Promise<voi
 }
 
 /**
- * Full recovery: pick the controller, rebind it, poll for the gamepad
- * to re-enumerate, then restart InputPlumber so it re-grabs the freshly
- * enumerated source. Returns a structured result for the UI.
+ * Full recovery: rebind the controller and poll for the gamepad to
+ * re-enumerate. InputPlumber re-grabs the freshly hotplugged source on
+ * its own, so we deliberately do NOT restart it here — that restart
+ * re-enumerates the active controller, which the overlay can register as
+ * a synthetic button press, re-triggering this very call in a loop.
+ *
+ * The `alreadyHealthy` short-circuit is the loop guard: if the gamepad
+ * is already enumerating there is nothing to recover, so a re-pressed
+ * button (or any re-invocation) no-ops instead of needlessly rebinding a
+ * working controller. Pass `force` to rebind regardless.
  */
 export async function recover(
   deps: XhciDeps,
-  opts: { override?: string } = {},
+  opts: { override?: string; force?: boolean } = {},
 ): Promise<RecoverResult> {
   const steps: string[] = [];
   const { controller } = await pickController(deps, opts.override);
+
+  // Loop guard — nothing to do if the gamepad is already on the bus.
+  if (!opts.force && (await gamepadPresent(deps.run))) {
+    return {
+      success: true,
+      controller,
+      steps,
+      gamepadPresent: true,
+      alreadyHealthy: true,
+    };
+  }
 
   if (!(await deps.pathExists(pciDevicePath(controller)))) {
     return {
@@ -215,21 +236,6 @@ export async function recover(
       gamepadPresent: false,
       error: `Gamepad USB IDs still missing after rebind (${GAMEPAD_IDS.join(", ")}). It may need a physical reconnect, or this is a different failure than the xHCI resume death.`,
     };
-  }
-
-  // Nudge InputPlumber so it re-grabs the freshly enumerated source.
-  const active = await deps.run(["systemctl", "is-active", "inputplumber"], {
-    timeoutMs: 5_000,
-  });
-  if (active.stdout.trim() === "active") {
-    steps.push("restart-inputplumber");
-    deps.log?.("Restarting InputPlumber so it re-grabs the gamepad ...");
-    await deps.run(["systemctl", "reset-failed", "inputplumber"], {
-      timeoutMs: 10_000,
-    });
-    await deps.run(["systemctl", "restart", "inputplumber"], {
-      timeoutMs: 10_000,
-    });
   }
 
   return { success: true, controller, steps, gamepadPresent: true };
