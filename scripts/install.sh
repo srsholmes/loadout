@@ -334,94 +334,98 @@ phase1() {
     mkdir -p "$INSTALL_DIR/plugins"
     mkdir -p "$HOME/.local/bin"
 
-    # Check if binary already exists
+    # Check if the binary already exists. Keeping it skips only the binary
+    # download/install below — the overlay, plugins and services further down
+    # are still refreshed from the latest release. This lets a re-run pick up
+    # new plugins (e.g. ones added since the last install) without forcing the
+    # user to delete the binary first.
+    INSTALL_BINARY=1
     if [ -f "$BINARY_PATH" ]; then
         if prompt_yn "Loadout binary already exists. Overwrite? (y/N)"; then
             info "Overwriting existing binary..."
         else
-            info "Keeping existing binary."
-            setup_desktop
-            setup_steam_cef_debugging
-            setup_service
-            return
+            info "Keeping existing binary (overlay + plugins will still be refreshed)."
+            INSTALL_BINARY=0
         fi
     fi
 
-    # Stop existing service if running (backend is a root system service)
-    if systemctl is-active loadout >/dev/null 2>&1; then
-        info "Stopping existing Loadout service..."
-        sudo systemctl stop loadout || true
-    fi
+    if [ "$INSTALL_BINARY" = "1" ]; then
+        # Stop existing service if running (backend is a root system service)
+        if systemctl is-active loadout >/dev/null 2>&1; then
+            info "Stopping existing Loadout service..."
+            sudo systemctl stop loadout || true
+        fi
 
-    # Download the binary
-    info "Downloading Loadout..."
-    TEMP_FILE="$(mktemp)"
-    if command -v curl >/dev/null 2>&1; then
-        if [ -n "$DOWNLOAD_ACCEPT_HEADER" ]; then
-            DOWNLOAD_OK=1
-            curl_gh -fSL --progress-bar -H "$DOWNLOAD_ACCEPT_HEADER" -o "$TEMP_FILE" "$DOWNLOAD_URL" || DOWNLOAD_OK=0
+        # Download the binary
+        info "Downloading Loadout..."
+        TEMP_FILE="$(mktemp)"
+        if command -v curl >/dev/null 2>&1; then
+            if [ -n "$DOWNLOAD_ACCEPT_HEADER" ]; then
+                DOWNLOAD_OK=1
+                curl_gh -fSL --progress-bar -H "$DOWNLOAD_ACCEPT_HEADER" -o "$TEMP_FILE" "$DOWNLOAD_URL" || DOWNLOAD_OK=0
+            else
+                DOWNLOAD_OK=1
+                curl_gh -fSL --progress-bar -o "$TEMP_FILE" "$DOWNLOAD_URL" || DOWNLOAD_OK=0
+            fi
+            if [ "$DOWNLOAD_OK" = "0" ]; then
+                rm -f "$TEMP_FILE"
+                error "Download failed. Please check your internet connection and try again."
+                error "URL: $DOWNLOAD_URL"
+                exit 1
+            fi
+        elif command -v wget >/dev/null 2>&1; then
+            if [ -n "$DOWNLOAD_ACCEPT_HEADER" ]; then
+                DOWNLOAD_OK=1
+                wget_gh --header="$DOWNLOAD_ACCEPT_HEADER" -q --show-progress -O "$TEMP_FILE" "$DOWNLOAD_URL" || DOWNLOAD_OK=0
+            else
+                DOWNLOAD_OK=1
+                wget_gh -q --show-progress -O "$TEMP_FILE" "$DOWNLOAD_URL" || DOWNLOAD_OK=0
+            fi
+            if [ "$DOWNLOAD_OK" = "0" ]; then
+                rm -f "$TEMP_FILE"
+                error "Download failed. Please check your internet connection and try again."
+                error "URL: $DOWNLOAD_URL"
+                exit 1
+            fi
         else
-            DOWNLOAD_OK=1
-            curl_gh -fSL --progress-bar -o "$TEMP_FILE" "$DOWNLOAD_URL" || DOWNLOAD_OK=0
-        fi
-        if [ "$DOWNLOAD_OK" = "0" ]; then
             rm -f "$TEMP_FILE"
-            error "Download failed. Please check your internet connection and try again."
+            error "Neither curl nor wget found. Cannot download the binary."
+            exit 1
+        fi
+
+        # Verify download is not empty
+        DOWNLOADED_SIZE="$(wc -c < "$TEMP_FILE" | tr -d ' ')"
+        if [ "$DOWNLOADED_SIZE" -lt 1024 ]; then
+            rm -f "$TEMP_FILE"
+            error "Downloaded file is too small ($DOWNLOADED_SIZE bytes). The download may have failed."
             error "URL: $DOWNLOAD_URL"
             exit 1
         fi
-    elif command -v wget >/dev/null 2>&1; then
-        if [ -n "$DOWNLOAD_ACCEPT_HEADER" ]; then
-            DOWNLOAD_OK=1
-            wget_gh --header="$DOWNLOAD_ACCEPT_HEADER" -q --show-progress -O "$TEMP_FILE" "$DOWNLOAD_URL" || DOWNLOAD_OK=0
-        else
-            DOWNLOAD_OK=1
-            wget_gh -q --show-progress -O "$TEMP_FILE" "$DOWNLOAD_URL" || DOWNLOAD_OK=0
-        fi
-        if [ "$DOWNLOAD_OK" = "0" ]; then
+        info "Downloaded $DOWNLOADED_SIZE bytes."
+
+        if ! verify_sha256 "$TEMP_FILE" "loadout-${ARCH}"; then
             rm -f "$TEMP_FILE"
-            error "Download failed. Please check your internet connection and try again."
-            error "URL: $DOWNLOAD_URL"
             exit 1
         fi
-    else
-        rm -f "$TEMP_FILE"
-        error "Neither curl nor wget found. Cannot download the binary."
-        exit 1
-    fi
 
-    # Verify download is not empty
-    DOWNLOADED_SIZE="$(wc -c < "$TEMP_FILE" | tr -d ' ')"
-    if [ "$DOWNLOADED_SIZE" -lt 1024 ]; then
-        rm -f "$TEMP_FILE"
-        error "Downloaded file is too small ($DOWNLOADED_SIZE bytes). The download may have failed."
-        error "URL: $DOWNLOAD_URL"
-        exit 1
+        # Install the binary at the chosen path. On a system path
+        # (/usr/local/bin) this needs sudo + restorecon to force bin_t so the
+        # root service (init_t) can exec it under enforcing SELinux. On SteamOS
+        # the binary lives in the user's home (BIN_NEEDS_SUDO=0) — plain user-
+        # owned, no SELinux concern, no /usr write (the rootfs is read-only).
+        if [ "$BIN_NEEDS_SUDO" = "1" ]; then
+            info "Installing the binary to $BINARY_PATH (needs sudo)..."
+            sudo install -m 0755 "$TEMP_FILE" "$BINARY_PATH"
+            rm -f "$TEMP_FILE"
+            command -v restorecon >/dev/null 2>&1 && sudo restorecon -F "$BINARY_PATH" 2>/dev/null || true
+        else
+            info "Installing the binary to $BINARY_PATH (user-writable on this distro)..."
+            mkdir -p "$(dirname "$BINARY_PATH")"
+            install -m 0755 "$TEMP_FILE" "$BINARY_PATH"
+            rm -f "$TEMP_FILE"
+        fi
+        success "Binary installed to $BINARY_PATH"
     fi
-    info "Downloaded $DOWNLOADED_SIZE bytes."
-
-    if ! verify_sha256 "$TEMP_FILE" "loadout-${ARCH}"; then
-        rm -f "$TEMP_FILE"
-        exit 1
-    fi
-
-    # Install the binary at the chosen path. On a system path
-    # (/usr/local/bin) this needs sudo + restorecon to force bin_t so the
-    # root service (init_t) can exec it under enforcing SELinux. On SteamOS
-    # the binary lives in the user's home (BIN_NEEDS_SUDO=0) — plain user-
-    # owned, no SELinux concern, no /usr write (the rootfs is read-only).
-    if [ "$BIN_NEEDS_SUDO" = "1" ]; then
-        info "Installing the binary to $BINARY_PATH (needs sudo)..."
-        sudo install -m 0755 "$TEMP_FILE" "$BINARY_PATH"
-        rm -f "$TEMP_FILE"
-        command -v restorecon >/dev/null 2>&1 && sudo restorecon -F "$BINARY_PATH" 2>/dev/null || true
-    else
-        info "Installing the binary to $BINARY_PATH (user-writable on this distro)..."
-        mkdir -p "$(dirname "$BINARY_PATH")"
-        install -m 0755 "$TEMP_FILE" "$BINARY_PATH"
-        rm -f "$TEMP_FILE"
-    fi
-    success "Binary installed to $BINARY_PATH"
 
     # Download the overlay binary
     download_overlay "$ARCH"
@@ -601,7 +605,14 @@ setup_overlay_deps() {
         warn "then re-run this installer; or build from a clone: bun run build-and-install"
     fi
 
-    [ -n "$_deps_tmp" ] && rm -f "$_deps_tmp"
+    # NOTE: keep this an `if`, not `[ -n "$_deps_tmp" ] && rm -f ...`. As the
+    # function's last command the latter returns 1 whenever $_deps_tmp is empty
+    # (the common case when running from a clone, where the helper is found on
+    # disk and never downloaded), and `set -e` would abort the whole installer
+    # right here — before plugins or the services are installed.
+    if [ -n "$_deps_tmp" ]; then
+        rm -f "$_deps_tmp"
+    fi
 }
 
 # Download and extract the plugin tree built by release.yml. Tarball
