@@ -1,0 +1,20 @@
+TDP Control plugin
+Copyright (c) 2026 Simon Holmes
+Licensed under BSD-3-Clause (see LICENSE).
+
+This plugin bundles one third-party binary.
+
+## RyzenAdj (bundled binary)
+
+  https://github.com/FlyGoat/RyzenAdj
+  License: LGPL-3.0
+
+The plugin ships a prebuilt `ryzenadj` binary at
+`bin/linux-x64/ryzenadj` to set AMD APU power limits on stock SteamOS,
+where `ryzenadj` isn't packaged and `/usr` is read-only. The binary is
+LGPL-3.0; its full license text is preserved alongside it in
+`bin/linux-x64/LICENSE-ryzenadj`, and `bin/linux-x64/SOURCE.txt` pins the
+exact upstream tag and commit it was built from. `build-ryzenadj.sh`
+reproduces the build. The binary dynamic-links system libraries
+(libpci/libudev/libcap), so an end user can relink against a modified
+ryzenadj per LGPL-3.0 §4. This plugin's own source is BSD-3-Clause.

@@ -336,9 +336,10 @@ loadout/
 | `bun run test` | Backend + UI tests |
 | `bun run lint` / `bun run format` | ESLint 9 flat config / Prettier |
 
-> **Note:** CI is temporarily disabled (manual `workflow_dispatch` only) while
-> the test harness is reworked off the bespoke shell scripts onto native
-> tooling.
+> **CI:** every pull request and every push to `main` runs the full
+> typecheck / lint / test suite ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+> Releases are cut manually via `workflow_dispatch`
+> ([`.github/workflows/release.yml`](.github/workflows/release.yml)).
 
 ## Persistent user config
 

@@ -1,0 +1,58 @@
+name: Bug report
+description: Something in Loadout isn't working
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Please confirm the bug reproduces on the
+        latest rolling build before filing.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: Steps to reproduce, expected vs actual behaviour.
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      description: Handheld / PC model.
+      placeholder: e.g. Steam Deck OLED, OneXPlayer APEX, ROG Ally
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / distro
+      placeholder: e.g. SteamOS 3.x, Bazzite, CachyOS
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Loadout version / commit
+      description: Shown in the overlay, or the install date / git short SHA.
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Relevant output from `journalctl --user -u loadout -u loadout-overlay`,
+        or run with `LOADOUT_DEBUG=1`. Paste as text, not a screenshot.
+      render: shell
+    validations:
+      required: false
+  - type: dropdown
+    id: plugin
+    attributes:
+      label: Is this specific to a plugin?
+      options:
+        - "No / not sure"
+        - "Yes — a specific plugin (name it above)"
+    validations:
+      required: false

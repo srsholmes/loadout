@@ -1,0 +1,23 @@
+RecompHub plugin
+Copyright (c) 2026 Simon Holmes
+Licensed under BSD-3-Clause (see LICENSE).
+
+This plugin orchestrates the download of third-party recompilation and
+native-port projects. None of them are bundled in this repository or its
+release artifacts.
+
+## Recompilation / native-port projects (downloaded at user request)
+
+The catalog in `games.json` references community recompilation and
+decompilation projects — e.g. Zelda 64: Recompiled
+(https://github.com/Zelda64Recomp/Zelda64Recomp), Banjo: Recompiled, and
+others. At the user's request, this plugin downloads each project's
+prebuilt release (or build inputs) directly from that project's official
+GitHub Releases. **No project binaries are redistributed by this
+repository.** Each downloaded project is governed by its own upstream
+license on the user's machine.
+
+Recompiled and decompiled ports require the user to supply their own
+legally-obtained game files; no copyrighted game data is included,
+referenced by content, or distributed here. This plugin's own source is
+BSD-3-Clause.

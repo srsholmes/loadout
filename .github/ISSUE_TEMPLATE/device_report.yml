@@ -1,0 +1,51 @@
+name: Hardware / device report
+description: Report whether Loadout runs on your handheld (tested or broken)
+labels: ["hardware"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        I'm actively looking for reports from devices I can't test myself.
+        Whether it works flawlessly or falls over at boot, this is useful —
+        thank you!
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      placeholder: e.g. Legion Go, GPD Win 4, AYANEO 2S
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / distro
+      placeholder: e.g. Bazzite 40, Windows + WSL n/a, SteamOS
+    validations:
+      required: true
+  - type: dropdown
+    id: status
+    attributes:
+      label: Status
+      options:
+        - "Works — fully usable"
+        - "Works — with caveats (describe below)"
+        - "Installs but doesn't run"
+        - "Won't install"
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: What works, what doesn't, any errors, and which plugins you tried.
+    validations:
+      required: true
+  - type: textarea
+    id: hardware-notes
+    attributes:
+      label: Hardware notes
+      description: |
+        Anything device-specific that mattered — APU, controller type,
+        TDP/RGB/fan quirks, gamescope behaviour.
+    validations:
+      required: false

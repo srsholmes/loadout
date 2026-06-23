@@ -2,6 +2,28 @@
   "name": "loadout",
   "version": "0.1.0",
   "private": true,
+  "description": "An open, hackable plugin overlay for Steam Deck and Linux gaming handhelds — TDP, RGB, frame-gen, recompiled games, and more, in-game over Steam Big Picture.",
+  "license": "BSD-3-Clause",
+  "author": "Simon Holmes",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/srsholmes/loadout.git"
+  },
+  "homepage": "https://github.com/srsholmes/loadout#readme",
+  "bugs": {
+    "url": "https://github.com/srsholmes/loadout/issues"
+  },
+  "keywords": [
+    "steam-deck",
+    "steamos",
+    "handheld",
+    "linux-gaming",
+    "overlay",
+    "gamescope",
+    "bun",
+    "electrobun",
+    "plugins"
+  ],
   "type": "module",
   "workspaces": [
     "apps/*",

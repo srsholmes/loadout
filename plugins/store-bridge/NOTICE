@@ -1,0 +1,19 @@
+Store Bridge plugin
+Copyright (c) 2026 Simon Holmes
+Licensed under BSD-3-Clause (see LICENSE).
+
+This plugin orchestrates one third-party tool, downloaded at runtime and
+not redistributed by this repository.
+
+## Legendary (downloaded at runtime, not bundled)
+
+  https://github.com/derrod/legendary
+  License: GPL-3.0
+
+To surface an Epic Games library as Steam shortcuts, this plugin downloads
+the `legendary` CLI from its official GitHub Releases at the user's request
+and runs it locally. **`legendary` is not bundled in this repository or its
+release artifacts** — the user fetches it directly from the upstream's
+distribution, and the GPL-3.0 governs that on-disk binary on the user's
+machine, not this plugin's source. This plugin is only an installer + UI +
+shortcut writer; its own source is BSD-3-Clause.

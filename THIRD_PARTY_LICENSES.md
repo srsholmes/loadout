@@ -12,12 +12,12 @@ packages, Bun, daisyUI, react-icons, etc.).
 
 ---
 
-## Electrobun (used by `packages/overlay-electrobun`)
+## Electrobun (used by `apps/loadout-overlay`)
 
 Source: <https://github.com/blackboardsh/electrobun>
 SPDX: `MIT`
 
-The overlay shell at `packages/overlay-electrobun` is built on Electrobun
+The overlay shell at `apps/loadout-overlay` is built on Electrobun
 (CEF). Per the MIT license, the upstream copyright notice and license
 text are reproduced here verbatim:
 

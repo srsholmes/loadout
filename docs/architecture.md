@@ -209,7 +209,7 @@ in the plugins directory:
 > processes. A crashed plugin can therefore affect the loader; in production
 > the loader swallows uncaught exceptions (except OOM) to stay alive, and
 > `LOADOUT_DEBUG=1` / `--debug` re-throws them instead. Process isolation is
-> a known follow-up (see `TODOS.md`), not the current state.
+> a known follow-up, not the current state.
 
 ## Typed RPC Bridge
 
