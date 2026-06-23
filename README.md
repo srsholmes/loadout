@@ -7,7 +7,7 @@
 ![Loadout home screen](docs/assets/home.png)
 
 **Tune your handheld without ever leaving your game.** Tap the overlay, dial in
-your TDP, flip on frame generation, check if a game runs well on Proton, launch
+your TDP, set a custom fan curve, check if a game runs well on Proton, launch
 your Epic library, install a recompiled N64 classic — then get straight back to
 playing. Twenty-plus plugins, one slick d-pad-friendly overlay.
 
