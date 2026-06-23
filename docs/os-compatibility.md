@@ -48,7 +48,7 @@ exact per-distro paths.
 ## Bazzite
 
 - **SELinux** enabled and pre-configured by default — the biggest cross-OS gotcha. The loader must only do things the default Bazzite policy permits: spawning from `$HOME`, binding localhost ports, writing to `$HOME`. For hardware control (sysfs writes), use the polkit helper pattern
-- **CEF debug port** forwarded differently: `steam-web-debug-portforward@.service` forwards from `localhost:8080` to `localhost:8081`
+- CEF remote debugging is enabled the same way as on every supported distro — the installer drops Steam's `.cef-enable-remote-debugging` flag — and the debug port is `localhost:8080` everywhere
 - Steam installed as layered RPM (not Flatpak) — same system access as SteamOS
 - `fsync`/`futex2` patched kernel for broader hardware support (ROG Ally, Legion Go, desktops)
 
@@ -66,41 +66,30 @@ Native Steam:  ~/.local/share/Steam/
 Flatpak Steam: ~/.var/app/com.valvesoftware.Steam/.local/share/Steam/
 ```
 
-SteamOS ships native Steam. Bazzite installs Steam as layered RPM (not Flatpak). CachyOS varies.
+SteamOS ships native Steam; Bazzite installs Steam as a layered RPM (not
+Flatpak); CachyOS varies. All supported targets use the native layout, so
+Steam paths resolve to the native location:
 
 ```ts
-import { existsSync } from "fs";
+// packages/steam-paths/src/index.ts
+import { homedir } from "node:os";
+import { join } from "node:path";
 
-export function getSteamRoot(): string {
-  const flatpak = `${process.env.HOME}/.var/app/com.valvesoftware.Steam/.local/share/Steam`;
-  const native = `${process.env.HOME}/.local/share/Steam`;
-  return existsSync(flatpak) ? flatpak : native;
+export function getSteamDir(): string {
+  return join(homedir(), ".local", "share", "Steam");
 }
 ```
+
+> Flatpak Steam is not auto-detected today — `getSteamDir()` returns the native
+> path unconditionally. Supporting a Flatpak install would mean wiring in the
+> `~/.var/app/...` path above.
 
 ## CEF Debug Port
 
-| OS | Port |
-|---|---|
-| SteamOS | `localhost:8080` |
-| Bazzite | `localhost:8081` |
-| CachyOS | `localhost:8080` |
-
-Auto-detection:
-
-```ts
-async function findCEFPort(): Promise<number> {
-  for (const port of [8080, 8081]) {
-    try {
-      const res = await fetch(`http://localhost:${port}/json/version`, {
-        signal: AbortSignal.timeout(1000),
-      });
-      if (res.ok) return port;
-    } catch {}
-  }
-  throw new Error("Steam CEF not found on any known port. Is Steam running?");
-}
-```
+Steam's CEF remote-debugging endpoint is at a fixed `localhost:8080` on every
+supported distro — the injector connects there directly (see
+`packages/steam-cdp`). Remote debugging has to be enabled first, which the
+installer does by dropping Steam's `.cef-enable-remote-debugging` flag.
 
 ## Kernel Differences
 
@@ -117,13 +106,15 @@ The standalone binary (`bun build --compile`) means no runtime dependencies:
 ```bash
 bun build ./apps/loadout/src/index.ts \
   --compile \
-  --target=bun-linux-x64 \
-  --minify \
-  --outfile ./dist/loadout-linux-x64
+  --outfile ./dist/loadout \
+  --define __LOADOUT_VERSION__='"<version>"' \
+  --define __LOADOUT_BUILD_DATE__='"<date>"' \
+  --minify
 ```
 
-(This is what `scripts/build.sh` / `bun run build` drives.) A single
-self-contained binary — users don't need Bun, Node, or Python installed.
+(This is what `scripts/build.sh` / `bun run build` drives; the release CI then
+renames `dist/loadout` to `loadout-x86_64`.) A single self-contained binary —
+users don't need Bun, Node, or Python installed.
 
 ## Compatibility Summary
 

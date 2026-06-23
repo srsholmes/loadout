@@ -203,7 +203,7 @@ A CI job that:
 1. Launches a Steam instance
 2. Connects to CEF debug port
 3. Injects a test harness
-4. Runs `validateAllModules()` testing every entry in `steam-modules.ts`
+4. Runs `validateAllModules()` testing every entry in `steam-components.ts`
 5. Reports which finders are broken
 
 Test against three Steam versions: SteamOS stable (oldest), SteamOS beta, and latest Steam (Bazzite/CachyOS).
@@ -228,7 +228,7 @@ Loader gets a small update fixing just the broken finders
 Plugins are unaffected — they were shielded
 ```
 
-Goal: a SteamOS update requires ~20-50 lines touching `steam-modules.ts`. Zero plugin authors need to do anything.
+Goal: a SteamOS update requires ~20-50 lines touching `steam-components.ts`. Zero plugin authors need to do anything.
 
 ## How Gamescope Works
 

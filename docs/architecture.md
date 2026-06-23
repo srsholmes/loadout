@@ -107,7 +107,8 @@ everything the CEF webview cannot. It owns:
 - **The X11 window** — a single Electrobun `BrowserWindow`, hidden on boot,
   shown/hidden in response to the wake input. `native/x11.ts` and
   `native/gamescope-atoms.ts` manage the window and the Gamescope X11 atoms
-  (the 50 ms active / 500 ms idle atom loop).
+  (event-driven via X11 `PropertyNotify`, with a 50 ms event-drain tick and a
+  100 ms `xprop` polling fallback).
 - **The evdev read loop** — `native/input-intercept.ts` reads controller
   input directly from `/dev/input`, using `EVIOCGRAB` / `EVIOCSMASK` to
   exclusively grab pads while the overlay is visible so the input doesn't

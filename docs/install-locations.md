@@ -48,7 +48,7 @@ Document of record: `memory/project_root_service_selinux.md` (and the
 `scripts/install.sh` and `scripts/install-local.sh` resolve the binary path at
 install time:
 
-1. Source `/etc/os-release` and read `ID` (with `ID_LIKE` as a fallback).
+1. Source `/etc/os-release` and read `ID`.
 2. If `ID=steamos`, install the binary to `$HOME/.local/share/loadout/loadout` (no sudo needed for the binary itself; the system unit install still needs sudo).
 3. Otherwise (Bazzite, Fedora-ostree, CachyOS, Arch, generic): install to `/usr/local/bin/loadout` with `sudo install` + `restorecon`.
 4. Generate `loadout.service` with the chosen `ExecStart=` path baked in (the unit template uses `__BIN__`/`__USER__` substitution).

@@ -353,7 +353,7 @@ shortcuts, per-plugin state — live in `~/.config/loadout/config.json`
 - **Overlay host:** [Electrobun](https://electrobun.dev) — CEF with Bun as the main process.
 - **UI:** React 18 + Tailwind v4 + daisyUI.
 - **Spatial navigation:** `@noriginmedia/norigin-spatial-navigation`.
-- **Service:** systemd user units (`loadout.service` + `loadout-overlay.service`).
+- **Service:** a system unit `loadout.service` (backend, runs as root) + a user unit `loadout-overlay.service` (overlay).
 
 ## Documentation
 
