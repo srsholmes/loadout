@@ -1,15 +1,20 @@
 # Loadout
 
-> **One overlay. Every tweak your handheld was missing.** A fast, beautiful
-> plugin platform and in-game overlay for Linux gaming handhelds — built
-> end-to-end in TypeScript.
+> **One toolkit. Every tweak your handheld was missing.** A fast, beautiful
+> plugin platform for Linux gaming handhelds — an in-game overlay in Gaming
+> Mode, a standalone app on the desktop — built end-to-end in TypeScript.
 
 ![Loadout home screen](docs/assets/home.png)
 
 **Tune your handheld without ever leaving your game.** Tap the overlay, dial in
 your TDP, set a custom fan curve, check if a game runs well on Proton, launch
 your Epic library, install a recompiled N64 classic — then get straight back to
-playing. Twenty-plus plugins, one slick d-pad-friendly overlay.
+playing. Twenty-plus plugins, one slick d-pad-friendly UI.
+
+**Works in both Gaming Mode and Desktop Mode.** In Steam's Gaming Mode it runs
+as an *in-game overlay* layered over your game; on the desktop it runs as a
+*standalone app* in its own window. Same UI, same plugins, same config — Loadout
+detects which mode you're in and adapts automatically.
 
 [**Install →**](#install) · [Plugins](#plugins) · [Supported devices](#supported-devices--testing) · [Build from source](#build-from-source)
 
@@ -41,9 +46,25 @@ The greatest hits — and there are [a dozen more](#all-plugins) below:
 - ⏱️ **[HowLongToBeat](plugins/hltb/README.md)** & **[PlayTime](plugins/playtime/README.md)** —
   Know what you're signing up for, and where your hours actually go.
 
+## Two ways to run it
+
+Loadout is the same app in both of Steam's environments — it detects which one
+you're in (it looks for Gamescope) and adapts:
+
+- **Gaming Mode → in-game overlay.** A CEF window layered over Gamescope via X11
+  atoms. Tap it open, tweak, and get back to your game without leaving it.
+- **Desktop Mode → standalone app.** The very same UI runs as an ordinary window
+  on your desktop — no game underneath to freeze, controller input still grabbed
+  so it stays d-pad-friendly.
+
+Your plugins, theme, layout, and config are shared across both. A handful of
+plugins that reach *into* Steam's Big Picture UI (badges, CSS theming) are
+Gaming-Mode-only by nature; everything else works in either mode.
+
 ## In Gaming Mode
 
-Plugins reach right into Steam's Big Picture UI — themed, badged, and native:
+In Gaming Mode, plugins reach right into Steam's Big Picture UI — themed,
+badged, and native:
 
 **[RecompHub](plugins/recomp/README.md)** turns recompiled classics into native
 Steam entries with full artwork — a dedicated collection in your library:
@@ -95,7 +116,8 @@ the overlay runs as your **user**:
 curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/install.sh | sh
 ```
 
-Then open the overlay from Gaming Mode and you're set. To remove it:
+Then open Loadout — as an overlay from Gaming Mode, or as a standalone app on
+the desktop — and you're set. To remove it:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/uninstall.sh | sh
@@ -130,12 +152,13 @@ entirely.
 
 ## FAQ
 
-### How do I open the overlay?
+### How do I open it?
 
-From Gaming Mode, trigger your configured wake shortcut on the controller. If
-you're on a keyboard (or your controller shortcut isn't working yet),
-**`Ctrl+4`** toggles the overlay open and closed at any time — handy as a
-fallback during first-time setup.
+In **Gaming Mode**, trigger your configured wake shortcut on the controller to
+bring up the overlay. On the **desktop**, launch Loadout like any other app and
+it opens as a standalone window. In either mode, if you're on a keyboard (or
+your controller shortcut isn't working yet), **`Ctrl+4`** toggles it open and
+closed at any time — handy as a fallback during first-time setup.
 
 ### What should I do the first time I launch it?
 
@@ -215,7 +238,8 @@ curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/unin
   plugin UI, and the overlay itself run on [Bun](https://bun.sh). A full
   plugin — backend + UI — is typically 150–300 lines.
 - **Our own overlay surface.** A standalone CEF window layered over Gamescope
-  via X11 atoms — not an injected panel, so Steam redesigns don't break it.
+  via X11 atoms — not an injected panel, so Steam redesigns don't break it. The
+  same window doubles as the Desktop Mode app, so there's one codebase for both.
 - **Injection only when you want it.** Plugins *can* reach into Big Picture via
   CEF's remote-debug protocol (badges, theming) — but it's opt-in, not the
   default path.
