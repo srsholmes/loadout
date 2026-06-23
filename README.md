@@ -13,8 +13,8 @@ playing. Twenty-plus plugins, one slick d-pad-friendly UI.
 
 **Works in both Gaming Mode and Desktop Mode.** In Steam's Gaming Mode it runs
 as an *in-game overlay* layered over your game; on the desktop it runs as a
-*standalone app* in its own window. Same UI, same plugins, same config — Loadout
-detects which mode you're in and adapts automatically.
+*standalone app* in its own window. Loadout detects which mode you're in and
+adapts automatically.
 
 [**Install →**](#install) · [Plugins](#plugins) · [Supported devices](#supported-devices--testing) · [Build from source](#build-from-source)
 
@@ -53,13 +53,12 @@ you're in (it looks for Gamescope) and adapts:
 
 - **Gaming Mode → in-game overlay.** A CEF window layered over Gamescope via X11
   atoms. Tap it open, tweak, and get back to your game without leaving it.
-- **Desktop Mode → standalone app.** The very same UI runs as an ordinary window
-  on your desktop — no game underneath to freeze, controller input still grabbed
-  so it stays d-pad-friendly.
+- **Desktop Mode → standalone app.** It runs as an ordinary window on your
+  desktop — no game underneath to freeze, controller input still grabbed so it
+  stays d-pad-friendly.
 
-Your plugins, theme, layout, and config are shared across both. A handful of
-plugins that reach *into* Steam's Big Picture UI (badges, CSS theming) are
-Gaming-Mode-only by nature; everything else works in either mode.
+A handful of plugins that reach *into* Steam's Big Picture UI (badges, CSS
+theming) are Gaming-Mode-only by nature; everything else works in either mode.
 
 ## In Gaming Mode
 
@@ -239,7 +238,7 @@ curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/unin
   plugin — backend + UI — is typically 150–300 lines.
 - **Our own overlay surface.** A standalone CEF window layered over Gamescope
   via X11 atoms — not an injected panel, so Steam redesigns don't break it. The
-  same window doubles as the Desktop Mode app, so there's one codebase for both.
+  same window runs as the Desktop Mode app.
 - **Injection only when you want it.** Plugins *can* reach into Big Picture via
   CEF's remote-debug protocol (badges, theming) — but it's opt-in, not the
   default path.
