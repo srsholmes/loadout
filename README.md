@@ -130,19 +130,22 @@ entirely.
 
 ## FAQ
 
-**How do I open the overlay?**
+### How do I open the overlay?
+
 From Gaming Mode, trigger your configured wake shortcut on the controller. If
 you're on a keyboard (or your controller shortcut isn't working yet),
 **`Ctrl+4`** toggles the overlay open and closed at any time — handy as a
 fallback during first-time setup.
 
-**What should I do the first time I launch it?**
+### What should I do the first time I launch it?
+
 First-time setup is much smoother with a **keyboard attached**. You'll be
 entering a few values (like a SteamGridDB API key) and configuring shortcuts,
 and typing those on a keyboard is far quicker than the on-screen keyboard. Once
 you're set up, day-to-day use is fully controller- and d-pad-friendly.
 
-**Do I need a SteamGridDB API key?**
+### Do I need a SteamGridDB API key?
+
 It's **highly encouraged.** The [SteamGridDB](plugins/steamgriddb/README.md)
 plugin — and the custom artwork that other plugins pull in (box art, heroes,
 logos) — needs a free API key to fetch art. Grab one from
@@ -150,13 +153,15 @@ logos) — needs a free API key to fetch art. Grab one from
 and paste it into the SteamGridDB plugin's settings; you only enter it once and
 it persists across reinstalls.
 
-**Can I open the overlay with a controller instead?**
+### Can I open the overlay with a controller instead?
+
 Yes — that's the main way. In **Settings → Controller** you can bind the overlay
 to **Guide + B** or **Guide + X**. (Guide + A and Guide + Y are deliberately left
 alone — Steam and InputPlumber reserve them for the QAM and Steam menu.) `Ctrl+4`
 on a keyboard always works too, as a fallback.
 
-**How do I update to a new version?**
+### How do I update to a new version?
+
 Re-run the same install command — it's idempotent. It checks for a newer binary
 and overlay, refreshes the bundled plugins, and leaves your config untouched:
 
@@ -164,23 +169,27 @@ and overlay, refreshes the bundled plugins, and leaves your config untouched:
 curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/install.sh | sh
 ```
 
-**How do I install or manage plugins?**
+### How do I install or manage plugins?
+
 All 20-plus plugins ship **bundled** with the release — there's nothing extra to
 download. Enable or disable individual plugins from **Settings → Plugins**.
 
-**My controller seems dead in Steam — what's going on?**
+### My controller seems dead in Steam — what's going on?
+
 While the overlay is *open*, it exclusively grabs your controller so your inputs
 drive the overlay and don't leak through to the game underneath. That's by
 design — close the overlay and the controller returns to Steam immediately. If a
 pad stays unresponsive while the overlay is *hidden*, make sure you're on the
 latest version.
 
-**Where do my settings live? Do they survive a reinstall?**
+### Where do my settings live? Do they survive a reinstall?
+
 Everything — theme, UI scale, favourites, home layout, controller shortcuts, and
 per-plugin state — lives in `~/.config/loadout/config.json` (honouring
 `$XDG_CONFIG_HOME`) and survives reinstalls and CEF profile wipes.
 
-**Something's not working — where are the logs?**
+### Something's not working — where are the logs?
+
 Backend logs are at `~/.config/loadout/logs/loadout.log`, or follow them live:
 
 ```sh
@@ -188,12 +197,13 @@ journalctl -u loadout -f               # backend (system service)
 journalctl --user -u loadout-overlay -f   # overlay (user service)
 ```
 
-**How do I report a bug or get help?**
+### How do I report a bug or get help?
+
 [Open an issue](https://github.com/srsholmes/loadout/issues) with your handheld,
 distro, and steps to reproduce — and if you're on an untested device, I'd love
 to hear from you.
 
-**How do I uninstall?**
+### How do I uninstall?
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/uninstall.sh | sh
