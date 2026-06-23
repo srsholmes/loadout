@@ -16,8 +16,7 @@
       "commands": [
         "tee",
         "lsusb",
-        "dmesg",
-        "systemctl"
+        "dmesg"
       ]
     },
     "category": "Device",

@@ -23,6 +23,7 @@ interface RecoverResult {
   controller: string;
   steps: string[];
   gamepadPresent: boolean;
+  alreadyHealthy?: boolean;
   unsupported?: boolean;
   error?: string;
 }
@@ -47,7 +48,11 @@ function Apex() {
     setBusy(true);
     try {
       const res = (await call("recover")) as RecoverResult;
-      if (res.success) {
+      if (res.alreadyHealthy) {
+        notify("Controller already working — nothing to recover.", {
+          kind: "success",
+        });
+      } else if (res.success) {
         notify(`Gamepad recovered — rebound ${res.controller}.`, {
           kind: "success",
         });
@@ -127,7 +132,7 @@ function Apex() {
               gamepad {status.gamepadPresent ? "present" : "absent"}
             </div>
 
-            <div>
+            <div className="mt-2">
               <Button onClick={handleRecover} disabled={busy}>
                 <span className="flex items-center gap-2">
                   <FaRotate className={busy ? "animate-spin" : undefined} size={13} />
@@ -136,12 +141,10 @@ function Apex() {
               </Button>
             </div>
 
-            {!healthy && (
-              <div className="text-xs text-base-content/55 leading-relaxed">
-                Safe to run any time — if the controller is already working this briefly
-                re-enumerates it and brings it straight back.
-              </div>
-            )}
+            <div className="text-xs text-base-content/55 leading-relaxed">
+              Safe to run any time — if the controller is already working it does nothing, so
+              there's no harm in pressing it.
+            </div>
           </div>
         </div>
       </div>

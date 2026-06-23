@@ -162,11 +162,45 @@ describe("recover", () => {
     expect(r.steps).toHaveLength(0);
   });
 
-  it("unbinds, binds, and restarts InputPlumber on success", async () => {
+  it("no-ops when the gamepad is already present (loop guard)", async () => {
     const commands: string[] = [];
     const pci = DEFAULT_XHCI_PCI;
     const deps = makeDeps({
-      // absent on the status-free path, present once the bus re-enumerates
+      present: true,
+      dmesg: `xhci_hcd ${pci}: assume dead`,
+      paths: new Set([`/sys/bus/pci/devices/${pci}`, `/sys/bus/pci/devices/${pci}/driver`]),
+      commands,
+    });
+    const r = await recover(deps);
+    expect(r.success).toBe(true);
+    expect(r.alreadyHealthy).toBe(true);
+    expect(r.steps).toHaveLength(0);
+    // Critically: no rebind, no InputPlumber touch — nothing that could
+    // re-trigger this call.
+    expect(commands).not.toContain("tee /sys/bus/pci/drivers/xhci_hcd/bind");
+    expect(commands.some((c) => c.startsWith("systemctl"))).toBe(false);
+  });
+
+  it("forces a rebind even when the gamepad is present", async () => {
+    const commands: string[] = [];
+    const pci = DEFAULT_XHCI_PCI;
+    const deps = makeDeps({
+      present: true,
+      dmesg: `xhci_hcd ${pci}: assume dead`,
+      paths: new Set([`/sys/bus/pci/devices/${pci}`, `/sys/bus/pci/devices/${pci}/driver`]),
+      commands,
+    });
+    const r = await recover(deps, { force: true });
+    expect(r.success).toBe(true);
+    expect(r.alreadyHealthy).toBeUndefined();
+    expect(commands).toContain("tee /sys/bus/pci/drivers/xhci_hcd/bind");
+  });
+
+  it("unbinds and binds on a genuine recovery, never restarting InputPlumber", async () => {
+    const commands: string[] = [];
+    const pci = DEFAULT_XHCI_PCI;
+    const deps = makeDeps({
+      // absent at the guard check, present once the bus re-enumerates
       present: [false, true],
       dmesg: `xhci_hcd ${pci}: assume dead`,
       paths: new Set([`/sys/bus/pci/devices/${pci}`, `/sys/bus/pci/devices/${pci}/driver`]),
@@ -175,10 +209,12 @@ describe("recover", () => {
     const r = await recover(deps);
     expect(r.success).toBe(true);
     expect(r.controller).toBe(pci);
-    expect(r.steps).toEqual(["unbind", "bind", "restart-inputplumber"]);
+    expect(r.steps).toEqual(["unbind", "bind"]);
     expect(commands).toContain(`tee /sys/bus/pci/drivers/xhci_hcd/unbind`);
     expect(commands).toContain(`tee /sys/bus/pci/drivers/xhci_hcd/bind`);
-    expect(commands).toContain("systemctl restart inputplumber");
+    // The plugin must NOT restart InputPlumber — that restart is what
+    // caused the re-press feedback loop.
+    expect(commands.some((c) => c.startsWith("systemctl"))).toBe(false);
   });
 
   it("reports failure when the gamepad never comes back", async () => {
@@ -197,10 +233,11 @@ describe("recover", () => {
   it("retries the bind when the driver doesn't re-attach", async () => {
     const commands: string[] = [];
     const pci = DEFAULT_XHCI_PCI;
-    // Driver link never present → no initial unbind, and the post-bind
-    // check fails → a retry bind is issued.
+    // Absent at the guard, present after rebind. Driver link never
+    // present → no initial unbind, and the post-bind check fails → a
+    // retry bind is issued.
     const deps = makeDeps({
-      present: [true],
+      present: [false, true],
       dmesg: `xhci_hcd ${pci}: assume dead`,
       paths: new Set([`/sys/bus/pci/devices/${pci}`]),
       commands,
