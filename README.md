@@ -128,6 +128,28 @@ entirely.
 
 </details>
 
+## FAQ
+
+**How do I open the overlay?**
+From Gaming Mode, trigger your configured wake shortcut on the controller. If
+you're on a keyboard (or your controller shortcut isn't working yet),
+**`Ctrl+4`** toggles the overlay open and closed at any time — handy as a
+fallback during first-time setup.
+
+**What should I do the first time I launch it?**
+First-time setup is much smoother with a **keyboard attached**. You'll be
+entering a few values (like a SteamGridDB API key) and configuring shortcuts,
+and typing those on a keyboard is far quicker than the on-screen keyboard. Once
+you're set up, day-to-day use is fully controller- and d-pad-friendly.
+
+**Do I need a SteamGridDB API key?**
+It's **highly encouraged.** The [SteamGridDB](plugins/steamgriddb/README.md)
+plugin — and the custom artwork that other plugins pull in (box art, heroes,
+logos) — needs a free API key to fetch art. Grab one from
+[steamgriddb.com/profile/preferences/api](https://www.steamgriddb.com/profile/preferences/api)
+and paste it into the SteamGridDB plugin's settings; you only enter it once and
+it persists across reinstalls.
+
 ## How it works
 
 - **TypeScript end to end.** The plugin host, every plugin backend, every
