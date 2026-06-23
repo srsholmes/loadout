@@ -56,8 +56,12 @@ an individual is officially representing the community in public spaces.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project maintainer at **s.r.s.holmes@gmail.com**. All complaints
-will be reviewed and investigated promptly and fairly.
+reported by reaching out to the project maintainer
+([@srsholmes](https://github.com/srsholmes)) on GitHub. For sensitive reports,
+please use a private
+[security advisory](https://github.com/srsholmes/loadout/security/advisories/new)
+so the details stay confidential. All complaints will be reviewed and
+investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the
 reporter of any incident.
