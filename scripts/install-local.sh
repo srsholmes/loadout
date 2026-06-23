@@ -229,5 +229,28 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-systemctl --user restart loadout-overlay
+# Graceful overlay (re)start. A plain `systemctl restart` races CEF: the
+# unit's main process can exit while its CEF helper/zygote children are
+# still tearing down and holding the browser profile under
+# .cache/.../CEF/partitions/default. If the fresh instance launches into
+# that window it fails with "Cannot create profile at path ..." and
+# renders a blank webview. So stop, wait for the whole process tree to
+# actually exit, then start.
+OVERLAY_BIN_DIR="$OVERLAY_INSTALL_DIR/bin"
+systemctl --user stop loadout-overlay 2>/dev/null || true
+echo "Waiting for the overlay to fully exit..."
+for i in $(seq 1 20); do
+    # pgrep -f against the install bin dir catches the launcher, the Bun
+    # main process, and every CEF Helper/zygote child — they all carry
+    # that path in their argv.
+    if ! pgrep -f "$OVERLAY_BIN_DIR" >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.5
+done
+# Last resort: anything still clinging after the grace window gets a TERM
+# so the profile lock is guaranteed free before we relaunch.
+pkill -TERM -f "$OVERLAY_BIN_DIR" 2>/dev/null || true
+sleep 0.5
+systemctl --user start loadout-overlay
 echo "Services restarted."

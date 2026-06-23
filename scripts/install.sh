@@ -999,7 +999,19 @@ OVERLAYEOF
         # find the display. Skips cleanly on headless / SSH installs.
         if [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
             systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY 2>/dev/null || true
-            if systemctl --user restart loadout-overlay 2>/dev/null; then
+            # Graceful restart — a plain `restart` can race CEF: the new
+            # instance launches while the old one's helper/zygote children
+            # still hold the browser profile under CEF/partitions/default,
+            # which fails with "Cannot create profile at path ..." and a
+            # blank webview. Stop, wait for the process tree to exit, start.
+            systemctl --user stop loadout-overlay 2>/dev/null || true
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+                pgrep -f "$OVERLAY_INSTALL_DIR/bin" >/dev/null 2>&1 || break
+                sleep 0.5
+            done
+            pkill -TERM -f "$OVERLAY_INSTALL_DIR/bin" 2>/dev/null || true
+            sleep 0.5
+            if systemctl --user start loadout-overlay 2>/dev/null; then
                 # Give the overlay a moment to come up and connect, then ask
                 # the loader to show it (loopback /show endpoint).
                 show_ok=0
