@@ -196,7 +196,7 @@ describe("recover", () => {
     expect(commands).toContain("tee /sys/bus/pci/drivers/xhci_hcd/bind");
   });
 
-  it("unbinds and binds on a genuine recovery, never restarting InputPlumber", async () => {
+  it("unbinds, binds, then restarts InputPlumber on a genuine recovery", async () => {
     const commands: string[] = [];
     const pci = DEFAULT_XHCI_PCI;
     const deps = makeDeps({
@@ -209,12 +209,14 @@ describe("recover", () => {
     const r = await recover(deps);
     expect(r.success).toBe(true);
     expect(r.controller).toBe(pci);
-    expect(r.steps).toEqual(["unbind", "bind"]);
+    expect(r.steps).toEqual(["unbind", "bind", "inputplumber-restart"]);
     expect(commands).toContain(`tee /sys/bus/pci/drivers/xhci_hcd/unbind`);
     expect(commands).toContain(`tee /sys/bus/pci/drivers/xhci_hcd/bind`);
-    // The plugin must NOT restart InputPlumber — that restart is what
-    // caused the re-press feedback loop.
-    expect(commands.some((c) => c.startsWith("systemctl"))).toBe(false);
+    // After a real rebind the pad re-enumerates on a fresh node; InputPlumber
+    // must be restarted to re-grab it (reset-failed first to clear any
+    // start-limit), or Steam sees a stale duplicate.
+    expect(commands).toContain("systemctl reset-failed inputplumber");
+    expect(commands).toContain("systemctl restart inputplumber");
   });
 
   it("reports failure when the gamepad never comes back", async () => {

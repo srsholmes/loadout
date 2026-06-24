@@ -17,7 +17,8 @@
         "tee",
         "lsusb",
         "dmesg",
-        "dbus-monitor"
+        "dbus-monitor",
+        "systemctl"
       ]
     },
     "category": "Device",

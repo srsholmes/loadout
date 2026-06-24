@@ -178,16 +178,21 @@ async function rebind(deps: XhciDeps, pci: string, steps: string[]): Promise<voi
 }
 
 /**
- * Full recovery: rebind the controller and poll for the gamepad to
- * re-enumerate. InputPlumber re-grabs the freshly hotplugged source on
- * its own, so we deliberately do NOT restart it here — that restart
- * re-enumerates the active controller, which the overlay can register as
- * a synthetic button press, re-triggering this very call in a loop.
+ * Full recovery: rebind the controller, poll for the gamepad to
+ * re-enumerate, then restart InputPlumber so it re-grabs the freshly
+ * hotplugged source. Without that restart InputPlumber keeps its grab on
+ * the old (now-gone) node and doesn't reliably pick up the new one,
+ * leaving a *duplicate* pad — the raw controller plus InputPlumber's
+ * virtual one — which Steam reads as a second, dead controller.
  *
- * The `alreadyHealthy` short-circuit is the loop guard: if the gamepad
- * is already enumerating there is nothing to recover, so a re-pressed
- * button (or any re-invocation) no-ops instead of needlessly rebinding a
- * working controller. Pass `force` to rebind regardless.
+ * The `alreadyHealthy` short-circuit is the loop guard: if the gamepad is
+ * already enumerating there is nothing to recover, so a re-pressed button
+ * (or any re-invocation) no-ops — no rebind, no InputPlumber restart —
+ * instead of needlessly resetting a working controller. That same guard is
+ * what makes the InputPlumber restart safe from the old re-press feedback
+ * loop: any synthetic press the restart provokes just re-enters recover(),
+ * finds the pad present, and returns before touching anything. Pass
+ * `force` to rebind regardless.
  */
 export async function recover(
   deps: XhciDeps,
@@ -237,6 +242,18 @@ export async function recover(
       error: `Gamepad USB IDs still missing after rebind (${GAMEPAD_IDS.join(", ")}). It may need a physical reconnect, or this is a different failure than the xHCI resume death.`,
     };
   }
+
+  // Re-grab via InputPlumber. The rebind hotplugged the pad on a fresh USB
+  // node; InputPlumber still holds its old grab and won't reliably re-grab
+  // the new one, so it must be restarted or Steam ends up seeing a stale
+  // duplicate. `reset-failed` first because a flapping source can trip
+  // InputPlumber's systemd start-limit, which would otherwise block the
+  // restart. Best-effort: a failure here doesn't fail the recovery (the USB
+  // pad is already back), so we don't gate the result on it.
+  steps.push("inputplumber-restart");
+  deps.log?.("restarting InputPlumber to re-grab the recovered pad");
+  await deps.run(["systemctl", "reset-failed", "inputplumber"], { timeoutMs: 5_000 });
+  await deps.run(["systemctl", "restart", "inputplumber"], { timeoutMs: 20_000 });
 
   return { success: true, controller, steps, gamepadPresent: true };
 }
