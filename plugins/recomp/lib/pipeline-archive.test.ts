@@ -130,7 +130,7 @@ describe("FIX 2 — path traversal / symlink escape rejected", () => {
     await expect(extractArchive(archive, dest)).rejects.toThrow(/symlink|\.\.|outside|escape/i);
   });
 
-  it("rejects a .7z entry with a ../ traversal path", async () => {
+  it("rejects a .7z entry with a ../ traversal path (via the pre-flight guard)", async () => {
     // libarchive listing path (shared with .rar) must reject traversal.
     const stage = await mkdtemp(join(sandbox, "7ztstage-"));
     const deep = join(stage, "deep");
@@ -142,10 +142,27 @@ describe("FIX 2 — path traversal / symlink escape rejected", () => {
 
     const dest = join(sandbox, "sztdest");
     const { extractArchive } = await import("./pipeline-archive");
+    // Assert the GUARD rejected it (`assertSafeArchive`), not bsdtar's own
+    // runtime `..` refusal — i.e. the pre-flight actually parsed the name.
     await expect(extractArchive(archive, dest)).rejects.toThrow(
-      /\.\.|traversal|escape|outside/i,
+      /Refusing to extract.*traversal/i,
     );
     expect(existsSync(join(sandbox, "sz-escape.txt"))).toBe(false);
+  });
+
+  it("rejects a .7z symlink whose target is absolute / escapes dest", async () => {
+    // The libarchive listing must surface the symlink target so the guard
+    // rejects it before extraction (bsdtar stores symlinks as symlinks).
+    const stage = await mkdtemp(join(sandbox, "7zsymstage-"));
+    await symlink("/etc/passwd", join(stage, "evil"));
+    const archive = join(sandbox, "szsymlink.7z");
+    await run(["bsdtar", "-a", "-cf", archive, "evil"], stage);
+
+    const dest = join(sandbox, "szsymdest");
+    const { extractArchive } = await import("./pipeline-archive");
+    await expect(extractArchive(archive, dest)).rejects.toThrow(
+      /Refusing to extract.*(absolute|symlink|\.\.)/i,
+    );
   });
 
   it("rejects a zip entry with a ../ traversal path", async () => {

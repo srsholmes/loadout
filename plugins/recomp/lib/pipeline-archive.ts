@@ -190,32 +190,40 @@ async function listZip(
 
 /**
  * List a `.rar` / `.7z` archive's members (with symlink targets) via
- * `bsdtar` (libarchive). We don't ship a dedicated `unrar`/`7z` reader
- * for the safety pre-flight because libarchive already understands both
- * formats and renders a verbose listing in the SAME shape as GNU tar:
+ * `bsdtar` (libarchive), for the safety pre-flight. We don't reuse the GNU
+ * tar verbose-line regex here: libarchive renders its verbose (`-tvf`) date
+ * in an `ls -l` month-name style (`Jun 24 22:18`) that differs from GNU
+ * tar's numeric `2024-06-24`, so the shared regex silently mis-parsed the
+ * member name (it kept a date prefix), and the traversal/absolute check
+ * never fired. Instead:
  *
- *   `mode user/group size date time name [-> link]`
- *
- * so the existing per-line parser (mode/owner/size/date/time, then the
- * name, then an optional ` -> target` for symlinks) applies unchanged.
- * The C locale keeps the date/time columns stable for the regex.
+ *   - names come from `-tf` (one full member path per line, no columns to
+ *     parse — robust regardless of date/locale formatting), and
+ *   - symlink/hardlink targets come from a `-tvf` pass, taking the text
+ *     after the LAST ` -> ` (a member name containing ` -> ` can't hide
+ *     the real, final target).
  */
 async function listLibarchive(
   archivePath: string,
 ): Promise<{ name: string; link?: string }[]> {
-  const out = await listingStdout(["bsdtar", "-tvf", archivePath], archivePath);
   const result: { name: string; link?: string }[] = [];
-  for (const line of out.split("\n")) {
-    if (line.trim() === "") continue;
-    const m = line.match(/^\S+\s+\S+\s+\d+\s+[\d-]+\s+[\d:]+\s+(.*)$/);
-    const tail = m ? m[1]! : line;
-    const sym = tail.indexOf(" -> ");
-    if (sym !== -1) {
-      result.push({ name: tail.slice(0, sym), link: tail.slice(sym + 4) });
-    } else {
-      result.push({ name: tail });
-    }
+
+  const names = await listingStdout(["bsdtar", "-tf", archivePath], archivePath);
+  for (const line of names.split("\n")) {
+    const name = line.replace(/\/+$/, ""); // dirs list with a trailing slash
+    if (name.trim() === "") continue;
+    result.push({ name });
   }
+
+  // Symlink/hardlink targets only surface in the verbose listing as
+  // `… name -> target`. We only need the target for the escape check; the
+  // names were already checked above, so push target-only entries.
+  const verbose = await listingStdout(["bsdtar", "-tvf", archivePath], archivePath);
+  for (const line of verbose.split("\n")) {
+    const i = line.lastIndexOf(" -> ");
+    if (i !== -1) result.push({ name: "", link: line.slice(i + 4).trim() });
+  }
+
   return result;
 }
 
