@@ -3179,29 +3179,6 @@
       "steamGridDbId": 5249112
     },
     {
-      "id": "snowboard-kids-2",
-      "name": "Snowboard Kids 2",
-      "project": "Decompilation of snowboard kids 2 (N64)",
-      "platform": "n64",
-      "repo": "cdlewis/snowboardkids2-decomp",
-      "description": "Decompilation of snowboard kids 2 (N64)",
-      "installType": "prebuilt",
-      "releaseAssets": {},
-      "launchCommand": {},
-      "status": "in_progress",
-      "tags": [
-        "c",
-        "decomp",
-        "decompilation",
-        "mips-assembly",
-        "n64",
-        "n64-dev",
-        "reverse-engineering"
-      ],
-      "website": "https://decomp.dev/cdlewis/snowboardkids2-decomp",
-      "steamGridDbId": 1667
-    },
-    {
       "id": "snap",
       "name": "Snap",
       "project": "Gotta match 'em all",
