@@ -246,9 +246,9 @@
       "id": "goldeneye-recomp",
       "name": "GoldenEye 007",
       "project": "GoldenEye 007 Recompiled",
-      "platform": "n64",
+      "platform": "xbox360",
       "repo": "SunJaycy/GoldenEye-Recomp",
-      "description": "Native PC port of GoldenEye 007 via static recompilation (ReXGlue). Keyboard & mouse support, online multiplayer, higher framerates, and graphics options. Windows build runs through Proton; AMD GPUs may need extra setup.",
+      "description": "PC recompilation of the Xbox 360 (XBLA) version of GoldenEye 007. Keyboard & mouse support, higher framerates, and graphics options. Requires your own game files: place the XBLA dump (default.xex + assets) in the `assets` folder next to the executable, or it exits with \"Entrypoint XEX not found\". Windows build runs through Proton.",
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": "*-Win.rar",
@@ -261,7 +261,8 @@
       "tags": [
         "goldeneye",
         "bond",
-        "n64",
+        "xbox360",
+        "xbla",
         "shooter",
         "fps",
         "3d"
