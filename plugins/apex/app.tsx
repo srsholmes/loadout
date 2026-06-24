@@ -197,6 +197,14 @@ function Apex() {
               Takes effect after a reboot.
             </div>
 
+            <div className="text-xs text-base-content/55 leading-relaxed">
+              <span className="mono">hid-oxp</span> normally provides paddle mapping, RGB and
+              vibration — but those keep working without it: InputPlumber reads the controller
+              directly for input and paddles, Loadout's RGB plugin drives the lighting, and rumble
+              comes from the Xbox driver. It's a temporary workaround until the driver bug is fixed
+              upstream.
+            </div>
+
             {hidOxp?.rebootRequired && (
               <Alert
                 variant="warning"
@@ -214,7 +222,8 @@ function Apex() {
                   Blacklist the hid-oxp driver
                 </span>
                 <span className="text-xs text-base-content/55 leading-relaxed">
-                  Recommended on the Apex if the gamepad keeps dying on wake. Reversible — turn it
+                  Temporary fix if the gamepad keeps dying on wake. InputPlumber and Loadout's RGB
+                  plugin cover paddles, RGB and rumble, so nothing should break. Reversible — turn it
                   off and reboot to restore the driver.
                 </span>
               </div>
