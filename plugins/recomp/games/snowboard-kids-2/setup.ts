@@ -31,6 +31,10 @@ await sdk.env.ensurePackages([
   "make",
   "git",
   "gcc",
+  // The main build runs a `clang -fsyntax-only` check pass on every C
+  // source before the real KMC-gcc compile (the Makefile's CC_CHECK), so
+  // clang is required even though the actual codegen is gcc 2.7.2.
+  "clang",
   "python3",
   "python3-pip",
   "curl",
@@ -42,6 +46,35 @@ await sdk.env.ensurePackages([
 
 sdk.progress("Cloning cdlewis/snowboardkids2-decomp…");
 await sdk.cloneFromGitHub("cdlewis/snowboardkids2-decomp", "main");
+
+// GitHub source tarballs (what cloneFromGitHub downloads) do NOT include
+// submodule contents, but the build needs three of them: lib/ultralib and
+// lib/libmus are compiled into libgultra_rom.a / libmus.a and linked into
+// the ROM, and lib/f3dex2 supplies microcode headers (see the Makefile's
+// IINC / LIBULTRA / LIBMUS). `make setup` would normally `git submodule
+// update --init`, but there's no .git in a tarball checkout, so we fetch
+// each submodule at the commit pinned by the parent repo. Cloning with git
+// (rather than another tarball) also gives each submodule its own .git, so
+// the build's `make -C lib/ultralib setup` works. The tools/asm-differ and
+// tools/decomp-permuter submodules are dev/diff tooling a plain build never
+// touches, so we skip them.
+sdk.progress("Fetching git submodules (ultralib, libmus, f3dex2)…");
+await sdk.env.run(
+  [
+    "set -e",
+    "fetch_submodule() {",
+    '  rm -rf "$2"; mkdir -p "$2"',
+    '  git -C "$2" init -q',
+    '  git -C "$2" remote add origin "$1"',
+    '  git -C "$2" fetch -q --depth 1 origin "$3"',
+    '  git -C "$2" checkout -q FETCH_HEAD',
+    "}",
+    "fetch_submodule https://github.com/cdlewis/ultralib.git lib/ultralib c2badeea898d1de3b3722a2c038e5d9597a477b8",
+    "fetch_submodule https://github.com/cdlewis/libmus.git lib/libmus 123a807db6f23e2e3f1c2f0245ff586bc2aaef38",
+    "fetch_submodule https://github.com/Mr-Wiseguy/f3dex2.git lib/f3dex2 f3ef9bc0b8f8aaeafc0af6b04deaab74023943e5",
+  ].join("\n"),
+  { cwd: sdk.installDir, stage: "setup", timeoutMs: 10 * 60_000 },
+);
 
 // The base ROM must be a big-endian (.z64) Snowboard Kids 2 ROM placed
 // at the repo root as `snowboardkids2.z64`. splat reads it during
