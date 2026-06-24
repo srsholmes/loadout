@@ -225,8 +225,10 @@ fi
 # pa_in_valgrind` and the like. Walk the whole `/usr/lib*` tree so we
 # catch those too.
 DECK_LIBS_TMP="$EXTRACT_TMP/deck-libs.txt"
-find /usr/lib /usr/lib64 -name '*.so*' -type f 2>/dev/null \
-    | xargs -n1 basename 2>/dev/null \
+# `-printf '%f'` emits the basename in-process. The old `xargs -n1 basename`
+# spawned one process PER .so (~4500 on SteamOS), which on the Deck's session
+# took minutes (and looked like a hang) — find's own printf does it in <1s.
+find /usr/lib /usr/lib64 -name '*.so*' -type f -printf '%f\n' 2>/dev/null \
     | sort -u > "$DECK_LIBS_TMP"
 
 # Electrobun's launcher sets LD_LIBRARY_PATH=./ (its bin/ cwd) — it does
