@@ -1,4 +1,4 @@
-import { access } from "node:fs/promises";
+import { access, readFile, writeFile, rm } from "node:fs/promises";
 import type { PluginBackend, EmitPayload, PluginLogger } from "@loadout/types";
 import { runFull, runStreaming } from "@loadout/exec";
 import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
@@ -11,6 +11,14 @@ import {
   type RecoverResult,
 } from "./lib/xhci";
 import { startWakeListener, type StopHandle } from "./lib/wake-listener";
+import {
+  getStatus as fingerprintStatus,
+  apply as applyFingerprint,
+  revert as revertFingerprint,
+  type FingerprintDeps,
+  type FingerprintStatus,
+  type FingerprintResult,
+} from "./lib/fingerprint";
 
 const PLUGIN_ID = "apex";
 
@@ -69,6 +77,36 @@ export default class ApexBackend implements PluginBackend {
     };
   }
 
+  // Filesystem + OS access for the fingerprint-wake block. Same injection
+  // pattern as `deps`; swapped for fakes in tests.
+  private get fpDeps(): FingerprintDeps {
+    return {
+      run: (cmd, opts) => runFull(cmd, opts),
+      pathExists: async (path) => {
+        try {
+          await access(path);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      readFile: (path) => readFile(path, "utf-8"),
+      writeFile: (path, content) => writeFile(path, content),
+      removeFile: (path) => rm(path, { force: true }),
+      readCmdline: () => readFile("/proc/cmdline", "utf-8"),
+      distroId: async () => {
+        try {
+          const t = await readFile("/etc/os-release", "utf-8");
+          const m = t.match(/^ID=(.*)$/m);
+          return m ? m[1].replace(/["']/g, "").trim() : "";
+        } catch {
+          return "";
+        }
+      },
+      log: (m) => this.log?.info(`[apex] ${m}`),
+    };
+  }
+
   async onLoad(): Promise<void> {
     this.unsupported = !(await isApex());
     if (this.unsupported) {
@@ -96,6 +134,7 @@ export default class ApexBackend implements PluginBackend {
     status?: XhciStatus;
     autoRecoverOnWake?: boolean;
     listenerRunning?: boolean;
+    fingerprint?: FingerprintStatus;
   }> {
     if (this.unsupported) return { unsupported: true };
     const settings = await readPluginStorage<ApexSettings>(PLUGIN_ID);
@@ -104,7 +143,24 @@ export default class ApexBackend implements PluginBackend {
       status: await computeStatus(this.deps),
       autoRecoverOnWake: !!settings.autoRecoverOnWake,
       listenerRunning: this.wakeStop !== null,
+      fingerprint: await fingerprintStatus(this.fpDeps),
     };
+  }
+
+  /**
+   * Block / unblock the fingerprint reader as a wake source. Closes both
+   * wake paths (controller PME at runtime + the GPIO kernel arg); the karg
+   * change needs a reboot, signalled via `rebootRequired`.
+   */
+  async setFingerprintBlock(
+    enabled: boolean,
+  ): Promise<FingerprintResult & { unsupported?: boolean }> {
+    if (this.unsupported) {
+      return { success: false, rebootRequired: false, steps: [], unsupported: true, error: "Not running on Apex hardware." };
+    }
+    const result = enabled ? await applyFingerprint(this.fpDeps) : await revertFingerprint(this.fpDeps);
+    this.emit?.({ event: "statusChanged", data: undefined });
+    return result;
   }
 
   /**
