@@ -58,6 +58,12 @@ function makeDeps(opts: {
     },
     pathExists: async (p) => paths.has(p),
     sleep: async () => {},
+    // Recorded like a command so tests can assert the delegation happened
+    // without xhci.ts shelling out to systemctl itself.
+    restartInputPlumber: async () => {
+      commands.push("restartInputPlumber()");
+      return { ok: true };
+    },
   };
 }
 
@@ -178,7 +184,7 @@ describe("recover", () => {
     // Critically: no rebind, no InputPlumber touch — nothing that could
     // re-trigger this call.
     expect(commands).not.toContain("tee /sys/bus/pci/drivers/xhci_hcd/bind");
-    expect(commands.some((c) => c.startsWith("systemctl"))).toBe(false);
+    expect(commands).not.toContain("restartInputPlumber()");
   });
 
   it("forces a rebind even when the gamepad is present", async () => {
@@ -213,10 +219,12 @@ describe("recover", () => {
     expect(commands).toContain(`tee /sys/bus/pci/drivers/xhci_hcd/unbind`);
     expect(commands).toContain(`tee /sys/bus/pci/drivers/xhci_hcd/bind`);
     // After a real rebind the pad re-enumerates on a fresh node; InputPlumber
-    // must be restarted to re-grab it (reset-failed first to clear any
-    // start-limit), or Steam sees a stale duplicate.
-    expect(commands).toContain("systemctl reset-failed inputplumber");
-    expect(commands).toContain("systemctl restart inputplumber");
+    // must be re-grabbed or Steam sees a stale duplicate. recover() delegates
+    // that to the injected restartInputPlumber (the input-plumber plugin, in
+    // prod) rather than shelling out to systemctl itself — so the wake profile
+    // gets reloaded and the overlay shortcut survives.
+    expect(commands).toContain("restartInputPlumber()");
+    expect(commands.some((c) => c.startsWith("systemctl"))).toBe(false);
   });
 
   it("reports failure when the gamepad never comes back", async () => {

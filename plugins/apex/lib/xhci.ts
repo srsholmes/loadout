@@ -45,6 +45,14 @@ export interface XhciDeps {
   pathExists: (path: string) => Promise<boolean>;
   /** Resolvable delay (wired to `setTimeout` in prod; instant in tests). */
   sleep: (ms: number) => Promise<void>;
+  /**
+   * Re-grab the recovered pad through InputPlumber. In prod this delegates
+   * to the input-plumber plugin's `restartInputPlumber` (daemon restart +
+   * wake-profile *reload*), so the QAM→F16 wake mapping survives — a raw
+   * `systemctl restart inputplumber` drops the loaded profile and kills the
+   * overlay shortcut. Best-effort: recover() never gates success on this.
+   */
+  restartInputPlumber: () => Promise<{ ok: boolean; error?: string }>;
   /** Optional progress sink. */
   log?: (message: string) => void;
 }
@@ -246,14 +254,17 @@ export async function recover(
   // Re-grab via InputPlumber. The rebind hotplugged the pad on a fresh USB
   // node; InputPlumber still holds its old grab and won't reliably re-grab
   // the new one, so it must be restarted or Steam ends up seeing a stale
-  // duplicate. `reset-failed` first because a flapping source can trip
-  // InputPlumber's systemd start-limit, which would otherwise block the
-  // restart. Best-effort: a failure here doesn't fail the recovery (the USB
-  // pad is already back), so we don't gate the result on it.
+  // duplicate. We delegate to the input-plumber plugin (see
+  // `deps.restartInputPlumber`) instead of a raw `systemctl restart` so the
+  // restart also *reloads* the wake profile — otherwise the QAM→F16 overlay
+  // shortcut silently dies. Best-effort: a failure here doesn't fail the
+  // recovery (the USB pad is already back), so we don't gate the result on it.
   steps.push("inputplumber-restart");
   deps.log?.("restarting InputPlumber to re-grab the recovered pad");
-  await deps.run(["systemctl", "reset-failed", "inputplumber"], { timeoutMs: 5_000 });
-  await deps.run(["systemctl", "restart", "inputplumber"], { timeoutMs: 20_000 });
+  const ip = await deps.restartInputPlumber();
+  if (!ip.ok) {
+    deps.log?.(`InputPlumber restart reported a problem: ${ip.error ?? "unknown"} (pad is back regardless)`);
+  }
 
   return { success: true, controller, steps, gamepadPresent: true };
 }
