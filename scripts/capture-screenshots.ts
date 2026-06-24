@@ -357,18 +357,21 @@ async function runSteps(cdp: CDP, steps: Step[]): Promise<boolean> {
 
 // ── Post-processing: copy to plugin assets + cull stale shots ──────────────
 
-function copyToPluginAssets(theme: string): void {
+function copyToPluginAssets(theme: string, only?: Set<string>): void {
   // Copy each plugin's shots (from the captured theme dir) into its
   // tracked `assets/` dir so the plugin README + the root README gallery
   // reference stable paths that live next to the source:
   //   landing      NN-<id>.png        → assets/screenshot.png
   //   sub-pages    NN-<id>-<page>.png → assets/screenshot-<page>.png
+  // `only` (from --plugins=) scopes the copy to a subset so a filtered
+  // capture never rewrites other plugins' assets.
   const srcDir = join(OUT, theme);
   if (!existsSync(srcDir)) {
     console.error(`[copy] ${rel(srcDir)} missing — run a capture first`);
     return;
   }
   PLUGINS.forEach((pid, idx) => {
+    if (only && !only.has(pid)) return;
     const nn = String(idx + 3).padStart(2, "0");
     const destDir = join(ROOT, "plugins", pid, "assets");
 
@@ -441,9 +444,30 @@ async function main(): Promise<void> {
   const themeArg = [...args]
     .find((a) => a.startsWith("--theme="))
     ?.split("=")[1];
+
+  // `--plugins=a,b,c` (or `--plugin=a`) limits capture to a subset. When set,
+  // the global home shots are skipped and stale-culling is disabled, so a
+  // focused run never touches other plugins' screenshots/assets. Numbering
+  // still uses each plugin's index in the full list, so filenames stay stable.
+  const onlyArg = [...args]
+    .find((a) => a.startsWith("--plugins=") || a.startsWith("--plugin="))
+    ?.split("=")[1];
+  let only: Set<string> | null = null;
+  if (onlyArg) {
+    const requested = onlyArg.split(",").map((s) => s.trim()).filter(Boolean);
+    const unknown = requested.filter((p) => !PLUGINS.includes(p));
+    if (unknown.length) {
+      console.error(`[capture] unknown plugin(s): ${unknown.join(", ")}`);
+      console.error(`[capture] available: ${PLUGINS.join(", ")}`);
+      process.exit(1);
+    }
+    only = new Set(requested);
+    console.log(`[capture] limited to: ${requested.join(", ")}`);
+  }
+
   if (args.has("--copy-only") || args.has("--cull-only")) {
-    if (args.has("--cull-only")) cullStaleScreenshots();
-    if (args.has("--copy-only")) copyToPluginAssets(themeArg ?? "midnight");
+    if (args.has("--cull-only") && !only) cullStaleScreenshots();
+    if (args.has("--copy-only")) copyToPluginAssets(themeArg ?? "midnight", only ?? undefined);
     return;
   }
 
@@ -457,17 +481,21 @@ async function main(): Promise<void> {
   console.log(`[theme] capturing current theme: ${theme}`);
 
   // Global surfaces (home only — the settings page isn't a useful shot).
-  await setSidebarCollapsed(cdp, false);
-  await navigate(cdp, "#/");
-  await cdp.screenshot(join(OUT, theme, "00-home.png"));
-  await navigate(cdp, "#/");
-  await setSidebarCollapsed(cdp, true);
-  await cdp.screenshot(join(OUT, theme, "02-home-sidebar-collapsed.png"));
-  await setSidebarCollapsed(cdp, false);
+  // Skipped on a filtered run — only the requested plugins are captured.
+  if (!only) {
+    await setSidebarCollapsed(cdp, false);
+    await navigate(cdp, "#/");
+    await cdp.screenshot(join(OUT, theme, "00-home.png"));
+    await navigate(cdp, "#/");
+    await setSidebarCollapsed(cdp, true);
+    await cdp.screenshot(join(OUT, theme, "02-home-sidebar-collapsed.png"));
+    await setSidebarCollapsed(cdp, false);
+  }
 
   // Each plugin: landing shot, then each recipe sub-page.
   for (let idx = 0; idx < PLUGINS.length; idx++) {
     const pid = PLUGINS[idx]!;
+    if (only && !only.has(pid)) continue;
     const nn = String(idx + 3).padStart(2, "0");
     await navigate(cdp, `#/plugin/${pid}`);
     if (LANDING_SETUP[pid]) await runSteps(cdp, LANDING_SETUP[pid]);
@@ -491,8 +519,10 @@ async function main(): Promise<void> {
     }
   }
 
-  cullStaleScreenshots();
-  copyToPluginAssets(theme);
+  // Culling compares against the FULL expected set, so it's only meaningful
+  // on a complete pass — skip it on a filtered run to avoid surprises.
+  if (!only) cullStaleScreenshots();
+  copyToPluginAssets(theme, only ?? undefined);
   process.exit(0);
 }
 
