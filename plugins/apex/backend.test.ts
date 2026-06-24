@@ -37,6 +37,15 @@ const setHidOxpImpl = mock(async () => ({
   moduleLoaded: true,
   rebootRequired: true,
 }));
+const fingerprintStatusImpl = mock(async () => ({
+  supported: true,
+  applied: false,
+  rebootPending: false,
+  kargActive: false,
+  distro: "steamos",
+}));
+const applyFingerprintImpl = mock(async () => ({ success: true, rebootRequired: true, steps: [] }));
+const revertFingerprintImpl = mock(async () => ({ success: true, rebootRequired: true, steps: [] }));
 
 mock.module("./lib/dmi", () => ({
   isApex: async () => isApexResult,
@@ -48,6 +57,11 @@ mock.module("./lib/xhci", () => ({
 mock.module("./lib/hid-oxp", () => ({
   getHidOxpStatus: hidOxpStatusImpl,
   setHidOxpBlacklist: setHidOxpImpl,
+}));
+mock.module("./lib/fingerprint", () => ({
+  getStatus: fingerprintStatusImpl,
+  apply: applyFingerprintImpl,
+  revert: revertFingerprintImpl,
 }));
 
 import ApexBackend from "./backend";
@@ -66,6 +80,9 @@ describe("Apex backend", () => {
     getStatusImpl.mockClear();
     hidOxpStatusImpl.mockClear();
     setHidOxpImpl.mockClear();
+    fingerprintStatusImpl.mockClear();
+    applyFingerprintImpl.mockClear();
+    revertFingerprintImpl.mockClear();
   });
 
   it("marks itself unsupported on non-Apex hardware", async () => {

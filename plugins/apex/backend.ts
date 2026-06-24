@@ -15,6 +15,14 @@ import {
   type HidOxpDeps,
   type HidOxpStatus,
 } from "./lib/hid-oxp";
+import {
+  getStatus as fingerprintStatus,
+  apply as applyFingerprint,
+  revert as revertFingerprint,
+  type FingerprintDeps,
+  type FingerprintStatus,
+  type FingerprintResult,
+} from "./lib/fingerprint";
 
 /**
  * Apex — OneXPlayer Apex device fixes.
@@ -79,6 +87,36 @@ export default class ApexBackend implements PluginBackend {
     };
   }
 
+  // Filesystem + OS access for the fingerprint-wake block. Same injection
+  // pattern as `deps`; swapped for fakes in tests.
+  private get fpDeps(): FingerprintDeps {
+    return {
+      run: (cmd, opts) => runFull(cmd, opts),
+      pathExists: async (path) => {
+        try {
+          await access(path);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      readFile: (path) => readFile(path, "utf-8"),
+      writeFile: (path, content) => writeFile(path, content),
+      removeFile: (path) => rm(path, { force: true }),
+      readCmdline: () => readFile("/proc/cmdline", "utf-8"),
+      distroId: async () => {
+        try {
+          const t = await readFile("/etc/os-release", "utf-8");
+          const m = t.match(/^ID=(.*)$/m);
+          return m ? m[1].replace(/["']/g, "").trim() : "";
+        } catch {
+          return "";
+        }
+      },
+      log: (m) => this.log?.info(`[apex] ${m}`),
+    };
+  }
+
   async onLoad(): Promise<void> {
     this.unsupported = !(await isApex());
     if (this.unsupported) {
@@ -95,13 +133,31 @@ export default class ApexBackend implements PluginBackend {
     unsupported: boolean;
     status?: XhciStatus;
     hidOxp?: HidOxpStatus;
+    fingerprint?: FingerprintStatus;
   }> {
     if (this.unsupported) return { unsupported: true };
-    const [status, hidOxp] = await Promise.all([
+    const [status, hidOxp, fingerprint] = await Promise.all([
       computeStatus(this.deps),
       getHidOxpStatus(this.hidOxpDeps),
+      fingerprintStatus(this.fpDeps),
     ]);
-    return { unsupported: false, status, hidOxp };
+    return { unsupported: false, status, hidOxp, fingerprint };
+  }
+
+  /**
+   * Block / unblock the fingerprint reader as a wake source. Closes both
+   * wake paths (controller PME at runtime + the GPIO kernel arg); the karg
+   * change needs a reboot, signalled via `rebootRequired`.
+   */
+  async setFingerprintBlock(
+    enabled: boolean,
+  ): Promise<FingerprintResult & { unsupported?: boolean }> {
+    if (this.unsupported) {
+      return { success: false, rebootRequired: false, steps: [], unsupported: true, error: "Not running on Apex hardware." };
+    }
+    const result = enabled ? await applyFingerprint(this.fpDeps) : await revertFingerprint(this.fpDeps);
+    this.emit?.({ event: "statusChanged", data: undefined });
+    return result;
   }
 
   /**
