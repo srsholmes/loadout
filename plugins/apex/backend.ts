@@ -1,7 +1,6 @@
 import { access } from "node:fs/promises";
 import type { PluginBackend, EmitPayload, PluginLogger } from "@loadout/types";
-import { runFull, runStreaming } from "@loadout/exec";
-import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
+import { runFull } from "@loadout/exec";
 import { isApex } from "./lib/dmi";
 import {
   getStatus as computeStatus,
@@ -10,23 +9,6 @@ import {
   type XhciStatus,
   type RecoverResult,
 } from "./lib/xhci";
-import { startWakeListener, type StopHandle } from "./lib/wake-listener";
-
-const PLUGIN_ID = "apex";
-
-/** Persisted per-plugin settings (in ~/.config/loadout/plugins/apex.json). */
-interface ApexSettings {
-  /** Run the gamepad recovery automatically whenever the device resumes. */
-  autoRecoverOnWake?: boolean;
-}
-
-/**
- * How long to wait after a resume before checking the gamepad. The kernel
- * re-enumerates USB during resume; checking too early can read the pad as
- * briefly-absent and trigger a needless rebind. recover() then polls, so
- * this only needs to clear the initial settle.
- */
-const RESUME_SETTLE_MS = 2_000;
 
 /**
  * Apex — OneXPlayer Apex device fixes.
@@ -48,8 +30,6 @@ export default class ApexBackend implements PluginBackend {
   private unsupported = false;
   /** Serialises recover() so a double-tap can't run two rebinds at once. */
   private recovering = false;
-  /** Live handle to the resume listener when auto-recover-on-wake is on. */
-  private wakeStop: StopHandle | null = null;
 
   // Hardware-access dependencies handed to the pure xhci orchestration.
   // Wired to the real exec / fs / timers here; swapped for fakes in tests.
@@ -73,64 +53,17 @@ export default class ApexBackend implements PluginBackend {
     this.unsupported = !(await isApex());
     if (this.unsupported) {
       this.log?.info("[apex] Non-Apex hardware — plugin inert (recovery disabled).");
-      return;
+    } else {
+      this.log?.info("[apex] OneXPlayer Apex detected — recovery available.");
     }
-    this.log?.info("[apex] OneXPlayer Apex detected — recovery available.");
-
-    // Restore the auto-recover-on-wake listener if it was left enabled.
-    const settings = await readPluginStorage<ApexSettings>(PLUGIN_ID);
-    if (settings.autoRecoverOnWake) {
-      this.startWake();
-    }
-  }
-
-  async onUnload(): Promise<void> {
-    this.stopWake();
   }
 
   // ---------- RPC ----------
 
   /** Snapshot the controller/gamepad state for the UI. */
-  async getStatus(): Promise<{
-    unsupported: boolean;
-    status?: XhciStatus;
-    autoRecoverOnWake?: boolean;
-    listenerRunning?: boolean;
-  }> {
+  async getStatus(): Promise<{ unsupported: boolean; status?: XhciStatus }> {
     if (this.unsupported) return { unsupported: true };
-    const settings = await readPluginStorage<ApexSettings>(PLUGIN_ID);
-    return {
-      unsupported: false,
-      status: await computeStatus(this.deps),
-      autoRecoverOnWake: !!settings.autoRecoverOnWake,
-      listenerRunning: this.wakeStop !== null,
-    };
-  }
-
-  /**
-   * Enable/disable running the recovery automatically on resume. Persists
-   * the choice and starts/stops the logind wake listener to match.
-   */
-  async setAutoRecoverOnWake(
-    enabled: boolean,
-  ): Promise<{ success: boolean; unsupported?: boolean; error?: string }> {
-    if (this.unsupported) {
-      return { success: false, unsupported: true, error: "Not running on Apex hardware." };
-    }
-    try {
-      const existing = await readPluginStorage<ApexSettings>(PLUGIN_ID);
-      await writePluginStorage<ApexSettings>(PLUGIN_ID, {
-        ...existing,
-        autoRecoverOnWake: enabled,
-      });
-      if (enabled) this.startWake();
-      else this.stopWake();
-      this.emit?.({ event: "statusChanged", data: undefined });
-      return { success: true };
-    } catch (e) {
-      this.log?.warn(`[apex] setAutoRecoverOnWake failed: ${e}`);
-      return { success: false, error: String(e) };
-    }
+    return { unsupported: false, status: await computeStatus(this.deps) };
   }
 
   /** Run the rebind recovery. Returns a structured result for the UI. */
@@ -162,57 +95,6 @@ export default class ApexBackend implements PluginBackend {
       return result;
     } finally {
       this.recovering = false;
-    }
-  }
-
-  // ---------- auto-recover-on-wake ----------
-
-  /** Start the logind resume listener (idempotent). */
-  private startWake(): void {
-    if (this.wakeStop) return;
-    this.wakeStop = startWakeListener(
-      {
-        spawn: ({ cmd, onLine, onSpawn }) => {
-          // Long-lived; resolves only when the monitor is killed on stop().
-          // enforceCommandPolicy runs synchronously inside runStreaming, so
-          // the `dbus-monitor` permission is checked within this scope.
-          void runStreaming(cmd, {
-            onLine,
-            onSpawn: (proc) => onSpawn({ kill: () => proc.kill() }),
-          }).catch((e) => this.log?.warn(`[apex] wake listener exited: ${e}`));
-        },
-        log: (m) => this.log?.info(`[apex] ${m}`),
-      },
-      () => void this.onResume(),
-    );
-    this.log?.info("[apex] auto-recover-on-wake enabled — listening for resume.");
-  }
-
-  /** Stop the resume listener (idempotent). */
-  private stopWake(): void {
-    if (!this.wakeStop) return;
-    this.wakeStop.stop();
-    this.wakeStop = null;
-    this.log?.info("[apex] auto-recover-on-wake disabled.");
-  }
-
-  /**
-   * Fired on resume. Waits for the bus to settle, then runs the guarded
-   * recovery — a no-op if the gamepad survived the sleep, a rebind if not.
-   */
-  private async onResume(): Promise<void> {
-    await new Promise((r) => setTimeout(r, RESUME_SETTLE_MS));
-    try {
-      const res = await this.recover();
-      if (res.alreadyHealthy) {
-        this.log?.info("[apex] wake: gamepad healthy — no rebind needed.");
-      } else if (res.success) {
-        this.log?.info(`[apex] wake: recovered gamepad (rebound ${res.controller}).`);
-      } else {
-        this.log?.warn(`[apex] wake: recovery failed — ${res.error ?? "unknown"}.`);
-      }
-    } catch (e) {
-      this.log?.warn(`[apex] wake recovery threw: ${e}`);
     }
   }
 }

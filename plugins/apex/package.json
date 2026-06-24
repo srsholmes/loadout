@@ -16,8 +16,7 @@
       "commands": [
         "tee",
         "lsusb",
-        "dmesg",
-        "dbus-monitor"
+        "dmesg"
       ]
     },
     "category": "Device",

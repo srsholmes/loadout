@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { FaGamepad, FaTriangleExclamation, FaCircleCheck, FaRotate } from "react-icons/fa6";
-import { Alert, Button, Spinner, Toggle, mountComponent, notify, useBackend } from "@loadout/ui";
+import { Alert, Button, Spinner, mountComponent, notify, useBackend } from "@loadout/ui";
 
 export const icon = FaGamepad;
 
@@ -16,8 +16,6 @@ interface XhciStatus {
 interface StatusResult {
   unsupported: boolean;
   status?: XhciStatus;
-  autoRecoverOnWake?: boolean;
-  listenerRunning?: boolean;
 }
 
 interface RecoverResult {
@@ -35,7 +33,6 @@ function Apex() {
 
   const [data, setData] = useState<StatusResult | null>(null);
   const [busy, setBusy] = useState(false);
-  const [autoWakeBusy, setAutoWakeBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     setData((await call("getStatus")) as StatusResult);
@@ -69,25 +66,6 @@ function Apex() {
       setBusy(false);
     }
   }, [call, refresh]);
-
-  const handleToggleAutoWake = useCallback(
-    async (next: boolean) => {
-      setAutoWakeBusy(true);
-      try {
-        const res = (await call("setAutoRecoverOnWake", next)) as {
-          success: boolean;
-          error?: string;
-        };
-        if (!res.success) {
-          notify(res.error ?? "Couldn't update the setting.", { kind: "error" });
-        }
-      } finally {
-        setAutoWakeBusy(false);
-        await refresh();
-      }
-    },
-    [call, refresh],
-  );
 
   if (!data) {
     return (
@@ -166,23 +144,6 @@ function Apex() {
             <div className="text-xs text-base-content/55 leading-relaxed">
               Safe to run any time — if the controller is already working it does nothing, so
               there's no harm in pressing it.
-            </div>
-
-            <div className="flex justify-between items-start gap-4 pt-4 mt-1 border-t border-base-300">
-              <div className="flex flex-col gap-1 min-w-0">
-                <span className="text-sm text-base-content font-medium">
-                  Recover automatically on wake
-                </span>
-                <span className="text-xs text-base-content/55 leading-relaxed">
-                  Run this recovery whenever the device wakes from sleep, so you never have to
-                  press the button. Only rebinds if the gamepad is actually missing.
-                </span>
-              </div>
-              <Toggle
-                checked={!!data.autoRecoverOnWake}
-                disabled={autoWakeBusy}
-                onChange={handleToggleAutoWake}
-              />
             </div>
           </div>
         </div>
