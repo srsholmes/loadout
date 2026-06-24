@@ -26,6 +26,11 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
 
+      # bsdtar (libarchive) backs the recomp plugin's .rar/.7z extraction +
+      # its archive-safety tests; the ubuntu runner doesn't ship it by default.
+      - name: Install system test deps (bsdtar)
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools
+
       - name: Install dependencies
         run: bun install
 

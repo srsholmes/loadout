@@ -39,6 +39,8 @@ async function assertSafeArchive(archivePath: string): Promise<void> {
     entries.push(...(await listTar(archivePath, false)));
   } else if (lower.endsWith(".zip")) {
     entries.push(...(await listZip(archivePath)));
+  } else if (lower.endsWith(".rar") || lower.endsWith(".7z")) {
+    entries.push(...(await listLibarchive(archivePath)));
   } else {
     // .appimage and unknown formats are copied verbatim, not unpacked
     // — nothing to validate here.
@@ -187,10 +189,52 @@ async function listZip(
 }
 
 /**
- * Extract a `.zip`, `.tar.gz`, `.tgz`, `.tar`, or `.appimage` to
- * `dest`. AppImages are copied (and renamed if `appimageBasename`
- * is provided so registry entries don't have to embed versioned
- * filenames). Recursively unpacks nested archives up to 3 levels.
+ * List a `.rar` / `.7z` archive's members (with symlink targets) via
+ * `bsdtar` (libarchive), for the safety pre-flight. We don't reuse the GNU
+ * tar verbose-line regex here: libarchive renders its verbose (`-tvf`) date
+ * in an `ls -l` month-name style (`Jun 24 22:18`) that differs from GNU
+ * tar's numeric `2024-06-24`, so the shared regex silently mis-parsed the
+ * member name (it kept a date prefix), and the traversal/absolute check
+ * never fired. Instead:
+ *
+ *   - names come from `-tf` (one full member path per line, no columns to
+ *     parse — robust regardless of date/locale formatting), and
+ *   - symlink/hardlink targets come from a `-tvf` pass, taking the text
+ *     after the LAST ` -> ` (a member name containing ` -> ` can't hide
+ *     the real, final target).
+ */
+async function listLibarchive(
+  archivePath: string,
+): Promise<{ name: string; link?: string }[]> {
+  const result: { name: string; link?: string }[] = [];
+
+  const names = await listingStdout(["bsdtar", "-tf", archivePath], archivePath);
+  for (const line of names.split("\n")) {
+    const name = line.replace(/\/+$/, ""); // dirs list with a trailing slash
+    if (name.trim() === "") continue;
+    result.push({ name });
+  }
+
+  // Symlink/hardlink targets only surface in the verbose listing as
+  // `… name -> target`. We only need the target for the escape check; the
+  // names were already checked above, so push target-only entries.
+  const verbose = await listingStdout(["bsdtar", "-tvf", archivePath], archivePath);
+  for (const line of verbose.split("\n")) {
+    const i = line.lastIndexOf(" -> ");
+    if (i !== -1) result.push({ name: "", link: line.slice(i + 4).trim() });
+  }
+
+  return result;
+}
+
+/**
+ * Extract a `.zip`, `.tar.gz`, `.tgz`, `.tar`, `.rar`, `.7z`, or
+ * `.appimage` to `dest`. AppImages are copied (and renamed if
+ * `appimageBasename` is provided so registry entries don't have to
+ * embed versioned filenames). `.rar`/`.7z` go through `bsdtar`
+ * (libarchive) since `unzip`/`tar` can't read them — some upstreams
+ * (e.g. GoldenEye-Recomp) only publish a `.rar`. Recursively unpacks
+ * nested archives up to 3 levels.
  *
  * Every archive is pre-validated (`assertSafeArchive`) so no member
  * can write outside `dest`, and every extraction's exit code is
@@ -237,6 +281,18 @@ export async function extractArchive(
     if (code !== 0) {
       const err = await new Response(proc.stderr).text();
       throw new Error(`tar extract failed (exit ${code}): ${err}`);
+    }
+  } else if (filename.endsWith(".rar") || filename.endsWith(".7z")) {
+    // `unzip`/`tar` can't read these; libarchive's `bsdtar` handles both.
+    // `-x` extract, `-f` file, `-C` into dest.
+    const proc = spawn(["bsdtar", "-xf", archivePath, "-C", dest], {
+      stdout: "ignore",
+      stderr: "pipe",
+    });
+    const code = await proc.exited;
+    if (code !== 0) {
+      const err = await new Response(proc.stderr).text();
+      throw new Error(`bsdtar extract failed (exit ${code}): ${err}`);
     }
   } else if (filename.endsWith(".appimage")) {
     const destPath = join(dest, appimageBasename ?? basename(archivePath));

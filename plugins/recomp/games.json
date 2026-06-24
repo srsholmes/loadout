@@ -2,6 +2,32 @@
   "version": 1,
   "games": [
     {
+      "id": "snowboard-kids-2",
+      "name": "Snowboard Kids 2",
+      "project": "Snowboard Kids 2: Recompiled",
+      "platform": "n64",
+      "repo": "cdlewis/snowboardkids2-recomp",
+      "description": "Native PC port of Snowboard Kids 2 via static recompilation. Runs natively on Linux and Windows with modern controls and mod support. Supply your own ROM on first launch.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "SnowboardKids2Recompiled-Windows-*.zip",
+        "linux": "SnowboardKids2Recompiled-Linux-X64-Release.tar.gz"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/SnowboardKids2Recompiled.exe",
+        "linux": "{installDir}/SnowboardKids2Recompiled"
+      },
+      "tags": [
+        "snowboard-kids",
+        "n64",
+        "racing",
+        "3d"
+      ],
+      "website": "https://github.com/cdlewis/snowboardkids2-recomp",
+      "latestVersion": "v1.0.5",
+      "steamGridDbId": 1667
+    },
+    {
       "id": "zelda64-recomp",
       "name": "The Legend of Zelda: Majora's Mask",
       "project": "Zelda 64: Recompiled",
@@ -215,6 +241,33 @@
       ],
       "latestVersion": "v0.2.0-dev",
       "steamGridDbId": 33703
+    },
+    {
+      "id": "goldeneye-recomp",
+      "name": "GoldenEye 007",
+      "project": "GoldenEye 007 Recompiled",
+      "platform": "xbox360",
+      "repo": "SunJaycy/GoldenEye-Recomp",
+      "description": "PC recompilation of the Xbox 360 (XBLA) version of GoldenEye 007. Keyboard & mouse support, higher framerates, and graphics options. Requires your own game files: place the XBLA dump (default.xex + assets) in the `assets` folder next to the executable, or it exits with \"Entrypoint XEX not found\". Windows build runs through Proton.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "*-Win.rar",
+        "linux": null
+      },
+      "launchCommand": {
+        "windows": "{installDir}/GoldenEye-Recomp-Win/GoldenEye.exe",
+        "linux": null
+      },
+      "tags": [
+        "goldeneye",
+        "bond",
+        "xbox360",
+        "xbla",
+        "shooter",
+        "fps",
+        "3d"
+      ],
+      "latestVersion": "Goldeneye1.2.4"
     },
     {
       "id": "unleashed-recomp",
@@ -3151,29 +3204,6 @@
       "tags": [],
       "website": null,
       "steamGridDbId": 5249112
-    },
-    {
-      "id": "snowboard-kids-2",
-      "name": "Snowboard Kids 2",
-      "project": "Decompilation of snowboard kids 2 (N64)",
-      "platform": "n64",
-      "repo": "cdlewis/snowboardkids2-decomp",
-      "description": "Decompilation of snowboard kids 2 (N64)",
-      "installType": "prebuilt",
-      "releaseAssets": {},
-      "launchCommand": {},
-      "status": "in_progress",
-      "tags": [
-        "c",
-        "decomp",
-        "decompilation",
-        "mips-assembly",
-        "n64",
-        "n64-dev",
-        "reverse-engineering"
-      ],
-      "website": "https://decomp.dev/cdlewis/snowboardkids2-decomp",
-      "steamGridDbId": 1667
     },
     {
       "id": "snap",

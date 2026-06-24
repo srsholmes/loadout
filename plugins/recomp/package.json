@@ -59,6 +59,7 @@
         "gh",
         "unzip",
         "tar",
+        "bsdtar",
         "chmod",
         "zenity",
         "kdialog",
