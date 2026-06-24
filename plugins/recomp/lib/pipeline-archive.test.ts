@@ -65,6 +65,22 @@ describe("extractArchive — happy path", () => {
     await extractArchive(archive, dest);
     expect(existsSync(join(dest, "hello.txt"))).toBe(true);
   });
+
+  it("extracts a clean .7z via bsdtar (libarchive)", async () => {
+    // `.rar` and `.7z` share the libarchive (`bsdtar`) extract +
+    // listing path. We build a `.7z` (bsdtar can WRITE 7z but not rar)
+    // to exercise that path end-to-end — GoldenEye-Recomp ships a `.rar`
+    // which goes through the same branch.
+    const stage = await mkdtemp(join(sandbox, "7zstage-"));
+    await writeFile(join(stage, "hello.txt"), "hi");
+    const archive = join(sandbox, "clean.7z");
+    await run(["bsdtar", "-a", "-cf", archive, "hello.txt"], stage);
+
+    const dest = join(sandbox, "7zdest");
+    const { extractArchive } = await import("./pipeline-archive");
+    await extractArchive(archive, dest);
+    expect(existsSync(join(dest, "hello.txt"))).toBe(true);
+  });
 });
 
 describe("FIX 1 — nested-archive extraction failures throw", () => {
@@ -112,6 +128,24 @@ describe("FIX 2 — path traversal / symlink escape rejected", () => {
     const dest = join(sandbox, "symdest");
     const { extractArchive } = await import("./pipeline-archive");
     await expect(extractArchive(archive, dest)).rejects.toThrow(/symlink|\.\.|outside|escape/i);
+  });
+
+  it("rejects a .7z entry with a ../ traversal path", async () => {
+    // libarchive listing path (shared with .rar) must reject traversal.
+    const stage = await mkdtemp(join(sandbox, "7ztstage-"));
+    const deep = join(stage, "deep");
+    await mkdir(deep, { recursive: true });
+    await writeFile(join(stage, "sz-escape.txt"), "pwned");
+    const archive = join(sandbox, "sztraversal.7z");
+    // Store the member literally as `../sz-escape.txt` (relative to deep/).
+    await run(["bsdtar", "-a", "-cf", archive, "../sz-escape.txt"], deep);
+
+    const dest = join(sandbox, "sztdest");
+    const { extractArchive } = await import("./pipeline-archive");
+    await expect(extractArchive(archive, dest)).rejects.toThrow(
+      /\.\.|traversal|escape|outside/i,
+    );
+    expect(existsSync(join(sandbox, "sz-escape.txt"))).toBe(false);
   });
 
   it("rejects a zip entry with a ../ traversal path", async () => {

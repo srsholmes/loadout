@@ -217,6 +217,32 @@
       "steamGridDbId": 33703
     },
     {
+      "id": "goldeneye-recomp",
+      "name": "GoldenEye 007",
+      "project": "GoldenEye 007 Recompiled",
+      "platform": "n64",
+      "repo": "SunJaycy/GoldenEye-Recomp",
+      "description": "Native PC port of GoldenEye 007 via static recompilation (ReXGlue). Keyboard & mouse support, online multiplayer, higher framerates, and graphics options. Windows build runs through Proton; AMD GPUs may need extra setup.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "*-Win.rar",
+        "linux": null
+      },
+      "launchCommand": {
+        "windows": "{installDir}/GoldenEye-Recomp-Win/GoldenEye.exe",
+        "linux": null
+      },
+      "tags": [
+        "goldeneye",
+        "bond",
+        "n64",
+        "shooter",
+        "fps",
+        "3d"
+      ],
+      "latestVersion": "Goldeneye1.2.4"
+    },
+    {
       "id": "unleashed-recomp",
       "name": "Sonic Unleashed",
       "project": "Unleashed Recomp",

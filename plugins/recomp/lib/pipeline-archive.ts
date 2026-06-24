@@ -39,6 +39,8 @@ async function assertSafeArchive(archivePath: string): Promise<void> {
     entries.push(...(await listTar(archivePath, false)));
   } else if (lower.endsWith(".zip")) {
     entries.push(...(await listZip(archivePath)));
+  } else if (lower.endsWith(".rar") || lower.endsWith(".7z")) {
+    entries.push(...(await listLibarchive(archivePath)));
   } else {
     // .appimage and unknown formats are copied verbatim, not unpacked
     // — nothing to validate here.
@@ -187,10 +189,44 @@ async function listZip(
 }
 
 /**
- * Extract a `.zip`, `.tar.gz`, `.tgz`, `.tar`, or `.appimage` to
- * `dest`. AppImages are copied (and renamed if `appimageBasename`
- * is provided so registry entries don't have to embed versioned
- * filenames). Recursively unpacks nested archives up to 3 levels.
+ * List a `.rar` / `.7z` archive's members (with symlink targets) via
+ * `bsdtar` (libarchive). We don't ship a dedicated `unrar`/`7z` reader
+ * for the safety pre-flight because libarchive already understands both
+ * formats and renders a verbose listing in the SAME shape as GNU tar:
+ *
+ *   `mode user/group size date time name [-> link]`
+ *
+ * so the existing per-line parser (mode/owner/size/date/time, then the
+ * name, then an optional ` -> target` for symlinks) applies unchanged.
+ * The C locale keeps the date/time columns stable for the regex.
+ */
+async function listLibarchive(
+  archivePath: string,
+): Promise<{ name: string; link?: string }[]> {
+  const out = await listingStdout(["bsdtar", "-tvf", archivePath], archivePath);
+  const result: { name: string; link?: string }[] = [];
+  for (const line of out.split("\n")) {
+    if (line.trim() === "") continue;
+    const m = line.match(/^\S+\s+\S+\s+\d+\s+[\d-]+\s+[\d:]+\s+(.*)$/);
+    const tail = m ? m[1]! : line;
+    const sym = tail.indexOf(" -> ");
+    if (sym !== -1) {
+      result.push({ name: tail.slice(0, sym), link: tail.slice(sym + 4) });
+    } else {
+      result.push({ name: tail });
+    }
+  }
+  return result;
+}
+
+/**
+ * Extract a `.zip`, `.tar.gz`, `.tgz`, `.tar`, `.rar`, `.7z`, or
+ * `.appimage` to `dest`. AppImages are copied (and renamed if
+ * `appimageBasename` is provided so registry entries don't have to
+ * embed versioned filenames). `.rar`/`.7z` go through `bsdtar`
+ * (libarchive) since `unzip`/`tar` can't read them — some upstreams
+ * (e.g. GoldenEye-Recomp) only publish a `.rar`. Recursively unpacks
+ * nested archives up to 3 levels.
  *
  * Every archive is pre-validated (`assertSafeArchive`) so no member
  * can write outside `dest`, and every extraction's exit code is
@@ -237,6 +273,18 @@ export async function extractArchive(
     if (code !== 0) {
       const err = await new Response(proc.stderr).text();
       throw new Error(`tar extract failed (exit ${code}): ${err}`);
+    }
+  } else if (filename.endsWith(".rar") || filename.endsWith(".7z")) {
+    // `unzip`/`tar` can't read these; libarchive's `bsdtar` handles both.
+    // `-x` extract, `-f` file, `-C` into dest.
+    const proc = spawn(["bsdtar", "-xf", archivePath, "-C", dest], {
+      stdout: "ignore",
+      stderr: "pipe",
+    });
+    const code = await proc.exited;
+    if (code !== 0) {
+      const err = await new Response(proc.stderr).text();
+      throw new Error(`bsdtar extract failed (exit ${code}): ${err}`);
     }
   } else if (filename.endsWith(".appimage")) {
     const destPath = join(dest, appimageBasename ?? basename(archivePath));
