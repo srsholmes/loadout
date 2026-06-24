@@ -45,6 +45,14 @@ export interface XhciDeps {
   pathExists: (path: string) => Promise<boolean>;
   /** Resolvable delay (wired to `setTimeout` in prod; instant in tests). */
   sleep: (ms: number) => Promise<void>;
+  /**
+   * Re-grab the recovered pad through InputPlumber. In prod this delegates
+   * to the input-plumber plugin's `restartInputPlumber` (daemon restart +
+   * wake-profile *reload*), so the QAM→F16 wake mapping survives — a raw
+   * `systemctl restart inputplumber` drops the loaded profile and kills the
+   * overlay shortcut. Best-effort: recover() never gates success on this.
+   */
+  restartInputPlumber: () => Promise<{ ok: boolean; error?: string }>;
   /** Optional progress sink. */
   log?: (message: string) => void;
 }
@@ -178,16 +186,21 @@ async function rebind(deps: XhciDeps, pci: string, steps: string[]): Promise<voi
 }
 
 /**
- * Full recovery: rebind the controller and poll for the gamepad to
- * re-enumerate. InputPlumber re-grabs the freshly hotplugged source on
- * its own, so we deliberately do NOT restart it here — that restart
- * re-enumerates the active controller, which the overlay can register as
- * a synthetic button press, re-triggering this very call in a loop.
+ * Full recovery: rebind the controller, poll for the gamepad to
+ * re-enumerate, then restart InputPlumber so it re-grabs the freshly
+ * hotplugged source. Without that restart InputPlumber keeps its grab on
+ * the old (now-gone) node and doesn't reliably pick up the new one,
+ * leaving a *duplicate* pad — the raw controller plus InputPlumber's
+ * virtual one — which Steam reads as a second, dead controller.
  *
- * The `alreadyHealthy` short-circuit is the loop guard: if the gamepad
- * is already enumerating there is nothing to recover, so a re-pressed
- * button (or any re-invocation) no-ops instead of needlessly rebinding a
- * working controller. Pass `force` to rebind regardless.
+ * The `alreadyHealthy` short-circuit is the loop guard: if the gamepad is
+ * already enumerating there is nothing to recover, so a re-pressed button
+ * (or any re-invocation) no-ops — no rebind, no InputPlumber restart —
+ * instead of needlessly resetting a working controller. That same guard is
+ * what makes the InputPlumber restart safe from the old re-press feedback
+ * loop: any synthetic press the restart provokes just re-enters recover(),
+ * finds the pad present, and returns before touching anything. Pass
+ * `force` to rebind regardless.
  */
 export async function recover(
   deps: XhciDeps,
@@ -236,6 +249,21 @@ export async function recover(
       gamepadPresent: false,
       error: `Gamepad USB IDs still missing after rebind (${GAMEPAD_IDS.join(", ")}). It may need a physical reconnect, or this is a different failure than the xHCI resume death.`,
     };
+  }
+
+  // Re-grab via InputPlumber. The rebind hotplugged the pad on a fresh USB
+  // node; InputPlumber still holds its old grab and won't reliably re-grab
+  // the new one, so it must be restarted or Steam ends up seeing a stale
+  // duplicate. We delegate to the input-plumber plugin (see
+  // `deps.restartInputPlumber`) instead of a raw `systemctl restart` so the
+  // restart also *reloads* the wake profile — otherwise the QAM→F16 overlay
+  // shortcut silently dies. Best-effort: a failure here doesn't fail the
+  // recovery (the USB pad is already back), so we don't gate the result on it.
+  steps.push("inputplumber-restart");
+  deps.log?.("restarting InputPlumber to re-grab the recovered pad");
+  const ip = await deps.restartInputPlumber();
+  if (!ip.ok) {
+    deps.log?.(`InputPlumber restart reported a problem: ${ip.error ?? "unknown"} (pad is back regardless)`);
   }
 
   return { success: true, controller, steps, gamepadPresent: true };

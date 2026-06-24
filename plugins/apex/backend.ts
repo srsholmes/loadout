@@ -1,5 +1,5 @@
 import { access, readFile, writeFile, rm } from "node:fs/promises";
-import type { PluginBackend, EmitPayload, PluginLogger } from "@loadout/types";
+import type { PluginBackend, EmitPayload, PluginLogger, CallPlugin } from "@loadout/types";
 import { runFull } from "@loadout/exec";
 import { isApex } from "./lib/dmi";
 import {
@@ -40,6 +40,7 @@ import {
 export default class ApexBackend implements PluginBackend {
   emit?: (payload: EmitPayload) => void;
   log?: PluginLogger;
+  callPlugin?: CallPlugin;
 
   private unsupported = false;
   /** Serialises recover() so a double-tap can't run two rebinds at once. */
@@ -59,8 +60,44 @@ export default class ApexBackend implements PluginBackend {
         }
       },
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      restartInputPlumber: () => this._restartInputPlumber(),
       log: (m) => this.log?.info(`[apex] ${m}`),
     };
+  }
+
+  /**
+   * Re-grab the recovered pad via InputPlumber. Delegates to the
+   * input-plumber plugin's `restartInputPlumber` (cross-plugin call) so the
+   * restart also reloads the wake profile — keeping the QAM→F16 overlay
+   * shortcut alive. A raw `systemctl restart inputplumber` would drop that
+   * profile, which is exactly the regression this fixes.
+   *
+   * Falls back to a raw restart only when the input-plumber plugin isn't
+   * available (call handle missing, plugin not loaded, or method absent) —
+   * in that case there's no wake profile to preserve anyway. A non-ok result
+   * *from* input-plumber is NOT a fallback trigger: re-running a raw restart
+   * would just drop the profile we were trying to keep.
+   */
+  private async _restartInputPlumber(): Promise<{ ok: boolean; error?: string }> {
+    if (this.callPlugin) {
+      try {
+        const r = (await this.callPlugin("input-plumber", "restartInputPlumber")) as
+          | { ok: boolean; error?: string }
+          | undefined;
+        return r ?? { ok: true };
+      } catch (e) {
+        this.log?.warn(
+          `[apex] input-plumber restart unavailable (${e}); falling back to raw systemctl restart`,
+        );
+      }
+    }
+    // Fallback: no input-plumber plugin to delegate to — restart the daemon
+    // directly. reset-failed first to clear any systemd start-limit.
+    await runFull(["systemctl", "reset-failed", "inputplumber"], { timeoutMs: 5_000 });
+    const res = await runFull(["systemctl", "restart", "inputplumber"], { timeoutMs: 20_000 });
+    return res.exitCode === 0
+      ? { ok: true }
+      : { ok: false, error: res.stderr || `systemctl exited ${res.exitCode}` };
   }
 
   // IO dependencies for the hid-oxp blacklist. The backend runs as root, so

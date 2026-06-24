@@ -58,6 +58,12 @@ function makeDeps(opts: {
     },
     pathExists: async (p) => paths.has(p),
     sleep: async () => {},
+    // Recorded like a command so tests can assert the delegation happened
+    // without xhci.ts shelling out to systemctl itself.
+    restartInputPlumber: async () => {
+      commands.push("restartInputPlumber()");
+      return { ok: true };
+    },
   };
 }
 
@@ -178,7 +184,7 @@ describe("recover", () => {
     // Critically: no rebind, no InputPlumber touch — nothing that could
     // re-trigger this call.
     expect(commands).not.toContain("tee /sys/bus/pci/drivers/xhci_hcd/bind");
-    expect(commands.some((c) => c.startsWith("systemctl"))).toBe(false);
+    expect(commands).not.toContain("restartInputPlumber()");
   });
 
   it("forces a rebind even when the gamepad is present", async () => {
@@ -196,7 +202,7 @@ describe("recover", () => {
     expect(commands).toContain("tee /sys/bus/pci/drivers/xhci_hcd/bind");
   });
 
-  it("unbinds and binds on a genuine recovery, never restarting InputPlumber", async () => {
+  it("unbinds, binds, then restarts InputPlumber on a genuine recovery", async () => {
     const commands: string[] = [];
     const pci = DEFAULT_XHCI_PCI;
     const deps = makeDeps({
@@ -209,11 +215,15 @@ describe("recover", () => {
     const r = await recover(deps);
     expect(r.success).toBe(true);
     expect(r.controller).toBe(pci);
-    expect(r.steps).toEqual(["unbind", "bind"]);
+    expect(r.steps).toEqual(["unbind", "bind", "inputplumber-restart"]);
     expect(commands).toContain(`tee /sys/bus/pci/drivers/xhci_hcd/unbind`);
     expect(commands).toContain(`tee /sys/bus/pci/drivers/xhci_hcd/bind`);
-    // The plugin must NOT restart InputPlumber — that restart is what
-    // caused the re-press feedback loop.
+    // After a real rebind the pad re-enumerates on a fresh node; InputPlumber
+    // must be re-grabbed or Steam sees a stale duplicate. recover() delegates
+    // that to the injected restartInputPlumber (the input-plumber plugin, in
+    // prod) rather than shelling out to systemctl itself — so the wake profile
+    // gets reloaded and the overlay shortcut survives.
+    expect(commands).toContain("restartInputPlumber()");
     expect(commands.some((c) => c.startsWith("systemctl"))).toBe(false);
   });
 

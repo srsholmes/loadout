@@ -143,6 +143,23 @@ export interface PluginLogger {
   debug(message: string): void;
 }
 
+/**
+ * Cross-plugin call handle injected by the loader after instantiation
+ * (like `emit`/`log`). Lets one backend invoke another *loaded* plugin's
+ * RPC method in-process. The call runs inside the **target** plugin's
+ * command-policy and sandboxed-fetch scopes — not the caller's — so the
+ * caller needs no extra permissions for what the target does. Rejects if
+ * the target plugin isn't loaded or the method doesn't exist.
+ *
+ * Optional: undefined in unit tests and any context without a loader, so
+ * callers must guard (`this.callPlugin?.(…)`) and have a fallback.
+ */
+export type CallPlugin = (
+  pluginId: string,
+  method: string,
+  ...args: unknown[]
+) => Promise<unknown>;
+
 export interface PluginBackend {
   onLoad?(): Promise<void> | void;
   onUnload?(): Promise<void> | void;
@@ -154,6 +171,11 @@ export interface PluginBackend {
    * never need to reference it.
    */
   log?: PluginLogger;
+  /**
+   * Cross-plugin call handle injected by the loader (see {@link CallPlugin}).
+   * Declare it locally to use without a cast: `callPlugin?: CallPlugin`.
+   */
+  callPlugin?: CallPlugin;
 }
 
 export interface ResolveMethodArgs {

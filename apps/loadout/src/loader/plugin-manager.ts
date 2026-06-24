@@ -2,6 +2,7 @@ import { readdir, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { PluginMeta, PluginBackend, RpcEvent } from "@loadout/types";
+import { resolveMethod } from "@loadout/types";
 import { withCommandPolicy, type CommandPolicy } from "@loadout/exec";
 import { createSandboxedFetch } from "./sandboxed-fetch";
 import { log, createPluginLogger } from "./logger";
@@ -56,6 +57,34 @@ export function withSandboxedFetch<T>(
   fn: () => T | Promise<T>,
 ): Promise<T> {
   return fetchStorage.run(sandboxedFetch, async () => fn());
+}
+
+/**
+ * In-process cross-plugin dispatch. Resolves `method` on the target
+ * plugin's backend and invokes it inside the target's command policy +
+ * sandboxed fetch — the same dual scope the WebSocket rpc-handler uses —
+ * so the caller borrows none of its own capabilities. Throws (rejects)
+ * when the target plugin isn't loaded or the method isn't callable, so
+ * callers can fall back. Backing impl for the injected `callPlugin`.
+ */
+export async function callPluginMethod(
+  plugins: Map<string, LoadedPlugin>,
+  targetId: string,
+  method: string,
+  args: unknown[],
+): Promise<unknown> {
+  const entry = plugins.get(targetId);
+  if (!entry) throw new Error(`Plugin "${targetId}" is not loaded`);
+
+  const fn = resolveMethod({ instance: entry.instance, name: method });
+  if (!fn) {
+    throw new Error(`Method "${method}" not found on plugin "${targetId}"`);
+  }
+
+  const inner = () => withSandboxedFetch(entry.sandboxedFetch, () => fn(...args));
+  return entry.commandPolicy
+    ? withCommandPolicy(entry.commandPolicy, inner)
+    : inner();
 }
 
 export async function loadPlugins({
@@ -156,6 +185,13 @@ export async function loadPlugins({
         broadcast({ type: "event", plugin: meta.id, event, data });
       };
       instance.log = pluginLog;
+
+      // Inject the cross-plugin call handle. Late-binds against `loaded`,
+      // so a plugin can call one that's registered later in this loop. The
+      // target method runs inside the *target's* command policy + sandboxed
+      // fetch (not this plugin's), mirroring the rpc-handler's dispatch.
+      instance.callPlugin = (targetId, method, ...args) =>
+        callPluginMethod(loaded, targetId, method, args);
 
       // Call onLoad inside both gates: command policy (subprocess
       // capability) wrapping the sandboxed fetch (network capability).

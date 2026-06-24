@@ -18,6 +18,7 @@
         "lsusb",
         "dmesg",
         "dbus-monitor",
+        "systemctl",
         "sh",
         "udevadm",
         "steamos-readonly",
