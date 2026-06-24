@@ -44,6 +44,7 @@ const healthyStatus = {
     deadInLog: false,
     summary: "Controller healthy — nothing to do.",
   },
+  hidOxp: { blacklisted: false, moduleLoaded: true, rebootRequired: false },
 };
 
 const missingStatus = {
@@ -139,6 +140,43 @@ describe("apex plugin", () => {
     fireEvent.click(button!);
     await waitFor(() => {
       expect(callMock).toHaveBeenCalledWith("recover");
+    });
+  });
+
+  it("shows the driver-blacklist control and toggles it", async () => {
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Driver blacklist");
+      expect(container.textContent).toContain("Blacklist the hid-oxp driver");
+    });
+
+    const toggles = [...container.querySelectorAll('input[type="checkbox"]')];
+    const blacklistToggle = toggles[toggles.length - 1] as HTMLInputElement;
+    expect(blacklistToggle.checked).toBe(false);
+
+    fireEvent.click(blacklistToggle);
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("setHidOxpBlacklist", true);
+    });
+  });
+
+  it("warns when a reboot is required to apply the blacklist", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus")
+        return Promise.resolve({
+          ...healthyStatus,
+          hidOxp: { blacklisted: true, moduleLoaded: true, rebootRequired: true },
+        });
+      return Promise.resolve({ success: true });
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Reboot required");
     });
   });
 

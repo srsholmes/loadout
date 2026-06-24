@@ -1,11 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import {
-  FaGamepad,
-  FaTriangleExclamation,
-  FaCircleCheck,
-  FaRotate,
-  FaFingerprint,
-} from "react-icons/fa6";
+import { FaGamepad, FaTriangleExclamation, FaCircleCheck, FaRotate, FaMicrochip, FaFingerprint } from "react-icons/fa6";
 import { Alert, Button, Spinner, Toggle, mountComponent, notify, useBackend } from "@loadout/ui";
 
 export const icon = FaGamepad;
@@ -19,6 +13,12 @@ interface XhciStatus {
   summary: string;
 }
 
+interface HidOxpStatus {
+  blacklisted: boolean;
+  moduleLoaded: boolean;
+  rebootRequired: boolean;
+}
+
 interface FingerprintStatus {
   supported: boolean;
   applied: boolean;
@@ -30,8 +30,7 @@ interface FingerprintStatus {
 interface StatusResult {
   unsupported: boolean;
   status?: XhciStatus;
-  autoRecoverOnWake?: boolean;
-  listenerRunning?: boolean;
+  hidOxp?: HidOxpStatus;
   fingerprint?: FingerprintStatus;
 }
 
@@ -57,7 +56,7 @@ function Apex() {
 
   const [data, setData] = useState<StatusResult | null>(null);
   const [busy, setBusy] = useState(false);
-  const [autoWakeBusy, setAutoWakeBusy] = useState(false);
+  const [blacklistBusy, setBlacklistBusy] = useState(false);
   const [fpBusy, setFpBusy] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -93,19 +92,26 @@ function Apex() {
     }
   }, [call, refresh]);
 
-  const handleToggleAutoWake = useCallback(
+  const handleToggleBlacklist = useCallback(
     async (next: boolean) => {
-      setAutoWakeBusy(true);
+      setBlacklistBusy(true);
       try {
-        const res = (await call("setAutoRecoverOnWake", next)) as {
+        const res = (await call("setHidOxpBlacklist", next)) as {
           success: boolean;
           error?: string;
+          hidOxp?: HidOxpStatus;
         };
         if (!res.success) {
-          notify(res.error ?? "Couldn't update the setting.", { kind: "error" });
+          notify(res.error ?? "Couldn't update the driver blacklist.", { kind: "error" });
+        } else if (res.hidOxp?.rebootRequired) {
+          notify("Driver blacklisted — reboot to apply.", { kind: "success" });
+        } else if (next) {
+          notify("hid-oxp driver blacklisted.", { kind: "success" });
+        } else {
+          notify("hid-oxp driver blacklist removed.", { kind: "success" });
         }
       } finally {
-        setAutoWakeBusy(false);
+        setBlacklistBusy(false);
         await refresh();
       }
     },
@@ -170,6 +176,7 @@ function Apex() {
 
   const status = data.status!;
   const healthy = status.gamepadPresent;
+  const hidOxp = data.hidOxp;
 
   return (
     <div className="p-7 h-full overflow-y-auto">
@@ -217,21 +224,57 @@ function Apex() {
               Safe to run any time — if the controller is already working it does nothing, so
               there's no harm in pressing it.
             </div>
+          </div>
+        </div>
 
-            <div className="flex justify-between items-start gap-4 pt-4 mt-1 border-t border-base-300">
+        <div className="card">
+          <div className="card-header flex items-center gap-2 py-3.5 px-4.5 border-b border-base-300">
+            <div className="card-title flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-base-content/50">
+              <FaMicrochip className="w-3 h-3" /> Driver blacklist
+            </div>
+          </div>
+          <div className="card-body p-6 flex flex-col gap-4">
+            <div className="text-sm text-base-content/80 leading-relaxed">
+              Blacklisting the OneXPlayer <span className="mono">hid-oxp</span> driver stops it
+              binding the built-in gamepad, which in testing keeps the USB controller alive across
+              sleep far more reliably — preventing the drop-out rather than recovering from it.
+              Takes effect after a reboot.
+            </div>
+
+            <div className="text-xs text-base-content/55 leading-relaxed">
+              <span className="mono">hid-oxp</span> normally provides paddle mapping, RGB and
+              vibration — but those keep working without it: InputPlumber reads the controller
+              directly for input and paddles, Loadout's RGB plugin drives the lighting, and rumble
+              comes from the Xbox driver. It's a temporary workaround until the driver bug is fixed
+              upstream.
+            </div>
+
+            {hidOxp?.rebootRequired && (
+              <Alert
+                variant="warning"
+                icon={<FaTriangleExclamation size={14} />}
+                title="Reboot required"
+              >
+                The blacklist is set but <span className="mono">hid-oxp</span> is still loaded.
+                Reboot to apply it.
+              </Alert>
+            )}
+
+            <div className="flex justify-between items-start gap-4">
               <div className="flex flex-col gap-1 min-w-0">
                 <span className="text-sm text-base-content font-medium">
-                  Recover automatically on wake
+                  Blacklist the hid-oxp driver
                 </span>
                 <span className="text-xs text-base-content/55 leading-relaxed">
-                  Run this recovery whenever the device wakes from sleep, so you never have to
-                  press the button. Only rebinds if the gamepad is actually missing.
+                  Temporary fix if the gamepad keeps dying on wake. InputPlumber and Loadout's RGB
+                  plugin cover paddles, RGB and rumble, so nothing should break. Reversible — turn it
+                  off and reboot to restore the driver.
                 </span>
               </div>
               <Toggle
-                checked={!!data.autoRecoverOnWake}
-                disabled={autoWakeBusy}
-                onChange={handleToggleAutoWake}
+                checked={!!hidOxp?.blacklisted}
+                disabled={blacklistBusy}
+                onChange={handleToggleBlacklist}
               />
             </div>
           </div>
