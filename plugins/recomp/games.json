@@ -2,6 +2,32 @@
   "version": 1,
   "games": [
     {
+      "id": "snowboard-kids-2",
+      "name": "Snowboard Kids 2",
+      "project": "Snowboard Kids 2: Recompiled",
+      "platform": "n64",
+      "repo": "cdlewis/snowboardkids2-recomp",
+      "description": "Native PC port of Snowboard Kids 2 via static recompilation. Runs natively on Linux and Windows with modern controls and mod support. Supply your own ROM on first launch.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "SnowboardKids2Recompiled-Windows-*.zip",
+        "linux": "SnowboardKids2Recompiled-Linux-X64-Release.tar.gz"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/SnowboardKids2Recompiled.exe",
+        "linux": "{installDir}/SnowboardKids2Recompiled"
+      },
+      "tags": [
+        "snowboard-kids",
+        "n64",
+        "racing",
+        "3d"
+      ],
+      "website": "https://github.com/cdlewis/snowboardkids2-recomp",
+      "latestVersion": "v1.0.5",
+      "steamGridDbId": 1667
+    },
+    {
       "id": "zelda64-recomp",
       "name": "The Legend of Zelda: Majora's Mask",
       "project": "Zelda 64: Recompiled",
