@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { FaGamepad, FaTriangleExclamation, FaCircleCheck, FaRotate } from "react-icons/fa6";
+import { FaGamepad, FaTriangleExclamation, FaCircleCheck, FaRotate, FaMicrochip, FaFingerprint } from "react-icons/fa6";
 import { Alert, Button, Spinner, Toggle, mountComponent, notify, useBackend } from "@loadout/ui";
 
 export const icon = FaGamepad;
@@ -13,11 +13,32 @@ interface XhciStatus {
   summary: string;
 }
 
+interface HidOxpStatus {
+  blacklisted: boolean;
+  moduleLoaded: boolean;
+  rebootRequired: boolean;
+}
+
+interface FingerprintStatus {
+  supported: boolean;
+  applied: boolean;
+  rebootPending: boolean;
+  kargActive: boolean;
+  distro: string;
+}
+
 interface StatusResult {
   unsupported: boolean;
   status?: XhciStatus;
-  autoRecoverOnWake?: boolean;
-  listenerRunning?: boolean;
+  hidOxp?: HidOxpStatus;
+  fingerprint?: FingerprintStatus;
+}
+
+interface FingerprintResult {
+  success: boolean;
+  rebootRequired: boolean;
+  manualKarg?: string;
+  error?: string;
 }
 
 interface RecoverResult {
@@ -35,7 +56,8 @@ function Apex() {
 
   const [data, setData] = useState<StatusResult | null>(null);
   const [busy, setBusy] = useState(false);
-  const [autoWakeBusy, setAutoWakeBusy] = useState(false);
+  const [blacklistBusy, setBlacklistBusy] = useState(false);
+  const [fpBusy, setFpBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     setData((await call("getStatus")) as StatusResult);
@@ -70,19 +92,53 @@ function Apex() {
     }
   }, [call, refresh]);
 
-  const handleToggleAutoWake = useCallback(
+  const handleToggleBlacklist = useCallback(
     async (next: boolean) => {
-      setAutoWakeBusy(true);
+      setBlacklistBusy(true);
       try {
-        const res = (await call("setAutoRecoverOnWake", next)) as {
+        const res = (await call("setHidOxpBlacklist", next)) as {
           success: boolean;
           error?: string;
+          hidOxp?: HidOxpStatus;
         };
         if (!res.success) {
-          notify(res.error ?? "Couldn't update the setting.", { kind: "error" });
+          notify(res.error ?? "Couldn't update the driver blacklist.", { kind: "error" });
+        } else if (res.hidOxp?.rebootRequired) {
+          notify("Driver blacklisted — reboot to apply.", { kind: "success" });
+        } else if (next) {
+          notify("hid-oxp driver blacklisted.", { kind: "success" });
+        } else {
+          notify("hid-oxp driver blacklist removed.", { kind: "success" });
         }
       } finally {
-        setAutoWakeBusy(false);
+        setBlacklistBusy(false);
+        await refresh();
+      }
+    },
+    [call, refresh],
+  );
+
+  const handleToggleFingerprint = useCallback(
+    async (next: boolean) => {
+      setFpBusy(true);
+      try {
+        const res = (await call("setFingerprintBlock", next)) as FingerprintResult;
+        if (!res.success) {
+          notify(res.error ?? "Couldn't update the fingerprint setting.", { kind: "error" });
+        } else if (res.manualKarg) {
+          notify(
+            `Controller wake ${next ? "blocked" : "restored"}. Your distro needs a manual kernel arg — see the panel.`,
+            { kind: "success" },
+          );
+        } else if (res.rebootRequired) {
+          notify(`Reboot required to finish ${next ? "blocking" : "restoring"} fingerprint wake.`, {
+            kind: "success",
+          });
+        } else {
+          notify(next ? "Fingerprint wake blocked." : "Fingerprint wake restored.", { kind: "success" });
+        }
+      } finally {
+        setFpBusy(false);
         await refresh();
       }
     },
@@ -120,6 +176,7 @@ function Apex() {
 
   const status = data.status!;
   const healthy = status.gamepadPresent;
+  const hidOxp = data.hidOxp;
 
   return (
     <div className="p-7 h-full overflow-y-auto">
@@ -167,25 +224,111 @@ function Apex() {
               Safe to run any time — if the controller is already working it does nothing, so
               there's no harm in pressing it.
             </div>
+          </div>
+        </div>
 
-            <div className="flex justify-between items-start gap-4 pt-4 mt-1 border-t border-base-300">
+        <div className="card">
+          <div className="card-header flex items-center gap-2 py-3.5 px-4.5 border-b border-base-300">
+            <div className="card-title flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-base-content/50">
+              <FaMicrochip className="w-3 h-3" /> Driver blacklist
+            </div>
+          </div>
+          <div className="card-body p-6 flex flex-col gap-4">
+            <div className="text-sm text-base-content/80 leading-relaxed">
+              Blacklisting the OneXPlayer <span className="mono">hid-oxp</span> driver stops it
+              binding the built-in gamepad, which in testing keeps the USB controller alive across
+              sleep far more reliably — preventing the drop-out rather than recovering from it.
+              Takes effect after a reboot.
+            </div>
+
+            <div className="text-xs text-base-content/55 leading-relaxed">
+              <span className="mono">hid-oxp</span> normally provides paddle mapping, RGB and
+              vibration — but those keep working without it: InputPlumber reads the controller
+              directly for input and paddles, Loadout's RGB plugin drives the lighting, and rumble
+              comes from the Xbox driver. It's a temporary workaround until the driver bug is fixed
+              upstream.
+            </div>
+
+            {hidOxp?.rebootRequired && (
+              <Alert
+                variant="warning"
+                icon={<FaTriangleExclamation size={14} />}
+                title="Reboot required"
+              >
+                The blacklist is set but <span className="mono">hid-oxp</span> is still loaded.
+                Reboot to apply it.
+              </Alert>
+            )}
+
+            <div className="flex justify-between items-start gap-4">
               <div className="flex flex-col gap-1 min-w-0">
                 <span className="text-sm text-base-content font-medium">
-                  Recover automatically on wake
+                  Blacklist the hid-oxp driver
                 </span>
                 <span className="text-xs text-base-content/55 leading-relaxed">
-                  Run this recovery whenever the device wakes from sleep, so you never have to
-                  press the button. Only rebinds if the gamepad is actually missing.
+                  Temporary fix if the gamepad keeps dying on wake. InputPlumber and Loadout's RGB
+                  plugin cover paddles, RGB and rumble, so nothing should break. Reversible — turn it
+                  off and reboot to restore the driver.
                 </span>
               </div>
               <Toggle
-                checked={!!data.autoRecoverOnWake}
-                disabled={autoWakeBusy}
-                onChange={handleToggleAutoWake}
+                checked={!!hidOxp?.blacklisted}
+                disabled={blacklistBusy}
+                onChange={handleToggleBlacklist}
               />
             </div>
           </div>
         </div>
+
+        {data.fingerprint?.supported && (
+          <div className="card">
+            <div className="card-header flex items-center gap-2 py-3.5 px-4.5 border-b border-base-300">
+              <div className="card-title flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-base-content/50">
+                <FaFingerprint className="w-3 h-3" /> Fingerprint wake
+              </div>
+            </div>
+            <div className="card-body p-6 flex flex-col gap-4">
+              <div className="text-sm text-base-content/80 leading-relaxed">
+                The power button's fingerprint sensor wakes the Apex from sleep on a light touch —
+                annoying in a bag. This blocks it as a wake source; a deliberate power-button{" "}
+                <span className="font-medium">press</span> still wakes the device.
+              </div>
+
+              <div className="flex justify-between items-start gap-4">
+                <div className="flex flex-col gap-1 min-w-0">
+                  <span className="text-sm text-base-content font-medium">
+                    Block fingerprint wake
+                  </span>
+                  <span className="text-xs text-base-content/55 leading-relaxed">
+                    Disables the sensor's USB-controller wake and adds a kernel parameter for the
+                    GPIO wake line.
+                  </span>
+                </div>
+                <Toggle
+                  checked={!!data.fingerprint.applied}
+                  disabled={fpBusy}
+                  onChange={handleToggleFingerprint}
+                />
+              </div>
+
+              {data.fingerprint.rebootPending && (
+                <Alert variant="warning" icon={<FaTriangleExclamation size={14} />} title="Reboot required">
+                  A kernel-parameter change is staged. Reboot to finish applying the fingerprint
+                  wake block.
+                </Alert>
+              )}
+
+              {!data.fingerprint.kargActive && data.fingerprint.distro !== "steamos" && (
+                <div className="text-xs text-base-content/55 leading-relaxed">
+                  On {data.fingerprint.distro || "this distro"} the GPIO kernel arg can't be applied
+                  automatically yet. Add{" "}
+                  <span className="mono">gpiolib_acpi.ignore_wake=AMDI0030:00@58</span> to your
+                  kernel command line and reboot to fully block the touch wake.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

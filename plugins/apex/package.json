@@ -11,14 +11,18 @@
   "plugin": {
     "id": "apex",
     "name": "Apex",
-    "description": "OneXPlayer Apex device fixes. Recovers the internal gamepad after the xHCI USB controller dies on resume from sleep, by rebinding the PCI controller so the pad re-enumerates.",
+    "description": "OneXPlayer Apex device fixes: recover the internal gamepad when its xHCI controller dies on resume (or blacklist the hid-oxp driver to prevent the drop-out), and block the fingerprint reader from waking the device on a light touch.",
     "permissions": {
       "commands": [
         "tee",
         "lsusb",
         "dmesg",
         "dbus-monitor",
-        "systemctl"
+        "systemctl",
+        "sh",
+        "udevadm",
+        "steamos-readonly",
+        "update-grub"
       ]
     },
     "category": "Device",
