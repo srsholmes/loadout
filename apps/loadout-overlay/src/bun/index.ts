@@ -514,6 +514,18 @@ function toggleOverlay(source: string) {
     ipIntercept.current?.grab();
     overlay.show();
     atoms.show().catch((e) => console.warn("[overlay] atoms.show:", e));
+    // Desktop mode has no gamescope to composite us above Big Picture, so
+    // the atoms above are a no-op there — bring the window to the front and
+    // focus it via the WM instead. Gate on the live /proc gamescope check,
+    // NOT the boot-time `gamescopeMode` flag: that keys off $GAMESCOPE_DISPLAY,
+    // which is stale-set to :0 in the desktop service environment and falsely
+    // reports gaming mode (so the raise never ran). isGameModeActive() scans
+    // /proc for a "gamescope*" comm and is true only under a real session.
+    if (!isGameModeActive()) {
+      atoms
+        .raiseAboveDesktop()
+        .catch((e) => console.warn("[overlay] atoms.raiseAboveDesktop:", e));
+    }
     state.isOpen = true;
     broadcastOverlayVisibility();
     trace(`[toggle] ${source} → SHOW`);

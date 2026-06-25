@@ -939,6 +939,53 @@ export class GamescopeAtoms {
   }
 
   /**
+   * Desktop-mode (no gamescope) front-and-focus.
+   *
+   * In gaming mode gamescope reads STEAM_OVERLAY=1 and composites us above
+   * the game. There's no gamescope on the KDE/Plasma desktop, so those
+   * atoms are a no-op and our plain CEF window stays *behind* a fullscreen
+   * Steam Big Picture window — KWin keeps the *active* fullscreen window in
+   * its elevated stacking layer and we have no always-on-top hint.
+   *
+   * `xdotool windowactivate` is the reliable lever, verified on this host's
+   * KWin Wayland session (the overlay + BPM are XWayland clients): it sets
+   * _NET_ACTIVE_WINDOW to our window, which KWin honours — BPM is no longer
+   * the active fullscreen window, so KWin lowers it out of the fullscreen
+   * layer and our overlay lands on top, focused, in one call. `windowraise`
+   * follows as belt-and-suspenders.
+   *
+   * We deliberately do NOT set _NET_WM_STATE_ABOVE here: under Wayland KWin
+   * manages _NET_WM_STATE itself and ignores direct xprop property sets on
+   * mapped windows (EWMH wants a ClientMessage), so it'd be inert at best
+   * and clobber KWin's MAXIMIZED/FOCUSED bits at worst.
+   *
+   * Caller gates this on desktop mode (live /proc gamescope check); it's a
+   * no-op under gamescope, where the atoms already handle stacking.
+   */
+  async raiseAboveDesktop(): Promise<void> {
+    if (!this.windowId) await this.findWindow();
+    if (!this.windowId) return;
+    if (!(await commandExists("xdotool"))) {
+      console.warn("[gamescope-atoms] xdotool not found — can't raise overlay");
+      return;
+    }
+    for (const verb of ["windowactivate", "windowraise"]) {
+      try {
+        await run([
+          "env",
+          `DISPLAY=${this.display}`,
+          "xdotool",
+          verb,
+          this.windowId,
+        ]);
+      } catch (err) {
+        console.warn(`[gamescope-atoms] raiseAboveDesktop ${verb}:`, err);
+      }
+    }
+    trace(`[gamescope-atoms] raiseAboveDesktop: activated+raised ${this.windowId}`);
+  }
+
+  /**
    * Snapshot the current root STEAM_TOUCH_CLICK_MODE and overwrite it with
    * TOUCH_MODE_OVERLAY so Gamescope routes touch straight to our window
    * instead of synthesizing a fake mouse cursor. Writes unconditionally —
