@@ -724,8 +724,17 @@ export async function startInputIntercept(
     // deadline. See doGrab for the stuck-Guide rationale.
     if (intercepting && pendingGrabs.size > 0) {
       for (const [t, deadline] of [...pendingGrabs]) {
-        if (!readModifierState(t.fd).guide || now >= deadline) {
+        const released = !readModifierState(t.fd).guide;
+        if (released || now >= deadline) {
           pendingGrabs.delete(t);
+          if (!released) {
+            // Deadline hit with Guide still held — grab anyway so we can't be
+            // left ungrabbed forever, but this re-introduces the stuck-Guide
+            // we were avoiding. Log it so a field report can be tied to this.
+            console.warn(
+              `[input-intercept] forcing deferred grab of ${t.path} after ${DEFER_GRAB_TIMEOUT_MS}ms (Guide still held)`,
+            );
+          }
           grabDevice(t);
         }
       }
@@ -741,6 +750,14 @@ export async function startInputIntercept(
       // never run wake detection on them. readRawEvents above already drained
       // the fd so its buffer can't back up — just skip the rest.
       if (t.grabOnly) continue;
+
+      // A device with a still-deferred grab isn't ours yet — the app
+      // underneath is reading it (that's the whole point of deferring, so it
+      // sees the Guide release). Don't run wake detection on it (a second
+      // Guide+B would otherwise re-toggle the overlay we just opened) and
+      // don't forward its events to nav (it'd double with the app). We still
+      // drained its fd above so its buffer can't back up.
+      if (pendingGrabs.has(t)) continue;
 
       // Wake detection runs in every mode on every device.
       for (const e of events) {
@@ -831,6 +848,40 @@ export async function startInputIntercept(
     resyncDeviceState(t, mods);
   }
 
+  /**
+   * Grab `t` now, or — for a physical pad whose Guide (BTN_MODE) is still
+   * held — DEFER the EVIOCGRAB until Guide releases (pollOnce engages it).
+   *
+   * The overlay opens on Guide+B; if we grab while Guide is held, the user's
+   * Guide-RELEASE lands on us (grabbed) and never reaches the app underneath,
+   * leaving Steam stuck in "Guide held" after we close — every button then
+   * reads as a Guide chord (X→keyboard, L2→zoom, R2→screenshot, stick→volume),
+   * looking like a dead controller. While deferred the app still reads the
+   * (ungrabbed) device, so it observes the release.
+   *
+   * Shared by all three grab sites (doGrab, hotplug, reconcile) so they behave
+   * identically. Caller must have applied intercept masks for non-grab-only
+   * devices first. Grab-only virtual mirrors don't carry the user-held
+   * modifier (resyncDeviceState no-ops on them) so they grab immediately.
+   */
+  function grabOrDefer(t: TrackedDevice): void {
+    if (t.grabOnly || t.grabbed) {
+      grabDevice(t);
+      return;
+    }
+    // Read the kernel button bitmap once: it decides the deferral and (when
+    // we grab now) seeds resyncDeviceState, so EVIOCGKEY is read once per grab.
+    const mods = readModifierState(t.fd);
+    if (mods.guide) {
+      pendingGrabs.set(t, performance.now() + DEFER_GRAB_TIMEOUT_MS);
+      console.log(
+        `[input-intercept] deferring grab of ${t.path} '${t.dev.name}' until Guide released`,
+      );
+      return;
+    }
+    grabDevice(t, mods);
+  }
+
   function doGrab(): void {
     if (intercepting) return;
     intercepting = true;
@@ -841,37 +892,12 @@ export async function startInputIntercept(
       if (!t.dev.flags.isController) continue;
       // Fresh modifier state each cycle: a guide/select/ctrl release missed
       // last session must not leave guideHeld stuck (→ every B reads as
-      // Guide+B → re-toggles the overlay). resyncDeviceState below then
-      // re-seeds from real hardware.
+      // Guide+B → re-toggles the overlay). resyncDeviceState (in grabOrDefer)
+      // then re-seeds from real hardware.
       t.combo = newComboState();
       t.shortcut = newShortcutState();
-      // grab-only virtual mirrors don't carry the user-held modifier and
-      // resyncDeviceState no-ops on them, so just grab immediately.
-      if (t.grabOnly) {
-        grabDevice(t);
-        continue;
-      }
-      applyInterceptMasks(t.fd);
-      // Read the kernel button bitmap once: it both decides the deferral
-      // below and seeds resyncDeviceState (passed into grabDevice), so we
-      // never read EVIOCGKEY twice for the same grab.
-      const mods = readModifierState(t.fd);
-      // Defer the EVIOCGRAB while the toggle modifier (Guide/BTN_MODE) is
-      // still physically held. The overlay opens on Guide+B; if we grab now,
-      // the user's Guide-RELEASE lands on us (grabbed) and never reaches the
-      // app underneath, leaving Steam stuck in "Guide held" after we close —
-      // every button then reads as a Guide chord (X→keyboard, L2→zoom,
-      // R2→screenshot, stick→volume), looking like a dead controller. While
-      // we hold off, the app still reads the (ungrabbed) device, so it
-      // observes the release; pollOnce grabs the instant Guide goes up.
-      if (!t.grabbed && mods.guide) {
-        pendingGrabs.set(t, performance.now() + DEFER_GRAB_TIMEOUT_MS);
-        console.log(
-          `[input-intercept] deferring grab of ${t.path} '${t.dev.name}' until Guide released`,
-        );
-        continue;
-      }
-      grabDevice(t, mods);
+      if (!t.grabOnly) applyInterceptMasks(t.fd);
+      grabOrDefer(t);
     }
     startTimer();
   }
@@ -945,19 +971,7 @@ export async function startInputIntercept(
     // Keyboards / qam don't get grabbed.
     if (intercepting && t.dev.flags.isController) {
       if (!t.grabOnly) applyInterceptMasks(t.fd);
-      const intBuf = new Int32Array([1]);
-      const rc = libc.symbols.ioctl(t.fd, EVIOCGRAB, ptr(intBuf));
-      if (rc === 0) {
-        t.grabbed = true;
-        console.log(
-          `[input-intercept] hotplug grabbed ${t.path} '${t.dev.name}'${t.grabOnly ? " (virtual, grab-only)" : ""}`,
-        );
-      } else {
-        console.warn(
-          `[input-intercept] hotplug grab failed for ${t.path} (rc=${rc})`,
-        );
-      }
-      resyncDeviceState(t);
+      grabOrDefer(t);
     }
   }
 
@@ -965,6 +979,9 @@ export async function startInputIntercept(
     const idx = tracked.findIndex((t) => t.path === eventPath);
     if (idx < 0) return;
     const [t] = tracked.splice(idx, 1);
+    // Drop any deferred-grab entry before closing the fd: a stale entry would
+    // make pollOnce ioctl a closed (possibly OS-reused) fd next tick.
+    pendingGrabs.delete(t);
     if (t.grabbed) {
       libc.symbols.ioctl(t.fd, EVIOCGRAB, null);
       t.grabbed = false;
@@ -1024,15 +1041,7 @@ export async function startInputIntercept(
       const t = openAndTrack(dev);
       if (t && intercepting && t.dev.flags.isController) {
         if (!t.grabOnly) applyInterceptMasks(t.fd);
-        const intBuf = new Int32Array([1]);
-        const rc = libc.symbols.ioctl(t.fd, EVIOCGRAB, ptr(intBuf));
-        if (rc === 0) {
-          t.grabbed = true;
-          console.log(
-            `[input-intercept] reconcile grabbed ${t.path} '${t.dev.name}'${t.grabOnly ? " (virtual, grab-only)" : ""}`,
-          );
-        }
-        resyncDeviceState(t);
+        grabOrDefer(t);
       }
     }
   }

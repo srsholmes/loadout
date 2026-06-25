@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, mock } from "bun:test";
-import { toArrayBuffer } from "bun:ffi";
+import { toArrayBuffer, type Pointer } from "bun:ffi";
 import type { InputDevice } from "./devices";
 
 // ---- Mocks -----------------------------------------------------------------
@@ -75,7 +75,9 @@ mock.module("./ffi", () => ({
           guideHeldFds.has(fd) &&
           typeof valuePtr === "number"
         ) {
-          const bitmap = new Uint8Array(toArrayBuffer(valuePtr, 0, 96));
+          const bitmap = new Uint8Array(
+            toArrayBuffer(valuePtr as Pointer, 0, 96),
+          );
           bitmap[BTN_MODE_CODE >> 3] |= 1 << (BTN_MODE_CODE & 7);
         }
         const rc = ioctlFailFds.has(fd) ? -1 : 0;
@@ -394,6 +396,50 @@ describe("startInputIntercept — grab / release", () => {
       (c) => c.kind === "ioctl" && c.request === 0x40044590n && c.argKind === "pointer",
     );
     expect(grabs).toHaveLength(1);
+    h.shutdown();
+  });
+
+  it("release cancels a still-deferred grab — the pad is never grabbed", async () => {
+    devicesOnSystem = [mkDevice("/dev/input/event5", "Pad", { isController: true })];
+    const h = await startInputIntercept({ onWake: () => {}, onAction: () => {} });
+    const padFd = (
+      ffiCalls.find((c) => c.kind === "open" && c.path === "/dev/input/event5") as
+        | { rc: number }
+        | undefined
+    )?.rc as number;
+    guideHeldFds.add(padFd);
+    h.grab(); // deferred (Guide held)
+    h.release(); // closes before Guide ever released → must cancel the defer
+    guideHeldFds.delete(padFd); // even though Guide is now "up"…
+    await new Promise((r) => setTimeout(r, 70)); // …no late grab may fire
+    const grabs = ffiCalls.filter(
+      (c) => c.kind === "ioctl" && c.request === 0x40044590n && c.argKind === "pointer",
+    );
+    expect(grabs).toHaveLength(0);
+    h.shutdown();
+  });
+
+  it("with two pads, defers only the Guide-held one and grabs the other now", async () => {
+    devicesOnSystem = [
+      mkDevice("/dev/input/event5", "Held", { isController: true }),
+      mkDevice("/dev/input/event6", "Free", { isController: true }),
+    ];
+    const h = await startInputIntercept({ onWake: () => {}, onAction: () => {} });
+    const heldFd = (
+      ffiCalls.find((c) => c.kind === "open" && c.path === "/dev/input/event5") as
+        | { rc: number }
+        | undefined
+    )?.rc as number;
+    guideHeldFds.add(heldFd); // only the first pad has Guide held
+    const grabs = () =>
+      ffiCalls.filter(
+        (c) => c.kind === "ioctl" && c.request === 0x40044590n && c.argKind === "pointer",
+      );
+    h.grab();
+    expect(grabs()).toHaveLength(1); // free pad grabbed immediately, held one deferred
+    guideHeldFds.delete(heldFd);
+    await new Promise((r) => setTimeout(r, 70));
+    expect(grabs().length).toBeGreaterThanOrEqual(2); // held pad grabbed after release
     h.shutdown();
   });
 
