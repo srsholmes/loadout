@@ -5,7 +5,7 @@ import type { EmitPayload } from "@loadout/types";
  * Apex backend tests.
  *
  * The backend's only real responsibilities are: gate everything on the
- * DMI check, and serialise recover(). We mock `./lib/dmi` (DMI probe)
+ * DMI check, and serialise recover(). We mock `@loadout/devices` (DMI probe)
  * and `./lib/xhci` (the rebind orchestration, tested separately) so
  * these tests assert the wiring — gating, the in-progress lock, and the
  * statusChanged emit — not the hardware logic.
@@ -47,7 +47,7 @@ const fingerprintStatusImpl = mock(async () => ({
 const applyFingerprintImpl = mock(async () => ({ success: true, rebootRequired: true, steps: [] }));
 const revertFingerprintImpl = mock(async () => ({ success: true, rebootRequired: true, steps: [] }));
 
-mock.module("./lib/dmi", () => ({
+mock.module("@loadout/devices", () => ({
   isApex: async () => isApexResult,
 }));
 mock.module("./lib/xhci", () => ({

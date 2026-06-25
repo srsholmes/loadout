@@ -1,10 +1,11 @@
 /**
- * Device database + pure matching helpers for TDP control.
+ * Device database + pure matching helpers, shared across plugins via
+ * `@loadout/devices`.
  *
- * Split out of backend.ts so the (large, static) handheld table and the
- * watt-matching logic are independently readable and unit-testable. No I/O
- * lives here — `backend.ts` reads DMI/CPU info and calls `matchDevice` /
- * `matchProfileName` with it.
+ * The (large, static) handheld table and the watt-matching logic live here so
+ * any plugin can resolve a device's TDP range / presets. No I/O lives in this
+ * module — callers read DMI/CPU info (see `./dmi`) and pass it to `matchDevice`
+ * / `matchProfileName`.
  */
 
 export type CpuVendor = "AMD" | "Intel" | "Unknown";
@@ -15,7 +16,14 @@ export interface DeviceInfo {
   /** Friendly display name */
   name: string;
   minTdp: number;
+  /** Max TDP when plugged into AC. */
   maxTdp: number;
+  /**
+   * Max TDP when running on battery. A notch below `maxTdp` for high-power
+   * devices to protect runtime/thermals; equal to `maxTdp` when there's no
+   * meaningful gap (e.g. Steam Deck). Invariant: `batteryMaxTdp <= maxTdp`.
+   */
+  batteryMaxTdp: number;
   /** Per-profile watt defaults */
   profiles: { Silent: number; Balanced: number; Performance: number };
 }
@@ -27,6 +35,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "Steam Deck OLED",
     minTdp: 3,
     maxTdp: 15,
+    batteryMaxTdp: 15,
     profiles: { Silent: 5, Balanced: 10, Performance: 15 },
   },
   {
@@ -34,6 +43,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "Steam Deck LCD",
     minTdp: 3,
     maxTdp: 15,
+    batteryMaxTdp: 15,
     profiles: { Silent: 5, Balanced: 10, Performance: 15 },
   },
   // ASUS ROG Ally
@@ -42,6 +52,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "ROG Ally X",
     minTdp: 5,
     maxTdp: 30,
+    batteryMaxTdp: 25,
     profiles: { Silent: 10, Balanced: 17, Performance: 30 },
   },
   {
@@ -49,6 +60,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "ROG Ally",
     minTdp: 5,
     maxTdp: 25,
+    batteryMaxTdp: 20,
     profiles: { Silent: 10, Balanced: 15, Performance: 25 },
   },
   // Lenovo Legion Go
@@ -57,6 +69,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "Legion Go S (Z2 Go)",
     minTdp: 5,
     maxTdp: 25,
+    batteryMaxTdp: 20,
     profiles: { Silent: 8, Balanced: 15, Performance: 25 },
   },
   {
@@ -64,6 +77,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "Legion Go S (Z1 Extreme)",
     minTdp: 5,
     maxTdp: 30,
+    batteryMaxTdp: 25,
     profiles: { Silent: 8, Balanced: 15, Performance: 30 },
   },
   {
@@ -71,6 +85,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "Legion Go",
     minTdp: 5,
     maxTdp: 30,
+    batteryMaxTdp: 25,
     profiles: { Silent: 8, Balanced: 15, Performance: 30 },
   },
   // OneXPlayer
@@ -79,6 +94,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "OneXPlayer APEX",
     minTdp: 5,
     maxTdp: 80,
+    batteryMaxTdp: 55,
     profiles: { Silent: 15, Balanced: 30, Performance: 50 },
   },
   {
@@ -86,6 +102,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "OneXPlayer Mini Pro",
     minTdp: 5,
     maxTdp: 30,
+    batteryMaxTdp: 25,
     profiles: { Silent: 8, Balanced: 15, Performance: 30 },
   },
   {
@@ -93,6 +110,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "OneXPlayer",
     minTdp: 5,
     maxTdp: 35,
+    batteryMaxTdp: 28,
     profiles: { Silent: 10, Balanced: 18, Performance: 35 },
   },
   // GPD
@@ -101,6 +119,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "GPD Win Max 2",
     minTdp: 5,
     maxTdp: 28,
+    batteryMaxTdp: 24,
     profiles: { Silent: 8, Balanced: 15, Performance: 28 },
   },
   {
@@ -108,6 +127,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "GPD Win 4",
     minTdp: 5,
     maxTdp: 28,
+    batteryMaxTdp: 24,
     profiles: { Silent: 8, Balanced: 15, Performance: 28 },
   },
   {
@@ -115,6 +135,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "GPD Device",
     minTdp: 5,
     maxTdp: 28,
+    batteryMaxTdp: 24,
     profiles: { Silent: 8, Balanced: 15, Performance: 28 },
   },
   // AYANEO
@@ -123,6 +144,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "AYANEO",
     minTdp: 5,
     maxTdp: 33,
+    batteryMaxTdp: 28,
     profiles: { Silent: 8, Balanced: 15, Performance: 33 },
   },
   // AOKZOE
@@ -131,6 +153,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "AOKZOE",
     minTdp: 5,
     maxTdp: 33,
+    batteryMaxTdp: 28,
     profiles: { Silent: 8, Balanced: 18, Performance: 33 },
   },
   // Minisforum
@@ -139,6 +162,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "Minisforum V3",
     minTdp: 5,
     maxTdp: 30,
+    batteryMaxTdp: 25,
     profiles: { Silent: 10, Balanced: 18, Performance: 30 },
   },
   {
@@ -146,6 +170,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "Minisforum",
     minTdp: 5,
     maxTdp: 35,
+    batteryMaxTdp: 28,
     profiles: { Silent: 10, Balanced: 18, Performance: 35 },
   },
   // MSI Claw
@@ -154,6 +179,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "MSI Claw 8 AI+",
     minTdp: 5,
     maxTdp: 40,
+    batteryMaxTdp: 33,
     profiles: { Silent: 10, Balanced: 20, Performance: 40 },
   },
   {
@@ -161,6 +187,7 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     name: "MSI Claw",
     minTdp: 5,
     maxTdp: 30,
+    batteryMaxTdp: 25,
     profiles: { Silent: 8, Balanced: 17, Performance: 30 },
   },
 ];
@@ -170,6 +197,7 @@ const DEFAULT_AMD: Omit<DeviceInfo, "match"> = {
   name: "Generic AMD",
   minTdp: 5,
   maxTdp: 35,
+  batteryMaxTdp: 28,
   profiles: { Silent: 10, Balanced: 18, Performance: 35 },
 };
 
@@ -177,6 +205,7 @@ const DEFAULT_INTEL: Omit<DeviceInfo, "match"> = {
   name: "Generic Intel",
   minTdp: 3,
   maxTdp: 40,
+  batteryMaxTdp: 30,
   profiles: { Silent: 8, Balanced: 15, Performance: 30 },
 };
 
@@ -184,6 +213,7 @@ const DEFAULT_UNKNOWN: Omit<DeviceInfo, "match"> = {
   name: "Unknown",
   minTdp: 5,
   maxTdp: 35,
+  batteryMaxTdp: 28,
   profiles: { Silent: 10, Balanced: 18, Performance: 35 },
 };
 
@@ -198,7 +228,10 @@ export const PLATFORM_PROFILE_TDP_MAP: Record<string, number> = {
 export interface DeviceMatch {
   name: string;
   minTdp: number;
+  /** Max TDP when plugged into AC. */
   maxTdp: number;
+  /** Max TDP when on battery (<= maxTdp). */
+  batteryMaxTdp: number;
   profiles: Record<string, number>;
 }
 
@@ -217,6 +250,7 @@ export function matchDevice(
         name: device.name,
         minTdp: device.minTdp,
         maxTdp: device.maxTdp,
+        batteryMaxTdp: device.batteryMaxTdp,
         profiles: { ...device.profiles },
       };
     }
@@ -231,6 +265,7 @@ export function matchDevice(
     name: fallback.name,
     minTdp: fallback.minTdp,
     maxTdp: fallback.maxTdp,
+    batteryMaxTdp: fallback.batteryMaxTdp,
     profiles: { ...fallback.profiles },
   };
 }

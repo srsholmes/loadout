@@ -100,16 +100,27 @@ mkdir -p "$NM_DST/@loadout"
 # packages/ui depending on fuzzysort), so we strip those after copy
 # and rely on the shared root instead.
 
-# Workspace packages used by plugins. Add new packages here when a
-# plugin starts importing them.
-for pkg in types exec steam-paths ui plugin-storage vdf external-cache per-game-profiles steam-cdp steam-cef-badges file-picker steam-shortcut sgdb-art deck-hid; do
-    if [ -d "$PROJECT_ROOT/packages/$pkg" ]; then
-        cp -RL "$PROJECT_ROOT/packages/$pkg" "$NM_DST/@loadout/$pkg"
-        # Drop the workspace's own node_modules — its entries are
-        # `.bun/`-store symlinks that resolve in the source repo but
-        # not here. Transitive deps are hoisted to $NM_DST below.
-        rm -rf "$NM_DST/@loadout/$pkg/node_modules"
-    fi
+# Workspace packages used by plugins — AUTO-DISCOVERED from packages/* so a
+# new package never needs hand-adding here. (This used to be a hardcoded list
+# that silently broke plugin bundling every time a plugin started importing a
+# fresh @loadout/* package — e.g. @loadout/devices.) We key off each
+# package.json's real `name` so the staged path matches the import specifier
+# even if the folder name ever diverges; non-@loadout dirs are skipped.
+for pkg_dir in "$PROJECT_ROOT"/packages/*/; do
+    pkg_dir="${pkg_dir%/}"
+    [ -f "$pkg_dir/package.json" ] || continue
+    name=$(bun -e "process.stdout.write(require('$pkg_dir/package.json').name||'')" 2>/dev/null)
+    case "$name" in
+        @loadout/*) ;;
+        *) continue ;;
+    esac
+    dst="$NM_DST/$name"
+    mkdir -p "$(dirname "$dst")"
+    cp -RL "$pkg_dir" "$dst"
+    # Drop the workspace's own node_modules — its entries are `.bun/`-store
+    # symlinks that resolve in the source repo but not here. Transitive deps
+    # are hoisted to $NM_DST below.
+    rm -rf "$dst/node_modules"
 done
 
 # react/react-dom/scheduler for the runtime vendor bundle build;
@@ -148,8 +159,11 @@ for plugin_dir in "$PLUGINS_DST"/*/; do
     hoist_deps_from "$plugin_dir/package.json"
 done
 
-for pkg in types exec steam-paths ui plugin-storage; do
-    hoist_deps_from "$PROJECT_ROOT/packages/$pkg/package.json"
+# Hoist transitive deps for EVERY workspace package (not a hand-picked
+# subset) — any package staged above may declare non-@loadout deps that its
+# stripped node_modules can no longer resolve.
+for pkg_dir in "$PROJECT_ROOT"/packages/*/; do
+    hoist_deps_from "${pkg_dir%/}/package.json"
 done
 
 PLUGIN_COUNT=$(find "$PLUGINS_DST" -mindepth 1 -maxdepth 1 -type d | wc -l)

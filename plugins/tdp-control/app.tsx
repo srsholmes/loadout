@@ -112,6 +112,19 @@ function TdpControl() {
     },
   });
 
+  // AC power changes shift the TDP ceiling (lower on battery). Update the
+  // slider's max bound; the accompanying tdpChanged event (emitted when the
+  // backend re-applies the clamped/restored value) keeps the value in sync.
+  useEvent({
+    event: "acPowerChanged",
+    handler: (data) => {
+      const { maxWatts } = data as { online: boolean; maxWatts: number };
+      if (typeof maxWatts === "number") {
+        setInfo((prev) => (prev ? { ...prev, maxWatts } : prev));
+      }
+    },
+  });
+
   // Fetch TDP info on mount
   useEffect(() => {
     call("getTdpInfo").then((result) => {
@@ -662,6 +675,14 @@ function TdpHomeWidget() {
       }
       setActiveProfile(d.activeProfile);
       if (d.activeProfile) setUserCustom(false);
+    }, []),
+  });
+
+  useEvent({
+    event: "acPowerChanged",
+    handler: useCallback((data: unknown) => {
+      const { maxWatts } = data as { online: boolean; maxWatts: number };
+      if (typeof maxWatts === "number") setMaxW(maxWatts);
     }, []),
   });
 

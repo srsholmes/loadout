@@ -1,7 +1,7 @@
 import { access, readFile, writeFile, rm } from "node:fs/promises";
 import type { PluginBackend, EmitPayload, PluginLogger, CallPlugin } from "@loadout/types";
 import { runFull } from "@loadout/exec";
-import { isApex } from "./lib/dmi";
+import { isApex } from "@loadout/devices";
 import {
   getStatus as computeStatus,
   recover as runRecover,
