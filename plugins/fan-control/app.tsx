@@ -1,8 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { FaFan, FaTemperatureHalf } from "react-icons/fa6";
+import {
+  FaFan,
+  FaTemperatureHalf,
+  FaPlus,
+  FaTrashCan,
+  FaArrowRotateLeft,
+  FaChevronLeft,
+  FaChevronRight,
+} from "react-icons/fa6";
 import {
   Alert,
   Button,
+  IconButton,
   PluginHeader,
   Slider,
   Spinner,
@@ -13,6 +22,15 @@ import {
   useCurrentGame,
   SegmentedItem,
 } from "@loadout/ui";
+import type { FanCurvePoint } from "./lib/fan-curves";
+import {
+  CURVE_MAX_POINTS,
+  CURVE_MIN_POINTS,
+  CURVE_TEMP_MAX,
+  CURVE_TEMP_MIN,
+  DEFAULT_CUSTOM_CURVE,
+} from "./lib/custom-curve";
+import { FanCurveGraph } from "./components/FanCurveGraph";
 
 export const icon = FaFan;
 
@@ -42,6 +60,7 @@ interface FanInfo {
   fanCount: number;
   available: boolean;
   activePreset: string | null;
+  customCurveActive: boolean;
   usingEctool: boolean;
   warning: string | null;
   safetyEngaged: boolean;
@@ -142,6 +161,11 @@ function FanControl() {
   const [fanInfo, setFanInfo] = useState<FanInfo | null>(null);
   const [sliderValue, setSliderValue] = useState(50);
   const [activePreset, setActivePreset] = useState<Preset | null>(null);
+  const [customActive, setCustomActive] = useState(false);
+  const [customPoints, setCustomPoints] = useState<FanCurvePoint[]>(() =>
+    DEFAULT_CUSTOM_CURVE.map((p) => ({ ...p })),
+  );
+  const [selectedPoint, setSelectedPoint] = useState(0);
   const [loading, setLoading] = useState(true);
   const {
     perGameEnabled,
@@ -156,14 +180,22 @@ function FanControl() {
     handler: (data) => {
       const info = data as FanInfo;
       setFanInfo(info);
+      // Each tick only asserts a positive selection (preset XOR custom),
+      // never clears to "none" — the click handlers own clearing, so a
+      // stale 2 s-cadence event can't wipe an optimistic selection.
       if (info.activePreset) {
         setActivePreset(info.activePreset as Preset);
+        setCustomActive(false);
+      }
+      if (info.customCurveActive) {
+        setCustomActive(true);
+        setActivePreset(null);
       }
       setLoading(false);
     },
   });
 
-  // Fetch initial fan info on mount
+  // Fetch initial fan info + the saved custom curve on mount.
   useEffect(() => {
     call("getFanInfo").then((info) => {
       const data = info as FanInfo;
@@ -171,8 +203,18 @@ function FanControl() {
       if (data.fans.length > 0) {
         setSliderValue(data.fans[0].percent);
       }
+      setActivePreset(data.activePreset ? (data.activePreset as Preset) : null);
+      setCustomActive(Boolean(data.customCurveActive));
       setLoading(false);
     });
+    call("getCustomCurve")
+      .then((pts) => {
+        const curve = pts as FanCurvePoint[];
+        if (Array.isArray(curve) && curve.length >= CURVE_MIN_POINTS) {
+          setCustomPoints(curve);
+        }
+      })
+      .catch(() => {});
   }, [call]);
 
   const handleSetMode = useCallback(
@@ -180,6 +222,7 @@ function FanControl() {
       await call("setFanMode", mode);
       if (mode === "auto") {
         setActivePreset(null);
+        setCustomActive(false);
         persistGameProfile("auto");
       } else {
         persistGameProfile("manual", sliderValue);
@@ -192,6 +235,7 @@ function FanControl() {
     async (percent: number) => {
       setSliderValue(percent);
       setActivePreset(null);
+      setCustomActive(false);
       await call("setFanSpeed", percent);
       persistGameProfile("manual", percent);
     },
@@ -201,11 +245,101 @@ function FanControl() {
   const handleApplyPreset = useCallback(
     async (preset: Preset) => {
       setActivePreset(preset);
+      setCustomActive(false);
       await call("applyPreset", preset);
       persistGameProfile("manual", sliderValue);
     },
     [call, persistGameProfile, sliderValue],
   );
+
+  const handleSelectCustom = useCallback(async () => {
+    setActivePreset(null);
+    setCustomActive(true);
+    await call("applyCustomCurve").catch(() => {});
+    persistGameProfile("manual", sliderValue);
+  }, [call, persistGameProfile, sliderValue]);
+
+  // Persist edited points to the backend. setCustomCurve sanitises and
+  // returns the canonical curve, which we adopt so the UI never drifts
+  // from what's stored / running (e.g. a dropped duplicate point).
+  const commitCustomPoints = useCallback(
+    async (pts: FanCurvePoint[]) => {
+      setCustomPoints(pts);
+      const res = (await call("setCustomCurve", pts).catch(() => null)) as
+        | { curve?: FanCurvePoint[] }
+        | null;
+      if (res?.curve && Array.isArray(res.curve)) {
+        setCustomPoints(res.curve);
+        setSelectedPoint((i) => Math.min(i, res.curve!.length - 1));
+      }
+    },
+    [call],
+  );
+
+  // Live edit of one point's temp/percent. Temp is clamped between its
+  // neighbours (1 °C gap) so the curve order never breaks mid-edit.
+  const updatePoint = useCallback(
+    (index: number, next: Partial<FanCurvePoint>, commit: boolean) => {
+      setCustomPoints((prev) => {
+        const pts = prev.map((p) => ({ ...p }));
+        const point = pts[index];
+        if (!point) return prev;
+        if (typeof next.percent === "number") {
+          point.percent = Math.max(0, Math.min(100, Math.round(next.percent)));
+        }
+        if (typeof next.tempC === "number") {
+          const minT = index > 0 ? pts[index - 1].tempC + 1 : CURVE_TEMP_MIN;
+          const maxT =
+            index < pts.length - 1 ? pts[index + 1].tempC - 1 : CURVE_TEMP_MAX;
+          point.tempC = Math.max(minT, Math.min(maxT, Math.round(next.tempC)));
+        }
+        if (commit) void commitCustomPoints(pts);
+        return pts;
+      });
+    },
+    [commitCustomPoints],
+  );
+
+  const handleAddPoint = useCallback(() => {
+    setCustomPoints((prev) => {
+      if (prev.length >= CURVE_MAX_POINTS) return prev;
+      // Insert into the widest temperature gap so the new node has room.
+      let gapIdx = 0;
+      let gapSize = -1;
+      for (let i = 0; i < prev.length - 1; i++) {
+        const size = prev[i + 1].tempC - prev[i].tempC;
+        if (size > gapSize) {
+          gapSize = size;
+          gapIdx = i;
+        }
+      }
+      const lo = prev[gapIdx];
+      const hi = prev[gapIdx + 1];
+      const mid: FanCurvePoint = {
+        tempC: Math.round((lo.tempC + hi.tempC) / 2),
+        percent: Math.round((lo.percent + hi.percent) / 2),
+      };
+      const pts = [...prev.slice(0, gapIdx + 1), mid, ...prev.slice(gapIdx + 1)];
+      setSelectedPoint(gapIdx + 1);
+      void commitCustomPoints(pts);
+      return pts;
+    });
+  }, [commitCustomPoints]);
+
+  const handleRemovePoint = useCallback(() => {
+    setCustomPoints((prev) => {
+      if (prev.length <= CURVE_MIN_POINTS) return prev;
+      const pts = prev.filter((_, i) => i !== selectedPoint);
+      setSelectedPoint((i) => Math.min(i, pts.length - 1));
+      void commitCustomPoints(pts);
+      return pts;
+    });
+  }, [commitCustomPoints, selectedPoint]);
+
+  const handleResetCurve = useCallback(() => {
+    setSelectedPoint(0);
+    void commitCustomPoints(DEFAULT_CUSTOM_CURVE.map((p) => ({ ...p })));
+  }, [commitCustomPoints]);
 
   const handleTogglePerGame = useCallback(
     async (next: boolean) => {
@@ -371,7 +505,7 @@ function FanControl() {
                 {PRESETS.map((preset) => (
                   <SegmentedItem
                     key={preset.key}
-                    active={activePreset === preset.key}
+                    active={!customActive && activePreset === preset.key}
                     onSelect={() => handleApplyPreset(preset.key)}
                     style={{ flex: 1 }}
                   >
@@ -381,8 +515,172 @@ function FanControl() {
                     </span>
                   </SegmentedItem>
                 ))}
+                <SegmentedItem
+                  active={customActive}
+                  onSelect={handleSelectCustom}
+                  style={{ flex: 1 }}
+                >
+                  <span className="flex flex-col items-center leading-tight">
+                    <span className="text-[13px] font-semibold">Custom</span>
+                    <span className="text-[10.5px] opacity-60 mt-0.5">Your own curve</span>
+                  </span>
+                </SegmentedItem>
               </div>
             </div>
+
+            {/* CUSTOM CURVE EDITOR — graph + per-point sliders. Pointer
+                users drag nodes on the graph; gamepad users select a node
+                and edit it with the two sliders below. */}
+            {customActive && (
+              <div className="subsection">
+                {(() => {
+                  const sel = customPoints[selectedPoint] ?? customPoints[0];
+                  const minTemp =
+                    selectedPoint > 0
+                      ? customPoints[selectedPoint - 1].tempC + 1
+                      : CURVE_TEMP_MIN;
+                  const maxTemp =
+                    selectedPoint < customPoints.length - 1
+                      ? customPoints[selectedPoint + 1].tempC - 1
+                      : CURVE_TEMP_MAX;
+                  return (
+                    <>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="subsection-label mb-0">Custom Curve</div>
+                        <Button
+                          size="sm"
+                          variant="neutral"
+                          onClick={handleResetCurve}
+                        >
+                          <span className="inline-flex items-center gap-1.5">
+                            <FaArrowRotateLeft className="w-3 h-3" /> Reset
+                          </span>
+                        </Button>
+                      </div>
+
+                      <div className="bg-base-300/40 rounded-xl p-3 mb-3.5">
+                        <FanCurveGraph
+                          points={customPoints}
+                          selectedIndex={selectedPoint}
+                          currentTempC={primaryTemp}
+                          onSelectPoint={setSelectedPoint}
+                          onChangePoint={(i, p) =>
+                            updatePoint(i, p, false)
+                          }
+                          onCommit={() => commitCustomPoints(customPoints)}
+                        />
+                      </div>
+
+                      {/* Point selector */}
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <IconButton
+                            ariaLabel="Previous point"
+                            title="Previous point"
+                            onClick={() =>
+                              setSelectedPoint((i) => Math.max(0, i - 1))
+                            }
+                            disabled={selectedPoint <= 0}
+                          >
+                            <FaChevronLeft className="w-3 h-3" />
+                          </IconButton>
+                          <span className="mono text-[12px] text-base-content/70 min-w-[64px] text-center">
+                            Point {selectedPoint + 1} / {customPoints.length}
+                          </span>
+                          <IconButton
+                            ariaLabel="Next point"
+                            title="Next point"
+                            onClick={() =>
+                              setSelectedPoint((i) =>
+                                Math.min(customPoints.length - 1, i + 1),
+                              )
+                            }
+                            disabled={selectedPoint >= customPoints.length - 1}
+                          >
+                            <FaChevronRight className="w-3 h-3" />
+                          </IconButton>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <IconButton
+                            ariaLabel="Add point"
+                            title="Add point"
+                            variant="accent"
+                            onClick={handleAddPoint}
+                            disabled={customPoints.length >= CURVE_MAX_POINTS}
+                          >
+                            <FaPlus className="w-3 h-3" />
+                          </IconButton>
+                          <IconButton
+                            ariaLabel="Remove point"
+                            title="Remove point"
+                            variant="danger"
+                            onClick={handleRemovePoint}
+                            disabled={customPoints.length <= CURVE_MIN_POINTS}
+                          >
+                            <FaTrashCan className="w-3 h-3" />
+                          </IconButton>
+                        </div>
+                      </div>
+
+                      {/* Selected-point editing */}
+                      <div className="mb-3">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-[12px] text-base-content/70">
+                            Temperature
+                          </span>
+                          <span className="mono text-[12px] font-semibold">
+                            {sel.tempC}°C
+                          </span>
+                        </div>
+                        <Slider
+                          value={sel.tempC}
+                          min={minTemp}
+                          max={maxTemp}
+                          step={1}
+                          onChange={(val) =>
+                            updatePoint(selectedPoint, { tempC: val }, false)
+                          }
+                          onCommit={(val) =>
+                            updatePoint(selectedPoint, { tempC: val }, true)
+                          }
+                        />
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-[12px] text-base-content/70">
+                            Fan speed
+                          </span>
+                          <span
+                            className="mono text-[12px] font-semibold"
+                            style={{ color: "var(--accent)" }}
+                          >
+                            {sel.percent}%
+                          </span>
+                        </div>
+                        <Slider
+                          value={sel.percent}
+                          min={0}
+                          max={100}
+                          step={1}
+                          onChange={(val) =>
+                            updatePoint(selectedPoint, { percent: val }, false)
+                          }
+                          onCommit={(val) =>
+                            updatePoint(selectedPoint, { percent: val }, true)
+                          }
+                        />
+                      </div>
+
+                      <div className="subsection-desc mt-2.5">
+                        Drag points on the graph, or pick a point and use the
+                        sliders. The dashed line marks the current temperature.
+                        The safety floor still overrides the curve above 75°C.
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
         </div>
         )}
 

@@ -22,6 +22,8 @@ import {
   type FanCurvePoint,
   type PresetName,
 } from "./lib/fan-curves";
+import { DEFAULT_CUSTOM_CURVE, sanitiseCurve } from "./lib/custom-curve";
+import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
 import {
   classifyTempZone,
   cpuChipPriority,
@@ -130,6 +132,8 @@ interface FanInfoResult {
   available: boolean;
   /** Active preset name, if any */
   activePreset: PresetName | null;
+  /** Whether the user's custom fan curve is the active control mode. */
+  customCurveActive: boolean;
   /** Whether ectool fallback is being used */
   usingEctool: boolean;
   /** Safety warning message, if any */
@@ -195,6 +199,13 @@ export default class FanControlBackend implements PluginBackend {
   private interval?: Timer;
   private curveInterval?: Timer;
   private activePreset: PresetName | null = null;
+  // The user's editable fan curve (graph editor). Loaded from plugin
+  // storage in onLoad; seeded from DEFAULT_CUSTOM_CURVE until then.
+  private customCurve: FanCurvePoint[] = DEFAULT_CUSTOM_CURVE.map((p) => ({ ...p }));
+  // True while the custom curve is the active control mode — mutually
+  // exclusive with activePreset (both drive the same curve loop, only one
+  // at a time). Surfaced to the UI so the editor can reflect/restore state.
+  private customCurveActive = false;
   private useEctool = false;
   private originalModes: Map<string, string> = new Map();
   private hardwareScanner?: RetryScanner;
@@ -269,6 +280,18 @@ export default class FanControlBackend implements PluginBackend {
       await this.profileEngine.load();
     } catch (err) {
       console.error("[fan-control] Failed to load per-game profiles:", err);
+    }
+
+    // Load the user's saved custom curve so the graph editor and any
+    // applyCustomCurve call have it ready. Sanitised on read — storage is
+    // user-editable JSON, so we never trust the shape.
+    try {
+      const stored = await readPluginStorage<{ customCurve?: unknown }>(PLUGIN_ID);
+      if (stored.customCurve !== undefined) {
+        this.customCurve = sanitiseCurve(stored.customCurve);
+      }
+    } catch (err) {
+      console.error("[fan-control] Failed to load custom curve:", err);
     }
 
     // Kernel modules like oxpec can be loaded after user services start.
@@ -407,6 +430,7 @@ export default class FanControlBackend implements PluginBackend {
         fanCount: 0,
         available: false,
         activePreset: this.activePreset,
+        customCurveActive: this.customCurveActive,
         usingEctool: false,
         warning: null,
         safetyEngaged: false,
@@ -446,6 +470,7 @@ export default class FanControlBackend implements PluginBackend {
         fanCount: 1,
         available: true,
         activePreset: this.activePreset,
+        customCurveActive: this.customCurveActive,
         usingEctool: true,
         warning,
         safetyEngaged: this.safetyEngaged,
@@ -492,6 +517,7 @@ export default class FanControlBackend implements PluginBackend {
       fanCount: device.fans.length,
       available: true,
       activePreset: this.activePreset,
+      customCurveActive: this.customCurveActive,
       usingEctool: false,
       warning,
       safetyEngaged: this.safetyEngaged,
@@ -527,6 +553,7 @@ export default class FanControlBackend implements PluginBackend {
     // Stop any active curve loop
     this.stopCurveLoop();
     this.activePreset = null;
+    this.customCurveActive = false;
     // Setting a specific speed implies manual mode.
     this.manualModeRequested = "manual";
     this.lastUserSpeedPwm = pwmValue;
@@ -592,6 +619,7 @@ export default class FanControlBackend implements PluginBackend {
     if (mode === "auto") {
       this.stopCurveLoop();
       this.activePreset = null;
+      this.customCurveActive = false;
     }
     this.manualModeRequested = mode;
 
@@ -647,6 +675,7 @@ export default class FanControlBackend implements PluginBackend {
     }
 
     this.activePreset = name;
+    this.customCurveActive = false;
     console.log(`[fan-control] Applying preset: ${name}`);
 
     // Set to manual mode first
@@ -654,6 +683,66 @@ export default class FanControlBackend implements PluginBackend {
     if (!modeResult.success) return modeResult;
 
     // Apply curve immediately, then start a loop
+    await this.applyCurve(curve);
+    this.startCurveLoop(curve);
+
+    return { success: true };
+  }
+
+  // -----------------------------------------------------------------------
+  // Custom fan curve (user-editable, graph editor)
+  // -----------------------------------------------------------------------
+
+  /** Returns the user's saved custom fan curve (always a valid curve). */
+  async getCustomCurve(): Promise<FanCurvePoint[]> {
+    return this.customCurve.map((p) => ({ ...p }));
+  }
+
+  /**
+   * Persists a new custom curve. Input is sanitised (untrusted UI/storage
+   * shape) before it's stored, so the returned curve is the canonical one
+   * the caller should render. If the custom curve is the active control
+   * mode, the curve loop is restarted so edits take effect immediately.
+   */
+  async setCustomCurve(
+    points: unknown,
+  ): Promise<{ success: boolean; error?: string; curve: FanCurvePoint[] }> {
+    const curve = sanitiseCurve(points);
+    this.customCurve = curve;
+
+    try {
+      // Read-modify-write so we don't clobber per-game profiles / the
+      // enabled flag that share this plugin's storage file.
+      const existing = await readPluginStorage<Record<string, unknown>>(PLUGIN_ID);
+      await writePluginStorage(PLUGIN_ID, { ...existing, customCurve: curve });
+    } catch (err) {
+      console.error("[fan-control] Failed to persist custom curve:", err);
+    }
+
+    if (this.customCurveActive) {
+      await this.applyCurve(curve);
+      this.startCurveLoop(curve);
+    }
+
+    return { success: true, curve: curve.map((p) => ({ ...p })) };
+  }
+
+  /**
+   * Makes the saved custom curve the active control mode. Same shape as
+   * applyPreset — switch to manual, apply once, then run the curve loop.
+   */
+  async applyCustomCurve(): Promise<{ success: boolean; error?: string }> {
+    const curve = this.customCurve;
+    this.activePreset = null;
+    this.customCurveActive = true;
+    console.log("[fan-control] Applying custom fan curve");
+
+    const modeResult = await this.setFanModeInternal("manual");
+    if (!modeResult.success) {
+      this.customCurveActive = false;
+      return modeResult;
+    }
+
     await this.applyCurve(curve);
     this.startCurveLoop(curve);
 

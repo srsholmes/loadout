@@ -3,7 +3,7 @@ import { describe, it, expect, mock, beforeEach } from "bun:test";
 // module for the partial-mock spread. (bun's mock.module is not hoisted,
 // unlike vitest's vi.mock — static imports evaluate first.)
 import * as actualUi from "@loadout/ui";
-import { waitFor } from "../../test/render";
+import { waitFor, fireEvent } from "../../test/render";
 
 const callMock = mock((_method: string) => Promise.resolve(null));
 const eventHandlers = new Map<string, (data: unknown) => void>();
@@ -45,9 +45,17 @@ const mockFanInfo = {
   fanCount: 1,
   available: true,
   activePreset: null,
+  customCurveActive: false,
   usingEctool: false,
   warning: null,
 };
+
+const mockCustomCurve = [
+  { tempC: 40, percent: 20 },
+  { tempC: 55, percent: 45 },
+  { tempC: 70, percent: 70 },
+  { tempC: 85, percent: 100 },
+];
 
 function createContainer(): HTMLElement {
   const container = document.createElement("div");
@@ -157,6 +165,66 @@ describe("fan-control plugin", () => {
     mount(container);
     await waitFor(() => {
       expect(container.textContent).toContain("No fan hardware detected");
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Custom fan curve editor
+  // ---------------------------------------------------------------------------
+
+  it("fetches the saved custom curve on mount", async () => {
+    const container = createContainer();
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("getCustomCurve");
+    });
+  });
+
+  it("offers a Custom preset option in manual mode", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getFanInfo")
+        return Promise.resolve({ ...mockFanInfo, mode: "manual" });
+      if (method === "getCustomCurve") return Promise.resolve(mockCustomCurve);
+      return Promise.resolve(null);
+    });
+    const container = createContainer();
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => {
+      const texts = Array.from(container.querySelectorAll("button")).map(
+        (b) => b.textContent,
+      );
+      expect(texts.some((t) => t?.includes("Custom"))).toBe(true);
+    });
+  });
+
+  it("applies the custom curve and reveals the graph editor when Custom is selected", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getFanInfo")
+        return Promise.resolve({ ...mockFanInfo, mode: "manual" });
+      if (method === "getCustomCurve") return Promise.resolve(mockCustomCurve);
+      return Promise.resolve(null);
+    });
+    const container = createContainer();
+    const { mount } = await import("./app");
+    mount(container);
+
+    const customButton = await waitFor(() => {
+      const btn = Array.from(container.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Custom"),
+      );
+      if (!btn) throw new Error("Custom button not yet rendered");
+      return btn;
+    });
+
+    fireEvent.click(customButton);
+
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("applyCustomCurve");
+      // The graph editor (an SVG) appears once Custom is active.
+      expect(container.querySelector("svg[aria-label='Fan curve graph']")).not.toBeNull();
+      expect(container.textContent).toContain("Point 1 / 4");
     });
   });
 });
