@@ -939,6 +939,90 @@ export class GamescopeAtoms {
   }
 
   /**
+   * Desktop-mode (no gamescope) front-and-focus.
+   *
+   * In gaming mode gamescope reads STEAM_OVERLAY=1 and composites us above
+   * the game. There's no gamescope on the KDE/Plasma desktop, so those
+   * atoms are a no-op and our plain CEF window stays *behind* a fullscreen
+   * Steam Big Picture window — KWin keeps the active fullscreen window in
+   * its elevated stacking layer and we have no always-on-top hint.
+   *
+   * `xdotool windowactivate` is the reliable lever: activating our window
+   * makes BPM no longer the active fullscreen window, so KWin demotes it
+   * out of the fullscreen layer and our overlay lands on top — and we get
+   * input focus in the same call. We additionally set _NET_WM_STATE_ABOVE
+   * (best-effort, via xprop since wmctrl isn't guaranteed present) to pin
+   * us above once activated.
+   *
+   * Caller gates this on desktop mode; it's a no-op under gamescope.
+   */
+  async raiseAboveDesktop(): Promise<void> {
+    if (!this.windowId) await this.findWindow();
+    if (!this.windowId) return;
+    if (!(await commandExists("xdotool"))) {
+      console.warn("[gamescope-atoms] xdotool not found — can't raise overlay");
+      return;
+    }
+    try {
+      await run([
+        "env",
+        `DISPLAY=${this.display}`,
+        "xdotool",
+        "windowactivate",
+        this.windowId,
+      ]);
+    } catch (err) {
+      console.warn("[gamescope-atoms] raiseAboveDesktop windowactivate:", err);
+    }
+    // Best-effort keep-above pin. xprop can set the property directly; KWin
+    // honours _NET_WM_STATE_ABOVE for the active window we just raised.
+    try {
+      await run([
+        "env",
+        `DISPLAY=${this.display}`,
+        "xprop",
+        "-id",
+        this.windowId,
+        "-f",
+        "_NET_WM_STATE",
+        "32a",
+        "-set",
+        "_NET_WM_STATE",
+        "_NET_WM_STATE_ABOVE",
+      ]);
+    } catch (err) {
+      console.warn("[gamescope-atoms] raiseAboveDesktop _NET_WM_STATE:", err);
+    }
+  }
+
+  /**
+   * Clear the desktop keep-above pin set by `raiseAboveDesktop`. Best-effort
+   * — `minimize()` already hides the window, but dropping _NET_WM_STATE keeps
+   * the window from re-appearing above everything if it's later un-minimized
+   * by the WM rather than by our show() path. No-op under gamescope.
+   */
+  async lowerFromDesktop(): Promise<void> {
+    if (!this.windowId) return;
+    try {
+      await run([
+        "env",
+        `DISPLAY=${this.display}`,
+        "xprop",
+        "-id",
+        this.windowId,
+        "-f",
+        "_NET_WM_STATE",
+        "32a",
+        "-set",
+        "_NET_WM_STATE",
+        "",
+      ]);
+    } catch (err) {
+      console.warn("[gamescope-atoms] lowerFromDesktop _NET_WM_STATE:", err);
+    }
+  }
+
+  /**
    * Snapshot the current root STEAM_TOUCH_CLICK_MODE and overwrite it with
    * TOUCH_MODE_OVERLAY so Gamescope routes touch straight to our window
    * instead of synthesizing a fake mouse cursor. Writes unconditionally —

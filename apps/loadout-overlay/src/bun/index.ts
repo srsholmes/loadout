@@ -468,6 +468,12 @@ function toggleOverlay(source: string) {
     stopFreezeWatchdog();
     overlay.minimize();
     atoms.hide().catch((e) => console.warn("[overlay] atoms.hide:", e));
+    // Drop the desktop keep-above pin set on open (no-op under gamescope).
+    if (!gamescopeMode) {
+      atoms
+        .lowerFromDesktop()
+        .catch((e) => console.warn("[overlay] atoms.lowerFromDesktop:", e));
+    }
     intercept.current?.release();
     ipIntercept.current?.release();
     // Always SIGCONT Steam on close, even when suspendSteamEnabled is
@@ -514,6 +520,15 @@ function toggleOverlay(source: string) {
     ipIntercept.current?.grab();
     overlay.show();
     atoms.show().catch((e) => console.warn("[overlay] atoms.show:", e));
+    // Desktop mode has no gamescope to composite us above Big Picture, so
+    // the atoms above are a no-op there — bring the window to the front and
+    // focus it via the WM instead. Gated to desktop: under gamescope the
+    // atoms already handle stacking.
+    if (!gamescopeMode) {
+      atoms
+        .raiseAboveDesktop()
+        .catch((e) => console.warn("[overlay] atoms.raiseAboveDesktop:", e));
+    }
     state.isOpen = true;
     broadcastOverlayVisibility();
     trace(`[toggle] ${source} → SHOW`);

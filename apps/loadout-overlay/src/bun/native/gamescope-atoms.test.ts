@@ -765,4 +765,96 @@ HDMI-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis
       expect(writes[0].value).toBe("4");
     });
   });
+
+  describe("raiseAboveDesktop / lowerFromDesktop", () => {
+    // Desktop-mode front-and-focus: there's no gamescope to composite us, so
+    // we lean on the WM. windowactivate raises + focuses; _NET_WM_STATE_ABOVE
+    // pins us above the (now non-active) fullscreen Big Picture window.
+
+    /** Find the `xdotool windowactivate <id>` call, if any. */
+    function activateCall(): string[] | null {
+      for (const c of mockRun.mock.calls) {
+        const cmd = c[0] as string[];
+        if (cmd.includes("xdotool") && cmd.includes("windowactivate")) {
+          return cmd;
+        }
+      }
+      return null;
+    }
+
+    /** Find the `xprop … -set _NET_WM_STATE <value>` write, if any. */
+    function wmStateSet(): { target: string; value: string } | null {
+      for (const c of mockRun.mock.calls) {
+        const cmd = c[0] as string[];
+        if (
+          cmd[2] === "xprop" &&
+          cmd[3] === "-id" &&
+          cmd.includes("-set") &&
+          cmd.includes("_NET_WM_STATE")
+        ) {
+          // ["env", "DISPLAY=:0", "xprop", "-id", <hex>, "-f",
+          //  "_NET_WM_STATE", "32a", "-set", "_NET_WM_STATE", VALUE]
+          return { target: cmd[4], value: cmd[cmd.length - 1] };
+        }
+      }
+      return null;
+    }
+
+    it("activates the overlay window and pins it above on raise", async () => {
+      // findWindow → our overlay (decimal 10 → 0xa).
+      mockRun.mockImplementation((cmd: string[]) => {
+        const stdout = mockXdotoolSearch(cmd);
+        if (stdout !== null) return Promise.resolve({ stdout, exitCode: 0 });
+        return Promise.resolve({ stdout: "", exitCode: 0 });
+      });
+      const atoms = new GamescopeAtoms({
+        display: ":0",
+        windowName: "Loadout Overlay",
+        forceXprop: true,
+      });
+      await atoms.raiseAboveDesktop();
+
+      const activate = activateCall();
+      expect(activate).not.toBeNull();
+      expect(activate).toContain("0xa");
+
+      const state = wmStateSet();
+      expect(state).not.toBeNull();
+      expect(state?.target).toBe("0xa");
+      expect(state?.value).toBe("_NET_WM_STATE_ABOVE");
+    });
+
+    it("does nothing when xdotool is unavailable", async () => {
+      mockCommandExists.mockImplementation(() => Promise.resolve(false));
+      const atoms = new GamescopeAtoms({
+        display: ":0",
+        windowName: "Loadout Overlay",
+        forceXprop: true,
+      });
+      await atoms.raiseAboveDesktop();
+      expect(activateCall()).toBeNull();
+    });
+
+    it("clears _NET_WM_STATE on lower (only after a window is resolved)", async () => {
+      mockRun.mockImplementation((cmd: string[]) => {
+        const stdout = mockXdotoolSearch(cmd);
+        if (stdout !== null) return Promise.resolve({ stdout, exitCode: 0 });
+        return Promise.resolve({ stdout: "", exitCode: 0 });
+      });
+      const atoms = new GamescopeAtoms({
+        display: ":0",
+        windowName: "Loadout Overlay",
+        forceXprop: true,
+      });
+      // Resolve the window id first (lowerFromDesktop no-ops without one).
+      await atoms.findWindow();
+      mockRun.mockClear();
+      await atoms.lowerFromDesktop();
+
+      const state = wmStateSet();
+      expect(state).not.toBeNull();
+      expect(state?.target).toBe("0xa");
+      expect(state?.value).toBe("");
+    });
+  });
 });
