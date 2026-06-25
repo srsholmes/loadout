@@ -1297,13 +1297,23 @@ export default class TdpControlBackend implements PluginBackend {
     try {
       const entries = await readdir("/sys/class/power_supply/");
       for (const entry of entries) {
+        // Only the wall adapter (type=Mains) reflects charger state. Other
+        // supplies expose `online` too — notably HID peripheral batteries
+        // (Bluetooth controllers/keyboards have type=Battery), whose `online`
+        // tracks the peripheral's link, NOT the power cord. Latching onto one
+        // of those made unplugging the charger a no-op, so the battery TDP cap
+        // never engaged. Require Mains.
+        const type = (
+          await readFileText(`/sys/class/power_supply/${entry}/type`)
+        )?.trim();
+        if (type !== "Mains") continue;
         const onlinePath = `/sys/class/power_supply/${entry}/online`;
         const text = await readFileText(onlinePath);
         if (text !== null) {
           this.acPowerPath = onlinePath;
           this.acPowerOnline = text.trim() === "1";
           console.log(
-            `[tdp-control] AC power adapter found: ${entry}, online=${this.acPowerOnline}`,
+            `[tdp-control] AC power adapter found: ${entry} (Mains), online=${this.acPowerOnline}`,
           );
           return;
         }
