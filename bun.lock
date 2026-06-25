@@ -76,6 +76,10 @@
       "name": "@loadout/deck-hid",
       "version": "0.0.1",
     },
+    "packages/devices": {
+      "name": "@loadout/devices",
+      "version": "0.0.1",
+    },
     "packages/exec": {
       "name": "@loadout/exec",
       "version": "0.0.1",
@@ -171,6 +175,7 @@
       "name": "@loadout/plugin-apex",
       "version": "0.0.1",
       "dependencies": {
+        "@loadout/devices": "workspace:*",
         "@loadout/ui": "workspace:*",
         "react": "^18.3.0",
         "react-dom": "^18.3.0",
@@ -443,6 +448,7 @@
       "name": "@loadout/plugin-tdp-control",
       "version": "0.0.1",
       "dependencies": {
+        "@loadout/devices": "workspace:*",
         "@loadout/exec": "workspace:*",
         "@loadout/plugin-storage": "workspace:*",
         "@loadout/steam-paths": "workspace:*",
@@ -599,6 +605,8 @@
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
     "@loadout/deck-hid": ["@loadout/deck-hid@workspace:packages/deck-hid"],
+
+    "@loadout/devices": ["@loadout/devices@workspace:packages/devices"],
 
     "@loadout/exec": ["@loadout/exec@workspace:packages/exec"],
 

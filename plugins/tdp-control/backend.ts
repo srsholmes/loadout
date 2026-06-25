@@ -14,7 +14,7 @@ import {
   matchProfileName,
   PLATFORM_PROFILE_TDP_MAP,
   type CpuVendor,
-} from "./lib/devices";
+} from "@loadout/devices";
 
 // ---------------------------------------------------------------------------
 // Constants: sysfs paths
@@ -59,7 +59,7 @@ const CHARGE_LIMIT_PATH =
   "/sys/class/power_supply/BAT0/charge_control_end_threshold";
 
 // ---------------------------------------------------------------------------
-// Enums (the device database + matching live in ./lib/devices)
+// Enums (the device database + matching live in @loadout/devices)
 // ---------------------------------------------------------------------------
 
 type TdpMethod = "ryzenadj" | "intel-rapl" | "platform_profile" | "wmi" | "none";
@@ -187,7 +187,12 @@ interface TdpInfo {
   /** How the current TDP was obtained. */
   tdpReadSource: TdpReadSource;
   minWatts: number;
+  /** TDP ceiling that currently applies (power-state aware). */
   maxWatts: number;
+  /** Full ceiling when plugged into AC. */
+  pluggedMaxWatts: number;
+  /** Ceiling when on battery (<= pluggedMaxWatts). */
+  batteryMaxWatts: number;
   platform: string;
   deviceName: string;
   method: TdpMethod;
@@ -248,13 +253,23 @@ export default class TdpControlBackend implements PluginBackend {
   // TDP method & state
   private method: TdpMethod = "none";
   private minWatts = 5;
+  /** Max TDP when plugged into AC (the device's full ceiling). */
   private maxWatts = 35;
+  /** Max TDP when on battery (<= maxWatts). See effectiveMaxWatts(). */
+  private batteryMaxWatts = 35;
   private profiles: Record<string, number> = {
     Silent: 10,
     Balanced: 18,
     Performance: 35,
   };
   private currentTdp: number | null = null;
+  /**
+   * The last *requested* wattage, stored unclamped — the standing intent.
+   * setTdp() applies a power-state-clamped value to hardware but remembers
+   * the raw request here so an AC transition can re-apply it (clamp down on
+   * battery, spring back up on AC) without ever mutating saved profiles.
+   */
+  private desiredTdp: number | null = null;
   private tdpReadSource: TdpReadSource = "estimated";
   private activeProfile: string | null = null;
   private trackedTdp: number | null = null;
@@ -423,7 +438,12 @@ export default class TdpControlBackend implements PluginBackend {
       currentTdp: this.currentTdp,
       tdpReadSource: this.tdpReadSource,
       minWatts: this.minWatts,
-      maxWatts: this.maxWatts,
+      // Report the cap that currently applies so the UI slider bound reflects
+      // power state immediately on load. pluggedMaxWatts/batteryMaxWatts let
+      // the UI explain the two ceilings.
+      maxWatts: this.effectiveMaxWatts(),
+      pluggedMaxWatts: this.maxWatts,
+      batteryMaxWatts: this.batteryMaxWatts,
       platform: this.dmiProductName,
       deviceName: this.deviceName,
       method: this.method,
@@ -457,13 +477,6 @@ export default class TdpControlBackend implements PluginBackend {
   ): Promise<{ success: boolean; error?: string }> {
     watts = Math.round(watts);
 
-    if (watts < this.minWatts || watts > this.maxWatts) {
-      return {
-        success: false,
-        error: `TDP must be between ${this.minWatts}W and ${this.maxWatts}W`,
-      };
-    }
-
     if (this.method === "none") {
       return {
         success: false,
@@ -471,36 +484,49 @@ export default class TdpControlBackend implements PluginBackend {
       };
     }
 
+    // Remember the raw intent (within the device's absolute range) so an AC
+    // transition can re-apply it — clamp down on battery, spring back up on
+    // AC — without mutating any saved profile.
+    this.desiredTdp = Math.max(this.minWatts, Math.min(this.maxWatts, watts));
+
+    // The cap takes precedence over the request: on battery a saved/requested
+    // 70W lands at the battery cap, not refused. Clamp (don't reject) so the
+    // auto-apply path (per-game profiles, defaults) always writes *something*.
+    const applied = Math.max(
+      this.minWatts,
+      Math.min(this.effectiveMaxWatts(), watts),
+    );
+
     try {
       if (this.method === "wmi") {
-        await this.setTdpViaWmi(watts);
+        await this.setTdpViaWmi(applied);
       } else if (this.method === "ryzenadj") {
-        await this.setTdpViaRyzenadj(watts);
+        await this.setTdpViaRyzenadj(applied);
       } else if (this.method === "intel-rapl") {
-        await this.setTdpViaIntelRapl(watts);
+        await this.setTdpViaIntelRapl(applied);
       } else if (this.method === "platform_profile") {
         // platform_profile is coarse — pick closest profile name
-        const profileName = this.wattsToPlatformProfile(watts);
+        const profileName = this.wattsToPlatformProfile(applied);
         await writeSysfs(PLATFORM_PROFILE_PATH, profileName);
         await this.detectPlatformProfile();
       }
 
-      // Track the value we just set
-      this.trackedTdp = watts;
-      this.currentTdp = watts;
+      // Track the value we actually applied (clamped), not the raw request.
+      this.trackedTdp = applied;
+      this.currentTdp = applied;
       this.tdpReadSource = "tracked";
-      this.activeProfile = this.matchProfile(watts);
+      this.activeProfile = this.matchProfile(applied);
 
       this.emit?.({
         event: "tdpChanged",
         data: {
-          currentTdp: watts,
+          currentTdp: applied,
           activeProfile: this.activeProfile,
           tdpReadSource: this.tdpReadSource,
         },
       });
 
-      console.log(`[tdp-control] TDP set to ${watts}W via ${this.method}`);
+      console.log(`[tdp-control] TDP set to ${applied}W via ${this.method}`);
       return { success: true };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -1033,7 +1059,17 @@ export default class TdpControlBackend implements PluginBackend {
     this.deviceName = device.name;
     this.minWatts = device.minTdp;
     this.maxWatts = device.maxTdp;
+    this.batteryMaxWatts = device.batteryMaxTdp;
     this.profiles = { ...device.profiles };
+  }
+
+  /**
+   * The TDP ceiling that currently applies, given power state. On battery we
+   * cap lower to protect runtime/thermals; plugged in (or when AC state is
+   * unknown — don't over-restrict) we allow the device's full max.
+   */
+  private effectiveMaxWatts(): number {
+    return this.acPowerOnline === false ? this.batteryMaxWatts : this.maxWatts;
   }
 
   private async detectTdpMethod(): Promise<void> {
@@ -1556,9 +1592,20 @@ export default class TdpControlBackend implements PluginBackend {
         if (text !== null) {
           this.acPowerOnline = text.trim() === "1";
           if (this.acPowerOnline !== prevAcPower) {
+            // Re-apply the standing intent through the (now power-state-aware)
+            // clamp: unplugging throttles a 70W request down to the battery
+            // cap; plugging back in springs it up to 70W again. setTdp emits
+            // its own tdpChanged with the applied value.
+            const intent = this.desiredTdp ?? this.currentTdp;
+            if (intent !== null && this.method !== "none") {
+              await this.setTdp(intent);
+            }
             this.emit?.({
               event: "acPowerChanged",
-              data: { online: this.acPowerOnline },
+              data: {
+                online: this.acPowerOnline,
+                maxWatts: this.effectiveMaxWatts(),
+              },
             });
             console.log(
               `[tdp-control] AC power changed: ${this.acPowerOnline ? "online" : "offline"}`,
