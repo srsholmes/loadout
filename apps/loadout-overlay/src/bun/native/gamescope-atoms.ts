@@ -944,17 +944,23 @@ export class GamescopeAtoms {
    * In gaming mode gamescope reads STEAM_OVERLAY=1 and composites us above
    * the game. There's no gamescope on the KDE/Plasma desktop, so those
    * atoms are a no-op and our plain CEF window stays *behind* a fullscreen
-   * Steam Big Picture window — KWin keeps the active fullscreen window in
+   * Steam Big Picture window — KWin keeps the *active* fullscreen window in
    * its elevated stacking layer and we have no always-on-top hint.
    *
-   * `xdotool windowactivate` is the reliable lever: activating our window
-   * makes BPM no longer the active fullscreen window, so KWin demotes it
-   * out of the fullscreen layer and our overlay lands on top — and we get
-   * input focus in the same call. We additionally set _NET_WM_STATE_ABOVE
-   * (best-effort, via xprop since wmctrl isn't guaranteed present) to pin
-   * us above once activated.
+   * `xdotool windowactivate` is the reliable lever, verified on this host's
+   * KWin Wayland session (the overlay + BPM are XWayland clients): it sets
+   * _NET_ACTIVE_WINDOW to our window, which KWin honours — BPM is no longer
+   * the active fullscreen window, so KWin lowers it out of the fullscreen
+   * layer and our overlay lands on top, focused, in one call. `windowraise`
+   * follows as belt-and-suspenders.
    *
-   * Caller gates this on desktop mode; it's a no-op under gamescope.
+   * We deliberately do NOT set _NET_WM_STATE_ABOVE here: under Wayland KWin
+   * manages _NET_WM_STATE itself and ignores direct xprop property sets on
+   * mapped windows (EWMH wants a ClientMessage), so it'd be inert at best
+   * and clobber KWin's MAXIMIZED/FOCUSED bits at worst.
+   *
+   * Caller gates this on desktop mode (live /proc gamescope check); it's a
+   * no-op under gamescope, where the atoms already handle stacking.
    */
   async raiseAboveDesktop(): Promise<void> {
     if (!this.windowId) await this.findWindow();
@@ -963,63 +969,20 @@ export class GamescopeAtoms {
       console.warn("[gamescope-atoms] xdotool not found — can't raise overlay");
       return;
     }
-    try {
-      await run([
-        "env",
-        `DISPLAY=${this.display}`,
-        "xdotool",
-        "windowactivate",
-        this.windowId,
-      ]);
-    } catch (err) {
-      console.warn("[gamescope-atoms] raiseAboveDesktop windowactivate:", err);
+    for (const verb of ["windowactivate", "windowraise"]) {
+      try {
+        await run([
+          "env",
+          `DISPLAY=${this.display}`,
+          "xdotool",
+          verb,
+          this.windowId,
+        ]);
+      } catch (err) {
+        console.warn(`[gamescope-atoms] raiseAboveDesktop ${verb}:`, err);
+      }
     }
-    // Best-effort keep-above pin. xprop can set the property directly; KWin
-    // honours _NET_WM_STATE_ABOVE for the active window we just raised.
-    try {
-      await run([
-        "env",
-        `DISPLAY=${this.display}`,
-        "xprop",
-        "-id",
-        this.windowId,
-        "-f",
-        "_NET_WM_STATE",
-        "32a",
-        "-set",
-        "_NET_WM_STATE",
-        "_NET_WM_STATE_ABOVE",
-      ]);
-    } catch (err) {
-      console.warn("[gamescope-atoms] raiseAboveDesktop _NET_WM_STATE:", err);
-    }
-  }
-
-  /**
-   * Clear the desktop keep-above pin set by `raiseAboveDesktop`. Best-effort
-   * — `minimize()` already hides the window, but dropping _NET_WM_STATE keeps
-   * the window from re-appearing above everything if it's later un-minimized
-   * by the WM rather than by our show() path. No-op under gamescope.
-   */
-  async lowerFromDesktop(): Promise<void> {
-    if (!this.windowId) return;
-    try {
-      await run([
-        "env",
-        `DISPLAY=${this.display}`,
-        "xprop",
-        "-id",
-        this.windowId,
-        "-f",
-        "_NET_WM_STATE",
-        "32a",
-        "-set",
-        "_NET_WM_STATE",
-        "",
-      ]);
-    } catch (err) {
-      console.warn("[gamescope-atoms] lowerFromDesktop _NET_WM_STATE:", err);
-    }
+    trace(`[gamescope-atoms] raiseAboveDesktop: activated+raised ${this.windowId}`);
   }
 
   /**
