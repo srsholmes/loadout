@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, mock } from "bun:test";
+import { toArrayBuffer, type Pointer } from "bun:ffi";
 import type { InputDevice } from "./devices";
 
 // ---- Mocks -----------------------------------------------------------------
@@ -37,6 +38,11 @@ let nextFd = 100;
 /** Queued events per FD: each entry is a batch delivered on the next read. */
 const pendingReads = new Map<number, Uint8Array[]>();
 let ioctlFailFds = new Set<number>();
+// FDs for which EVIOCGKEY should report BTN_MODE (Guide) currently held, so
+// the deferred-grab path (doGrab → defer until Guide released) can be tested.
+const guideHeldFds = new Set<number>();
+const EVIOCGKEY_96 = 0x80604518n;
+const BTN_MODE_CODE = 0x13c;
 
 function enqueueRead(fd: number, data: Uint8Array): void {
   const list = pendingReads.get(fd) ?? [];
@@ -62,6 +68,18 @@ mock.module("./ffi", () => ({
         else if (typeof valuePtr === "number" && valuePtr !== 0)
           argKind = "pointer";
         else if (typeof valuePtr === "object") argKind = "pointer";
+        // Simulate the kernel filling the EVIOCGKEY button bitmap so tests can
+        // assert the Guide-held deferral. Only when this fd is flagged held.
+        if (
+          request === EVIOCGKEY_96 &&
+          guideHeldFds.has(fd) &&
+          typeof valuePtr === "number"
+        ) {
+          const bitmap = new Uint8Array(
+            toArrayBuffer(valuePtr as Pointer, 0, 96),
+          );
+          bitmap[BTN_MODE_CODE >> 3] |= 1 << (BTN_MODE_CODE & 7);
+        }
         const rc = ioctlFailFds.has(fd) ? -1 : 0;
         ffiCalls.push({
           kind: "ioctl",
@@ -183,6 +201,7 @@ beforeEach(() => {
   nextFd = 100;
   pendingReads.clear();
   ioctlFailFds = new Set();
+  guideHeldFds.clear();
   devicesOnSystem = [];
 });
 
@@ -336,6 +355,91 @@ describe("startInputIntercept — grab / release", () => {
     expect(
       ffiCalls.filter((c) => c.kind === "ioctl" && c.request === 0x80604518n),
     ).toHaveLength(1); // only the controller fd
+    h.shutdown();
+  });
+
+  it("defers EVIOCGRAB while Guide is held, then grabs once it's released", async () => {
+    // The overlay opens on Guide+B. Grabbing while Guide is still physically
+    // held would swallow the user's Guide-release, leaving Steam stuck in
+    // "Guide held" after close. So doGrab defers the EVIOCGRAB until BTN_MODE
+    // reads released, and pollOnce engages it then.
+    devicesOnSystem = [mkDevice("/dev/input/event5", "Pad", { isController: true })];
+    const h = await startInputIntercept({ onWake: () => {}, onAction: () => {} });
+    const padFd = (
+      ffiCalls.find((c) => c.kind === "open" && c.path === "/dev/input/event5") as
+        | { rc: number }
+        | undefined
+    )?.rc as number;
+    const grabs = () =>
+      ffiCalls.filter(
+        (c) =>
+          c.kind === "ioctl" &&
+          c.request === 0x40044590n /* EVIOCGRAB */ &&
+          c.argKind === "pointer",
+      );
+
+    guideHeldFds.add(padFd); // Guide currently held
+    h.grab();
+    expect(grabs()).toHaveLength(0); // deferred — no grab yet
+
+    guideHeldFds.delete(padFd); // Guide released
+    await new Promise((r) => setTimeout(r, 70)); // > POLL_ACTIVE_MS (25ms)
+    expect(grabs().length).toBeGreaterThanOrEqual(1); // pollOnce grabbed it
+    h.shutdown();
+  });
+
+  it("grabs immediately when Guide is NOT held at grab time", async () => {
+    devicesOnSystem = [mkDevice("/dev/input/event5", "Pad", { isController: true })];
+    const h = await startInputIntercept({ onWake: () => {}, onAction: () => {} });
+    h.grab(); // guideHeldFds empty → BTN_MODE reads released
+    const grabs = ffiCalls.filter(
+      (c) => c.kind === "ioctl" && c.request === 0x40044590n && c.argKind === "pointer",
+    );
+    expect(grabs).toHaveLength(1);
+    h.shutdown();
+  });
+
+  it("release cancels a still-deferred grab — the pad is never grabbed", async () => {
+    devicesOnSystem = [mkDevice("/dev/input/event5", "Pad", { isController: true })];
+    const h = await startInputIntercept({ onWake: () => {}, onAction: () => {} });
+    const padFd = (
+      ffiCalls.find((c) => c.kind === "open" && c.path === "/dev/input/event5") as
+        | { rc: number }
+        | undefined
+    )?.rc as number;
+    guideHeldFds.add(padFd);
+    h.grab(); // deferred (Guide held)
+    h.release(); // closes before Guide ever released → must cancel the defer
+    guideHeldFds.delete(padFd); // even though Guide is now "up"…
+    await new Promise((r) => setTimeout(r, 70)); // …no late grab may fire
+    const grabs = ffiCalls.filter(
+      (c) => c.kind === "ioctl" && c.request === 0x40044590n && c.argKind === "pointer",
+    );
+    expect(grabs).toHaveLength(0);
+    h.shutdown();
+  });
+
+  it("with two pads, defers only the Guide-held one and grabs the other now", async () => {
+    devicesOnSystem = [
+      mkDevice("/dev/input/event5", "Held", { isController: true }),
+      mkDevice("/dev/input/event6", "Free", { isController: true }),
+    ];
+    const h = await startInputIntercept({ onWake: () => {}, onAction: () => {} });
+    const heldFd = (
+      ffiCalls.find((c) => c.kind === "open" && c.path === "/dev/input/event5") as
+        | { rc: number }
+        | undefined
+    )?.rc as number;
+    guideHeldFds.add(heldFd); // only the first pad has Guide held
+    const grabs = () =>
+      ffiCalls.filter(
+        (c) => c.kind === "ioctl" && c.request === 0x40044590n && c.argKind === "pointer",
+      );
+    h.grab();
+    expect(grabs()).toHaveLength(1); // free pad grabbed immediately, held one deferred
+    guideHeldFds.delete(heldFd);
+    await new Promise((r) => setTimeout(r, 70));
+    expect(grabs().length).toBeGreaterThanOrEqual(2); // held pad grabbed after release
     h.shutdown();
   });
 
