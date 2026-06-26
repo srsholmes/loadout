@@ -143,6 +143,46 @@ describe("apex plugin", () => {
     });
   });
 
+  it("shows the auto-recover-on-wake control and toggles it", async () => {
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Recover automatically on wake");
+    });
+
+    // The auto-recover toggle is the first checkbox — it lives in the
+    // gamepad-recovery card, ahead of the driver-blacklist card.
+    const autoToggle = container.querySelector(
+      'input[type="checkbox"]',
+    ) as HTMLInputElement;
+    expect(autoToggle.checked).toBe(false);
+
+    fireEvent.click(autoToggle);
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("setAutoRecoverOnWake", true);
+    });
+  });
+
+  it("reflects a persisted auto-recover-on-wake setting as checked", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus")
+        return Promise.resolve({ ...healthyStatus, autoRecoverOnWake: true, listenerRunning: true });
+      return Promise.resolve({ success: true });
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      const autoToggle = container.querySelector(
+        'input[type="checkbox"]',
+      ) as HTMLInputElement;
+      expect(autoToggle?.checked).toBe(true);
+    });
+  });
+
   it("shows the driver-blacklist control and toggles it", async () => {
     const container = document.createElement("div");
     const { mount } = await import("./app");
