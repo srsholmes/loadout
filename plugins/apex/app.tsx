@@ -32,6 +32,8 @@ interface StatusResult {
   status?: XhciStatus;
   hidOxp?: HidOxpStatus;
   fingerprint?: FingerprintStatus;
+  autoRecoverOnWake?: boolean;
+  listenerRunning?: boolean;
 }
 
 interface FingerprintResult {
@@ -56,6 +58,7 @@ function Apex() {
 
   const [data, setData] = useState<StatusResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [autoWakeBusy, setAutoWakeBusy] = useState(false);
   const [blacklistBusy, setBlacklistBusy] = useState(false);
   const [fpBusy, setFpBusy] = useState(false);
 
@@ -91,6 +94,25 @@ function Apex() {
       setBusy(false);
     }
   }, [call, refresh]);
+
+  const handleToggleAutoWake = useCallback(
+    async (next: boolean) => {
+      setAutoWakeBusy(true);
+      try {
+        const res = (await call("setAutoRecoverOnWake", next)) as {
+          success: boolean;
+          error?: string;
+        };
+        if (!res.success) {
+          notify(res.error ?? "Couldn't update the setting.", { kind: "error" });
+        }
+      } finally {
+        setAutoWakeBusy(false);
+        await refresh();
+      }
+    },
+    [call, refresh],
+  );
 
   const handleToggleBlacklist = useCallback(
     async (next: boolean) => {
@@ -223,6 +245,23 @@ function Apex() {
             <div className="text-xs text-base-content/55 leading-relaxed">
               Safe to run any time — if the controller is already working it does nothing, so
               there's no harm in pressing it.
+            </div>
+
+            <div className="flex justify-between items-start gap-4 pt-4 mt-1 border-t border-base-300">
+              <div className="flex flex-col gap-1 min-w-0">
+                <span className="text-sm text-base-content font-medium">
+                  Recover automatically on wake
+                </span>
+                <span className="text-xs text-base-content/55 leading-relaxed">
+                  Run this recovery whenever the device wakes from sleep, so you never have to
+                  press the button. Only rebinds if the gamepad is actually missing.
+                </span>
+              </div>
+              <Toggle
+                checked={!!data.autoRecoverOnWake}
+                disabled={autoWakeBusy}
+                onChange={handleToggleAutoWake}
+              />
             </div>
           </div>
         </div>
