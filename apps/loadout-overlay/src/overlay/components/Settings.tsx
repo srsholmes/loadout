@@ -1,5 +1,17 @@
 import { useState, useEffect, useMemo } from "react";
-import { PluginProvider, TabBar, Slider, Button, Select, Toggle, useBackend } from "@loadout/ui";
+import {
+  PluginProvider,
+  TabBar,
+  Slider,
+  Button,
+  Select,
+  Toggle,
+  useBackend,
+  useTranslation,
+  setLanguage,
+  SUPPORTED_LANGUAGES,
+  DEFAULT_LANGUAGE,
+} from "@loadout/ui";
 import { useSidebarAutoCollapseSetting } from "../hooks/useSidebarCollapse";
 import { useEnabledPlugins } from "../hooks/useEnabledPlugins";
 import { useConfigValue, getConfigValue, setConfigValue } from "../lib/userConfig";
@@ -61,13 +73,9 @@ function normalizeTheme(theme: string | undefined): string {
   return theme && THEME_IDS.includes(theme) ? theme : "midnight";
 }
 
-const TABS = [
-  { id: "general", label: "General" },
-  { id: "plugins", label: "Plugins" },
-  { id: "controller", label: "Controller" },
-] as const;
+const TAB_IDS = ["general", "plugins", "controller"] as const;
 
-type TabId = (typeof TABS)[number]["id"];
+type TabId = (typeof TAB_IDS)[number];
 
 /** Reads the persisted theme (synchronous — backed by the userConfig
  *  in-memory cache, which is seeded from its localStorage mirror at
@@ -174,21 +182,15 @@ function ThemeSwatch({
 type ActionStatus = "idle" | "arming" | "running" | "success" | "error";
 
 interface MaintenanceAction {
-  /** Title shown to the left of the button. */
-  title: string;
-  /** Sub-copy explaining what the action does. */
-  description: string;
-  /** Default button label (idle state). */
-  idleLabel: string;
-  /** Label while the RPC is in flight. */
-  runningLabel: string;
-  /** Label on success — cleared back to idle after 3s. */
-  successLabel: string;
+  /** Base i18n key under the `app` namespace — the row reads
+   *  `<i18nKey>.{title,description,idle,running,success}`. */
+  i18nKey: string;
   /** RPC to call after the user confirms. */
   invoke: () => Promise<{ success: boolean; error?: string }>;
 }
 
 function MaintenanceActionRow({ action }: { action: MaintenanceAction }) {
+  const { t } = useTranslation("app");
   const [status, setStatus] = useState<ActionStatus>("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -225,11 +227,11 @@ function MaintenanceActionRow({ action }: { action: MaintenanceAction }) {
   }
 
   const label =
-    status === "arming" ? "Click again to confirm"
-    : status === "running" ? action.runningLabel
-    : status === "success" ? action.successLabel
-    : status === "error" ? "Failed"
-    : action.idleLabel;
+    status === "arming" ? t("settings.maintenance.arming")
+    : status === "running" ? t(`${action.i18nKey}.running`)
+    : status === "success" ? t(`${action.i18nKey}.success`)
+    : status === "error" ? t("settings.maintenance.failed")
+    : t(`${action.i18nKey}.idle`);
 
   const variant =
     status === "arming" || status === "error" ? "danger"
@@ -239,9 +241,9 @@ function MaintenanceActionRow({ action }: { action: MaintenanceAction }) {
   return (
     <div className="flex justify-between items-center min-h-[44px]">
       <div className="pr-4">
-        <div className="text-sm text-base-content">{action.title}</div>
+        <div className="text-sm text-base-content">{t(`${action.i18nKey}.title`)}</div>
         <div className="text-xs text-base-content/50 mt-0.5">
-          {action.description}
+          {t(`${action.i18nKey}.description`)}
           {errorMsg && (
             <span className="block text-error mt-1 font-mono text-[11px]">{errorMsg}</span>
           )}
@@ -259,57 +261,32 @@ function MaintenanceActionRow({ action }: { action: MaintenanceAction }) {
 }
 
 const EXPORT_LOGS_ACTION: MaintenanceAction = {
-  title: "Save logs to file",
-  description:
-    "Dumps the UI and server logs into a timestamped file in your Downloads folder — attach it when reporting an issue.",
-  idleLabel: "Save logs",
-  runningLabel: "Saving...",
-  successLabel: "Saved to Downloads",
+  i18nKey: "settings.maintenance.export_logs",
   invoke: exportLogs,
 };
 
 const RESTART_SERVER_ACTION: MaintenanceAction = {
-  title: "Restart plugin server",
-  description: "Reloads every plugin backend — fixes a stuck plugin without a system reboot.",
-  idleLabel: "Restart server",
-  runningLabel: "Restarting...",
-  successLabel: "Restarted",
+  i18nKey: "settings.maintenance.restart_server",
   invoke: restartServer,
 };
 
 const RESTART_STEAM_ACTION: MaintenanceAction = {
-  title: "Restart Steam",
-  description: "Restarts the Steam process without rebooting. Use this if Steam crashed or froze after applying a CSS theme.",
-  idleLabel: "Restart Steam",
-  runningLabel: "Restarting...",
-  successLabel: "Restarted",
+  i18nKey: "settings.maintenance.restart_steam",
   invoke: restartSteam,
 };
 
 const UNFREEZE_STEAM_ACTION: MaintenanceAction = {
-  title: "Unfreeze Steam",
-  description: "Sends SIGCONT to the Steam process. Use this if Steam's menu is visible but buttons don't respond after closing the overlay.",
-  idleLabel: "Unfreeze Steam",
-  runningLabel: "Unfreezing...",
-  successLabel: "Unfrozen",
+  i18nKey: "settings.maintenance.unfreeze_steam",
   invoke: forceUnfreezeSteam,
 };
 
 const SHUTDOWN_ACTION: MaintenanceAction = {
-  title: "Shut down",
-  description: "Powers the device off via systemctl poweroff.",
-  idleLabel: "Shut down",
-  runningLabel: "Shutting down...",
-  successLabel: "Shutting down",
+  i18nKey: "settings.maintenance.shutdown",
   invoke: systemShutdown,
 };
 
 const REBOOT_ACTION: MaintenanceAction = {
-  title: "Restart device",
-  description: "Reboots the device via systemctl reboot.",
-  idleLabel: "Restart device",
-  runningLabel: "Restarting...",
-  successLabel: "Restarting",
+  i18nKey: "settings.maintenance.reboot",
   invoke: systemReboot,
 };
 
@@ -334,12 +311,7 @@ const REBOOT_ACTION: MaintenanceAction = {
 function ClearDataCachesActionRow() {
   const { call } = useBackend("__broadcast");
   const action: MaintenanceAction = {
-    title: "Clear all data caches",
-    description:
-      "Wipes every plugin's cached external API responses (ProtonDB, HowLongToBeat, SteamGridDB, …) so the next view re-fetches.",
-    idleLabel: "Clear caches",
-    runningLabel: "Clearing...",
-    successLabel: "Cleared",
+    i18nKey: "settings.maintenance.clear_caches",
     invoke: async () => {
       try {
         const res = (await call("clearExternalCache")) as {
@@ -415,8 +387,10 @@ function SettingsInner({
   plugins,
   onShowWelcome,
 }: Required<Omit<SettingsProps, "onShowWelcome">> & { onShowWelcome?: () => void }) {
+  const { t } = useTranslation("app");
   const [tab, setTab] = useState<TabId>("general");
   const [theme, setTheme] = useConfigValue<string>("theme", loadTheme());
+  const [language, setLanguageConfig] = useConfigValue<string>("language", DEFAULT_LANGUAGE);
   const [startupView, setStartupView] = useConfigValue<string>("startupView", "home");
   const [autoCollapseSidebar, setAutoCollapseSidebar] = useSidebarAutoCollapseSetting();
   const [shortcuts, setShortcuts] = useState<ControllerShortcuts | null>(null);
@@ -436,6 +410,13 @@ function SettingsInner({
     getControllerShortcuts().then(setShortcuts).catch(() => {});
   }, []);
 
+  function handleLanguageChange(code: string) {
+    // Persist the choice and switch the live i18next language — every
+    // mounted shell + plugin consumer re-renders, no reload needed.
+    setLanguageConfig(code);
+    void setLanguage(code);
+  }
+
   function handleShortcutChange(key: keyof ControllerShortcuts, value: string) {
     if (!shortcuts) return;
     const updated = { ...shortcuts, [key]: stringToAction(value) };
@@ -448,7 +429,11 @@ function SettingsInner({
       <div className="max-w-3xl mx-auto">
         {/* Tabs */}
         <div className="mb-6">
-          <TabBar tabs={[...TABS]} activeTab={tab} onTabChange={(id) => setTab(id as TabId)} />
+          <TabBar
+            tabs={TAB_IDS.map((id) => ({ id, label: t(`settings.tab.${id}`) }))}
+            activeTab={tab}
+            onTabChange={(id) => setTab(id as TabId)}
+          />
         </div>
 
         {/* General tab */}
@@ -456,10 +441,10 @@ function SettingsInner({
           <>
             {/* Appearance */}
             <section className="mb-6">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">Appearance</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">{t("settings.section.appearance")}</h3>
               <div className="bg-base-200 rounded-2xl border border-base-300 p-5">
                 <div className="flex justify-between items-center mb-3">
-                  <span className="text-sm text-base-content">UI Scale</span>
+                  <span className="text-sm text-base-content">{t("settings.ui_scale")}</span>
                   <span className="text-sm font-mono text-primary font-bold">{scale.toFixed(2)}x</span>
                 </div>
                 <Slider
@@ -477,17 +462,41 @@ function SettingsInner({
               </div>
             </section>
 
+            {/* Language */}
+            <section className="mb-6">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">{t("settings.section.language")}</h3>
+              <div className="bg-base-200 rounded-2xl border border-base-300 p-5">
+                <div className="flex justify-between items-center min-h-[44px]">
+                  <div className="pr-4">
+                    <div className="text-sm text-base-content">{t("settings.section.language")}</div>
+                    <div className="text-xs text-base-content/50 mt-0.5">
+                      {t("settings.language_desc")}
+                    </div>
+                  </div>
+                  <Select
+                    value={language}
+                    options={SUPPORTED_LANGUAGES.map((l) => ({
+                      value: l.code,
+                      label: l.label,
+                    }))}
+                    onChange={handleLanguageChange}
+                    className="w-48"
+                  />
+                </div>
+              </div>
+            </section>
+
             {/* Homepage */}
             <section className="mb-6">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">Homepage</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">{t("settings.section.homepage")}</h3>
               <div className="bg-base-200 rounded-2xl border border-base-300 p-5 space-y-4 divide-y divide-base-300 [&>*]:pt-4 [&>*:first-child]:pt-0">
                 <div className="flex justify-between items-center min-h-[44px]">
-                  <span className="text-sm text-base-content">On startup</span>
+                  <span className="text-sm text-base-content">{t("settings.on_startup")}</span>
                   <Select
                     value={startupView}
                     options={[
-                      { value: "home", label: "Open homepage" },
-                      { value: "last-tab", label: "Resume last view" },
+                      { value: "home", label: t("settings.startup.home") },
+                      { value: "last-tab", label: t("settings.startup.last_tab") },
                     ]}
                     onChange={setStartupView}
                     className="w-48"
@@ -496,12 +505,12 @@ function SettingsInner({
                 {onShowWelcome && (
                   <div className="flex justify-between items-center min-h-[44px]">
                     <div className="pr-4">
-                      <div className="text-sm text-base-content">Welcome tour</div>
+                      <div className="text-sm text-base-content">{t("settings.welcome_tour")}</div>
                       <div className="text-xs text-base-content/50 mt-0.5">
-                        Re-opens the first-boot intro and plugin picker.
+                        {t("settings.welcome_tour_desc")}
                       </div>
                     </div>
-                    <Button onClick={onShowWelcome}>Show welcome screen</Button>
+                    <Button onClick={onShowWelcome}>{t("settings.show_welcome")}</Button>
                   </div>
                 )}
               </div>
@@ -509,13 +518,13 @@ function SettingsInner({
 
             {/* Sidebar */}
             <section className="mb-6">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">Sidebar</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">{t("settings.section.sidebar")}</h3>
               <div className="bg-base-200 rounded-2xl border border-base-300 p-5">
                 <div className="flex justify-between items-center min-h-[44px]">
                   <div className="pr-4">
-                    <div className="text-sm text-base-content">Auto-collapse on focus</div>
+                    <div className="text-sm text-base-content">{t("settings.auto_collapse")}</div>
                     <div className="text-xs text-base-content/50 mt-0.5">
-                      Shrinks the sidebar to just icons when you're interacting with a plugin page.
+                      {t("settings.auto_collapse_desc")}
                     </div>
                   </div>
                   <Toggle checked={autoCollapseSidebar} onChange={setAutoCollapseSidebar} />
@@ -526,7 +535,7 @@ function SettingsInner({
             {/* Theme — four Loadout themes with big preview swatch cards */}
             <section className="mb-6">
               <div className="flex items-baseline justify-between mb-4">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40">Theme</h3>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40">{t("settings.section.theme")}</h3>
                 <span className="chip chip-accent">
                   {LOADOUT_THEMES.find((t) => t.id === theme)?.name ?? "Midnight"}
                 </span>
@@ -545,7 +554,7 @@ function SettingsInner({
 
             {/* Maintenance */}
             <section className="mb-6">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">Maintenance</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">{t("settings.section.maintenance")}</h3>
               <div className="bg-base-200 rounded-2xl border border-base-300 p-5 space-y-4 divide-y divide-base-300 [&>*]:pt-4 [&>*:first-child]:pt-0">
                 <MaintenanceActionRow action={EXPORT_LOGS_ACTION} />
                 <ClearDataCachesActionRow />
@@ -559,10 +568,10 @@ function SettingsInner({
 
             {/* About */}
             <section>
-              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">About</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">{t("settings.section.about")}</h3>
               <div className="bg-base-200 rounded-2xl border border-base-300 p-5">
                 <div className="flex justify-between items-center min-h-[44px]">
-                  <span className="text-sm text-base-content">Version</span>
+                  <span className="text-sm text-base-content">{t("settings.version")}</span>
                   <code className="text-sm text-primary bg-primary/10 px-3 py-1 rounded-lg font-mono">{VERSION}</code>
                 </div>
               </div>
@@ -575,16 +584,19 @@ function SettingsInner({
           <section>
             <div className="flex items-baseline justify-between mb-4">
               <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40">
-                Installed Plugins
+                {t("settings.installed_plugins")}
               </h3>
               <span className="text-xs text-base-content/40">
-                {enabledCount} of {sortedPlugins.length} enabled
+                {t("settings.plugins_enabled_count", {
+                  enabled: enabledCount,
+                  total: sortedPlugins.length,
+                })}
               </span>
             </div>
             <div className="bg-base-200 rounded-2xl border border-base-300 p-2">
               {sortedPlugins.length === 0 && (
                 <div className="text-center py-8 text-sm text-base-content/40">
-                  No plugins installed.
+                  {t("settings.no_plugins")}
                 </div>
               )}
               {sortedPlugins.map((plugin) => {
@@ -608,7 +620,7 @@ function SettingsInner({
                         {plugin.name}
                       </div>
                       <div className="text-xs text-base-content/50 line-clamp-2">
-                        {plugin.subtitle || plugin.description || "No description."}
+                        {plugin.subtitle || plugin.description || t("settings.no_description")}
                       </div>
                     </div>
                     <div className="shrink-0">
@@ -628,11 +640,11 @@ function SettingsInner({
         {tab === "controller" && (
           <section>
             <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">
-              Controller Shortcuts
+              {t("settings.controller_shortcuts")}
             </h3>
             <div className="bg-base-200 rounded-2xl border border-base-300 p-5 space-y-4">
               <p className="text-xs text-base-content/50">
-                Hold the Guide button and press a face button to trigger an action.
+                {t("settings.controller_hint")}
               </p>
               {shortcuts &&
                 BUTTON_LABELS.map(({ key, label }) => (
@@ -645,7 +657,7 @@ function SettingsInner({
                   />
                 ))}
               {!shortcuts && (
-                <div className="text-sm text-base-content/40">Loading...</div>
+                <div className="text-sm text-base-content/40">{t("settings.loading")}</div>
               )}
             </div>
           </section>

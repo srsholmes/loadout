@@ -87,6 +87,16 @@ export function buildRpcHandlers(deps: RpcHandlerDeps) {
       },
       toggle: async (): Promise<boolean> => requestToggle(deps.state),
       isGamescopeMode: async () => deps.gamescopeMode,
+      // OS locale for first-run language detection. Read from the host's
+      // environment (the webview's navigator.language can be a generic CEF
+      // default under gamescope). The overlay normalizes whatever string
+      // this returns to a supported language code, falling back to English.
+      getSystemLocale: async (): Promise<string> =>
+        process.env.LANG ||
+        process.env.LC_ALL ||
+        process.env.LC_MESSAGES ||
+        process.env.LANGUAGE ||
+        "",
       // Liveness ping from the webview (~1×/s). The freeze watchdog uses the
       // last-seen time to tell a healthy overlay from a hung one. Fire-and-
       // forget: returns nothing, never throws.

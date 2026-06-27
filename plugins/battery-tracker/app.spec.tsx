@@ -13,13 +13,30 @@ import { describe, it, expect, mock, beforeEach } from "bun:test";
 // module. bun's mock.module is NOT hoisted (unlike vitest's vi.mock).
 import * as actualUi from "@loadout/ui";
 import { waitFor } from "../../test/render";
+import enGb from "./i18n/en-gb.json";
 
 const callMock = mock((_method: string) => Promise.resolve(null));
 const eventHandlers = new Map<string, (data: unknown) => void>();
 
+// i18n isn't initialized in the unit-test environment, so the real
+// `usePluginTranslation` would return raw keys. Resolve against the
+// shipped en-gb.json instead — this keeps the text assertions meaningful
+// AND doubles as a check that every key the UI uses exists in the source.
+const enStrings = enGb as Record<string, string>;
+function testT(key: string, opts?: Record<string, unknown>): string {
+  let s = enStrings[key] ?? key;
+  if (opts) {
+    for (const [k, v] of Object.entries(opts)) {
+      s = s.replace(`{{${k}}}`, String(v));
+    }
+  }
+  return s;
+}
+
 mock.module("@loadout/ui", () => ({
   ...actualUi,
   PluginProvider: ({ children }: any) => children,
+  usePluginTranslation: () => ({ t: testT, i18n: { language: "en-gb" }, ready: true }),
   useBackend: () => ({
     call: callMock,
     useEvent: ({ event, handler }: any) => {

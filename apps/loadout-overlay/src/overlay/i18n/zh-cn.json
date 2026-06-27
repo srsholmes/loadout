@@ -1,0 +1,39 @@
+{
+  "settings": {
+    "tab": {
+      "general": "通用",
+      "plugins": "插件",
+      "controller": "手柄"
+    },
+    "section": {
+      "appearance": "外观",
+      "language": "语言",
+      "homepage": "主页",
+      "sidebar": "侧边栏",
+      "theme": "主题",
+      "maintenance": "维护",
+      "about": "关于"
+    },
+    "ui_scale": "界面缩放",
+    "language_desc": "选择显示语言。缺少翻译时将回退为英文。",
+    "on_startup": "启动时",
+    "startup": {
+      "home": "打开主页",
+      "last_tab": "恢复上次视图"
+    },
+    "auto_collapse": "聚焦时自动折叠",
+    "version": "版本",
+    "installed_plugins": "已安装插件",
+    "plugins_enabled_count": "已启用 {{enabled}} / {{total}}",
+    "controller_shortcuts": "手柄快捷键",
+    "controller_hint": "按住 Guide 键并按下一个面板按键即可触发操作。",
+    "loading": "加载中…",
+    "maintenance": {
+      "restart_server": {
+        "title": "重启插件服务",
+        "description": "重新加载所有插件后端 — 无需重启系统即可修复卡住的插件。",
+        "idle": "重启服务"
+      }
+    }
+  }
+}
