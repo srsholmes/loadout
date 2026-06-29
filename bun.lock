@@ -171,12 +171,17 @@
       "name": "@loadout/vdf",
       "version": "0.0.1",
     },
+    "packages/wake": {
+      "name": "@loadout/wake",
+      "version": "0.0.1",
+    },
     "plugins/apex": {
       "name": "@loadout/plugin-apex",
       "version": "0.0.1",
       "dependencies": {
         "@loadout/devices": "workspace:*",
         "@loadout/ui": "workspace:*",
+        "@loadout/wake": "workspace:*",
         "react": "^18.3.0",
         "react-dom": "^18.3.0",
         "react-icons": "^5.6.0",
@@ -468,6 +473,17 @@
         "react-dom": "^18.3.0",
       },
     },
+    "plugins/wifi": {
+      "name": "@loadout/plugin-wifi",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/ui": "workspace:*",
+        "@loadout/wake": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+        "react-icons": "^5.6.0",
+      },
+    },
   },
   "packages": {
     "@adobe/css-tools": ["@adobe/css-tools@4.4.4", "", {}, "sha512-Elp+iwUx5rN5+Y8xLt5/GRoG20WGoDCQ/1Fb+1LiGtvwbDavuSk0jhD/eZdckHAuzcDzccnkv+rEjyWfRx18gg=="],
@@ -670,6 +686,8 @@
 
     "@loadout/plugin-theme-loader": ["@loadout/plugin-theme-loader@workspace:plugins/theme-loader"],
 
+    "@loadout/plugin-wifi": ["@loadout/plugin-wifi@workspace:plugins/wifi"],
+
     "@loadout/sgdb-art": ["@loadout/sgdb-art@workspace:packages/sgdb-art"],
 
     "@loadout/steam-cdp": ["@loadout/steam-cdp@workspace:packages/steam-cdp"],
@@ -685,6 +703,8 @@
     "@loadout/ui": ["@loadout/ui@workspace:packages/ui"],
 
     "@loadout/vdf": ["@loadout/vdf@workspace:packages/vdf"],
+
+    "@loadout/wake": ["@loadout/wake@workspace:packages/wake"],
 
     "@malept/cross-spawn-promise": ["@malept/cross-spawn-promise@1.1.1", "", { "dependencies": { "cross-spawn": "^7.0.1" } }, "sha512-RTBGWL5FWQcg9orDOCcp4LvItNzUPcyEU9bwaeJX0rJ1IQxzucC48Y0/sQLp/g6t99IQgAlGIaesJS+gTn7tVQ=="],
 

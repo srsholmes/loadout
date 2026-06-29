@@ -3,9 +3,9 @@
  *
  * Tails logind's `PrepareForSleep` D-Bus signal via `dbus-monitor` on the
  * system bus. The signal carries a boolean: `true` is emitted just before
- * suspend, `false` once the system has resumed. We only care about resume
- * (`false`): that's when the Apex's xHCI controller may have died and the
- * internal gamepad needs recovering.
+ * suspend, `false` once the system has resumed. Most callers only care about
+ * resume (`false`): that's when post-sleep hardware fixes need re-applying
+ * (the Apex's xHCI controller dying, WiFi power-save re-enabling, …).
  *
  * logind is present identically on SteamOS, Bazzite and CachyOS, so this is
  * the portable cross-distro wake hook — there's no systemd-sleep script to
@@ -13,7 +13,9 @@
  * the backend that owns it runs as a root system service.
  *
  * The subprocess and the line parsing are dependency-injected (`WakeDeps`)
- * so the orchestration is unit-testable without a real D-Bus.
+ * so the orchestration is unit-testable without a real D-Bus. Wire `spawn`
+ * to `@loadout/exec`'s `runStreaming` in production; note the consuming
+ * plugin must declare the `dbus-monitor` command permission in its manifest.
  */
 
 /** The minimal handle we need on the spawned monitor: a way to kill it. */
@@ -93,7 +95,7 @@ export function startWakeListener(deps: WakeDeps, onResume: () => void): StopHan
     },
     onLine: (line) => {
       if (parse(line) === "resume") {
-        deps.log?.("resume detected — running gamepad recovery");
+        deps.log?.("resume detected");
         onResume();
       }
     },

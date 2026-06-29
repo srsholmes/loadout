@@ -1,0 +1,28 @@
+{
+  "name": "@loadout/plugin-wifi",
+  "version": "0.0.1",
+  "type": "module",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-icons": "^5.6.0",
+    "@loadout/ui": "workspace:*",
+    "@loadout/wake": "workspace:*"
+  },
+  "plugin": {
+    "id": "wifi",
+    "name": "WiFi",
+    "description": "Stop WiFi dropping out by disabling the radio's power saving. Writes a NetworkManager drop-in (and an iwd quirk where iwd is installed), applies it instantly, and re-asserts it on every wake. Cross-distro: SteamOS, Bazzite, CachyOS.",
+    "permissions": {
+      "commands": [
+        "iw",
+        "dbus-monitor"
+      ]
+    },
+    "category": "Device",
+    "subtitle": "Disable WiFi power saving",
+    "target": {
+      "type": "overlay"
+    }
+  }
+}
