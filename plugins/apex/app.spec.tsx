@@ -45,20 +45,6 @@ const healthyStatus = {
     summary: "Controller healthy — nothing to do.",
   },
   hidOxp: { blacklisted: false, moduleLoaded: true, rebootRequired: false },
-  storage: { drives: [] },
-};
-
-const unmountedDrive = {
-  path: "/dev/nvme1n1p1",
-  label: "Games",
-  uuid: "GAME-1",
-  fstype: "ext4",
-  size: 1024 ** 4,
-  mounted: false,
-  mountpoint: null,
-  suggestedMountpoint: "/run/media/deck/Games",
-  steamLibraryFound: false,
-  inFstab: false,
 };
 
 const missingStatus = {
@@ -231,86 +217,6 @@ describe("apex plugin", () => {
     mount(container);
     await waitFor(() => {
       expect(container.textContent).toContain("Reboot required");
-    });
-  });
-
-  it("renders the storage card and detects drives", async () => {
-    const container = document.createElement("div");
-    const { mount } = await import("./app");
-    mount(container);
-
-    await waitFor(() => {
-      expect(container.textContent).toContain("Storage drive");
-      expect(container.textContent).toContain("No data drives detected yet");
-    });
-
-    const detectBtn = [...container.querySelectorAll("button")].find((b) =>
-      b.textContent?.includes("Detect drives"),
-    );
-    expect(detectBtn).toBeTruthy();
-
-    fireEvent.click(detectBtn as HTMLButtonElement);
-    await waitFor(() => {
-      expect(callMock).toHaveBeenCalledWith("detectDrives");
-    });
-  });
-
-  it("lists an unmounted drive and mounts it", async () => {
-    callMock.mockImplementation((method: string) => {
-      if (method === "getStatus")
-        return Promise.resolve({ ...healthyStatus, storage: { drives: [unmountedDrive] } });
-      if (method === "mountDrive")
-        return Promise.resolve({ success: true, mountpoint: "/run/media/deck/Games", steamLibraryFound: true });
-      return Promise.resolve({ success: true });
-    });
-    const container = document.createElement("div");
-    const { mount } = await import("./app");
-    mount(container);
-
-    let mountBtn: HTMLButtonElement | undefined;
-    await waitFor(() => {
-      expect(container.textContent).toContain("Games");
-      const btn = [...container.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Mount");
-      expect(btn).toBeTruthy();
-      mountBtn = btn as HTMLButtonElement;
-    });
-
-    fireEvent.click(mountBtn!);
-    await waitFor(() => {
-      expect(callMock).toHaveBeenCalledWith("mountDrive", "GAME-1");
-    });
-  });
-
-  it("reflects a mounted, boot-pinned drive and toggles auto-mount off", async () => {
-    const mountedDrive = {
-      ...unmountedDrive,
-      mounted: true,
-      mountpoint: "/run/media/deck/Games",
-      steamLibraryFound: true,
-      inFstab: true,
-    };
-    callMock.mockImplementation((method: string) => {
-      if (method === "getStatus")
-        return Promise.resolve({ ...healthyStatus, storage: { drives: [mountedDrive] } });
-      return Promise.resolve({ success: true });
-    });
-    const container = document.createElement("div");
-    const { mount } = await import("./app");
-    mount(container);
-
-    await waitFor(() => {
-      expect(container.textContent).toContain("Steam library found");
-      expect(container.textContent).toContain("Mounted");
-    });
-
-    // The boot-mount toggle is the last checkbox; it reflects inFstab=true.
-    const toggles = [...container.querySelectorAll('input[type="checkbox"]')];
-    const bootToggle = toggles[toggles.length - 1] as HTMLInputElement;
-    expect(bootToggle.checked).toBe(true);
-
-    fireEvent.click(bootToggle);
-    await waitFor(() => {
-      expect(callMock).toHaveBeenCalledWith("setDriveAutoMount", "GAME-1", false);
     });
   });
 

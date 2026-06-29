@@ -31,7 +31,16 @@
  * without root, real disks, or a real mount.
  */
 
-import type { Run } from "./xhci";
+export interface RunResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+export type Run = (
+  cmd: string[],
+  opts?: { stdin?: string; timeoutMs?: number },
+) => Promise<RunResult>;
 
 export interface StorageDeps {
   /** Run a subprocess (wired to `@loadout/exec`'s `runFull` in prod). */

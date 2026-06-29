@@ -19,7 +19,7 @@ import {
   FSTAB_BACKUP,
   type StorageDeps,
 } from "./storage";
-import type { RunResult } from "./xhci";
+import type { RunResult } from "./storage";
 
 /**
  * Storage detect/mount tests. All IO is injected, so these are pure unit tests

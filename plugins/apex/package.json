@@ -13,7 +13,7 @@
   "plugin": {
     "id": "apex",
     "name": "Apex",
-    "description": "OneXPlayer Apex device fixes: recover the internal gamepad when its xHCI controller dies on resume — manually or automatically on every wake (or blacklist the hid-oxp driver to prevent the drop-out), block the fingerprint reader from waking the device on a light touch, and detect & mount a second internal SSD holding a Steam library when an update stops auto-mounting it.",
+    "description": "OneXPlayer Apex device fixes: recover the internal gamepad when its xHCI controller dies on resume — manually or automatically on every wake (or blacklist the hid-oxp driver to prevent the drop-out), and block the fingerprint reader from waking the device on a light touch.",
     "permissions": {
       "commands": [
         "tee",
@@ -24,10 +24,7 @@
         "sh",
         "udevadm",
         "steamos-readonly",
-        "update-grub",
-        "lsblk",
-        "mount",
-        "findmnt"
+        "update-grub"
       ]
     },
     "category": "Device",
