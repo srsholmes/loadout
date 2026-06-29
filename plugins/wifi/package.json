@@ -16,6 +16,7 @@
     "permissions": {
       "commands": [
         "iw",
+        "nmcli",
         "dbus-monitor"
       ]
     },

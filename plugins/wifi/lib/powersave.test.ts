@@ -114,9 +114,12 @@ function makeDeps(opts?: {
   dirs?: string[];
   net?: Record<string, boolean>; // iface -> isWireless
   powerSave?: "on" | "off";
+  iwSetFails?: boolean;
+  nmcliFails?: boolean;
 }): {
   deps: PowerSaveDeps;
   files: Record<string, string>;
+  dirs: Set<string>;
   runs: string[][];
 } {
   const files: Record<string, string> = { ...(opts?.files ?? {}) };
@@ -127,10 +130,14 @@ function makeDeps(opts?: {
 
   const run = async (cmd: string[]): Promise<RunResult> => {
     runs.push(cmd);
+    if (cmd[0] === "nmcli") {
+      return { stdout: "", stderr: "", exitCode: opts?.nmcliFails ? 1 : 0 };
+    }
     if (cmd[0] === "iw" && cmd.includes("get")) {
       return { stdout: `Power save: ${powerSave}`, stderr: "", exitCode: 0 };
     }
     if (cmd[0] === "iw" && cmd.includes("set")) {
+      if (opts?.iwSetFails) return { stdout: "", stderr: "rfkill", exitCode: 237 };
       powerSave = cmd[cmd.length - 1] as "on" | "off";
       return { stdout: "", stderr: "", exitCode: 0 };
     }
@@ -149,12 +156,18 @@ function makeDeps(opts?: {
     removeFile: async (path) => {
       delete files[path];
     },
+    mkdirp: async (path) => {
+      dirs.add(path);
+    },
     pathExists: async (path) => path in files || dirs.has(path),
     listNet: async () => Object.keys(net),
     isWireless: async (iface) => !!net[iface],
   };
-  return { deps, files, runs };
+  return { deps, files, dirs, runs };
 }
+
+const ranNmcliReload = (runs: string[][]) =>
+  runs.some((c) => c[0] === "nmcli" && c.includes("reload"));
 
 describe("detectWirelessIface", () => {
   it("returns the first wireless interface", async () => {
@@ -169,17 +182,19 @@ describe("detectWirelessIface", () => {
 });
 
 describe("enable", () => {
-  it("writes the NM drop-in and applies runtime off (no iwd present)", async () => {
+  it("writes the NM drop-in, reloads NM, and applies runtime off (no iwd present)", async () => {
     const { deps, files, runs } = makeDeps();
     const res = await enable(deps);
     expect(res.success).toBe(true);
     expect(res.iface).toBe("wlan0");
     expect(nmDropInActive(files[NM_CONF])).toBe(true);
     expect(files[IWD_CONF]).toBeUndefined();
+    expect(ranNmcliReload(runs)).toBe(true);
     expect(runs.some((c) => c.includes("set") && c.includes("off"))).toBe(true);
+    expect(res.steps).toContain("nm-reloaded");
   });
 
-  it("merges the iwd quirk when iwd is installed", async () => {
+  it("merges the iwd quirk + mkdir when iwd is installed", async () => {
     const { deps, files } = makeDeps({
       dirs: [IWD_DIR],
       files: { [IWD_CONF]: "[General]\nFoo=bar\n" },
@@ -188,6 +203,34 @@ describe("enable", () => {
     expect(res.success).toBe(true);
     expect(iwdQuirkActive(files[IWD_CONF])).toBe(true);
     expect(files[IWD_CONF]).toContain("Foo=bar");
+  });
+
+  it("detects iwd by its unit even when /etc/iwd is absent, creating the dir", async () => {
+    const { deps, files, dirs } = makeDeps({
+      dirs: ["/usr/lib/systemd/system/iwd.service"], // iwd installed, no /etc/iwd
+    });
+    const res = await enable(deps);
+    expect(res.success).toBe(true);
+    expect(dirs.has(IWD_DIR)).toBe(true); // mkdir -p ran
+    expect(iwdQuirkActive(files[IWD_CONF])).toBe(true);
+    expect(res.steps).toContain("iwd-config-written");
+  });
+
+  it("still reports success when the runtime iw apply fails (config persists)", async () => {
+    const { deps, files } = makeDeps({ iwSetFails: true });
+    const res = await enable(deps);
+    expect(res.success).toBe(true);
+    expect(nmDropInActive(files[NM_CONF])).toBe(true);
+    expect(res.steps).not.toContain("runtime-off");
+  });
+
+  it("still succeeds (config written) when nmcli reload fails", async () => {
+    const { deps, files, runs } = makeDeps({ nmcliFails: true });
+    const res = await enable(deps);
+    expect(res.success).toBe(true);
+    expect(nmDropInActive(files[NM_CONF])).toBe(true);
+    expect(ranNmcliReload(runs)).toBe(true);
+    expect(res.steps).not.toContain("nm-reloaded");
   });
 });
 
@@ -211,6 +254,23 @@ describe("disable", () => {
     await disable(deps);
     expect(files[IWD_CONF]).toBeUndefined();
   });
+
+  it("reloads NM so the removal is live without a reboot", async () => {
+    const { deps, runs } = makeDeps({ files: { [NM_CONF]: buildNmDropIn() } });
+    const res = await disable(deps);
+    expect(ranNmcliReload(runs)).toBe(true);
+    expect(res.steps).toContain("nm-reloaded");
+  });
+
+  it("reports the error when a write throws", async () => {
+    const { deps } = makeDeps({ files: { [NM_CONF]: buildNmDropIn() } });
+    deps.removeFile = async () => {
+      throw new Error("EROFS");
+    };
+    const res = await disable(deps);
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("EROFS");
+  });
 });
 
 describe("getStatus", () => {
@@ -230,6 +290,13 @@ describe("getStatus", () => {
     expect(s.iwdPresent).toBe(true);
     expect(s.iwdConfigured).toBe(false);
     expect(s.configured).toBe(false);
+  });
+
+  it("leaves runtime null when there is no wireless interface", async () => {
+    const { deps } = makeDeps({ net: { eth0: false } });
+    const s = await getStatus(deps);
+    expect(s.iface).toBeNull();
+    expect(s.runtime).toBeNull();
   });
 });
 

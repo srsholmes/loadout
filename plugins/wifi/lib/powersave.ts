@@ -14,10 +14,12 @@
  *      directly. Merged into any existing config — never clobbered.
  *
  *   3. Runtime `iw dev <iface> set power_save off`: takes effect *instantly*
- *      without dropping the live connection, so we never need the disruptive
- *      `systemctl restart NetworkManager` from the manual fix. The config
- *      files cover the next reconnect / reboot; the wake hook (in backend.ts)
- *      re-asserts it after resume.
+ *      on the live session. Paired with a lightweight `nmcli general reload`
+ *      so NetworkManager picks up the new drop-in default WITHOUT a full
+ *      `systemctl restart` (which would drop the connection) — NM only reads
+ *      conf.d at startup or on an explicit reload, so without this a
+ *      mid-session reconnect would silently revert to power-save-on. The wake
+ *      hook (in backend.ts) re-asserts the runtime state after resume.
  *
  * All filesystem + subprocess access is injected (`PowerSaveDeps`) so the
  * orchestration is unit-testable without root, real sysfs, or a real radio.
@@ -43,6 +45,8 @@ export interface PowerSaveDeps {
   writeFile: (path: string, content: string) => Promise<void>;
   /** Remove a file. Must swallow ENOENT (absent == success). */
   removeFile: (path: string) => Promise<void>;
+  /** Create a directory and any missing parents (mkdir -p). */
+  mkdirp: (path: string) => Promise<void>;
   pathExists: (path: string) => Promise<boolean>;
   /** Interface names under /sys/class/net (basenames). */
   listNet: () => Promise<string[]>;
@@ -54,6 +58,22 @@ export interface PowerSaveDeps {
 export const NM_CONF = "/etc/NetworkManager/conf.d/wifi-powersave-off.conf";
 export const IWD_DIR = "/etc/iwd";
 export const IWD_CONF = "/etc/iwd/main.conf";
+
+/**
+ * Paths that indicate iwd is installed. We can't rely on /etc/iwd existing —
+ * SteamOS ships iwd as the NetworkManager backend but iwd runs fine with no
+ * config dir, so /etc/iwd is frequently absent there. Checking the unit /
+ * daemon binary as well catches that case so the belt-and-suspenders iwd
+ * quirk is actually applied where iwd is the backend.
+ */
+const IWD_MARKERS = [
+  IWD_DIR,
+  "/var/lib/iwd",
+  "/usr/lib/systemd/system/iwd.service",
+  "/lib/systemd/system/iwd.service",
+  "/usr/libexec/iwd",
+  "/usr/lib/iwd/iwd",
+];
 
 const QUIRK_SECTION = "DriverQuirks";
 const QUIRK_KEY = "PowerSaveDisable";
@@ -177,6 +197,27 @@ export async function detectWirelessIface(deps: PowerSaveDeps): Promise<string |
   return null;
 }
 
+/** Whether iwd is installed (see IWD_MARKERS for why this isn't just /etc/iwd). */
+export async function iwdInstalled(deps: PowerSaveDeps): Promise<boolean> {
+  for (const path of IWD_MARKERS) {
+    if (await deps.pathExists(path)) return true;
+  }
+  return false;
+}
+
+/**
+ * Make NetworkManager re-read conf.d without restarting it. A plain `nmcli
+ * general reload` reloads config in-place (it does NOT drop connections), so
+ * the new wifi.powersave default is live for the next (re)connect. Non-fatal:
+ * a missing/odd nmcli is logged, not thrown — the runtime `iw` override still
+ * covers the current session and the config still applies on reboot.
+ */
+async function reloadNetworkManager(deps: PowerSaveDeps): Promise<boolean> {
+  const r = await deps.run(["nmcli", "general", "reload"], { timeoutMs: 10_000 });
+  if (r.exitCode !== 0) deps.log?.(`nmcli general reload failed (${r.exitCode}): ${r.stderr.trim()}`);
+  return r.exitCode === 0;
+}
+
 export interface PowerSaveStatus {
   /** Detected wireless interface, or null if none. */
   iface: string | null;
@@ -198,7 +239,7 @@ export async function getStatus(deps: PowerSaveDeps): Promise<PowerSaveStatus> {
   const nmContent = await deps.readFile(NM_CONF).catch(() => "");
   const nmConfigured = nmDropInActive(nmContent);
 
-  const iwdPresent = await deps.pathExists(IWD_DIR);
+  const iwdPresent = await iwdInstalled(deps);
   const iwdContent = iwdPresent ? await deps.readFile(IWD_CONF).catch(() => "") : "";
   const iwdConfigured = iwdPresent ? iwdQuirkActive(iwdContent) : false;
 
@@ -226,11 +267,16 @@ export async function enable(deps: PowerSaveDeps): Promise<PowerSaveResult> {
     await deps.writeFile(NM_CONF, buildNmDropIn());
     steps.push("nm-config-written");
 
-    if (await deps.pathExists(IWD_DIR)) {
+    if (await iwdInstalled(deps)) {
+      await deps.mkdirp(IWD_DIR);
       const current = await deps.readFile(IWD_CONF).catch(() => "");
       await deps.writeFile(IWD_CONF, mergeIwdDriverQuirks(current));
       steps.push("iwd-config-written");
     }
+
+    // Make NM pick up the new drop-in default without a connection-dropping
+    // restart, so a mid-session reconnect doesn't revert to power-save-on.
+    if (await reloadNetworkManager(deps)) steps.push("nm-reloaded");
 
     const iface = await detectWirelessIface(deps);
     if (iface) {
@@ -259,6 +305,8 @@ export async function disable(deps: PowerSaveDeps): Promise<PowerSaveResult> {
       else await deps.writeFile(IWD_CONF, next);
       steps.push("iwd-config-removed");
     }
+
+    if (await reloadNetworkManager(deps)) steps.push("nm-reloaded");
 
     const iface = await detectWirelessIface(deps);
     if (iface) {

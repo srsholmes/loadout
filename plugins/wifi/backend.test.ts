@@ -134,6 +134,39 @@ describe("WiFi backend", () => {
     expect(events).toEqual([]);
   });
 
+  it("surfaces a disable failure and leaves the listener running", async () => {
+    storage = { powerSaveDisabled: true };
+    disableImpl.mockImplementationOnce(async () => ({
+      success: false,
+      iface: "wlan0",
+      steps: [],
+      error: "EROFS",
+    }));
+    const { backend } = makeBackend();
+    await backend.onLoad(); // listener started from persisted setting
+
+    const res = await backend.setPowerSaveDisabled(false);
+    expect(res.success).toBe(false);
+    expect(res.error).toBe("EROFS");
+    // The persisted flag and the live listener are untouched on failure.
+    expect(storage.powerSaveDisabled).toBe(true);
+    expect(stopSpy).not.toHaveBeenCalled();
+  });
+
+  it("swallows a reassert error on resume", async () => {
+    reassertImpl.mockImplementationOnce(async () => {
+      throw new Error("iw gone");
+    });
+    const { backend } = makeBackend();
+    await backend.onLoad();
+    await backend.setPowerSaveDisabled(true);
+
+    expect(capturedOnResume).toBeTruthy();
+    // Must not throw out of the resume callback.
+    expect(() => capturedOnResume!()).not.toThrow();
+    await Promise.resolve();
+  });
+
   it("restores the wake listener on load when the setting was persisted", async () => {
     storage = { powerSaveDisabled: true };
     const { backend } = makeBackend();

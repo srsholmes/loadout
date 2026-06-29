@@ -1,4 +1,4 @@
-import { readFile, writeFile, rm, access, readdir } from "node:fs/promises";
+import { readFile, writeFile, rm, mkdir, access, readdir } from "node:fs/promises";
 import type { PluginBackend, EmitPayload, PluginLogger } from "@loadout/types";
 import { runFull, runStreaming } from "@loadout/exec";
 import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
@@ -54,6 +54,9 @@ export default class WifiBackend implements PluginBackend {
         } catch (e) {
           if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e;
         }
+      },
+      mkdirp: async (path) => {
+        await mkdir(path, { recursive: true });
       },
       pathExists: async (path) => {
         try {
