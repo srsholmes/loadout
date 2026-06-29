@@ -24,7 +24,7 @@ import {
   type FingerprintStatus,
   type FingerprintResult,
 } from "./lib/fingerprint";
-import { startWakeListener, type StopHandle } from "./lib/wake-listener";
+import { startWakeListener, type StopHandle } from "@loadout/wake";
 
 const PLUGIN_ID = "apex";
 
