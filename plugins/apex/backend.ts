@@ -1,5 +1,5 @@
 import { access, readFile, writeFile, rm, mkdir } from "node:fs/promises";
-import { userInfo } from "node:os";
+import { userInfo, homedir } from "node:os";
 import type { PluginBackend, EmitPayload, PluginLogger, CallPlugin } from "@loadout/types";
 import { runFull, runStreaming } from "@loadout/exec";
 import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
@@ -53,6 +53,27 @@ interface ApexSettings {
  * this only needs to clear the initial settle.
  */
 const RESUME_SETTLE_MS = 2_000;
+
+/**
+ * Resolve the real desktop user that owns the Steam session, for the
+ * `/run/media/<user>/…` mount root. The backend runs as a ROOT system service,
+ * so `os.userInfo()` reports `root` — mounting under `/run/media/root` where
+ * Steam can't see it. The unit instead passes `--user <name>` and sets
+ * `HOME=/home/<name>` (see loadout.service), so we trust those: the `--user`
+ * arg first, then HOME's basename (covers `/home/<u>` and ostree's
+ * `/var/home/<u>`), falling back to `$USER` and finally the process owner.
+ */
+export function resolveTargetUser(argv: readonly string[] = process.argv): string {
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--user" && argv[i + 1]) return argv[i + 1];
+    if (argv[i].startsWith("--user=")) return argv[i].slice("--user=".length);
+  }
+  const home = process.env.HOME || homedir();
+  const base = home.replace(/\/+$/, "").split("/").pop();
+  if (base && base !== "root") return base;
+  if (process.env.USER && process.env.USER !== "root") return process.env.USER;
+  return userInfo().username;
+}
 
 /**
  * Apex — OneXPlayer Apex device fixes.
@@ -208,7 +229,7 @@ export default class ApexBackend implements PluginBackend {
       mkdirp: async (path) => {
         await mkdir(path, { recursive: true });
       },
-      currentUser: () => userInfo().username,
+      currentUser: () => resolveTargetUser(),
       log: (m) => this.log?.info(`[apex] ${m}`),
     };
   }

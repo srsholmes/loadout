@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, mock } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
 import type { EmitPayload } from "@loadout/types";
 
 /**
@@ -117,7 +117,42 @@ mock.module("@loadout/wake", () => ({
   startWakeListener: startWakeListenerImpl,
 }));
 
-import ApexBackend from "./backend";
+import ApexBackend, { resolveTargetUser } from "./backend";
+
+describe("resolveTargetUser", () => {
+  const HOME = process.env.HOME;
+  const USER = process.env.USER;
+  afterEach(() => {
+    if (HOME === undefined) delete process.env.HOME;
+    else process.env.HOME = HOME;
+    if (USER === undefined) delete process.env.USER;
+    else process.env.USER = USER;
+  });
+
+  it("prefers the --user arg the system unit passes (space form)", () => {
+    expect(resolveTargetUser(["loadout", "--user", "deck"])).toBe("deck");
+  });
+
+  it("accepts the --user=NAME form", () => {
+    expect(resolveTargetUser(["loadout", "--user=alice"])).toBe("alice");
+  });
+
+  it("falls back to HOME's basename when there's no --user (root service)", () => {
+    process.env.HOME = "/home/deck";
+    expect(resolveTargetUser(["loadout"])).toBe("deck");
+  });
+
+  it("handles ostree-style /var/home/<user>", () => {
+    process.env.HOME = "/var/home/bazzite";
+    expect(resolveTargetUser(["loadout"])).toBe("bazzite");
+  });
+
+  it("never resolves to root from HOME=/root, using $USER instead", () => {
+    process.env.HOME = "/root";
+    process.env.USER = "deck";
+    expect(resolveTargetUser(["loadout"])).toBe("deck");
+  });
+});
 
 function makeBackend() {
   const events: EmitPayload[] = [];
