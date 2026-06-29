@@ -1,4 +1,5 @@
-import { access, readFile, writeFile, rm } from "node:fs/promises";
+import { access, readFile, writeFile, rm, mkdir } from "node:fs/promises";
+import { userInfo } from "node:os";
 import type { PluginBackend, EmitPayload, PluginLogger, CallPlugin } from "@loadout/types";
 import { runFull, runStreaming } from "@loadout/exec";
 import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
@@ -24,6 +25,17 @@ import {
   type FingerprintStatus,
   type FingerprintResult,
 } from "./lib/fingerprint";
+import {
+  getStorageStatus,
+  detectCandidates,
+  mountCandidate,
+  persistFstab,
+  unpersistFstab,
+  type StorageDeps,
+  type StorageStatus,
+  type Candidate,
+  type MountResult,
+} from "./lib/storage";
 import { startWakeListener, type StopHandle } from "@loadout/wake";
 
 const PLUGIN_ID = "apex";
@@ -176,6 +188,31 @@ export default class ApexBackend implements PluginBackend {
     };
   }
 
+  // Filesystem + OS access for the game-storage detect/mount block. Same
+  // injection pattern as `deps`; swapped for fakes in tests. The backend runs
+  // as root, so it writes /etc/fstab via node fs directly and runs
+  // lsblk/mount/findmnt via @loadout/exec.
+  private get storageDeps(): StorageDeps {
+    return {
+      run: (cmd, opts) => runFull(cmd, opts),
+      readFile: (path) => readFile(path, "utf-8"),
+      writeFile: (path, content) => writeFile(path, content),
+      pathExists: async (path) => {
+        try {
+          await access(path);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      mkdirp: async (path) => {
+        await mkdir(path, { recursive: true });
+      },
+      currentUser: () => userInfo().username,
+      log: (m) => this.log?.info(`[apex] ${m}`),
+    };
+  }
+
   async onLoad(): Promise<void> {
     this.unsupported = !(await isApex());
     if (this.unsupported) {
@@ -203,14 +240,16 @@ export default class ApexBackend implements PluginBackend {
     status?: XhciStatus;
     hidOxp?: HidOxpStatus;
     fingerprint?: FingerprintStatus;
+    storage?: StorageStatus;
     autoRecoverOnWake?: boolean;
     listenerRunning?: boolean;
   }> {
     if (this.unsupported) return { unsupported: true };
-    const [status, hidOxp, fingerprint, settings] = await Promise.all([
+    const [status, hidOxp, fingerprint, storage, settings] = await Promise.all([
       computeStatus(this.deps),
       getHidOxpStatus(this.hidOxpDeps),
       fingerprintStatus(this.fpDeps),
+      getStorageStatus(this.storageDeps),
       readPluginStorage<ApexSettings>(PLUGIN_ID),
     ]);
     return {
@@ -218,9 +257,71 @@ export default class ApexBackend implements PluginBackend {
       status,
       hidOxp,
       fingerprint,
+      storage,
       autoRecoverOnWake: !!settings.autoRecoverOnWake,
       listenerRunning: this.wakeStop !== null,
     };
+  }
+
+  // ---------- game-storage detect & mount ----------
+
+  /** Re-scan for unmounted/mounted data drives (the "Detect drives" button). */
+  async detectDrives(): Promise<StorageStatus & { unsupported?: boolean; candidates?: Candidate[] }> {
+    if (this.unsupported) return { drives: [], unsupported: true };
+    const [storage, candidates] = await Promise.all([
+      getStorageStatus(this.storageDeps),
+      detectCandidates(this.storageDeps),
+    ]);
+    return { ...storage, candidates };
+  }
+
+  /**
+   * Mount the data drive with the given UUID at its Steam-visible mount point.
+   * Only ever mounts an existing filesystem — never formats or repairs it.
+   */
+  async mountDrive(uuid: string): Promise<MountResult & { unsupported?: boolean }> {
+    if (this.unsupported) {
+      return { success: false, mountpoint: "", steamLibraryFound: false, unsupported: true, error: "Not running on Apex hardware." };
+    }
+    if (!uuid) {
+      return { success: false, mountpoint: "", steamLibraryFound: false, error: "No drive selected." };
+    }
+    const result = await mountCandidate(this.storageDeps, { uuid });
+    this.emit?.({ event: "statusChanged", data: undefined });
+    return result;
+  }
+
+  /**
+   * Persist (or remove) an /etc/fstab entry so the drive auto-mounts on boot
+   * and a future update can't silently un-mount it. Backed up + idempotent.
+   */
+  async setDriveAutoMount(
+    uuid: string,
+    enabled: boolean,
+  ): Promise<{ success: boolean; unsupported?: boolean; error?: string }> {
+    if (this.unsupported) {
+      return { success: false, unsupported: true, error: "Not running on Apex hardware." };
+    }
+    if (!uuid) return { success: false, error: "No drive selected." };
+    try {
+      let result: { success: boolean; error?: string };
+      if (!enabled) {
+        result = await unpersistFstab(this.storageDeps, { uuid });
+      } else {
+        const { drives } = await getStorageStatus(this.storageDeps);
+        const drive = drives.find((d) => d.uuid.toLowerCase() === uuid.toLowerCase());
+        if (!drive) return { success: false, error: `Drive ${uuid} not found.` };
+        // Persist the live mount point if it's mounted, else the path we'd
+        // mount it at — systemd's fstab generator creates the directory.
+        const mountpoint = drive.mounted && drive.mountpoint ? drive.mountpoint : drive.suggestedMountpoint;
+        result = await persistFstab(this.storageDeps, { uuid, mountpoint, fstype: drive.fstype });
+      }
+      this.emit?.({ event: "statusChanged", data: undefined });
+      return result;
+    } catch (e) {
+      this.log?.warn(`[apex] setDriveAutoMount failed: ${e}`);
+      return { success: false, error: String(e) };
+    }
   }
 
   /**
