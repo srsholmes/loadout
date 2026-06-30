@@ -26,6 +26,7 @@ import { App, navigateOverlay } from "@overlay/App";
 import { applyTheme } from "@overlay/components/Settings";
 import { initBackend } from "@overlay/lib/backend";
 import { getConfigValue, loadUserConfig } from "@overlay/lib/userConfig";
+import { seedOverlayI18n, initOverlayI18n } from "@overlay/lib/i18n-setup";
 import { runStartupInits } from "@overlay/lib/pluginInit";
 import { ensureConnected, subscribe } from "@loadout/ui/ws-client";
 import { showOverlay } from "@overlay/lib/host";
@@ -75,6 +76,11 @@ window.__electroview = electro;
 // mirror at module load — instant on any boot after the first.
 applyTheme(getConfigValue<string>("theme", "dark"));
 
+// Seed i18n from the persisted language (mirror-cached) before first
+// render so the UI doesn't flash untranslated keys. Reconciled with the
+// authoritative on-disk config + first-run detection in boot().
+seedOverlayI18n();
+
 // Catch-all error surfaces — we want every uncaught error to reach the
 // dev console with a consistent prefix so `scripts/capture-screenshots`
 // and grep over the log can pinpoint the crash site. The PluginHost /
@@ -115,6 +121,10 @@ async function boot() {
     loadUserConfig()
       .then(() => {
         applyTheme(getConfigValue<string>("theme", "dark"));
+        // Reconcile language with the on-disk config and run first-run
+        // OS-locale detection (persists the default if unset). Fire-and-
+        // forget — the seed already initialized i18n for first paint.
+        void initOverlayI18n();
         // First run (fresh install): the user hasn't completed the welcome
         // flow or set a wake button, so open the overlay ourselves to show
         // it. The installer also pokes the loader's /show, but that races

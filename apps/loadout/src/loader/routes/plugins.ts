@@ -44,6 +44,7 @@ export const tokenRoute: RouteHandler = {
 
 const APP_BUNDLE_PATTERN = /^\/plugins\/([^/]+)\/app-bundle\.js$/;
 const ASSET_PATTERN = /^\/plugins\/([^/]+)\/assets\/(.+)$/;
+const I18N_PATTERN = /^\/plugins\/([^/]+)\/i18n\/([^/]+\.json)$/;
 
 export const pluginAppBundleRoute: RouteHandler = {
   name: "plugins.app-bundle",
@@ -106,9 +107,47 @@ export const pluginAssetRoute: RouteHandler = {
   },
 };
 
+/**
+ * Serve a plugin's translation files from its `i18n/` folder:
+ * `/plugins/<id>/i18n/<lang>.json` (e.g. `en-gb.json`). Same
+ * path-traversal guard as the asset route — the resolved path must stay
+ * inside the plugin's `i18n` directory. A missing file returns 404, which
+ * the i18n layer treats as "namespace not translated" and falls back to
+ * English.
+ */
+export const pluginI18nRoute: RouteHandler = {
+  name: "plugins.i18n",
+  match: (_req, url) => I18N_PATTERN.test(url.pathname),
+  async handle(_req, url, ctx) {
+    const match = url.pathname.match(I18N_PATTERN)!;
+    const pluginId = match[1];
+    const fileName = decodeURIComponent(match[2]);
+    if (!ctx.plugins.has(pluginId)) {
+      return new Response("Not Found", { status: 404 });
+    }
+    const i18nRoot = resolve(join(ctx.pluginsDir, pluginId, "i18n"));
+    const target = resolve(join(i18nRoot, fileName));
+    if (target !== i18nRoot && !target.startsWith(i18nRoot + sep)) {
+      return new Response("Forbidden", { status: 403 });
+    }
+    const file = Bun.file(target);
+    if (!(await file.exists())) {
+      return new Response("Not Found", { status: 404 });
+    }
+    return new Response(file, {
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "public, max-age=3600",
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
+  },
+};
+
 export const pluginsRoutes: RouteHandler[] = [
   pluginsListRoute,
   tokenRoute,
   pluginAppBundleRoute,
   pluginAssetRoute,
+  pluginI18nRoute,
 ];

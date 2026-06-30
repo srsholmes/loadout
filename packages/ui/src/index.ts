@@ -72,6 +72,27 @@ export type { ResolvedKey, KeystrokeHandler } from "./keyboard";
 export { notify, TOAST_EVENT } from "./notify";
 export type { ToastKind, NotifyOptions, ToastEventDetail } from "./notify";
 
+// i18n — shared singleton (host shell + every plugin share one instance).
+export {
+  i18n,
+  initI18n,
+  setLanguage,
+  getLanguage,
+  ensureNamespace,
+  normalizeLocale,
+  isI18nInitialized,
+  usePluginTranslation,
+  useTranslation,
+  Trans,
+  SUPPORTED_LANGUAGES,
+  DEFAULT_LANGUAGE,
+} from "./i18n";
+export type {
+  SupportedLanguage,
+  InitI18nOptions,
+  LoadNamespaceResource,
+} from "./i18n";
+
 export * as Steam from "./steam";
 export { navigate, navigateBack, closeSideMenus, navigateToPage } from "./navigation";
 

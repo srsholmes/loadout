@@ -45,6 +45,16 @@ export async function isGamescopeMode(): Promise<boolean> {
   return result === true;
 }
 
+/**
+ * Read the host OS locale (e.g. `zh_CN.UTF-8`) for first-run language
+ * detection. Returns `""` outside Electrobun (standalone dev / tests) so
+ * the caller falls back to `navigator.language`.
+ */
+export async function getSystemLocale(): Promise<string> {
+  const result = await rpcInvoke("getSystemLocale");
+  return typeof result === "string" ? result : "";
+}
+
 
 /**
  * Restart the backend `loadout.service` via the Bun host's

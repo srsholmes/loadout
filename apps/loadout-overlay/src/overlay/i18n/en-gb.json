@@ -1,0 +1,91 @@
+{
+  "settings": {
+    "tab": {
+      "general": "General",
+      "plugins": "Plugins",
+      "controller": "Controller"
+    },
+    "section": {
+      "appearance": "Appearance",
+      "language": "Language",
+      "homepage": "Homepage",
+      "sidebar": "Sidebar",
+      "theme": "Theme",
+      "maintenance": "Maintenance",
+      "about": "About"
+    },
+    "ui_scale": "UI Scale",
+    "language_desc": "Choose the display language. Where a translation is missing, text falls back to English.",
+    "on_startup": "On startup",
+    "startup": {
+      "home": "Open homepage",
+      "last_tab": "Resume last view"
+    },
+    "welcome_tour": "Welcome tour",
+    "welcome_tour_desc": "Re-opens the first-boot intro and plugin picker.",
+    "show_welcome": "Show welcome screen",
+    "auto_collapse": "Auto-collapse on focus",
+    "auto_collapse_desc": "Shrinks the sidebar to just icons when you're interacting with a plugin page.",
+    "version": "Version",
+    "installed_plugins": "Installed Plugins",
+    "plugins_enabled_count": "{{enabled}} of {{total}} enabled",
+    "no_plugins": "No plugins installed.",
+    "no_description": "No description.",
+    "controller_shortcuts": "Controller Shortcuts",
+    "controller_hint": "Hold the Guide button and press a face button to trigger an action.",
+    "loading": "Loading...",
+    "maintenance": {
+      "export_logs": {
+        "title": "Save logs to file",
+        "description": "Dumps the UI and server logs into a timestamped file in your Downloads folder — attach it when reporting an issue.",
+        "idle": "Save logs",
+        "running": "Saving...",
+        "success": "Saved to Downloads"
+      },
+      "clear_caches": {
+        "title": "Clear all data caches",
+        "description": "Wipes every plugin's cached external API responses (ProtonDB, HowLongToBeat, SteamGridDB, …) so the next view re-fetches.",
+        "idle": "Clear caches",
+        "running": "Clearing...",
+        "success": "Cleared"
+      },
+      "restart_server": {
+        "title": "Restart plugin server",
+        "description": "Reloads every plugin backend — fixes a stuck plugin without a system reboot.",
+        "idle": "Restart server",
+        "running": "Restarting...",
+        "success": "Restarted"
+      },
+      "restart_steam": {
+        "title": "Restart Steam",
+        "description": "Restarts the Steam process without rebooting. Use this if Steam crashed or froze after applying a CSS theme.",
+        "idle": "Restart Steam",
+        "running": "Restarting...",
+        "success": "Restarted"
+      },
+      "unfreeze_steam": {
+        "title": "Unfreeze Steam",
+        "description": "Sends SIGCONT to the Steam process. Use this if Steam's menu is visible but buttons don't respond after closing the overlay.",
+        "idle": "Unfreeze Steam",
+        "running": "Unfreezing...",
+        "success": "Unfrozen"
+      },
+      "shutdown": {
+        "title": "Shut down",
+        "description": "Powers the device off via systemctl poweroff.",
+        "idle": "Shut down",
+        "running": "Shutting down...",
+        "success": "Shutting down"
+      },
+      "reboot": {
+        "title": "Restart device",
+        "description": "Reboots the device via systemctl reboot.",
+        "idle": "Restart device",
+        "running": "Restarting...",
+        "success": "Restarting"
+      },
+      "arming": "Click again to confirm",
+      "failed": "Failed"
+    }
+  }
+}
