@@ -141,6 +141,17 @@ describe("pure filters", () => {
     }
   });
 
+  it("matches system tokens on segment boundaries, not bare substrings", () => {
+    // Data drives whose names merely *contain* a token are NOT system drives.
+    for (const l of ["Homelab", "BootCamp", "Varsity", "Homework", "Bootleg", "Overflow"]) {
+      expect(isSystemLabel(l)).toBe(false);
+    }
+    // …but a token as a whole `-`/`_`-separated segment still flags.
+    for (const l of ["home-A", "boot_b", "var-2", "frzr_root"]) {
+      expect(isSystemLabel(l)).toBe(true);
+    }
+  });
+
   it("isDataPartition rejects non-partitions, missing uuid, non-whitelist fs, system labels", () => {
     const base = { type: "part", fstype: "ext4", uuid: "X", label: "Games" };
     expect(isDataPartition(base)).toBe(true);

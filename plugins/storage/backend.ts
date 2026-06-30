@@ -4,13 +4,11 @@ import type { PluginBackend, EmitPayload, PluginLogger } from "@loadout/types";
 import { runFull } from "@loadout/exec";
 import {
   getStorageStatus,
-  detectCandidates,
   mountCandidate,
   persistFstab,
   unpersistFstab,
   type StorageDeps,
   type StorageStatus,
-  type Candidate,
   type MountResult,
 } from "./lib/storage";
 
@@ -88,13 +86,14 @@ export default class StorageBackend implements PluginBackend {
     return getStorageStatus(this.storageDeps);
   }
 
-  /** Re-scan for unmounted/mounted data drives (the "Detect drives" button). */
-  async detectDrives(): Promise<StorageStatus & { candidates?: Candidate[] }> {
-    const [storage, candidates] = await Promise.all([
-      getStorageStatus(this.storageDeps),
-      detectCandidates(this.storageDeps),
-    ]);
-    return { ...storage, candidates };
+  /**
+   * Re-scan for unmounted/mounted data drives (the "Detect drives" button).
+   * `getStorageStatus` already enumerates every managed drive (including the
+   * unmounted ones the UI offers to mount), so a separate candidate scan would
+   * just be a second redundant `lsblk`.
+   */
+  async detectDrives(): Promise<StorageStatus> {
+    return getStorageStatus(this.storageDeps);
   }
 
   /**

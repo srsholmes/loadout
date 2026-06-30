@@ -24,9 +24,6 @@ const driveFixture = {
   inFstab: false,
 };
 const storageStatusImpl = mock(async () => ({ drives: [{ ...driveFixture }] }));
-const detectCandidatesImpl = mock(async () => [
-  { path: "/dev/nvme1n1p1", label: "Games", uuid: "GAME-1", fstype: "ext4", size: 1024 ** 4 },
-]);
 const mountCandidateImpl = mock(async () => ({
   success: true,
   mountpoint: "/run/media/deck/Games",
@@ -37,7 +34,6 @@ const unpersistFstabImpl = mock(async () => ({ success: true }));
 
 mock.module("./lib/storage", () => ({
   getStorageStatus: storageStatusImpl,
-  detectCandidates: detectCandidatesImpl,
   mountCandidate: mountCandidateImpl,
   persistFstab: persistFstabImpl,
   unpersistFstab: unpersistFstabImpl,
@@ -90,7 +86,6 @@ function makeBackend() {
 describe("Storage backend", () => {
   beforeEach(() => {
     storageStatusImpl.mockClear();
-    detectCandidatesImpl.mockClear();
     mountCandidateImpl.mockClear();
     persistFstabImpl.mockClear();
     unpersistFstabImpl.mockClear();
@@ -105,13 +100,12 @@ describe("Storage backend", () => {
     expect(storageStatusImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("detectDrives returns the scan and candidates", async () => {
+  it("detectDrives re-scans and returns the storage status", async () => {
     const { backend } = makeBackend();
 
     const res = await backend.detectDrives();
     expect(res.drives[0]?.uuid).toBe("GAME-1");
-    expect(res.candidates?.[0]?.uuid).toBe("GAME-1");
-    expect(detectCandidatesImpl).toHaveBeenCalledTimes(1);
+    expect(storageStatusImpl).toHaveBeenCalledTimes(1);
   });
 
   it("mountDrive mounts through the lib and emits statusChanged", async () => {

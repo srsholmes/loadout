@@ -64,10 +64,12 @@ export const FSTAB_BACKUP = "/etc/fstab.loadout.bak";
 export const WHITELIST_FS = ["ext4", "btrfs", "xfs", "exfat", "ntfs", "vfat"] as const;
 
 /**
- * Label/mountpoint tokens that mark a partition as system-owned. SteamOS (and
- * friends) suffix these (rootfs-A, var-B, …), so we substring-match
- * case-insensitively. Better to skip a genuinely-named data drive than to ever
- * touch a system partition.
+ * Label tokens that mark a partition as system-owned. SteamOS (and friends)
+ * suffix these with an A/B slot (`rootfs-A`, `var-B`, …), so we match a token
+ * that is either the whole label or a `-`/`_`-separated segment of it — NOT a
+ * bare substring, which would wrongly skip genuinely-named data drives like
+ * `Homelab` (contains "home") or `BootCamp` (contains "boot"). Still biased
+ * toward safety: anything that *is* one of these segments is left untouched.
  */
 export const SYSTEM_LABEL_TOKENS = [
   "rootfs",
@@ -157,8 +159,14 @@ export function isWhitelistedFs(fstype: string | null | undefined): boolean {
 /** True if a label looks like a system partition we must never touch. */
 export function isSystemLabel(label: string | null | undefined): boolean {
   if (!label) return false;
+  const tokens = SYSTEM_LABEL_TOKENS as readonly string[];
   const l = label.toLowerCase();
-  return SYSTEM_LABEL_TOKENS.some((t) => l.includes(t));
+  // Whole-label match first (covers multi-word tokens like `frzr_root`), then
+  // match on the `-`/`_`-separated A/B-slot segments SteamOS uses (`rootfs-A`,
+  // `var-b`) — never a bare substring, which would wrongly skip data drives
+  // named `Homelab` ("home") or `BootCamp` ("boot").
+  if (tokens.includes(l)) return true;
+  return l.split(/[-_]/).some((seg) => tokens.includes(seg));
 }
 
 function toBytes(size: number | string | null | undefined): number {
