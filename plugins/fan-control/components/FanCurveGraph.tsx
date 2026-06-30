@@ -1,5 +1,5 @@
 import { useRef, type PointerEvent as ReactPointerEvent } from "react";
-import type { FanCurvePoint } from "../lib/fan-curves";
+import { interpolateCurve, type FanCurvePoint } from "../lib/fan-curves";
 import { CURVE_TEMP_MAX, CURVE_TEMP_MIN } from "../lib/custom-curve";
 
 /**
@@ -51,6 +51,8 @@ export interface FanCurveGraphProps {
   onCommit?: () => void;
   /** Current CPU/SoC temperature, drawn as a live operating-point marker. */
   currentTempC?: number | null;
+  /** When false, nodes can't be dragged/selected — used to *visualise* a
+   *  read-only preset curve. Defaults to true (the custom-curve editor). */
   editable?: boolean;
 }
 
@@ -139,7 +141,7 @@ export function FanCurveGraph({
       ? Math.max(CURVE_TEMP_MIN, Math.min(CURVE_TEMP_MAX, currentTempC))
       : null;
   const livePct =
-    liveTemp !== null ? interpolateForMarker(points, liveTemp) : null;
+    liveTemp !== null ? interpolateCurve(points, liveTemp) : null;
 
   return (
     <svg
@@ -249,7 +251,7 @@ export function FanCurveGraph({
               cy={cy}
               r={10}
               fill="transparent"
-              style={{ cursor: editable ? "grab" : "pointer" }}
+              style={{ cursor: editable ? "grab" : "default" }}
               onPointerDown={(e) => handlePointerDown(e, i)}
             />
             <circle
@@ -266,25 +268,4 @@ export function FanCurveGraph({
       })}
     </svg>
   );
-}
-
-/**
- * Local copy of interpolateCurve for the live marker only. Kept separate
- * from the backend's curve maths so the graph stays a leaf component with
- * no import cycle through the plugin's logic; the parent already feeds it
- * sanitised, ascending points.
- */
-function interpolateForMarker(curve: FanCurvePoint[], tempC: number): number {
-  if (tempC <= curve[0].tempC) return curve[0].percent;
-  const lastIdx = curve.length - 1;
-  if (tempC >= curve[lastIdx].tempC) return curve[lastIdx].percent;
-  for (let i = 0; i < lastIdx; i++) {
-    const lo = curve[i];
-    const hi = curve[i + 1];
-    if (tempC >= lo.tempC && tempC <= hi.tempC) {
-      const ratio = (tempC - lo.tempC) / (hi.tempC - lo.tempC);
-      return Math.round(lo.percent + ratio * (hi.percent - lo.percent));
-    }
-  }
-  return curve[lastIdx].percent;
 }

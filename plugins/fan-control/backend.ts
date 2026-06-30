@@ -23,7 +23,7 @@ import {
   type PresetName,
 } from "./lib/fan-curves";
 import { DEFAULT_CUSTOM_CURVE, sanitiseCurve } from "./lib/custom-curve";
-import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
+import { readPluginStorage, mutatePluginStorage } from "@loadout/plugin-storage";
 import {
   classifyTempZone,
   cpuChipPriority,
@@ -711,10 +711,12 @@ export default class FanControlBackend implements PluginBackend {
     this.customCurve = curve;
 
     try {
-      // Read-modify-write so we don't clobber per-game profiles / the
-      // enabled flag that share this plugin's storage file.
-      const existing = await readPluginStorage<Record<string, unknown>>(PLUGIN_ID);
-      await writePluginStorage(PLUGIN_ID, { ...existing, customCurve: curve });
+      // Serialized read-modify-write so a concurrent per-game-profile save
+      // (same storage file) can't lost-update the curve, and vice versa.
+      await mutatePluginStorage<Record<string, unknown>>(PLUGIN_ID, (existing) => ({
+        ...existing,
+        customCurve: curve,
+      }));
     } catch (err) {
       console.error("[fan-control] Failed to persist custom curve:", err);
     }
@@ -1056,12 +1058,14 @@ export default class FanControlBackend implements PluginBackend {
 
     this.safetyEngaged = true;
 
-    // Curve loop is the authority on the fan write when a preset is
-    // active — it already calls applySafetyFloor on every tick, and
-    // having the watchdog write in parallel races (curve writes the
-    // curve target, watchdog writes the bare floor, fans flap). Just
-    // flag engaged and let the curve loop do the write.
-    if (this.activePreset !== null) return;
+    // Curve loop is the authority on the fan write when a preset OR the
+    // custom curve is active — it already calls applySafetyFloor on every
+    // tick, and having the watchdog write in parallel races (curve writes
+    // the curve target, watchdog writes the bare floor, fans flap). Just
+    // flag engaged and let the curve loop do the write. (customCurveActive
+    // matters because applyCustomCurve sets activePreset=null while still
+    // running startCurveLoop.)
+    if (this.activePreset !== null || this.customCurveActive) return;
 
     // Manual mode (or pure-auto with no user intent): the watchdog is
     // the only periodic writer, so it owns the write here. Pass the

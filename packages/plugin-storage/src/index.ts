@@ -79,3 +79,36 @@ export async function writePluginStorage<T extends object>(
   await writeFile(tmp, JSON.stringify(data, null, 2) + "\n", "utf-8");
   await rename(tmp, path);
 }
+
+// Per-plugin write lock. Several call sites do independent read-modify-write
+// on the SAME plugin file (e.g. a custom-curve save and a per-game-profile
+// save both merging into fan-control.json). Without serialization their
+// reads can interleave and one write clobbers the other's top-level keys —
+// a lost update. One chained promise per pluginId makes those cycles
+// strictly sequential.
+const storageLocks = new Map<string, Promise<unknown>>();
+
+/**
+ * Serialized read-modify-write of a plugin's JSON. `mutate` receives the
+ * current contents and returns the next contents; for a given `pluginId`
+ * the read+write is queued behind any in-flight mutation, so concurrent
+ * callers each observe the previous one's result instead of overwriting it.
+ * Use this instead of a bare read→spread→write whenever more than one code
+ * path persists into the same file. Throws on I/O failure (after the lock
+ * advances) — callers should catch and warn.
+ */
+export async function mutatePluginStorage<T extends object>(
+  pluginId: string,
+  mutate: (current: Partial<T>) => T,
+): Promise<void> {
+  const prior = storageLocks.get(pluginId) ?? Promise.resolve();
+  // A failed prior mutation must not poison the chain for later writers.
+  const run = prior
+    .catch(() => {})
+    .then(async () => {
+      const current = await readPluginStorage<T>(pluginId);
+      await writePluginStorage(pluginId, mutate(current));
+    });
+  storageLocks.set(pluginId, run);
+  return run;
+}

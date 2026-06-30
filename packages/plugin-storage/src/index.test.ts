@@ -20,6 +20,7 @@ import {
   pluginStoragePath,
   readPluginStorage,
   writePluginStorage,
+  mutatePluginStorage,
 } from "./index";
 
 let tempDir: string;
@@ -168,5 +169,56 @@ describe("writePluginStorage", () => {
     const out = await readPluginStorage<{ who: string }>("parallel");
     expect(out.who).toBeDefined();
     expect(["a", "b"]).toContain(out.who as string);
+  });
+});
+
+describe("mutatePluginStorage", () => {
+  it("creates the file and applies the mutation", async () => {
+    await mutatePluginStorage<Record<string, number>>(
+      "m1",
+      (cur) => ({ ...cur, a: 1 }) as Record<string, number>,
+    );
+    expect(await readPluginStorage("m1")).toEqual({ a: 1 });
+  });
+
+  it("preserves sibling keys across a read-modify-write", async () => {
+    await writePluginStorage("m2", { keep: "yes" });
+    await mutatePluginStorage<Record<string, unknown>>("m2", (cur) => ({
+      ...cur,
+      added: 1,
+    }));
+    expect(await readPluginStorage("m2")).toEqual({ keep: "yes", added: 1 });
+  });
+
+  it("serializes concurrent read-modify-writes without lost updates", async () => {
+    // Fire N mutations concurrently, each adding its own key. With a bare
+    // read→spread→write these interleave and clobber each other; the
+    // per-plugin lock makes them strictly sequential so every key survives.
+    const N = 25;
+    await Promise.all(
+      Array.from({ length: N }, (_, i) =>
+        mutatePluginStorage<Record<string, number>>(
+          "m3",
+          (cur) => ({ ...cur, [`k${i}`]: i }) as Record<string, number>,
+        ),
+      ),
+    );
+    const stored = await readPluginStorage<Record<string, number>>("m3");
+    expect(Object.keys(stored)).toHaveLength(N);
+    for (let i = 0; i < N; i++) expect(stored[`k${i}`]).toBe(i);
+  });
+
+  it("a thrown mutation rejects but doesn't poison later writes", async () => {
+    await expect(
+      mutatePluginStorage("m4", () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    // The chain recovers — the next mutation still lands.
+    await mutatePluginStorage<Record<string, unknown>>("m4", (cur) => ({
+      ...cur,
+      ok: true,
+    }));
+    expect(await readPluginStorage("m4")).toEqual({ ok: true });
   });
 });

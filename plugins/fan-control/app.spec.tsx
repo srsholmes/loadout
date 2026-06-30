@@ -227,4 +227,97 @@ describe("fan-control plugin", () => {
       expect(container.textContent).toContain("Point 1 / 4");
     });
   });
+
+  it("visualises the selected preset as a read-only curve graph (no editor controls)", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getFanInfo")
+        return Promise.resolve({
+          ...mockFanInfo,
+          mode: "manual",
+          activePreset: "balanced",
+        });
+      if (method === "getCustomCurve") return Promise.resolve(mockCustomCurve);
+      return Promise.resolve(null);
+    });
+    const container = createContainer();
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      // The curve graph renders for the active preset...
+      expect(
+        container.querySelector("svg[aria-label='Fan curve graph']"),
+      ).not.toBeNull();
+      expect(container.textContent).toContain("Balanced Curve");
+      // ...but it's read-only: no add/remove-point controls, no point selector.
+      expect(container.querySelector("[aria-label='Add point']")).toBeNull();
+      expect(container.textContent).not.toContain("Point 1 / 4");
+    });
+  });
+
+  it("renders a saved per-game profile as a card with its setting and a Remove action", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getFanInfo") return Promise.resolve(mockFanInfo);
+      if (method === "getPerGameEnabled") return Promise.resolve(true);
+      if (method === "getGameProfiles")
+        return Promise.resolve([
+          { appId: 220, gameName: "Half-Life 2", mode: "manual", speed: 65 },
+        ]);
+      return Promise.resolve(null);
+    });
+    const container = createContainer();
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Saved profiles (1)");
+      expect(container.textContent).toContain("Half-Life 2");
+      expect(container.textContent).toContain("65%"); // fanProfileBadge label
+      const removeBtn = Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent?.trim() === "Remove",
+      );
+      expect(removeBtn).toBeTruthy();
+    });
+  });
+});
+
+describe("fan-control pure helpers", () => {
+  it("editCurvePoint clamps temp between neighbours (1°C gap) and percent to [0,100]", async () => {
+    const { editCurvePoint } = await import("./app");
+    const pts = [
+      { tempC: 30, percent: 10 },
+      { tempC: 50, percent: 50 },
+      { tempC: 80, percent: 90 },
+    ];
+    // Middle point can't pass its upper neighbour (80) minus 1.
+    expect(editCurvePoint(pts, 1, { tempC: 999 })[1].tempC).toBe(79);
+    // ...nor its lower neighbour (30) plus 1.
+    expect(editCurvePoint(pts, 1, { tempC: 0 })[1].tempC).toBe(31);
+    expect(editCurvePoint(pts, 1, { percent: 200 })[1].percent).toBe(100);
+    // Out-of-range index is a no-op (same reference back).
+    expect(editCurvePoint(pts, 9, { percent: 5 })).toBe(pts);
+  });
+
+  it("insertCurvePoint adds a midpoint node in the widest temperature gap", async () => {
+    const { insertCurvePoint } = await import("./app");
+    const pts = [
+      { tempC: 30, percent: 10 },
+      { tempC: 40, percent: 20 },
+      { tempC: 80, percent: 90 }, // widest gap is 40→80
+    ];
+    const { points, index } = insertCurvePoint(pts);
+    expect(points).toHaveLength(4);
+    expect(index).toBe(2);
+    expect(points[2]).toEqual({ tempC: 60, percent: 55 });
+  });
+
+  it("fanProfileBadge formats a manual speed vs auto mode", async () => {
+    const { fanProfileBadge } = await import("./app");
+    expect(
+      fanProfileBadge({ appId: 1, gameName: "x", mode: "manual", speed: 55 }),
+    ).toBe("55%");
+    expect(fanProfileBadge({ appId: 1, gameName: "x", mode: "auto" })).toBe(
+      "AUTO",
+    );
+  });
 });

@@ -26,7 +26,7 @@ import {
   SegmentedItem,
 } from "@loadout/ui";
 import { steamArtworkUrls } from "@loadout/steam-paths/artwork";
-import type { FanCurvePoint } from "./lib/fan-curves";
+import { FAN_CURVES, type FanCurvePoint } from "./lib/fan-curves";
 import {
   CURVE_MAX_POINTS,
   CURVE_MIN_POINTS,
@@ -280,65 +280,42 @@ function FanControl() {
     [call],
   );
 
-  // Live edit of one point's temp/percent. Temp is clamped between its
-  // neighbours (1 °C gap) so the curve order never breaks mid-edit.
+  // Live edit of one point's temp/percent. The curve maths live in pure
+  // module helpers; here we just push the result to state and (on commit)
+  // persist — no side effects inside the setState updater, so a Strict /
+  // concurrent re-render can't double-fire the backend write.
   const updatePoint = useCallback(
-    (index: number, next: Partial<FanCurvePoint>, commit: boolean) => {
-      setCustomPoints((prev) => {
-        const pts = prev.map((p) => ({ ...p }));
-        const point = pts[index];
-        if (!point) return prev;
-        if (typeof next.percent === "number") {
-          point.percent = Math.max(0, Math.min(100, Math.round(next.percent)));
-        }
-        if (typeof next.tempC === "number") {
-          const minT = index > 0 ? pts[index - 1].tempC + 1 : CURVE_TEMP_MIN;
-          const maxT =
-            index < pts.length - 1 ? pts[index + 1].tempC - 1 : CURVE_TEMP_MAX;
-          point.tempC = Math.max(minT, Math.min(maxT, Math.round(next.tempC)));
-        }
-        if (commit) void commitCustomPoints(pts);
-        return pts;
-      });
+    ({
+      index,
+      next,
+      commit,
+    }: {
+      index: number;
+      next: Partial<FanCurvePoint>;
+      commit: boolean;
+    }) => {
+      const pts = editCurvePoint(customPoints, index, next);
+      setCustomPoints(pts);
+      if (commit) void commitCustomPoints(pts);
     },
-    [commitCustomPoints],
+    [customPoints, commitCustomPoints],
   );
 
   const handleAddPoint = useCallback(() => {
-    setCustomPoints((prev) => {
-      if (prev.length >= CURVE_MAX_POINTS) return prev;
-      // Insert into the widest temperature gap so the new node has room.
-      let gapIdx = 0;
-      let gapSize = -1;
-      for (let i = 0; i < prev.length - 1; i++) {
-        const size = prev[i + 1].tempC - prev[i].tempC;
-        if (size > gapSize) {
-          gapSize = size;
-          gapIdx = i;
-        }
-      }
-      const lo = prev[gapIdx];
-      const hi = prev[gapIdx + 1];
-      const mid: FanCurvePoint = {
-        tempC: Math.round((lo.tempC + hi.tempC) / 2),
-        percent: Math.round((lo.percent + hi.percent) / 2),
-      };
-      const pts = [...prev.slice(0, gapIdx + 1), mid, ...prev.slice(gapIdx + 1)];
-      setSelectedPoint(gapIdx + 1);
-      void commitCustomPoints(pts);
-      return pts;
-    });
-  }, [commitCustomPoints]);
+    if (customPoints.length >= CURVE_MAX_POINTS) return;
+    const { points: pts, index } = insertCurvePoint(customPoints);
+    setCustomPoints(pts);
+    setSelectedPoint(index);
+    void commitCustomPoints(pts);
+  }, [customPoints, commitCustomPoints]);
 
   const handleRemovePoint = useCallback(() => {
-    setCustomPoints((prev) => {
-      if (prev.length <= CURVE_MIN_POINTS) return prev;
-      const pts = prev.filter((_, i) => i !== selectedPoint);
-      setSelectedPoint((i) => Math.min(i, pts.length - 1));
-      void commitCustomPoints(pts);
-      return pts;
-    });
-  }, [commitCustomPoints, selectedPoint]);
+    if (customPoints.length <= CURVE_MIN_POINTS) return;
+    const pts = customPoints.filter((_, i) => i !== selectedPoint);
+    setCustomPoints(pts);
+    setSelectedPoint((i) => Math.min(i, pts.length - 1));
+    void commitCustomPoints(pts);
+  }, [customPoints, selectedPoint, commitCustomPoints]);
 
   const handleResetCurve = useCallback(() => {
     setSelectedPoint(0);
@@ -532,6 +509,29 @@ function FanControl() {
               </div>
             </div>
 
+            {/* PRESET CURVE PREVIEW — the same graph, read-only, so the
+                user can see the shape of the selected built-in preset
+                without being able to edit it. Switching to Custom swaps in
+                the editable editor below. */}
+            {!customActive && activePreset && (
+              <div className="subsection">
+                <div className="subsection-label mb-3">
+                  {PRESETS.find((p) => p.key === activePreset)?.label ?? "Preset"} Curve
+                </div>
+                <div className="bg-base-300/40 rounded-xl p-3">
+                  <FanCurveGraph
+                    points={FAN_CURVES[activePreset]}
+                    currentTempC={primaryTemp}
+                    editable={false}
+                  />
+                </div>
+                <div className="subsection-desc mt-2.5">
+                  Preview of the {PRESETS.find((p) => p.key === activePreset)?.label ?? "preset"} curve
+                  (read-only). The dashed line marks the current temperature — pick Custom to draw your own.
+                </div>
+              </div>
+            )}
+
             {/* CUSTOM CURVE EDITOR — graph + per-point sliders. Pointer
                 users drag nodes on the graph; gamepad users select a node
                 and edit it with the two sliders below. */}
@@ -569,7 +569,7 @@ function FanControl() {
                           currentTempC={primaryTemp}
                           onSelectPoint={setSelectedPoint}
                           onChangePoint={(i, p) =>
-                            updatePoint(i, p, false)
+                            updatePoint({ index: i, next: p, commit: false })
                           }
                           onCommit={() => commitCustomPoints(customPoints)}
                         />
@@ -642,10 +642,10 @@ function FanControl() {
                           max={maxTemp}
                           step={1}
                           onChange={(val) =>
-                            updatePoint(selectedPoint, { tempC: val }, false)
+                            updatePoint({ index: selectedPoint, next: { tempC: val }, commit: false })
                           }
                           onCommit={(val) =>
-                            updatePoint(selectedPoint, { tempC: val }, true)
+                            updatePoint({ index: selectedPoint, next: { tempC: val }, commit: true })
                           }
                         />
                       </div>
@@ -667,10 +667,10 @@ function FanControl() {
                           max={100}
                           step={1}
                           onChange={(val) =>
-                            updatePoint(selectedPoint, { percent: val }, false)
+                            updatePoint({ index: selectedPoint, next: { percent: val }, commit: false })
                           }
                           onCommit={(val) =>
-                            updatePoint(selectedPoint, { percent: val }, true)
+                            updatePoint({ index: selectedPoint, next: { percent: val }, commit: true })
                           }
                         />
                       </div>
@@ -816,10 +816,60 @@ function FanControl() {
 
 /** Compact saved-profile label for a per-game fan card's overlay badge,
  *  e.g. "55%" for a manual speed or "AUTO" for auto mode. */
-function fanProfileBadge(p: FanGameProfile): string {
+export function fanProfileBadge(p: FanGameProfile): string {
   return p.mode === "manual" && typeof p.speed === "number"
     ? `${p.speed}%`
     : "AUTO";
+}
+
+/** Return a new curve with one point's temp/percent edited. Percent is
+ *  clamped to [0,100]; temp is clamped between its neighbours (1 °C gap)
+ *  so the curve can never reorder. Pure — out-of-range index is a no-op. */
+export function editCurvePoint(
+  points: FanCurvePoint[],
+  index: number,
+  next: Partial<FanCurvePoint>,
+): FanCurvePoint[] {
+  if (index < 0 || index >= points.length) return points;
+  const pts = points.map((p) => ({ ...p }));
+  const point = pts[index];
+  if (typeof next.percent === "number") {
+    point.percent = Math.max(0, Math.min(100, Math.round(next.percent)));
+  }
+  if (typeof next.tempC === "number") {
+    const minT = index > 0 ? pts[index - 1].tempC + 1 : CURVE_TEMP_MIN;
+    const maxT =
+      index < pts.length - 1 ? pts[index + 1].tempC - 1 : CURVE_TEMP_MAX;
+    point.tempC = Math.max(minT, Math.min(maxT, Math.round(next.tempC)));
+  }
+  return pts;
+}
+
+/** Insert a node into the widest temperature gap (midpoint of temp +
+ *  percent), returning the new array and the inserted index. Pure. */
+export function insertCurvePoint(points: FanCurvePoint[]): {
+  points: FanCurvePoint[];
+  index: number;
+} {
+  let gapIdx = 0;
+  let gapSize = -1;
+  for (let i = 0; i < points.length - 1; i++) {
+    const size = points[i + 1].tempC - points[i].tempC;
+    if (size > gapSize) {
+      gapSize = size;
+      gapIdx = i;
+    }
+  }
+  const lo = points[gapIdx];
+  const hi = points[gapIdx + 1];
+  const mid: FanCurvePoint = {
+    tempC: Math.round((lo.tempC + hi.tempC) / 2),
+    percent: Math.round((lo.percent + hi.percent) / 2),
+  };
+  return {
+    points: [...points.slice(0, gapIdx + 1), mid, ...points.slice(gapIdx + 1)],
+    index: gapIdx + 1,
+  };
 }
 
 /** Returns a color based on temperature thresholds. Uses theme tokens

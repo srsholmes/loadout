@@ -401,6 +401,43 @@ describe("FanControlBackend", () => {
       expect(internals(backend).customCurveActive).toBe(false);
       expect(internals(backend).activePreset).toBe("balanced");
     });
+
+    it("setFanMode('auto') clears the active custom curve", async () => {
+      withFanDevice();
+      await backend.applyCustomCurve();
+      expect(internals(backend).customCurveActive).toBe(true);
+      await backend.setFanMode("auto");
+      expect(internals(backend).customCurveActive).toBe(false);
+    });
+
+    it("re-applies and keeps the loop running when the curve is edited while active", async () => {
+      withFanDevice();
+      await backend.applyCustomCurve();
+      // Capture the writes triggered by the edit's immediate applyCurve().
+      const teeWrites: string[] = [];
+      spawnSpy.mockImplementation(
+        ((cmd: SpawnArgv) => {
+          if (cmd[0] === "tee") teeWrites.push(cmd[1]);
+          return asSpawned({
+            stdout: new ReadableStream({ start(c) { c.close(); } }),
+            stderr: new ReadableStream({ start(c) { c.close(); } }),
+            stdin: null,
+            exited: Promise.resolve(0),
+          });
+        }) as typeof Bun.spawn,
+      );
+      mockReadFile.mockImplementation(() => Promise.resolve("45000"));
+
+      await backend.setCustomCurve([
+        { tempC: 30, percent: 25 },
+        { tempC: 80, percent: 100 },
+      ]);
+
+      expect(internals(backend).customCurveActive).toBe(true);
+      expect(internals(backend).curveInterval).toBeDefined();
+      // The edit re-applied the curve immediately (a pwm write happened).
+      expect(teeWrites.some((p) => p.endsWith("pwm1"))).toBe(true);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -853,6 +890,24 @@ describe("FanControlBackend", () => {
       await internals(backend).safetyWatchdogTick();
       // No engagement, no writes — kernel auto stays in charge.
       expect(writes).toEqual([]);
+    });
+
+    // Regression: with the custom curve active, the curve loop (applyCurve)
+    // already enforces the floor on every tick. The watchdog must NOT also
+    // write the same pwm node — two timers racing it makes the fan flap.
+    // Before the fix the guard only checked activePreset (null for a custom
+    // curve), so the watchdog wrote in parallel.
+    it("does NOT write when the custom curve is active — the curve loop owns the write", async () => {
+      setupFanAndSensor();
+      internals(backend).customCurveActive = true;
+      mockReadFile.mockImplementation(() => Promise.resolve("82000")); // hot, ≥ WARM_C
+      const writes = captureTeeWrites();
+
+      await internals(backend).safetyWatchdogTick();
+
+      // Watchdog only flags engaged; it leaves the single write to the loop.
+      expect(writes).toEqual([]);
+      expect(internals(backend).safetyEngaged).toBe(true);
     });
 
     it("forces ≥60 % at hot temp (82 C)", async () => {
