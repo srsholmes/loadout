@@ -420,6 +420,16 @@
         "react-icons": "^5.6.0",
       },
     },
+    "plugins/storage": {
+      "name": "@loadout/plugin-storage-mount",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/ui": "workspace:*",
+        "react": "^18.3.0",
+        "react-dom": "^18.3.0",
+        "react-icons": "^5.6.0",
+      },
+    },
     "plugins/storage-cleaner": {
       "name": "@loadout/plugin-storage-cleaner",
       "version": "0.0.1",
@@ -679,6 +689,8 @@
     "@loadout/plugin-storage": ["@loadout/plugin-storage@workspace:packages/plugin-storage"],
 
     "@loadout/plugin-storage-cleaner": ["@loadout/plugin-storage-cleaner@workspace:plugins/storage-cleaner"],
+
+    "@loadout/plugin-storage-mount": ["@loadout/plugin-storage-mount@workspace:plugins/storage"],
 
     "@loadout/plugin-store-bridge": ["@loadout/plugin-store-bridge@workspace:plugins/store-bridge"],
 

@@ -375,6 +375,7 @@ Install and configure the LSFG-VK Vulkan frame generation layer
 - **[RGB Control](plugins/rgb-control/README.md)** — RGB LED control for Linux handhelds — supports OpenRGB, sysfs LEDs, and platform-specific interfaces
 - **[Sound Loader](plugins/sound-loader/README.md)** — Browse, install, and toggle community UI sound packs from deckthemes.com
 - **[SteamGridDB](plugins/steamgriddb/README.md)** — Browse and apply custom game art (grids, heroes, logos, icons) from SteamGridDB
+- **[Storage](plugins/storage/README.md)** — Detect and mount a game-storage drive (e.g. a second SSD holding a Steam library) that the system stopped auto-mounting after an update, and optionally pin it in /etc/fstab so it survives future updates. Works on any device.
 - **[Storage Cleaner](plugins/storage-cleaner/README.md)** — Shows disk usage, shader cache sizes, and lets users clean up space
 - **[Store Bridge](plugins/store-bridge/README.md)** — Surface your Epic Games library as Steam shortcuts (GOG, Amazon, Ubisoft, xCloud planned)
 - **[TDP Control](plugins/tdp-control/README.md)** — Adjust CPU/APU TDP wattage with presets and a slider
