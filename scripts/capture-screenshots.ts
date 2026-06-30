@@ -92,6 +92,18 @@ const PAGE_RECIPES: Record<string, PageShot[]> = {
     { name: "presets", steps: [{ kind: "aria", label: "Manage presets" }] },
   ],
   steamgriddb: [{ name: "detail", steps: [{ kind: "tile" }] }],
+  // Custom fan-curve editor only renders in Manual mode after the Custom
+  // preset is selected — flip Manual (header), then pick Custom to reveal
+  // the curve graph + per-point sliders.
+  "fan-control": [
+    {
+      name: "custom-curve",
+      steps: [
+        { kind: "text", label: "Manual" },
+        { kind: "text", label: "Custom" },
+      ],
+    },
+  ],
 };
 
 // Steps run on a plugin's LANDING view before its landing shot — to put a
