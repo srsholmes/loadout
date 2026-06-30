@@ -7,7 +7,24 @@ describe("matchDevice", () => {
     expect(d.name).toBe("OneXPlayer APEX");
     expect(d.minTdp).toBe(5);
     expect(d.maxTdp).toBe(80);
+    expect(d.batteryMaxTdp).toBe(55);
     expect(d.profiles).toEqual({ Silent: 15, Balanced: 30, Performance: 50 });
+  });
+
+  it("carries a battery cap on every match (<= the plugged max)", () => {
+    const cases = [
+      "ONEXPLAYER APEX",
+      "Galileo",
+      "ASUS ROG Ally X RC72LA",
+      "Claw 8 AI",
+      "Some Unknown Laptop", // vendor fallback
+    ];
+    for (const dmi of cases) {
+      const d = matchDevice(dmi, "AMD");
+      expect(typeof d.batteryMaxTdp).toBe("number");
+      expect(d.batteryMaxTdp).toBeLessThanOrEqual(d.maxTdp);
+      expect(d.batteryMaxTdp).toBeGreaterThanOrEqual(d.minTdp);
+    }
   });
 
   it("is order-sensitive: more specific entries win over generic ones", () => {

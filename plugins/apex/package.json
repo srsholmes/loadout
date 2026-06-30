@@ -6,12 +6,14 @@
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "react-icons": "^5.6.0",
-    "@loadout/ui": "workspace:*"
+    "@loadout/ui": "workspace:*",
+    "@loadout/devices": "workspace:*",
+    "@loadout/wake": "workspace:*"
   },
   "plugin": {
     "id": "apex",
     "name": "Apex",
-    "description": "OneXPlayer Apex device fixes: recover the internal gamepad when its xHCI controller dies on resume (or blacklist the hid-oxp driver to prevent the drop-out), and block the fingerprint reader from waking the device on a light touch.",
+    "description": "OneXPlayer Apex device fixes: recover the internal gamepad when its xHCI controller dies on resume — manually or automatically on every wake (or blacklist the hid-oxp driver to prevent the drop-out), and block the fingerprint reader from waking the device on a light touch.",
     "permissions": {
       "commands": [
         "tee",

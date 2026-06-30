@@ -200,18 +200,74 @@ describe("TdpControlBackend", () => {
       expect(result.error).toContain("No TDP control method");
     });
 
-    it("rejects TDP below minimum", async () => {
-      // Default min is 5
-      const result = await backend.setTdp(1);
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("must be between");
+    it("short-circuits on method=none before clamping (any value)", async () => {
+      // setTdp no longer rejects out-of-range values — it clamps. But with no
+      // control method it still can't write, so the none-guard fires first.
+      expect((await backend.setTdp(1)).error).toContain("No TDP control method");
+      expect((await backend.setTdp(100)).error).toContain(
+        "No TDP control method",
+      );
+    });
+  });
+
+  // ── power-state TDP limits (plugged vs battery) ───────────────────
+  //
+  // setTdp clamps to a *power-state-aware* ceiling and remembers the raw
+  // request (desiredTdp) so an AC transition can re-apply it. We stub the
+  // hardware write so we can assert the clamp math without /sys.
+
+  describe("power-state limits", () => {
+    function configure(opts: { ac: boolean | null }) {
+      const b = backend as unknown as {
+        method: string;
+        minWatts: number;
+        maxWatts: number;
+        batteryMaxWatts: number;
+        acPowerOnline: boolean | null;
+        desiredTdp: number | null;
+        currentTdp: number | null;
+        setTdpViaRyzenadj: (w: number) => Promise<void>;
+      };
+      b.method = "ryzenadj";
+      b.minWatts = 5;
+      b.maxWatts = 80;
+      b.batteryMaxWatts = 55;
+      b.acPowerOnline = opts.ac;
+      b.setTdpViaRyzenadj = async () => {}; // stub the SMU write
+      return b;
+    }
+
+    it("applies the full value when plugged in", async () => {
+      const b = configure({ ac: true });
+      const result = await backend.setTdp(70);
+      expect(result.success).toBe(true);
+      expect(b.currentTdp).toBe(70);
+      expect(b.desiredTdp).toBe(70);
     });
 
-    it("rejects TDP above maximum", async () => {
-      // Default max is 35
-      const result = await backend.setTdp(100);
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("must be between");
+    it("clamps the applied value to the battery cap on battery", async () => {
+      const b = configure({ ac: false });
+      const result = await backend.setTdp(70);
+      expect(result.success).toBe(true);
+      // Cap wins over the request, but the intent is preserved for spring-back.
+      expect(b.currentTdp).toBe(55);
+      expect(b.desiredTdp).toBe(70);
+      const changed = emittedEvents.find((e) => e.event === "tdpChanged");
+      expect((changed?.data as { currentTdp: number }).currentTdp).toBe(55);
+    });
+
+    it("treats unknown AC state as plugged (no over-restriction)", async () => {
+      const b = configure({ ac: null });
+      await backend.setTdp(70);
+      expect(b.currentTdp).toBe(70);
+    });
+
+    it("getTdpInfo reports the effective cap plus both ceilings", async () => {
+      configure({ ac: false });
+      const info = await backend.getTdpInfo();
+      expect(info.maxWatts).toBe(55); // effective (on battery)
+      expect(info.pluggedMaxWatts).toBe(80);
+      expect(info.batteryMaxWatts).toBe(55);
     });
   });
 
