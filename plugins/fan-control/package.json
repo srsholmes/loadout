@@ -9,6 +9,7 @@
     "@loadout/ui": "workspace:*",
     "@loadout/types": "workspace:*",
     "@loadout/exec": "workspace:*",
+    "@loadout/steam-paths": "workspace:*",
     "@loadout/plugin-storage": "workspace:*"
   },
   "plugin": {

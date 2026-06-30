@@ -10,7 +10,10 @@ import {
 } from "react-icons/fa6";
 import {
   Alert,
+  Badge,
   Button,
+  GameCard,
+  GameCardGrid,
   IconButton,
   PluginHeader,
   Slider,
@@ -22,6 +25,7 @@ import {
   useCurrentGame,
   SegmentedItem,
 } from "@loadout/ui";
+import { steamArtworkUrls } from "@loadout/steam-paths/artwork";
 import type { FanCurvePoint } from "./lib/fan-curves";
 import {
   CURVE_MAX_POINTS,
@@ -700,43 +704,58 @@ function FanControl() {
                 onChange={(next) => handleTogglePerGame(Boolean(next))}
               />
             </div>
-            {perGameEnabled && currentGame && (
-              <div className="row">
-                <span className="row-label truncate">
-                  Currently bound to {currentGame.gameName || `App ${currentGame.appId}`}
-                </span>
-                <span className="row-value capitalize">
-                  {(() => {
-                    const p = gameProfiles.find((x) => x.appId === currentGame.appId);
-                    if (!p) return "Unsaved";
-                    return p.mode === "manual" && typeof p.speed === "number"
-                      ? `Manual ${p.speed}%`
-                      : p.mode;
-                  })()}
-                </span>
-              </div>
-            )}
             {perGameEnabled && gameProfiles.length > 0 && (
-              <div className="mt-2 flex flex-col gap-1">
-                {gameProfiles.map((p) => (
-                  <div key={p.appId} className="row">
-                    <span className="row-label truncate">
-                      {p.gameName || `App ${p.appId}`}
-                    </span>
-                    <span className="row-value capitalize">
-                      {p.mode === "manual" && typeof p.speed === "number"
-                        ? `Manual ${p.speed}%`
-                        : p.mode}
-                    </span>
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      onClick={() => handleRemoveProfile(p.appId)}
-                    >
-                      Remove
-                    </Button>
-                  </div>
-                ))}
+              <div style={{ marginTop: 8 }}>
+                <div className="subsection-desc" style={{ marginBottom: 4 }}>
+                  Saved profiles ({gameProfiles.length})
+                </div>
+                {/* Cover grid — mirrors the TDP Control per-game grid
+                    (game capsule art, a RUNNING chip for the active game,
+                    the saved fan setting as an overlay badge, and a Remove
+                    action). Wired to BOTH the card's onPick (controller A /
+                    Enter) and the Remove button's onClick so it's fully
+                    usable with a gamepad. */}
+                <GameCardGrid>
+                  {gameProfiles.map((p) => {
+                    const isCurrent =
+                      currentGame !== null && currentGame.appId === p.appId;
+                    const removeProfile = () => handleRemoveProfile(p.appId);
+                    return (
+                      <GameCard
+                        key={p.appId}
+                        imageUrl={steamArtworkUrls(p.appId).capsule}
+                        fallbackImageUrl={steamArtworkUrls(p.appId).header}
+                        title={p.gameName || `App ${p.appId}`}
+                        highlighted={isCurrent}
+                        onPick={removeProfile}
+                        topLeftBadge={
+                          isCurrent ? (
+                            <span className="chip chip-accent">RUNNING</span>
+                          ) : undefined
+                        }
+                        overlayBadges={
+                          <Badge
+                            variant="accent"
+                            size="xs"
+                            className="font-semibold"
+                          >
+                            <span className="mono">{fanProfileBadge(p)}</span>
+                          </Badge>
+                        }
+                        action={
+                          <Button
+                            size="sm"
+                            fullWidth
+                            variant="danger"
+                            onClick={removeProfile}
+                          >
+                            Remove
+                          </Button>
+                        }
+                      />
+                    );
+                  })}
+                </GameCardGrid>
               </div>
             )}
           </div>
@@ -793,6 +812,14 @@ function FanControl() {
       </div>
     </>
   );
+}
+
+/** Compact saved-profile label for a per-game fan card's overlay badge,
+ *  e.g. "55%" for a manual speed or "AUTO" for auto mode. */
+function fanProfileBadge(p: FanGameProfile): string {
+  return p.mode === "manual" && typeof p.speed === "number"
+    ? `${p.speed}%`
+    : "AUTO";
 }
 
 /** Returns a color based on temperature thresholds. Uses theme tokens
