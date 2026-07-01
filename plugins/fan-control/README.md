@@ -1,12 +1,20 @@
 # Fan Control
 
-> Monitor and control fan speed, temperature, and fan curve presets
+> Monitor and control fan speed, temperature, and fan curves — presets or a custom curve editor
 
 Monitor temperatures and fan speed and apply fan-curve presets, trading noise for cooling on demand. Useful for keeping a handheld quiet on the couch or cooler during a long session.
+
+Beyond the built-in Silent / Balanced / Performance presets you can draw your own **custom fan curve**: a graph editor maps temperature (°C) to fan duty (%). Drag the points on the graph, or select a point and nudge it with the sliders — handy on a gamepad. The curve runs on the same 2 s evaluation loop as the presets, and the hardware safety floor still overrides it as temperatures climb toward thermal-trip range.
 
 ## Screenshots
 
 ![Fan Control](./assets/screenshot.png)
+
+Per-game profiles save a fan mode/speed per title and auto-apply on launch — each saved game shows as a card with its Steam art, a RUNNING marker for the active game, and its saved setting.
+
+![Custom fan curve editor](./assets/screenshot-custom-curve.png)
+
+The custom curve editor maps temperature to fan duty: drag points on the graph or nudge the selected point with the sliders (gamepad-friendly). The dashed line marks the current temperature.
 
 ## See also
 

@@ -16,7 +16,7 @@
  *     JSON file under the user's config dir (see `./plugin-storage`).
  */
 
-import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
+import { readPluginStorage, mutatePluginStorage } from "@loadout/plugin-storage";
 
 // ---------------------------------------------------------------------------
 // Per-game profile engine (inlined from @steam-loader/per-game-profiles)
@@ -221,12 +221,14 @@ export function createPluginStoragePersistence<P>(
       };
     },
     async save(state) {
-      const existing = await readPluginStorage<Record<string, unknown>>(pluginId);
-      await writePluginStorage(pluginId, {
+      // Serialized read-modify-write — another writer on the same plugin
+      // file (e.g. fan-control's custom-curve save) can't lost-update the
+      // keys this merge preserves via `...existing`.
+      await mutatePluginStorage<Record<string, unknown>>(pluginId, (existing) => ({
         ...existing,
         [enabledKey]: state.perGameEnabled,
         [profilesKey]: state.profiles,
-      });
+      }));
     },
   };
 }

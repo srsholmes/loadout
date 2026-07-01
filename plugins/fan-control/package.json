@@ -9,12 +9,13 @@
     "@loadout/ui": "workspace:*",
     "@loadout/types": "workspace:*",
     "@loadout/exec": "workspace:*",
+    "@loadout/steam-paths": "workspace:*",
     "@loadout/plugin-storage": "workspace:*"
   },
   "plugin": {
     "id": "fan-control",
     "name": "Fan Control",
-    "description": "Monitor and control fan speed, temperature, and fan curve presets",
+    "description": "Monitor and control fan speed, temperature, and fan curves — presets or a custom curve editor",
     "permissions": {
       "commands": ["ectool", "tee", "systemctl"],
       "filesystem": ["/sys/class/hwmon"]

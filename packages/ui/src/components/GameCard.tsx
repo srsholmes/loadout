@@ -258,7 +258,19 @@ export function GameCard({
         </div>
       )}
 
-      {action && <div className="flex items-center gap-1.5">{action}</div>}
+      {/* Stop clicks on the action button(s) from bubbling to the card's
+          own onClick (the interactive+action branch below wraps the whole
+          body in a <div onClick={onPick}>). Without this, clicking e.g.
+          "Remove" fires both the button handler AND onPick — a double
+          invocation. Gamepad A still reaches onPick via onEnterPress. */}
+      {action && (
+        <div
+          className="flex items-center gap-1.5"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {action}
+        </div>
+      )}
     </>
   );
 

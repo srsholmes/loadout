@@ -14,6 +14,7 @@ import type { Subprocess } from "bun";
 // on the same object the SUT calls.
 import * as fsp from "fs/promises";
 import * as fs from "fs";
+import * as storage from "@loadout/plugin-storage";
 
 // Standalone mock fns the test bodies configure via `.mockImplementation`
 // / `.mockClear`. The spies installed in beforeEach delegate to these,
@@ -55,6 +56,8 @@ type FanBackendInternals = {
   curveInterval?: ReturnType<typeof setInterval>;
   activeFanDevice: HwmonDeviceLike | null;
   tempSensors: TempSensorLike[];
+  customCurveActive: boolean;
+  activePreset: string | null;
   useEctool: boolean;
   manualModeRequested: "auto" | "manual" | null;
   safetyEngaged: boolean;
@@ -272,6 +275,168 @@ describe("FanControlBackend", () => {
       // No active fan device, no ectool
       const result = await backend.applyPreset("balanced");
       expect(result.success).toBe(false);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Custom fan curve (graph editor) — getCustomCurve / setCustomCurve /
+  // applyCustomCurve. Curve maths + sanitisation are unit-tested in
+  // lib/custom-curve.test.ts; these cover the backend integration:
+  // persistence, the customCurveActive flag, and live loop-restart on edit.
+  // ---------------------------------------------------------------------------
+
+  describe("custom fan curve", () => {
+    let readStorageSpy: ReturnType<typeof spyOn>;
+    let writeStorageSpy: ReturnType<typeof spyOn>;
+    let persisted: Record<string, unknown>;
+
+    beforeEach(() => {
+      persisted = {};
+      readStorageSpy = spyOn(storage, "readPluginStorage").mockImplementation(
+        (() => Promise.resolve(persisted)) as typeof storage.readPluginStorage,
+      );
+      writeStorageSpy = spyOn(storage, "writePluginStorage").mockImplementation(
+        ((_id: string, data: Record<string, unknown>) => {
+          persisted = data;
+          return Promise.resolve();
+        }) as typeof storage.writePluginStorage,
+      );
+    });
+
+    afterEach(() => {
+      readStorageSpy.mockRestore();
+      writeStorageSpy.mockRestore();
+    });
+
+    const withFanDevice = () => {
+      internals(backend).activeFanDevice = {
+        dir: "/sys/class/hwmon/hwmon0",
+        chipName: "test",
+        fans: [
+          {
+            index: 1,
+            inputPath: "/sys/class/hwmon/hwmon0/fan1_input",
+            pwmPath: "/sys/class/hwmon/hwmon0/pwm1",
+            pwmEnablePath: "/sys/class/hwmon/hwmon0/pwm1_enable",
+          },
+        ],
+        hasPwmControl: true,
+      };
+      // tee writes succeed; temp reads return a cool 45 °C so the safety
+      // floor doesn't override the curve value during the test.
+      spawnSpy.mockImplementation(
+        (() =>
+          asSpawned({
+            stdout: new ReadableStream({ start(c) { c.close(); } }),
+            stderr: new ReadableStream({ start(c) { c.close(); } }),
+            stdin: null,
+            exited: Promise.resolve(0),
+          })) as typeof Bun.spawn,
+      );
+      mockReadFile.mockImplementation(() => Promise.resolve("45000"));
+    };
+
+    it("returns a valid default curve before any edit", async () => {
+      const curve = await backend.getCustomCurve();
+      expect(curve.length).toBeGreaterThanOrEqual(2);
+      for (let i = 1; i < curve.length; i++) {
+        expect(curve[i].tempC).toBeGreaterThan(curve[i - 1].tempC);
+      }
+    });
+
+    it("sanitises, persists, and round-trips a saved curve", async () => {
+      const result = await backend.setCustomCurve([
+        { tempC: 80, percent: 100 },
+        { tempC: 40, percent: 10 }, // out of order on purpose
+      ]);
+      expect(result.success).toBe(true);
+      expect(result.curve).toEqual([
+        { tempC: 40, percent: 10 },
+        { tempC: 80, percent: 100 },
+      ]);
+      // Persisted under the customCurve key, not clobbering siblings.
+      expect(writeStorageSpy).toHaveBeenCalled();
+      expect((persisted as { customCurve?: unknown }).customCurve).toEqual(
+        result.curve,
+      );
+      // And readable back.
+      expect(await backend.getCustomCurve()).toEqual(result.curve);
+    });
+
+    it("coerces malformed input to a valid curve rather than failing", async () => {
+      const result = await backend.setCustomCurve("not a curve");
+      expect(result.success).toBe(true);
+      expect(result.curve.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("applyCustomCurve fails when no fan device is present", async () => {
+      const result = await backend.applyCustomCurve();
+      expect(result.success).toBe(false);
+      expect(internals(backend).customCurveActive).toBe(false);
+    });
+
+    it("applyCustomCurve engages the curve loop and sets customCurveActive", async () => {
+      withFanDevice();
+      const result = await backend.applyCustomCurve();
+      expect(result.success).toBe(true);
+      expect(internals(backend).customCurveActive).toBe(true);
+      expect(internals(backend).curveInterval).toBeDefined();
+      const info = await backend.getFanInfo();
+      expect(info.customCurveActive).toBe(true);
+      expect(info.activePreset).toBeNull();
+    });
+
+    it("setFanSpeed clears the active custom curve", async () => {
+      withFanDevice();
+      await backend.applyCustomCurve();
+      expect(internals(backend).customCurveActive).toBe(true);
+      await backend.setFanSpeed(60);
+      expect(internals(backend).customCurveActive).toBe(false);
+    });
+
+    it("applying a preset clears the active custom curve", async () => {
+      withFanDevice();
+      await backend.applyCustomCurve();
+      await backend.applyPreset("balanced");
+      expect(internals(backend).customCurveActive).toBe(false);
+      expect(internals(backend).activePreset).toBe("balanced");
+    });
+
+    it("setFanMode('auto') clears the active custom curve", async () => {
+      withFanDevice();
+      await backend.applyCustomCurve();
+      expect(internals(backend).customCurveActive).toBe(true);
+      await backend.setFanMode("auto");
+      expect(internals(backend).customCurveActive).toBe(false);
+    });
+
+    it("re-applies and keeps the loop running when the curve is edited while active", async () => {
+      withFanDevice();
+      await backend.applyCustomCurve();
+      // Capture the writes triggered by the edit's immediate applyCurve().
+      const teeWrites: string[] = [];
+      spawnSpy.mockImplementation(
+        ((cmd: SpawnArgv) => {
+          if (cmd[0] === "tee") teeWrites.push(cmd[1]);
+          return asSpawned({
+            stdout: new ReadableStream({ start(c) { c.close(); } }),
+            stderr: new ReadableStream({ start(c) { c.close(); } }),
+            stdin: null,
+            exited: Promise.resolve(0),
+          });
+        }) as typeof Bun.spawn,
+      );
+      mockReadFile.mockImplementation(() => Promise.resolve("45000"));
+
+      await backend.setCustomCurve([
+        { tempC: 30, percent: 25 },
+        { tempC: 80, percent: 100 },
+      ]);
+
+      expect(internals(backend).customCurveActive).toBe(true);
+      expect(internals(backend).curveInterval).toBeDefined();
+      // The edit re-applied the curve immediately (a pwm write happened).
+      expect(teeWrites.some((p) => p.endsWith("pwm1"))).toBe(true);
     });
   });
 
@@ -725,6 +890,24 @@ describe("FanControlBackend", () => {
       await internals(backend).safetyWatchdogTick();
       // No engagement, no writes — kernel auto stays in charge.
       expect(writes).toEqual([]);
+    });
+
+    // Regression: with the custom curve active, the curve loop (applyCurve)
+    // already enforces the floor on every tick. The watchdog must NOT also
+    // write the same pwm node — two timers racing it makes the fan flap.
+    // Before the fix the guard only checked activePreset (null for a custom
+    // curve), so the watchdog wrote in parallel.
+    it("does NOT write when the custom curve is active — the curve loop owns the write", async () => {
+      setupFanAndSensor();
+      internals(backend).customCurveActive = true;
+      mockReadFile.mockImplementation(() => Promise.resolve("82000")); // hot, ≥ WARM_C
+      const writes = captureTeeWrites();
+
+      await internals(backend).safetyWatchdogTick();
+
+      // Watchdog only flags engaged; it leaves the single write to the loop.
+      expect(writes).toEqual([]);
+      expect(internals(backend).safetyEngaged).toBe(true);
     });
 
     it("forces ≥60 % at hot temp (82 C)", async () => {
