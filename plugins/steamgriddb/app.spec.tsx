@@ -61,45 +61,55 @@ beforeEach(() => {
     return Promise.resolve(null);
   });
   gameLibraryCallMock.mockImplementation((method: string) => {
-    if (method === "getGames")
-      return Promise.resolve([
-        {
-          appId: "440",
-          name: "Team Fortress 2",
-          sizeOnDisk: 0,
-          headerUrl: "https://cdn/440/header.jpg",
-          capsuleUrl: "https://cdn/440/capsule.jpg",
-          localHeaderUrl: "/api/steam-grid/440/u/header",
-          localCapsuleUrl: "/api/steam-grid/440/u/capsule",
-          source: "steam",
-          tags: [],
-        },
-        {
-          appId: "730",
-          name: "Counter-Strike 2",
-          sizeOnDisk: 0,
-          headerUrl: "https://cdn/730/header.jpg",
-          capsuleUrl: "https://cdn/730/capsule.jpg",
-          localHeaderUrl: "/api/steam-grid/730/u/header",
-          localCapsuleUrl: "/api/steam-grid/730/u/capsule",
-          source: "steam",
-          tags: [],
-        },
-        {
-          appId: "3735928559",
-          name: "Super Mario 64",
-          sizeOnDisk: 0,
-          headerUrl: "/api/steam-grid/x/u/header",
-          capsuleUrl: "/api/steam-grid/x/u/capsule",
-          localHeaderUrl: "/api/steam-grid/x/u/header",
-          localCapsuleUrl: "/api/steam-grid/x/u/capsule",
-          source: "shortcut",
-          tags: ["Emulation"],
-        },
-      ]);
+    if (method === "getFullLibrary")
+      return Promise.resolve({ games: libraryFixture(), ownedAvailable: true });
     return Promise.resolve(null);
   });
 });
+
+/**
+ * Shared library fixture. TF2 is installed (real `sizeOnDisk`);
+ * Portal 2 is owned-but-not-installed (`sizeOnDisk: 0`, Steam source) so
+ * it exercises the "Not installed" badge; Super Mario 64 is a non-Steam
+ * shortcut (never badged as not-installed).
+ */
+function libraryFixture() {
+  return [
+    {
+      appId: "440",
+      name: "Team Fortress 2",
+      sizeOnDisk: 15_000_000,
+      headerUrl: "https://cdn/440/header.jpg",
+      capsuleUrl: "https://cdn/440/capsule.jpg",
+      localHeaderUrl: "/api/steam-grid/440/u/header",
+      localCapsuleUrl: "/api/steam-grid/440/u/capsule",
+      source: "steam",
+      tags: [],
+    },
+    {
+      appId: "620",
+      name: "Portal 2",
+      sizeOnDisk: 0,
+      headerUrl: "https://cdn/620/header.jpg",
+      capsuleUrl: "https://cdn/620/capsule.jpg",
+      localHeaderUrl: "/api/steam-grid/620/u/header",
+      localCapsuleUrl: "/api/steam-grid/620/u/capsule",
+      source: "steam",
+      tags: [],
+    },
+    {
+      appId: "3735928559",
+      name: "Super Mario 64",
+      sizeOnDisk: 0,
+      headerUrl: "/api/steam-grid/x/u/header",
+      capsuleUrl: "/api/steam-grid/x/u/capsule",
+      localHeaderUrl: "/api/steam-grid/x/u/header",
+      localCapsuleUrl: "/api/steam-grid/x/u/capsule",
+      source: "shortcut",
+      tags: ["Emulation"],
+    },
+  ];
+}
 
 function createContainer(): HTMLElement {
   const container = document.createElement("div");
@@ -197,5 +207,99 @@ describe("steamgriddb plugin", () => {
         "Custom artwork for your library",
       ),
     );
+  });
+
+  it("badges an owned-but-not-installed Steam game as 'Not installed'", async () => {
+    const container = createContainer();
+    const headerSlot = document.createElement("div");
+    document.body.appendChild(headerSlot);
+    const { mount } = await import("./app");
+    mount(container, { headerSlot });
+    // STEAM_ONLY default: TF2 (installed) + Portal 2 (owned/not-installed).
+    await waitFor(() => {
+      expect(container.textContent).toContain("Portal 2");
+    });
+    // Exactly one badge — Portal 2 (sizeOnDisk 0). TF2 is installed
+    // (non-zero size) so it must NOT be badged.
+    const badges = container.textContent?.match(/Not installed/g) ?? [];
+    expect(badges).toHaveLength(1);
+  });
+
+  it("shows the 'start Steam' hint when the owned library is unavailable", async () => {
+    gameLibraryCallMock.mockImplementation((method: string) => {
+      if (method === "getFullLibrary")
+        return Promise.resolve({
+          games: libraryFixture().filter((g) => g.sizeOnDisk > 0),
+          ownedAvailable: false,
+        });
+      return Promise.resolve(null);
+    });
+
+    const container = createContainer();
+    const headerSlot = document.createElement("div");
+    document.body.appendChild(headerSlot);
+    const { mount } = await import("./app");
+    mount(container, { headerSlot });
+    await waitFor(() =>
+      expect(container.textContent).toContain("Showing installed games only"),
+    );
+  });
+
+  it("applies art to a not-installed game with source 'steam'", async () => {
+    sgdbCallMock.mockImplementation((method: string) => {
+      if (method === "hasApiKey") return Promise.resolve(true);
+      if (method === "getGrids")
+        return Promise.resolve([
+          {
+            id: 111,
+            score: 4.2,
+            style: "alternate",
+            width: 600,
+            height: 900,
+            nsfw: false,
+            humor: false,
+            url: "https://sgdb/full/111.png",
+            thumb: "https://sgdb/thumb/111.png",
+            author: { name: "artist", steam64: "0", avatar: "" },
+          },
+        ]);
+      if (method === "applyArt")
+        return Promise.resolve({ success: true, instant: true, paths: [] });
+      return Promise.resolve(null);
+    });
+
+    const container = createContainer();
+    const headerSlot = document.createElement("div");
+    document.body.appendChild(headerSlot);
+    const { mount } = await import("./app");
+    mount(container, { headerSlot });
+
+    // Pick Portal 2 (owned, not installed).
+    await waitFor(() => expect(container.textContent).toContain("Portal 2"));
+    const portalCard = Array.from(
+      container.querySelectorAll("[data-game-card]"),
+    ).find((el) => el.textContent?.includes("Portal 2"));
+    expect(portalCard).toBeTruthy();
+    fireEvent.click(portalCard as HTMLElement);
+
+    // Its grids load — click the first asset tile to apply.
+    await waitFor(() => {
+      expect(container.querySelector('img[alt^="Art by"]')).not.toBeNull();
+    });
+    const assetButton = (
+      container.querySelector('img[alt^="Art by"]') as HTMLElement
+    ).closest("button");
+    fireEvent.click(assetButton as HTMLElement);
+
+    await waitFor(() => {
+      const applyCall = sgdbCallMock.mock.calls.find(
+        (c) => c[0] === "applyArt",
+      );
+      expect(applyCall).toBeTruthy();
+      // applyArt(appId, url, artType, source)
+      expect(applyCall?.[1]).toBe("620");
+      expect(applyCall?.[3]).toBe("grid_p");
+      expect(applyCall?.[4]).toBe("steam");
+    });
   });
 });

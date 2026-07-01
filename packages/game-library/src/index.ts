@@ -37,6 +37,63 @@ const DEFAULT_LOADER_ORIGIN = "http://localhost:33820";
 export interface ScanLibraryOptions {
   /** Origin used to build local `/api/steam-grid/*` URLs. */
   loaderOrigin?: string;
+  /**
+   * The user's full *owned* Steam library — every app in Steam's
+   * in-memory `appStore.allApps`, sourced by the caller via
+   * `@loadout/steam-cdp`'s `getAllApps()`. When provided, owned apps
+   * that have no `appmanifest_*.acf` on disk (never downloaded) are
+   * synthesized into the returned list so consumers like the
+   * SteamGridDB picker can reach them. Installed entries always win —
+   * this only fills gaps. Omit it (the default) to keep the classic
+   * installed-only behaviour every other consumer relies on.
+   */
+  ownedApps?: Array<{ appId: string; name: string }>;
+}
+
+/**
+ * Build the full set of artwork URLs for a Steam app id. Shared by the
+ * installed-manifest scan and the owned-but-not-installed synthesis so
+ * both paths produce byte-identical URLs. When no primary user id is
+ * available (no userdata yet) the local `/api/steam-grid` route can't be
+ * built, so every field falls back to the public CDN.
+ */
+function buildSteamArtUrls(
+  origin: string,
+  appId: string,
+  primaryUserId: string | null,
+): Pick<
+  GameInfo,
+  | "headerUrl"
+  | "capsuleUrl"
+  | "localHeaderUrl"
+  | "localCapsuleUrl"
+  | "cdnHeaderUrl"
+  | "cdnCapsuleUrl"
+> {
+  // `header.jpg` is 460×215 landscape (fallback). `library_600x900.jpg`
+  // is the 600×900 portrait Steam itself shows in the library grid.
+  const cdnHeader = `https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/header.jpg`;
+  const cdnCapsule = `https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/library_600x900.jpg`;
+  const localHeader = primaryUserId
+    ? localArtUrl(origin, appId, primaryUserId, "header")
+    : cdnHeader;
+  const localCapsule = primaryUserId
+    ? localArtUrl(origin, appId, primaryUserId, "capsule")
+    : cdnCapsule;
+  // Prefer the loader's local `/api/steam-grid/...` route as the
+  // canonical art URL — its handler probes the user's
+  // `userdata/<id>/config/grid/` first (custom SGDB art wins), falls
+  // back to Steam's downloaded appcache, and only then 302-redirects to
+  // the public CDN. The pure CDN URLs are kept on `cdnHeaderUrl` /
+  // `cdnCapsuleUrl` for the rare plugin that wants the public variant.
+  return {
+    headerUrl: primaryUserId ? localHeader : cdnHeader,
+    capsuleUrl: primaryUserId ? localCapsule : cdnCapsule,
+    localHeaderUrl: localHeader,
+    localCapsuleUrl: localCapsule,
+    cdnHeaderUrl: cdnHeader,
+    cdnCapsuleUrl: cdnCapsule,
+  };
 }
 
 /**
@@ -247,51 +304,46 @@ export async function scanLibrary(
           if (byAppId.has(appId)) continue;
 
           const sizeOnDisk = sizeStr ? parseInt(sizeStr) : 0;
-          // `header.jpg` is 460×215 landscape (fallback). `library_600x900.jpg`
-          // is the 600×900 portrait Steam itself shows in the library
-          // grid — every picker UI wants this for its tiles.
-          const cdnHeader = `https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/header.jpg`;
-          const cdnCapsule = `https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/library_600x900.jpg`;
-          const localHeader = primaryUserId
-            ? localArtUrl(origin, appId, primaryUserId, "header")
-            : cdnHeader;
-          const localCapsule = primaryUserId
-            ? localArtUrl(origin, appId, primaryUserId, "capsule")
-            : cdnCapsule;
-
-          // Prefer the loader's local `/api/steam-grid/...` route as
-          // the canonical art URL — its handler probes the user's
-          // `userdata/<id>/config/grid/` first (custom SGDB art wins),
-          // falls back to Steam's downloaded appcache, and only then
-          // 302-redirects to the public CDN when nothing is local.
-          // With `Cache-Control: no-cache` + an mtime-derived ETag,
-          // browsers revalidate on every reload so newly-applied
-          // custom art appears the next time a grid mounts — without
-          // this, plugins that used `headerUrl` would see Steam's
-          // CDN art forever regardless of what the user customised.
-          //
-          // The pure CDN URLs are kept on `cdnHeaderUrl` /
-          // `cdnCapsuleUrl` for the rare plugin that wants the
-          // public, longer-cacheable variant explicitly.
-          //
-          // If we couldn't resolve a primary user id (no userdata yet)
-          // the local route can't be built — fall back to CDN.
+          // Art URLs (local `/api/steam-grid` route + CDN fallbacks) are
+          // built by the shared `buildSteamArtUrls` helper so the
+          // owned-but-not-installed synthesis below stays byte-identical.
           byAppId.set(appId, {
             appId,
             name,
             sizeOnDisk,
-            headerUrl: primaryUserId ? localHeader : cdnHeader,
-            capsuleUrl: primaryUserId ? localCapsule : cdnCapsule,
-            localHeaderUrl: localHeader,
-            localCapsuleUrl: localCapsule,
-            cdnHeaderUrl: cdnHeader,
-            cdnCapsuleUrl: cdnCapsule,
+            ...buildSteamArtUrls(origin, appId, primaryUserId),
             source: "steam",
             tags: [],
           });
         } catch {
           // Skip unreadable manifests
         }
+      }
+    }
+
+    // Owned-but-not-installed games. When the caller passes the full
+    // owned library (from Steam's in-memory `appStore.allApps` via CDP),
+    // synthesize an entry for every owned app we didn't already see on
+    // disk. These have no `appmanifest_*.acf` — so `sizeOnDisk` is 0 —
+    // but they carry the same CDN + local art URLs as installed Steam
+    // apps, so the SGDB picker can art them up. Inserted BEFORE the
+    // collection merge below so a not-installed game that lives in a
+    // user collection (e.g. "favorite") still gets its tag. Installed
+    // entries always win: we only fill gaps, never overwrite the richer
+    // manifest-derived record.
+    if (opts.ownedApps && opts.ownedApps.length > 0) {
+      for (const owned of opts.ownedApps) {
+        if (!owned || typeof owned.appId !== "string" || owned.appId.length === 0)
+          continue;
+        if (byAppId.has(owned.appId)) continue;
+        byAppId.set(owned.appId, {
+          appId: owned.appId,
+          name: owned.name,
+          sizeOnDisk: 0,
+          ...buildSteamArtUrls(origin, owned.appId, primaryUserId),
+          source: "steam",
+          tags: [],
+        });
       }
     }
 
