@@ -114,31 +114,26 @@ function Apex() {
     [call, refresh],
   );
 
-  const handleToggleBlacklist = useCallback(
-    async (next: boolean) => {
-      setBlacklistBusy(true);
-      try {
-        const res = (await call("setHidOxpBlacklist", next)) as {
-          success: boolean;
-          error?: string;
-          hidOxp?: HidOxpStatus;
-        };
-        if (!res.success) {
-          notify(res.error ?? "Couldn't update the driver blacklist.", { kind: "error" });
-        } else if (res.hidOxp?.rebootRequired) {
-          notify("Driver blacklisted — reboot to apply.", { kind: "success" });
-        } else if (next) {
-          notify("hid-oxp driver blacklisted.", { kind: "success" });
-        } else {
-          notify("hid-oxp driver blacklist removed.", { kind: "success" });
-        }
-      } finally {
-        setBlacklistBusy(false);
-        await refresh();
+  const handleRemoveBlacklist = useCallback(async () => {
+    setBlacklistBusy(true);
+    try {
+      const res = (await call("setHidOxpBlacklist", false)) as {
+        success: boolean;
+        error?: string;
+        hidOxp?: HidOxpStatus;
+      };
+      if (!res.success) {
+        notify(res.error ?? "Couldn't remove the driver blacklist.", { kind: "error" });
+      } else {
+        notify("hid-oxp blacklist removed — reboot to restore the driver.", {
+          kind: "success",
+        });
       }
-    },
-    [call, refresh],
-  );
+    } finally {
+      setBlacklistBusy(false);
+      await refresh();
+    }
+  }, [call, refresh]);
 
   const handleToggleFingerprint = useCallback(
     async (next: boolean) => {
@@ -266,58 +261,48 @@ function Apex() {
           </div>
         </div>
 
-        <div className="card">
-          <div className="card-header flex items-center gap-2 py-3.5 px-4.5 border-b border-base-300">
-            <div className="card-title flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-base-content/50">
-              <FaMicrochip className="w-3 h-3" /> Driver blacklist
-            </div>
-          </div>
-          <div className="card-body p-6 flex flex-col gap-4">
-            <div className="text-sm text-base-content/80 leading-relaxed">
-              Blacklisting the OneXPlayer <span className="mono">hid-oxp</span> driver stops it
-              binding the built-in gamepad, which in testing keeps the USB controller alive across
-              sleep far more reliably — preventing the drop-out rather than recovering from it.
-              Takes effect after a reboot.
-            </div>
-
-            <div className="text-xs text-base-content/55 leading-relaxed">
-              <span className="mono">hid-oxp</span> normally provides paddle mapping, RGB and
-              vibration — but those keep working without it: InputPlumber reads the controller
-              directly for input and paddles, Loadout's RGB plugin drives the lighting, and rumble
-              comes from the Xbox driver. It's a temporary workaround until the driver bug is fixed
-              upstream.
-            </div>
-
-            {hidOxp?.rebootRequired && (
-              <Alert
-                variant="warning"
-                icon={<FaTriangleExclamation size={14} />}
-                title="Reboot required"
-              >
-                The blacklist is set but <span className="mono">hid-oxp</span> is still loaded.
-                Reboot to apply it.
-              </Alert>
-            )}
-
-            <div className="flex justify-between items-start gap-4">
-              <div className="flex flex-col gap-1 min-w-0">
-                <span className="text-sm text-base-content font-medium">
-                  Blacklist the hid-oxp driver
-                </span>
-                <span className="text-xs text-base-content/55 leading-relaxed">
-                  Temporary fix if the gamepad keeps dying on wake. InputPlumber and Loadout's RGB
-                  plugin cover paddles, RGB and rumble, so nothing should break. Reversible — turn it
-                  off and reboot to restore the driver.
-                </span>
+        {hidOxp?.blacklisted && (
+          <div className="card">
+            <div className="card-header flex items-center gap-2 py-3.5 px-4.5 border-b border-base-300">
+              <div className="card-title flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-base-content/50">
+                <FaMicrochip className="w-3 h-3" /> Driver blacklist
               </div>
-              <Toggle
-                checked={!!hidOxp?.blacklisted}
-                disabled={blacklistBusy}
-                onChange={handleToggleBlacklist}
-              />
+            </div>
+            <div className="card-body p-6 flex flex-col gap-4">
+              <div className="text-sm text-base-content/80 leading-relaxed">
+                The OneXPlayer <span className="mono">hid-oxp</span> driver is currently blacklisted
+                on this device — an older workaround for the built-in gamepad dropping out on wake.
+                <span className="font-medium"> Recover automatically on wake</span> (above) is the
+                preferred fix now, so you can safely remove the blacklist and restore the driver.
+              </div>
+
+              {hidOxp.rebootRequired && (
+                <Alert
+                  variant="warning"
+                  icon={<FaTriangleExclamation size={14} />}
+                  title="Reboot required"
+                >
+                  The blacklist is set but <span className="mono">hid-oxp</span> is still loaded.
+                  Reboot to apply it.
+                </Alert>
+              )}
+
+              <div>
+                <Button onClick={handleRemoveBlacklist} disabled={blacklistBusy}>
+                  <span className="flex items-center gap-2">
+                    <FaRotate className={blacklistBusy ? "animate-spin" : undefined} size={13} />
+                    {blacklistBusy ? "Removing…" : "Remove blacklist"}
+                  </span>
+                </Button>
+              </div>
+
+              <div className="text-xs text-base-content/55 leading-relaxed">
+                Removes <span className="mono">/etc/modprobe.d/hid-oxp.conf</span> and restores the
+                driver on the next reboot.
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {data.fingerprint?.supported && (
           <div className="card">
