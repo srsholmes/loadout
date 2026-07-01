@@ -10,7 +10,7 @@ Beyond the built-in Silent / Balanced / Performance presets you can draw your ow
 
 ![Fan Control](./assets/screenshot.png)
 
-Per-game profiles save a fan mode/speed per title and auto-apply on launch — each saved game shows as a card with its Steam art, a RUNNING marker for the active game, and its saved setting.
+Laid out top-to-bottom: live status (RPM, edge temp, mode), then — in Manual — the fan-speed slider and preset picker, a collapsible temperature-sensors panel, and per-game profiles at the end. Per-game profiles save a fan mode/speed per title and auto-apply on launch — each saved game shows as a card with its Steam art, a RUNNING marker for the active game, and its saved setting.
 
 ![Custom fan curve editor](./assets/screenshot-custom-curve.png)
 
