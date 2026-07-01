@@ -10,6 +10,7 @@ import {
   FaXmark,
 } from "react-icons/fa6";
 import {
+  Badge,
   Button,
   fuzzySearchGames,
   useCurrentGame,
@@ -169,6 +170,10 @@ function SteamGridDB() {
   const [libraryStatus, setLibraryStatus] = useState<"ok" | string | null>(
     null,
   );
+  /** True when the owned-but-not-installed games were reachable (Steam
+   *  running + library booted). When false, the list is installed-only
+   *  and we nudge the user to open Steam for their full library. */
+  const [ownedAvailable, setOwnedAvailable] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   // Default to Steam-only — most users want SGDB grid art for their
   // Steam library, not Heroic / Lutris / emulator shortcuts (which
@@ -236,15 +241,25 @@ function SteamGridDB() {
     let cancelled = false;
     void (async () => {
       try {
-        const [games, cols] = await Promise.all([
-          gameLibrary.call("getGames") as Promise<GameInfo[]>,
+        // `getFullLibrary` returns installed games + non-Steam shortcuts
+        // PLUS owned-but-not-installed Steam titles (read from Steam's
+        // in-memory library over CDP). `ownedAvailable` is false when
+        // Steam is closed — the list falls back to installed-only and we
+        // surface a hint. Collections still come from the installed-only
+        // `getCollections` (not-installed games carry no manifest tags).
+        const [full, cols] = await Promise.all([
+          gameLibrary.call("getFullLibrary") as Promise<{
+            games: GameInfo[];
+            ownedAvailable: boolean;
+          }>,
           gameLibrary
             .call("getCollections")
             .catch(() => []) as Promise<GameCollection[]>,
         ]);
         if (cancelled) return;
-        const list = Array.isArray(games) ? games : [];
+        const list = Array.isArray(full?.games) ? full.games : [];
         setLibrary(list);
+        setOwnedAvailable(full?.ownedAvailable ?? false);
         setCollections(Array.isArray(cols) ? cols : []);
         setLibraryStatus("ok");
         // Best-effort GC. Failure here just means the prune didn't
@@ -257,7 +272,7 @@ function SteamGridDB() {
           console.warn("[steamgriddb] pruneMatches failed:", err);
         });
       } catch (err) {
-        console.warn("[steamgriddb] game-library getGames failed:", err);
+        console.warn("[steamgriddb] game-library getFullLibrary failed:", err);
         if (cancelled) return;
         setLibraryStatus(err instanceof Error ? err.message : String(err));
       }
@@ -793,6 +808,19 @@ function SteamGridDB() {
                 </div>
               )}
 
+              {/* Steam-closed hint: without a live Steam client we can
+                  only see installed games, so nudge the user to open
+                  Steam for their full owned library. Shown above the
+                  grid so the (still useful) installed list stays
+                  visible below it. */}
+              {libraryStatus === "ok" && !ownedAvailable && (
+                <div className="subsection-desc mb-3">
+                  Showing installed games only. Start Steam and open your
+                  library to art up games you own but haven't downloaded
+                  yet.
+                </div>
+              )}
+
               {visibleGames.length > 0 && (
                 <GameCardGrid>
                   {visibleGames.map((game) => (
@@ -973,6 +1001,12 @@ function SgdbGameTile({
       ? `${game.localHeaderUrl}?v=${refreshToken}`
       : game.headerUrl;
 
+  // A Steam game with no size on disk has no `appmanifest_*.acf` — it's
+  // owned but not downloaded. (Shortcuts are always 0 too, so gate on
+  // source.) Flag it so the user knows the tile isn't installed; art can
+  // still be applied — it lands in the grid folder / Steam's live store.
+  const notInstalled = game.source === "steam" && game.sizeOnDisk === 0;
+
   return (
     <GameCard
       imageUrl={primaryThumb}
@@ -980,6 +1014,13 @@ function SgdbGameTile({
       title={game.name}
       collections={game.tags}
       onPick={onPick}
+      topRightBadge={
+        notInstalled ? (
+          <Badge variant="neutral" size="xs">
+            Not installed
+          </Badge>
+        ) : undefined
+      }
     />
   );
 }

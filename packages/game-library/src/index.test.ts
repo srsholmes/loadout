@@ -232,6 +232,82 @@ describe("scanLibrary", () => {
       "http://example:1234/api/steam-grid/504230/12345/header",
     );
   });
+
+  describe("ownedApps (owned-but-not-installed merge)", () => {
+    test("no ownedApps → output is unchanged (regression guard)", async () => {
+      writeAcf(join(tempRoot, "steamapps"), "504230", "Celeste", 1234567);
+      const withoutOpt = await scanLibrary();
+      const withEmpty = await scanLibrary({ ownedApps: [] });
+      expect(withEmpty).toEqual(withoutOpt);
+      expect(withEmpty).toHaveLength(1);
+    });
+
+    test("synthesizes an entry for an owned app with no manifest", async () => {
+      writeAcf(join(tempRoot, "steamapps"), "504230", "Celeste", 1234567);
+      writeShortcuts(join(tempRoot, "userdata"), "12345", []);
+
+      const games = await scanLibrary({
+        ownedApps: [{ appId: "220", name: "Half-Life 2" }],
+      });
+
+      expect(games).toHaveLength(2);
+      const hl2 = games.find((g) => g.appId === "220");
+      expect(hl2).toBeDefined();
+      expect(hl2?.name).toBe("Half-Life 2");
+      expect(hl2?.source).toBe("steam");
+      // No manifest on disk → not installed.
+      expect(hl2?.sizeOnDisk).toBe(0);
+      // Same art-URL shape as installed Steam apps (local route wins).
+      expect(hl2?.capsuleUrl).toContain("/api/steam-grid/220/12345/capsule");
+      expect(hl2?.cdnCapsuleUrl).toContain(
+        "cdn.cloudflare.steamstatic.com/steam/apps/220/library_600x900.jpg",
+      );
+    });
+
+    test("does NOT overwrite an installed app that is also in the owned list", async () => {
+      writeAcf(join(tempRoot, "steamapps"), "504230", "Celeste", 1234567);
+
+      const games = await scanLibrary({
+        ownedApps: [{ appId: "504230", name: "Celeste (owned label)" }],
+      });
+
+      expect(games).toHaveLength(1);
+      const celeste = games[0];
+      // Installed entry wins: real size + manifest name preserved.
+      expect(celeste.sizeOnDisk).toBe(1234567);
+      expect(celeste.name).toBe("Celeste");
+    });
+
+    test("an owned game that lives in a user collection still gets its tag", async () => {
+      // No manifest for 220 — it's owned-not-installed — but it's in the
+      // user's 'favorite' collection. The synthesis runs before the
+      // collection merge, so the tag should attach.
+      writeShortcuts(join(tempRoot, "userdata"), "12345", []);
+      writeLocalConfigWithCollections(join(tempRoot, "userdata"), "12345", {
+        favorite: { id: "favorite", added: [220] },
+      });
+
+      const games = await scanLibrary({
+        ownedApps: [{ appId: "220", name: "Half-Life 2" }],
+      });
+      const hl2 = games.find((g) => g.appId === "220");
+      expect(hl2?.tags).toEqual(["favorite"]);
+    });
+
+    test("skips malformed owned entries (empty/non-string appId)", async () => {
+      writeAcf(join(tempRoot, "steamapps"), "504230", "Celeste");
+      const games = await scanLibrary({
+        ownedApps: [
+          { appId: "", name: "junk" },
+          // @ts-expect-error — intentionally malformed to exercise the guard
+          { appId: 220, name: "numeric appId" },
+          { appId: "440", name: "Team Fortress 2" },
+        ],
+      });
+      const ids = games.map((g) => g.appId).sort();
+      expect(ids).toEqual(["440", "504230"]);
+    });
+  });
 });
 
 describe("getCollectionsFromGames", () => {

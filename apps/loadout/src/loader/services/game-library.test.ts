@@ -13,9 +13,16 @@ import type { GameInfo, GameLibraryChangedEvent } from "@loadout/types";
 // caching and broadcast wiring lives in the loader.
 let mockGames: GameInfo[] = [];
 let scanCalls = 0;
+/** Records the options the service passed to the most recent
+ *  `scanLibrary` call — lets `getFullLibrary` tests assert the owned
+ *  apps are threaded through. */
+let lastScanOpts: { ownedApps?: Array<{ appId: string; name: string }> } | undefined;
 mock.module("@loadout/game-library", () => ({
-  scanLibrary: async () => {
+  scanLibrary: async (
+    opts?: { ownedApps?: Array<{ appId: string; name: string }> },
+  ) => {
     scanCalls += 1;
+    lastScanOpts = opts;
     return mockGames.map((g) => ({ ...g }));
   },
   getCollectionsFromGames: (games: GameInfo[]) => {
@@ -26,6 +33,30 @@ mock.module("@loadout/game-library", () => ({
     return Array.from(counts.entries())
       .map(([id, count]) => ({ id, count }))
       .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id));
+  },
+}));
+
+// Mock the Steam CDP surface `getFullLibrary` uses to read the owned
+// library. `ownedMode` steers each test: "apps" returns owned games,
+// "unreachable" throws SteamClientUnreachableError (Steam closed →
+// installed-only fallback), "error" throws a generic error (should
+// propagate). Mirrors the pattern in protondb-badges/backend.test.ts.
+class SteamClientUnreachableErrorMock extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SteamClientUnreachableError";
+  }
+}
+let ownedMode: "apps" | "unreachable" | "error" = "unreachable";
+let mockOwnedApps: Array<{ appId: string; name: string }> = [];
+mock.module("@loadout/steam-cdp", () => ({
+  SteamClientUnreachableError: SteamClientUnreachableErrorMock,
+  withSteamClient: async (fn: (sc: unknown) => Promise<unknown>) => {
+    if (ownedMode === "unreachable") {
+      throw new SteamClientUnreachableErrorMock("Steam not reachable in test");
+    }
+    if (ownedMode === "error") throw new Error("generic CDP failure");
+    return fn({ apps: { getAllApps: async () => mockOwnedApps } });
   },
 }));
 
@@ -55,6 +86,9 @@ describe("GameLibraryService", () => {
   beforeEach(() => {
     mockGames = [];
     scanCalls = 0;
+    lastScanOpts = undefined;
+    ownedMode = "unreachable";
+    mockOwnedApps = [];
     service = new GameLibraryService();
     events = [];
     service.emit = ({ event, data }) => {
@@ -156,5 +190,91 @@ describe("GameLibraryService", () => {
     a[0].tags.push("hacked");
     const b = await service.getGames();
     expect(b[0].tags).toEqual(["fav"]);
+  });
+
+  describe("getFullLibrary", () => {
+    test("passes the owned apps through to scanLibrary and reports ownedAvailable=true when Steam is reachable", async () => {
+      ownedMode = "apps";
+      mockOwnedApps = [{ appId: "99", name: "Owned Not Installed" }];
+      mockGames = [game("1", "Installed")];
+      const result = await service.getFullLibrary();
+      expect(result.ownedAvailable).toBe(true);
+      expect(lastScanOpts?.ownedApps).toEqual([
+        { appId: "99", name: "Owned Not Installed" },
+      ]);
+      expect(result.games.map((g) => g.appId)).toEqual(["1"]); // mock scan echoes mockGames
+    });
+
+    test("falls back to installed-only with ownedAvailable=false when Steam is unreachable", async () => {
+      ownedMode = "unreachable";
+      mockGames = [game("1", "Installed")];
+      const result = await service.getFullLibrary();
+      expect(result.ownedAvailable).toBe(false);
+      // No owned apps threaded through — scanLibrary called without them.
+      expect(lastScanOpts?.ownedApps).toBeUndefined();
+      expect(result.games).toHaveLength(1);
+    });
+
+    test("rethrows non-unreachable CDP errors", async () => {
+      ownedMode = "error";
+      await expect(service.getFullLibrary()).rejects.toThrow(
+        "generic CDP failure",
+      );
+    });
+
+    test("caches within the same owned-availability, and does not pollute getGames' installed-only cache", async () => {
+      ownedMode = "apps";
+      mockOwnedApps = [{ appId: "99", name: "Owned" }];
+      mockGames = [game("1", "Installed")];
+      await service.getFullLibrary();
+      await service.getFullLibrary();
+      // Second call served from fullCache — no extra scan.
+      expect(scanCalls).toBe(1);
+
+      // getGames keeps its own installed-only cache — separate scan.
+      await service.getGames();
+      expect(scanCalls).toBe(2);
+    });
+
+    test("rebuilds when owned-availability flips (Steam comes up between calls)", async () => {
+      ownedMode = "unreachable";
+      mockGames = [game("1", "Installed")];
+      const first = await service.getFullLibrary();
+      expect(first.ownedAvailable).toBe(false);
+      expect(scanCalls).toBe(1);
+
+      // Steam is now up — the stale installed-only fullCache must not be
+      // reused; a fresh scan runs with the owned apps.
+      ownedMode = "apps";
+      mockOwnedApps = [{ appId: "99", name: "Owned" }];
+      const second = await service.getFullLibrary();
+      expect(second.ownedAvailable).toBe(true);
+      expect(scanCalls).toBe(2);
+      expect(lastScanOpts?.ownedApps).toEqual([{ appId: "99", name: "Owned" }]);
+    });
+
+    test("rescan clears the owned-augmented cache", async () => {
+      ownedMode = "apps";
+      mockOwnedApps = [{ appId: "99", name: "Owned" }];
+      mockGames = [game("1", "Installed")];
+      await service.getFullLibrary();
+      expect(scanCalls).toBe(1);
+
+      await service.rescan(); // scanCalls -> 2, clears fullCache
+      expect(scanCalls).toBe(2);
+
+      await service.getFullLibrary(); // must rebuild -> scanCalls 3
+      expect(scanCalls).toBe(3);
+    });
+
+    test("returns a defensive copy — callers can't mutate the owned cache", async () => {
+      ownedMode = "apps";
+      mockOwnedApps = [{ appId: "99", name: "Owned" }];
+      mockGames = [game("1", "Installed", ["fav"])];
+      const a = await service.getFullLibrary();
+      a.games[0].tags.push("hacked");
+      const b = await service.getFullLibrary();
+      expect(b.games[0].tags).toEqual(["fav"]);
+    });
   });
 });
