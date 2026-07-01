@@ -108,12 +108,26 @@ describe("fan-control plugin", () => {
     });
   });
 
-  it("displays temperature readings", async () => {
+  it("displays temperature readings (sensors behind the collapsible box)", async () => {
     const container = createContainer();
     const { mount } = await import("./app");
     mount(container);
+    // Edge/primary temp (55°) is in the always-visible Live Status card.
     await waitFor(() => {
       expect(container.textContent).toContain("55");
+    });
+    // Per-sensor rows (incl. GPU 48°) live in the Temperature Sensors box,
+    // which is collapsed by default — expand it, then they appear.
+    const toggle = await waitFor(() => {
+      const el = Array.from(container.querySelectorAll('[role="button"]')).find(
+        (b) => b.textContent?.includes("Temperature Sensors"),
+      );
+      if (!el) throw new Error("Temperature Sensors toggle not rendered");
+      return el as HTMLElement;
+    });
+    expect(container.textContent).not.toContain("48"); // hidden while closed
+    fireEvent.click(toggle);
+    await waitFor(() => {
       expect(container.textContent).toContain("48");
     });
   });

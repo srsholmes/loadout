@@ -12,6 +12,7 @@ import {
   Alert,
   Badge,
   Button,
+  Collapse,
   GameCard,
   GameCardGrid,
   IconButton,
@@ -449,10 +450,41 @@ function FanControl() {
           </Alert>
         )}
 
-        {/* FAN SPEED + PRESETS — Auto/Manual toggle and driver chip
-            live in the portaled topbar header. The card collapses
-            entirely in Auto mode so the body shows only the live
-            status / per-game cards beneath. */}
+        {/* LIVE STATUS (top) — fan RPM + edge-temp tiles and status rows,
+            full width. Temperature sensors live in their own collapsible
+            box further down. */}
+        <div className="card">
+          <div className="subsection">
+            <div className="subsection-label">Live Status</div>
+            <div className="grid grid-cols-2 gap-2.5 mb-3.5">
+              <div className="bg-base-300/50 rounded-xl px-3.5 py-4 text-center">
+                <div className="metric-value mono" style={{ fontSize: 30, color: "var(--accent)" }}>
+                  {primaryFan?.rpm.toLocaleString() ?? "—"}
+                </div>
+                <div className="metric-label mt-1">RPM</div>
+              </div>
+              <div className="bg-base-300/50 rounded-xl px-3.5 py-4 text-center">
+                <div className="metric-value mono" style={{ fontSize: 30, color: getTempColor(primaryTemp) }}>
+                  {primaryTemp}°
+                </div>
+                <div className="metric-label mt-1">EDGE TEMP</div>
+              </div>
+            </div>
+            {primaryFan && !fanInfo.usingEctool && (
+              <>
+                <div className="row"><span className="row-label">PWM value</span><span className="row-value">{primaryFan.pwm} / 255</span></div>
+                <div className="row"><span className="row-label">Fan speed</span><span className="row-value">{primaryFan.percent}%</span></div>
+              </>
+            )}
+            <div className="row"><span className="row-label">Mode</span><span className="row-value capitalize">{fanInfo.mode}</span></div>
+            {activePreset && (
+              <div className="row"><span className="row-label">Active preset</span><span className="row-value capitalize">{activePreset}</span></div>
+            )}
+          </div>
+        </div>
+
+        {/* FAN SPEED + PRESETS (Manual only) — the Auto/Manual toggle lives
+            in the portaled topbar header. */}
         {isManual && (
         <div className="card">
             <div className="subsection">
@@ -688,7 +720,36 @@ function FanControl() {
         </div>
         )}
 
-        {/* PER-GAME PROFILES */}
+        {/* TEMPERATURE SENSORS — collapsible box, closed by default so the
+            page stays compact; expand to see per-zone readings. */}
+        {fanInfo.temps.length > 0 && (
+          <Collapse
+            ariaLabel="Toggle temperature sensors"
+            title={
+              // Matches the .subsection-label look (10.5px uppercase) but
+              // without its margin-bottom, which would break the header's
+              // vertical centering.
+              <span
+                className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.1em]"
+                style={{ color: "var(--fg-3)" }}
+              >
+                <FaTemperatureHalf className="w-3 h-3" /> Temperature Sensors
+              </span>
+            }
+          >
+            {fanInfo.temps.map((t, i) => (
+              <div className="row" key={i}>
+                <span className="row-label mono text-xs">{t.label}</span>
+                <span className="flex items-center gap-2.5">
+                  <span className="text-[10.5px] text-base-content/50 uppercase tracking-[0.06em]">{t.zone}</span>
+                  <span className="row-value" style={{ color: getTempColor(t.tempC) }}>{t.tempC}°C</span>
+                </span>
+              </div>
+            ))}
+          </Collapse>
+        )}
+
+        {/* PER-GAME PROFILES — at the end, full width. */}
         <div className="card">
           <div className="subsection">
             <div className="flex items-center justify-between mb-3.5">
@@ -759,54 +820,6 @@ function FanControl() {
               </div>
             )}
           </div>
-        </div>
-
-        {/* LIVE STATUS — big tiles + rows */}
-        <div className="card">
-          <div className="subsection">
-            <div className="subsection-label">Live Status</div>
-            <div className="grid grid-cols-2 gap-2.5 mb-3.5">
-              <div className="bg-base-300/50 rounded-xl px-3.5 py-4 text-center">
-                <div className="metric-value mono" style={{ fontSize: 30, color: "var(--accent)" }}>
-                  {primaryFan?.rpm.toLocaleString() ?? "—"}
-                </div>
-                <div className="metric-label mt-1">RPM</div>
-              </div>
-              <div className="bg-base-300/50 rounded-xl px-3.5 py-4 text-center">
-                <div className="metric-value mono" style={{ fontSize: 30, color: getTempColor(primaryTemp) }}>
-                  {primaryTemp}°
-                </div>
-                <div className="metric-label mt-1">EDGE TEMP</div>
-              </div>
-            </div>
-            {primaryFan && !fanInfo.usingEctool && (
-              <>
-                <div className="row"><span className="row-label">PWM value</span><span className="row-value">{primaryFan.pwm} / 255</span></div>
-                <div className="row"><span className="row-label">Fan speed</span><span className="row-value">{primaryFan.percent}%</span></div>
-              </>
-            )}
-            <div className="row"><span className="row-label">Mode</span><span className="row-value capitalize">{fanInfo.mode}</span></div>
-            {activePreset && (
-              <div className="row"><span className="row-label">Active preset</span><span className="row-value capitalize">{activePreset}</span></div>
-            )}
-          </div>
-
-          {fanInfo.temps.length > 0 && (
-            <div className="subsection">
-              <div className="subsection-label flex items-center gap-1.5">
-                <FaTemperatureHalf className="w-3 h-3" /> Temperature Sensors
-              </div>
-              {fanInfo.temps.map((t, i) => (
-                <div className="row" key={i}>
-                  <span className="row-label mono text-xs">{t.label}</span>
-                  <span className="flex items-center gap-2.5">
-                    <span className="text-[10.5px] text-base-content/50 uppercase tracking-[0.06em]">{t.zone}</span>
-                    <span className="row-value" style={{ color: getTempColor(t.tempC) }}>{t.tempC}°C</span>
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       </div>
       </div>

@@ -469,6 +469,7 @@ export list is in
 | `Button`, `IconButton` | Buttons (gamepad-focusable). |
 | `Toggle`, `Slider`, `Select`, `TextInput`, `SearchField`, `SegmentedItem` | Form controls. |
 | `Panel`, `Field`, `Badge`, `Alert`, `Spinner` | Layout / status primitives. |
+| `Collapse` | Collapsible / accordion box (gamepad-focusable, closed by default). |
 | `TabBar` | Tab navigation. |
 | `PluginHeader`, `PluginHeaderSlotProvider` | Portal content into the overlay's topbar slot. |
 | `HeaderBackButton`, `useHeaderBack` | Back button + handler. |
@@ -476,6 +477,21 @@ export list is in
 
 Styling uses Tailwind utility classes plus project CSS tokens (see the
 `className`s in real plugins, e.g. `card`, `page-content`, `chip`).
+
+> **⚠️ Adding a NEW `@loadout/ui` component requires an overlay rebuild.**
+> The overlay bakes `@loadout/ui` into its build at compile time and exposes
+> it to plugins as the `__LOADOUT_SDK` global
+> (`apps/loadout-overlay/src/overlay/shared-modules.ts`). A plugin's
+> `import { Foo } from "@loadout/ui"` resolves to `__LOADOUT_SDK.Foo` at
+> runtime. So if you add a new export to `@loadout/ui`, re-staging plugins
+> (`scripts/prepare-plugins.sh`) is **not enough** — the installed overlay's
+> baked SDK won't have it, `Foo` will be `undefined`, and the plugin renders
+> blank (React "Element type is invalid", minified error #130). Rebuild +
+> reinstall the overlay so the new component is baked in:
+> `bun run build` then re-copy `apps/loadout-overlay/build/.../loadout-overlay-dev`
+> to `~/.local/share/loadout-overlay` (this is what `install-local.sh` does),
+> then `bun run restart`. Editing an *existing* component, or plugin-local
+> code, only needs a re-stage + backend restart.
 
 ---
 
