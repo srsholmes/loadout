@@ -279,6 +279,42 @@ describe("fan-control plugin", () => {
       expect(removeBtn).toBeTruthy();
     });
   });
+
+  it("clicking Remove fires removeGameProfile exactly once (no card-onPick double-fire)", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getFanInfo") return Promise.resolve(mockFanInfo);
+      if (method === "getPerGameEnabled") return Promise.resolve(true);
+      if (method === "getGameProfiles")
+        return Promise.resolve([
+          { appId: 220, gameName: "Half-Life 2", mode: "manual", speed: 65 },
+        ]);
+      return Promise.resolve(null);
+    });
+    const container = createContainer();
+    const { mount } = await import("./app");
+    mount(container);
+
+    const removeBtn = await waitFor(() => {
+      const btn = Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent?.trim() === "Remove",
+      );
+      if (!btn) throw new Error("Remove button not yet rendered");
+      return btn;
+    });
+
+    fireEvent.click(removeBtn);
+
+    await waitFor(() => {
+      // The card's own onPick is ALSO removeProfile; without the GameCard
+      // action-slot stopPropagation the click would bubble and fire it
+      // twice. Assert exactly one removeGameProfile call.
+      const removeCalls = callMock.mock.calls.filter(
+        (c) => c[0] === "removeGameProfile",
+      );
+      expect(removeCalls).toHaveLength(1);
+      expect(removeCalls[0][1]).toBe(220);
+    });
+  });
 });
 
 describe("fan-control pure helpers", () => {
