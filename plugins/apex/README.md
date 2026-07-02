@@ -22,12 +22,6 @@ That drops the built-in gamepad (`1a86:fe00` HID MCU + `045e:028e` Xbox 360 pad)
 
 The same logic is also available as a standalone shell script for use outside Loadout: [`scripts/fix-controller-resume.sh`](../../scripts/fix-controller-resume.sh).
 
-## Driver blacklist (hid-oxp)
-
-Blacklisting the OneXPlayer `hid-oxp` driver stops it binding the built-in gamepad, which in testing keeps the USB controller alive across sleep far more reliably — preventing the wake drop-out rather than recovering from it. Takes effect after a reboot.
-
-`hid-oxp` normally provides paddle mapping, RGB, and vibration, but those keep working without it: InputPlumber reads the controller directly for input and paddles, Loadout's RGB plugin drives the lighting via hidraw, and rumble comes from the Xbox driver. It's a **temporary workaround** until the driver bug is fixed upstream — the toggle is opt-in and reversible (turn it off and reboot to restore the driver).
-
 ## Fingerprint wake
 
 The power button's fingerprint sensor wakes the Apex from sleep on a light touch — annoying in a bag. The **Block fingerprint wake** toggle disables it as a wake source (controller PME at runtime + a GPIO kernel argument); a deliberate power-button press still wakes the device. The kernel-arg change needs a reboot, and on non-SteamOS distros the GPIO arg may need to be added manually (the panel shows the exact arg).
