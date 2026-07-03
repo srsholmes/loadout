@@ -8,6 +8,11 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com).
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Open the overlay from Steam's menu** (#169) — An optional **"Loadout"** entry in Steam's main menu that opens the overlay. It lives in Steam's own focus tree, so it stays reachable by D-pad even if the controller wake-shortcut is mis-configured or the pads wedge on wake — a backup way in. Toggle it under **Settings → General → Steam menu**; selecting it opens the overlay without navigating you anywhere.
+
 ## [v0.1.0] — 2026-07-03
 
 First versioned release. Establishes the versioned release process and bundles everything from the rolling-build history below; the notable recent additions:

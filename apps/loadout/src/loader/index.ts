@@ -334,6 +334,12 @@ export async function startServer(options: ServerOptions = {}) {
   // `dispatchRoute(req, url, ctx)` first; routes that match return
   // a Response, anything that falls through hits the inlined blocks
   // (currently every route) and ultimately the 404.
+  // The CEF injector is constructed further down (it needs broadcast
+  // helpers defined above), but the overlay-button route needs to reach it.
+  // Hold it in a ref the ctx closure reads lazily — until it's assigned,
+  // callers get a not-ready error rather than a crash.
+  const injectorRef: { current: SteamInjector | null } = { current: null };
+
   const ctx: RouteContext = {
     plugins,
     token,
@@ -345,6 +351,10 @@ export async function startServer(options: ServerOptions = {}) {
     broadcastToPlugins,
     compileTsx,
     bunPlugins: [vendorGlobalsPlugin(), sdkGlobalPlugin()],
+    refreshOverlayButton: (mainMenu) =>
+      injectorRef.current
+        ? injectorRef.current.refreshOverlayButton({ mainMenu })
+        : Promise.resolve({ ok: false, error: "Injector not ready yet." }),
   };
 
   // --- HTTP Server ---
@@ -469,6 +479,14 @@ export async function startServer(options: ServerOptions = {}) {
       const called = await broadcastToPlugins("handleGameExit", [appId]);
       log.info(`[broadcast] handleGameExit fanned out to ${called} plugin(s)`);
     },
+    // Issue #169: the injected Steam-menu "open overlay" entry can't reach
+    // the overlay's Bun main process directly, so it calls back here and we
+    // reuse the same /show broadcast path (→ webview → show() RPC).
+    onOverlayOpen: () => {
+      log.info("[overlay-button] Steam-menu entry activated — showing overlay");
+      if (wsClients.size > 0) broadcastShow();
+      else pendingShow = true;
+    },
     // Audit A-021: when the injector exhausts its crash-retry budget, fan
     // a __system event out so UI subscribers can surface "injector stopped"
     // instead of the previous silent failure.
@@ -477,6 +495,9 @@ export async function startServer(options: ServerOptions = {}) {
       broadcast({ type: "event", plugin: "__system", event: "inject-failed", data: info });
     },
   });
+  // Expose the injector to the overlay-button route (see ctx above).
+  injectorRef.current = injector;
+
   injector.start().catch((err) => {
     log.error(`[injector] Fatal error: ${err}`);
   });
