@@ -149,21 +149,29 @@ export function App() {
     return () => window.removeEventListener(TOAST_EVENT, onToast);
   }, []);
 
+  // Toasts render here in the parent, OUTSIDE AppInner's zoomed wrapper, so the
+  // UI-scale `zoom` never reached them and they stayed tiny (issue #177). Read
+  // the same `uiScale` config value AppInner uses and scale the toast container
+  // to match, so toasts grow with the rest of the UI.
+  const [uiScale] = useConfigValue<number>("uiScale", loadScale(false));
+
   return (
     <LoadoutProvider>
       <GamepadNavProvider onBack={handleBack}>
         <AppInner />
         <Toaster
           position="top-right"
+          containerStyle={{ zoom: uiScale }}
           toastOptions={{
             duration: 3000,
             style: {
               background: "var(--bg-inset)",
               color: "var(--fg-1)",
               border: "1px solid var(--line)",
-              borderRadius: "10px",
-              fontSize: "13px",
-              padding: "10px 14px",
+              borderRadius: "12px",
+              fontSize: "15px",
+              lineHeight: "1.35",
+              padding: "13px 18px",
               boxShadow: "0 8px 24px rgb(0 0 0 / 0.32)",
             },
             success: {
