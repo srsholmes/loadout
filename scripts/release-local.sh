@@ -1,7 +1,11 @@
 #!/bin/sh
-# Build + publish a Loadout "rolling" GitHub release from this machine,
-# using the gh CLI. A local-operator mirror of .github/workflows/release.yml
-# for when you'd rather cut a release by hand than run the Actions workflow.
+# Build + publish a Loadout versioned GitHub release from this machine, using
+# the gh CLI. An emergency/offline mirror of .github/workflows/release.yml for
+# when CI is unavailable and you must cut a release by hand.
+#
+# The normal path is `bun run release <minor|patch>` (scripts/release.sh), which
+# tags and lets CI build. Use this only as a fallback — and check out the tag
+# first (`git checkout vX.Y.Z`) so the binary reports the right version.
 #
 # Produces the exact assets scripts/install.sh expects, for the host arch:
 #   loadout-<arch>                  the compiled loader binary
@@ -9,23 +13,29 @@
 #   loadout-plugins-<arch>.tar.xz   plugins/ + one hoisted node_modules/
 #   SHA256SUMS                      checksums install.sh verifies against
 #
-# It replaces the single rolling release tagged `rolling` (marked
-# GitHub-"latest"), so `releases/latest` — which install.sh fetches —
-# always points at the newest build.
+# Publishes a release tagged vX.Y.Z, marked GitHub-"latest" so `releases/latest`
+# — which install.sh fetches — points at it.
 #
 # Prereqs: bun, gh (authenticated: `gh auth login`), xz, tar, sha256sum.
 #
 # Usage:
-#   sh scripts/release-local.sh            # build + publish
-#   sh scripts/release-local.sh --dry-run  # build + package, skip the upload
+#   sh scripts/release-local.sh vX.Y.Z            # build + publish the tag
+#   sh scripts/release-local.sh vX.Y.Z --dry-run  # build + package, skip upload
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO="srsholmes/loadout"
-TAG="rolling"
+TAG=""
 DRY_RUN=0
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=1 ;;
+        v[0-9]*.[0-9]*.[0-9]*) TAG="$arg" ;;
+        *) echo "usage: sh scripts/release-local.sh vX.Y.Z [--dry-run]" >&2; exit 1 ;;
+    esac
+done
+[ -n "$TAG" ] || { echo "missing release tag (vX.Y.Z). usage: sh scripts/release-local.sh vX.Y.Z [--dry-run]" >&2; exit 1; }
 
 case "$(uname -m)" in
     x86_64) ARCH="x86_64" ;;
@@ -84,12 +94,13 @@ fi
 
 echo "==> Publishing release '$TAG' to $REPO ..."
 ASSETS="$OUT/loadout-${ARCH} $OUT/loadout-overlay-${ARCH}.tar.xz $OUT/loadout-plugins-${ARCH}.tar.xz $OUT/SHA256SUMS"
-NOTES="Rolling build from $(git -C "$ROOT" rev-parse --short HEAD). Install: curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/install.sh | sh"
+NOTES="Loadout $TAG. Install: curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/install.sh | sh
+Pin this version: LOADOUT_VERSION=$TAG curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/install.sh | sh"
 
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
     # Re-upload the per-arch assets (and SHA256SUMS) over the existing
-    # rolling release. --clobber replaces same-named assets so re-running
-    # for the same arch is idempotent; other arches' assets are untouched.
+    # release. --clobber replaces same-named assets so re-running for the
+    # same arch is idempotent; other arches' assets are untouched.
     # shellcheck disable=SC2086
     gh release upload "$TAG" $ASSETS --clobber --repo "$REPO"
     gh release edit "$TAG" --latest --repo "$REPO" >/dev/null
@@ -97,7 +108,7 @@ else
     # shellcheck disable=SC2086
     gh release create "$TAG" $ASSETS \
         --repo "$REPO" \
-        --title "Rolling build (latest main)" \
+        --title "$TAG" \
         --notes "$NOTES" \
         --latest
 fi

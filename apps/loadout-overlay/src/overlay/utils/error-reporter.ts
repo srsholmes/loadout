@@ -7,6 +7,7 @@
  */
 
 import { authHeaders } from "../lib/backend";
+import { OVERLAY_VERSION } from "../version";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,7 +32,7 @@ export interface ErrorReport {
 // Constants
 // ---------------------------------------------------------------------------
 
-const VERSION = "0.1.0-alpha";
+const VERSION = OVERLAY_VERSION;
 
 // ---------------------------------------------------------------------------
 // Report creation
@@ -40,11 +41,7 @@ const VERSION = "0.1.0-alpha";
 /**
  * Build a structured error report from an Error and plugin metadata.
  */
-export function createErrorReport(
-  pluginId: string,
-  pluginName: string,
-  error: Error,
-): ErrorReport {
+export function createErrorReport(pluginId: string, pluginName: string, error: Error): ErrorReport {
   return {
     pluginName,
     pluginId,
@@ -179,9 +176,7 @@ export function installGlobalErrorHandlers(): () => void {
     const report = createErrorReport(
       "global",
       "Uncaught Error",
-      event.error instanceof Error
-        ? event.error
-        : new Error(event.message || "Unknown error"),
+      event.error instanceof Error ? event.error : new Error(event.message || "Unknown error"),
     );
     notifyListeners(report);
   }

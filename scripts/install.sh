@@ -91,6 +91,12 @@ error() {
 # CLI is logged in.
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 
+# Pin a specific release instead of the newest one. Set LOADOUT_VERSION to a
+# release tag (e.g. v0.1.0) to install/downgrade to that exact version; unset,
+# the installer resolves the GitHub "latest" release. The tag flows through to
+# the binary, overlay, plugin, and SHA256SUMS asset URLs automatically.
+LOADOUT_VERSION="${LOADOUT_VERSION:-}"
+
 # curl/wget wrappers that add an Authorization header when GITHUB_TOKEN is
 # set. Pass-through otherwise — public repos keep working with no token.
 curl_gh() {
@@ -292,7 +298,13 @@ phase1() {
 
     # --- Download or locate binary ---
 
-    RELEASE_URL="https://api.github.com/repos/$REPO/releases/latest"
+    # LOADOUT_VERSION pins a specific tag; otherwise take the newest release.
+    if [ -n "$LOADOUT_VERSION" ]; then
+        info "Pinned to release $LOADOUT_VERSION"
+        RELEASE_URL="https://api.github.com/repos/$REPO/releases/tags/$LOADOUT_VERSION"
+    else
+        RELEASE_URL="https://api.github.com/repos/$REPO/releases/latest"
+    fi
 
     DOWNLOAD_URL=""
     DOWNLOAD_ACCEPT_HEADER=""

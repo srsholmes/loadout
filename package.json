@@ -38,6 +38,7 @@
     "install-local": "sh scripts/install-local.sh",
     "build-and-install": "sh scripts/build.sh && sh scripts/install-local.sh",
     "restart": "sh scripts/restart-loadout.sh",
+    "release": "sh scripts/release.sh",
     "typecheck": "tsc --noEmit",
     "test": "bun run test:backend && bun run test:ui",
     "test:backend": "bun test test.ts --isolate",

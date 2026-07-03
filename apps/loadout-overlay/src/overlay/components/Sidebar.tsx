@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PluginInfo } from "../hooks/usePlugins";
 import { usePluginIcons } from "../hooks/usePluginIcons";
+import { OVERLAY_VERSION } from "../version";
 import { useFavorites } from "../hooks/useFavorites";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { useFocusable, FocusContext, Focusable, setFocus } from "./GamepadNav";
@@ -61,7 +62,8 @@ export function Sidebar({
 
   const { favorites, toggle: toggleFavorite } = useFavorites();
   const currentGame = useCurrentGame();
-  const homeLabel = currentGame?.gameName?.trim() || (currentGame ? `App ${currentGame.appId}` : "Home");
+  const homeLabel =
+    currentGame?.gameName?.trim() || (currentGame ? `App ${currentGame.appId}` : "Home");
   const homeTooltip = currentGame ? `Now playing: ${homeLabel}` : "Home";
   const homeCapsuleSrc = currentGame ? steamArtworkUrls(currentGame.appId).capsule : null;
 
@@ -94,10 +96,7 @@ export function Sidebar({
   }, [plugins, favorites]);
 
   // Flat list used for the active-indicator lookup and icon loading.
-  const flatPlugins = useMemo(
-    () => sections.flatMap((s) => s.items),
-    [sections],
-  );
+  const flatPlugins = useMemo(() => sections.flatMap((s) => s.items), [sections]);
   const pluginIcons = usePluginIcons(flatPlugins);
 
   const listRef = useRef<HTMLDivElement>(null);
@@ -140,7 +139,16 @@ export function Sidebar({
               tabIndex={-1}
               className="btn btn-square btn-ghost btn-sm shrink-0 is-drawer-close:tooltip is-drawer-close:tooltip-right"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" strokeLinejoin="round" strokeLinecap="round" strokeWidth={2} fill="none" stroke="currentColor" className="inline-block size-4">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                strokeLinejoin="round"
+                strokeLinecap="round"
+                strokeWidth={2}
+                fill="none"
+                stroke="currentColor"
+                className="inline-block size-4"
+              >
                 <path d="M4 4m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z" />
                 <path d="M9 4v16" />
                 <path d="M14 10l2 2l-2 2" />
@@ -153,7 +161,7 @@ export function Sidebar({
             </div>
             <div className="flex flex-col leading-tight min-w-0">
               <span className="text-sm font-bold truncate">Loadout</span>
-              <span className="text-[10px] text-base-content/40">v0.1.0-alpha</span>
+              <span className="text-[10px] text-base-content/40">v{OVERLAY_VERSION}</span>
             </div>
           </div>
         </div>
@@ -179,8 +187,19 @@ export function Sidebar({
                   homeCapsuleSrc ? (
                     <HomeCapsuleIcon src={homeCapsuleSrc} alt={homeLabel} />
                   ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="w-4 h-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"
+                      />
                     </svg>
                   )
                 }
@@ -290,7 +309,6 @@ export function Sidebar({
             />
           </Focusable>
         </div>
-
       </div>
     </FocusContext.Provider>
   );
@@ -337,9 +355,7 @@ function SidebarRow({
       >
         {icon}
       </div>
-      <span className="is-drawer-close:hidden text-sm font-medium truncate flex-1">
-        {label}
-      </span>
+      <span className="is-drawer-close:hidden text-sm font-medium truncate flex-1">{label}</span>
     </button>
   );
 }
@@ -357,7 +373,14 @@ function HomeCapsuleIcon({ src, alt }: { src: string; alt: string }) {
   }, [src]);
   if (failed) {
     return (
-      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        className="w-4 h-4"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        strokeWidth={2}
+      >
         <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z" />
       </svg>
     );

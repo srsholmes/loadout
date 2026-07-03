@@ -45,6 +45,13 @@ bun run format        # prettier
 Keep PRs focused, match the style of the surrounding code, and add tests for
 new backend/lib behaviour.
 
+## Releases
+
+Releases are versioned (`vX.Y.Z`) and cut manually with `bun run release
+<minor|patch>`, which bumps versions, updates the CHANGELOG, tags, and lets CI
+build and publish. Loose semver pre-1.0: features → minor, fixes → patch. See
+[docs/releasing.md](docs/releasing.md).
+
 ## Licensing
 
 By contributing, you agree your contributions are licensed under the

@@ -1,19 +1,29 @@
 name: Release
 
-# Manual-only release workflow. Builds the Loadout binary + Electrobun
-# overlay tree and replaces a single rolling GitHub Release tagged `rolling`,
-# marked as the GitHub-latest.
+# Versioned release workflow. Builds the Loadout binary + Electrobun overlay
+# tree + plugin bundle for a `vX.Y.Z` tag and publishes a versioned GitHub
+# Release (marked "latest", so the curl installer resolves to it). Old versions
+# stay downloadable by tag.
 #
-# Auto-trigger on push-to-main was removed (audit 2026-05 Q-001 / owner
-# decision): releases ship before CI gates, and a hotfix off a stale base
-# or a force-push would sail through unchecked. Until release.yml runs
-# `needs: ci`, the safer default is to require explicit operator intent.
+# Triggered by pushing a `v*.*.*` tag — which the local `scripts/release.sh`
+# (`bun run release <major|minor|patch>`) does after bumping versions, updating
+# the CHANGELOG, committing and tagging. You can also re-run a tag manually from
+# the Actions tab via workflow_dispatch with the `tag` input.
 #
-# Workflow: land changes on main, run CI, then trigger this manually from
-# the Actions tab (or via `gh workflow run release.yml`).
+# The old auto-trigger-on-push concern (audit 2026-05 Q-001: releasing before CI
+# gates) is handled here by the `gate` job — typecheck/lint/spec/test must pass
+# before anything publishes, and the tag is cut by an explicit operator action.
 
 on:
+  push:
+    tags:
+      - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing vX.Y.Z tag to (re)build and publish"
+        required: true
+        type: string
 
 permissions:
   contents: write  # required by softprops/action-gh-release@v2 to create the release
@@ -23,8 +33,36 @@ concurrency:
   cancel-in-progress: false  # don't kill a half-uploaded release
 
 jobs:
+  gate:
+    name: Pre-release checks (typecheck, lint, specs, tests)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Spec coverage
+        run: bun run check:specs
+
+      - name: Tests
+        run: bun run test
+
   build-and-release:
-    name: Build x86_64 + publish rolling release
+    name: Build x86_64 + publish versioned release
+    needs: gate
     # TODO(arm): add a matrix entry for aarch64 once we have hardware to test on.
     runs-on: ubuntu-latest
 
@@ -32,7 +70,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
-          fetch-depth: 0  # so scripts/build.sh can read git short SHA for dev-<sha> versioning
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0  # so scripts/build.sh can `git describe --tags` the version
+
+      - name: Resolve + verify release tag
+        id: tag
+        run: |
+          set -eu
+          TAG="${{ inputs.tag || github.ref_name }}"
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) : ;;
+            *) echo "::error::Refusing to release '$TAG' — expected a vX.Y.Z tag."; exit 1 ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Releasing $TAG"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
@@ -64,12 +115,10 @@ jobs:
 
           # 3. Plugin tree — stage every plugin alongside a single hoisted
           #    node_modules/ (react/react-dom/scheduler/react-icons +
-          #    @loadout/*). One copy shared by all 29 plugins instead
-          #    of per-plugin duplication that ballooned the tarball to
-          #    ~250 MB compressed. inject-builder.ts resolves deps from
-          #    the hoisted location at runtime. Without this, curl|sh
-          #    installs end up with an empty plugins/ dir and nothing
-          #    renders (audit 2026-05 H-002).
+          #    @loadout/*). One copy shared by all plugins instead of
+          #    per-plugin duplication that ballooned the tarball. Without
+          #    this, curl|sh installs end up with an empty plugins/ dir and
+          #    nothing renders (audit 2026-05 H-002).
           PLUGIN_STAGE_DIR="$RUNNER_TEMP/staged-install-root"
           bash scripts/prepare-plugins.sh "$PLUGIN_STAGE_DIR"
           tar -C "$PLUGIN_STAGE_DIR" -cJf loadout-plugins-x86_64.tar.xz plugins node_modules
@@ -87,22 +136,22 @@ jobs:
             loadout-plugins-x86_64.tar.xz \
             SHA256SUMS
 
-      - name: Publish rolling release
+      - name: Publish versioned release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
-          tag_name: rolling
-          name: Rolling build (latest main)
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
           body: |
-            Rolling release built from `main` at commit ${{ github.sha }}.
+            Loadout ${{ steps.tag.outputs.tag }}.
 
-            **Latest commit:** ${{ github.event.head_commit.message }}
-
-            Install with:
+            Install (or update) with:
             ```sh
             curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | sh
             ```
+            Pin this version: `LOADOUT_VERSION=${{ steps.tag.outputs.tag }} curl -fsSL … | sh`
 
-            Each push to `main` overwrites this release. For pinned versions, see tagged releases (when available).
+            Full notes: [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)
+          generate_release_notes: true
           prerelease: false
           make_latest: "true"
           files: |
