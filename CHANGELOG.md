@@ -2,13 +2,15 @@
 
 All notable user-facing changes to Loadout.
 
-Until now, releases have shipped as a single rolling build that's rebuilt from `main` on demand, so there are no version numbers yet — entries below are grouped by the date each build was published, and reconstructed by cross-referencing the pull requests that had merged at the time. Proper semantic versioning and a fixed release cadence are coming next.
+Starting with **v0.1.0**, releases are versioned — see [docs/releasing.md](docs/releasing.md) for the process and semver policy. The dated sections below v0.1.0 are the earlier rolling-build history, reconstructed by cross-referencing the pull requests merged at the time.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com).
 
 ---
 
-## 2026-07-01
+## [v0.1.0] — 2026-07-03
+
+First versioned release. Establishes the versioned release process and bundles everything from the rolling-build history below; the notable recent additions:
 
 ### Added
 - **Storage plugin** (#187) — A second internal SSD holding a Steam library sometimes stops auto-mounting after a SteamOS update. This plugin **detects an unmounted data drive and mounts it where Steam expects**, with a **"Mount on boot"** toggle that pins it in `/etc/fstab` so future updates can't silently drop it. Fully auto-detected — works on any device/distro, and never formats anything.
