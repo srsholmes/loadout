@@ -412,6 +412,22 @@ export async function startServer(options: ServerOptions = {}) {
         });
       }
 
+      // --- Re-apply the optional Steam "open overlay" menu entry on
+      //     demand (issue #169). The overlay Settings UI hits this right
+      //     after the user toggles the setting or edits the label so the
+      //     change lands in Steam immediately (and it can surface a toast
+      //     if injection fails). Authenticated via the /api/* gate above.
+      if (url.pathname === "/api/overlay-button/refresh" && req.method === "POST") {
+        const result = await injector.refreshOverlayButton();
+        return new Response(JSON.stringify(result), {
+          status: result.ok ? 200 : 503,
+          headers: {
+            "Content-Type": "application/json;charset=utf-8",
+            "Access-Control-Allow-Origin": "*",
+          },
+        });
+      }
+
       // --- Route-module dispatch (issue #87 / A-001). Every HTTP
       //     surface beyond /ws + /up lives in routes/<name>.ts and is
       //     wired through this single call. `dispatchRoute` returns
@@ -468,6 +484,14 @@ export async function startServer(options: ServerOptions = {}) {
     onGameExit: async (appId) => {
       const called = await broadcastToPlugins("handleGameExit", [appId]);
       log.info(`[broadcast] handleGameExit fanned out to ${called} plugin(s)`);
+    },
+    // Issue #169: the injected Steam-menu "open overlay" entry can't reach
+    // the overlay's Bun main process directly, so it calls back here and we
+    // reuse the same /show broadcast path (→ webview → show() RPC).
+    onOverlayOpen: () => {
+      log.info("[overlay-button] Steam-menu entry activated — showing overlay");
+      if (wsClients.size > 0) broadcastShow();
+      else pendingShow = true;
     },
     // Audit A-021: when the injector exhausts its crash-retry budget, fan
     // a __system event out so UI subscribers can surface "injector stopped"

@@ -1,5 +1,15 @@
-import { useState, useEffect, useMemo } from "react";
-import { PluginProvider, TabBar, Slider, Button, Select, Toggle, useBackend } from "@loadout/ui";
+import { useState, useEffect, useMemo, useRef } from "react";
+import {
+  PluginProvider,
+  TabBar,
+  Slider,
+  Button,
+  Select,
+  Toggle,
+  notify,
+  useBackend,
+} from "@loadout/ui";
+import { apiUrl, authHeaders } from "../lib/backend";
 import { useSidebarAutoCollapseSetting } from "../hooks/useSidebarCollapse";
 import { OVERLAY_VERSION } from "../version";
 import { useEnabledPlugins } from "../hooks/useEnabledPlugins";
@@ -502,6 +512,10 @@ function SettingsInner({
   const [theme, setTheme] = useConfigValue<string>("theme", loadTheme());
   const [startupView, setStartupView] = useConfigValue<string>("startupView", "home");
   const [autoCollapseSidebar, setAutoCollapseSidebar] = useSidebarAutoCollapseSetting();
+  const [steamMainMenu, setSteamMainMenu] = useConfigValue<boolean>(
+    "steamOverlayButtonMainMenu",
+    false,
+  );
   const [shortcuts, setShortcuts] = useState<ControllerShortcuts | null>(null);
   const { isEnabled, toggle: togglePluginEnabled } = useEnabledPlugins();
   const allPluginIds = useMemo(() => plugins.map((p) => p.id), [plugins]);
@@ -520,6 +534,50 @@ function SettingsInner({
       .then(setShortcuts)
       .catch(() => {});
   }, []);
+
+  // Push the Steam-menu "open overlay" button change into the running Steam
+  // client (issue #169). Debounced so typing a label doesn't spam the
+  // injector; surfaces a toast when injection fails (e.g. Steam not attached
+  // or desktop mode). Config itself is already persisted by the setters
+  // above — this only re-applies the CEF patch.
+  const steamButtonRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function scheduleSteamButtonRefresh() {
+    if (steamButtonRefreshTimer.current) clearTimeout(steamButtonRefreshTimer.current);
+    steamButtonRefreshTimer.current = setTimeout(() => {
+      steamButtonRefreshTimer.current = null;
+      const enabled = getConfigValue<boolean>("steamOverlayButtonMainMenu", false);
+      fetch(apiUrl("/api/overlay-button/refresh"), { method: "POST", headers: authHeaders() })
+        .then(async (res) => {
+          const data = (await res.json().catch(() => null)) as
+            | { ok?: boolean; error?: string }
+            | null;
+          const ok = res.ok && data?.ok !== false;
+          // Only nag when the user is trying to *enable* it — a failed
+          // teardown (already gone, Steam closed) isn't worth a toast.
+          if (ok) {
+            if (enabled) {
+              notify("Added the overlay button to Steam's menu.", {
+                kind: "success",
+                id: "steam-overlay-button",
+              });
+            }
+          } else if (enabled) {
+            notify(data?.error ?? "Couldn't add the button to Steam.", {
+              kind: "error",
+              id: "steam-overlay-button",
+            });
+          }
+        })
+        .catch(() => {
+          if (enabled) {
+            notify("Couldn't reach the loader to update Steam.", {
+              kind: "error",
+              id: "steam-overlay-button",
+            });
+          }
+        });
+    }, 400);
+  }
 
   function handleShortcutChange(key: keyof ControllerShortcuts, value: string) {
     if (!shortcuts) return;
@@ -606,6 +664,34 @@ function SettingsInner({
                     </div>
                   </div>
                   <Toggle checked={autoCollapseSidebar} onChange={setAutoCollapseSidebar} />
+                </div>
+              </div>
+            </section>
+
+            {/* Steam menu button — an optional escape hatch into the overlay
+                that lives in Steam's own nav menu, reachable by D-pad even if
+                the controller wake chord fails (issue #169). */}
+            <section className="mb-6">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">
+                Steam menu
+              </h3>
+              <div className="bg-base-200 rounded-2xl border border-base-300 p-5">
+                <div className="flex justify-between items-center min-h-[44px]">
+                  <div className="pr-4">
+                    <div className="text-sm text-base-content">Add "Loadout" to Steam's main menu</div>
+                    <div className="text-xs text-base-content/50 mt-0.5">
+                      Adds a "Loadout" entry to Steam's main menu that opens the overlay — a
+                      backup way in if the controller shortcut ever stops working. Selecting it
+                      opens the overlay without navigating you anywhere.
+                    </div>
+                  </div>
+                  <Toggle
+                    checked={steamMainMenu}
+                    onChange={(v) => {
+                      setSteamMainMenu(v);
+                      scheduleSteamButtonRefresh();
+                    }}
+                  />
                 </div>
               </div>
             </section>
