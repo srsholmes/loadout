@@ -1,129 +1,45 @@
 # Loadout
 
-> **One toolkit. Every tweak your handheld was missing.** A fast, beautiful
-> plugin platform for Linux gaming handhelds — an in-game overlay in Gaming
-> Mode, a standalone app on the desktop — built end-to-end in TypeScript.
+> **One toolkit for everything your Linux handheld was missing.** A plugin
+> platform for Linux gaming handhelds — an in-game overlay in Steam's Gaming
+> Mode, a standalone app on the desktop. TypeScript end to end.
 
 ![Loadout home screen](docs/assets/home.png)
 
-**Tune your handheld without ever leaving your game.** Tap the overlay, dial in
-your TDP, set a custom fan curve, check if a game runs well on Proton, launch
-your Epic library, install a recompiled N64 classic — then get straight back to
-playing. Twenty-plus plugins, one slick d-pad-friendly UI.
+Loadout puts 20-plus plugins behind one controller-friendly UI: set your TDP
+and fan curve, check Proton compatibility before you install, launch your Epic
+library next to your Steam games, apply custom box art, install a recompiled
+N64 classic — without leaving your game. It runs as an **in-game overlay** in
+Steam's Gaming Mode and as a **standalone app** on the desktop, detecting which
+mode you're in and adapting automatically.
 
-**Works in both Gaming Mode and Desktop Mode.** In Steam's Gaming Mode it runs
-as an _in-game overlay_ layered over your game; on the desktop it runs as a
-_standalone app_ in its own window. Loadout detects which mode you're in and
-adapts automatically.
+[**Install →**](#install) · [Featured plugins](#featured-plugins) · [All plugins](#all-plugins) · [Supported devices](#supported-devices--testing) · [Docs](#documentation)
 
-[**Install →**](#install) · [Plugins](#plugins) · [Supported devices](#supported-devices--testing) · [Build from source](#build-from-source)
-
-> 🚧 **Status: pre-launch.** Developed and tested on OneXPlayer devices and
-> Valve's Steam Deck — and I'm [looking for testers](#supported-devices--testing)
-> on other handhelds.
-
-## ✨ Highlights
-
-The greatest hits — and there are [a dozen more](#all-plugins) below:
-
-- 🕹️ **[RecompHub](plugins/recomp/README.md)** — Browse, install, and play
-  natively-recompiled classics (Zelda 64, Mario 64, and friends). No emulator,
-  one tap to play.
-- 🛒 **[Store Bridge](plugins/store-bridge/README.md)** — Your Epic Games
-  library, installed and launchable right alongside your Steam games.
-- 🖼️ **[SteamGridDB](plugins/steamgriddb/README.md)** — Gorgeous custom box
-  art, heroes, and logos for every game in your library.
-- ⚡ **[LSFG-VK](plugins/lsfg-vk/README.md)** — Lossless Scaling frame
-  generation as a Vulkan layer — more FPS, one toggle.
-- 🟢 **[ProtonDB Badges](plugins/protondb-badges/README.md)** — "Will it run?"
-  answered at a glance with a compatibility tier on every game tile.
-- 🔋 **[TDP](plugins/tdp-control/README.md)** & **[Fan
-  Control](plugins/fan-control/README.md)** — Find your perfect
-  battery-vs-performance balance with presets and live curves.
-- 🎨 **[Theme Loader](plugins/theme-loader/README.md)** & **[Sound
-  Loader](plugins/sound-loader/README.md)** — Reskin Big Picture with community
-  CSS themes and UI sound packs.
-- ⏱️ **[HowLongToBeat](plugins/hltb/README.md)** & **[PlayTime](plugins/playtime/README.md)** —
-  Know what you're signing up for, and where your hours actually go.
-
-## Two ways to run it
-
-Loadout is the same app in both of Steam's environments — it detects which one
-you're in (it looks for Gamescope) and adapts:
-
-- **Gaming Mode → in-game overlay.** A CEF window layered over Gamescope via X11
-  atoms. Tap it open, tweak, and get back to your game without leaving it.
-- **Desktop Mode → standalone app.** It runs as an ordinary window on your
-  desktop — no game underneath to freeze, controller input still grabbed so it
-  stays d-pad-friendly.
-
-A handful of plugins that reach _into_ Steam's Big Picture UI (badges, CSS
-theming) are Gaming-Mode-only by nature; everything else works in either mode.
-
-## In Gaming Mode
-
-In Gaming Mode, plugins reach right into Steam's Big Picture UI — themed,
-badged, and native:
-
-**[RecompHub](plugins/recomp/README.md)** turns recompiled classics into native
-Steam entries with full artwork — a dedicated collection in your library:
-
-![RecompHub in Big Picture](plugins/recomp/assets/screenshot-big-picture-library.png)
-
-**[Theme Loader](plugins/theme-loader/README.md)** restyles the whole interface
-with community CSS themes:
-
-![Themed Big Picture home](plugins/theme-loader/assets/screenshot-big-picture-home.png)
-
-![Themed Big Picture game page](plugins/theme-loader/assets/screenshot-big-picture-game.png)
-
-## Supported devices & testing
-
-**Loadout is Linux-only by design** — it targets distros that ship Steam Gaming
-Mode. No Windows or macOS build.
-
-| OS                       | Status       |
-| ------------------------ | ------------ |
-| **SteamOS** (Steam Deck) | ✅ Supported |
-| **Bazzite**              | ✅ Supported |
-| **CachyOS**              | ✅ Supported |
-
-**Hardware tested so far:**
-
-| Device            | Status          |
-| ----------------- | --------------- |
-| OneXPlayer APEX   | ✅ Daily-driven |
-| Steam Deck        | ✅ Tested       |
-| OneXPlayer F1 Pro | ✅ Tested       |
-
-> 🙋 **Got a different handheld?** ROG Ally, Legion Go, OneXPlayer, GPD, AYANEO,
-> AOKZOE — I'd love your help. **I'm actively looking for testers on other
-> devices.** [Open an issue](https://github.com/srsholmes/loadout/issues) with
-> your hardware and let's get Loadout running on it.
-
-See [docs/os-compatibility.md](docs/os-compatibility.md) for per-distro notes
-(including the bundled-glibc caveat on stock SteamOS).
+> 🚧 **Pre-launch.** Daily-driven on OneXPlayer devices and tested on Valve's
+> Steam Deck. I'm [looking for testers](#supported-devices--testing) on other
+> handhelds.
 
 ## Install
 
-One command — downloads the prebuilt binary + overlay, verifies SHA-256, and
-sets up the services. The backend installs as a **system** service (one `sudo`
-prompt at install) so plugins can touch hardware without prompting you again;
-the overlay runs as your **user**:
+One command. It downloads the prebuilt binary and overlay, verifies SHA-256,
+and installs the services. The backend installs as a **system** service (one
+`sudo` prompt) so plugins can touch hardware without prompting again; the
+overlay runs as your **user**:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/install.sh | sh
 ```
 
-Then open Loadout — as an overlay from Gaming Mode, or as a standalone app on
-the desktop — and you're set. To remove it:
+Then open it — as an overlay from Gaming Mode, or as a standalone app on the
+desktop. On a keyboard, **`Ctrl+4`** toggles it open and closed at any time
+(controller shortcuts are in the [FAQ](#faq)). To remove it:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/uninstall.sh | sh
 ```
 
 <details>
-<summary>Details & requirements</summary>
+<summary>Requirements & install details</summary>
 
 The installer downloads the prebuilt `loadout` binary + Electrobun overlay
 into `~/.local/share/loadout/` and `~/.local/share/loadout-overlay/`, verifies
@@ -143,55 +59,6 @@ caches it. This is kept out of the download on purpose so the release stays
 small; Bazzite/CachyOS/Fedora already provide these libraries and skip the step
 entirely.
 
-> If this repository is private, the install command will 404 until it's made
-> public; `install.sh` honours a `GITHUB_TOKEN` env var for authenticated
-> installs.
-
-</details>
-
-## FAQ
-
-### How do I open it?
-
-In **Gaming Mode**, trigger your configured wake shortcut on the controller to
-bring up the overlay. On the **desktop**, launch Loadout like any other app and
-it opens as a standalone window. In either mode, if you're on a keyboard (or
-your controller shortcut isn't working yet), **`Ctrl+4`** toggles it open and
-closed at any time — handy as a fallback during first-time setup.
-
-### What should I do the first time I launch it?
-
-First-time setup is much smoother with a **keyboard attached**. You'll be
-entering a few values (like a SteamGridDB API key) and configuring shortcuts,
-and typing those on a keyboard is far quicker than the on-screen keyboard. Once
-you're set up, day-to-day use is fully controller- and d-pad-friendly.
-
-### Do I need a SteamGridDB API key?
-
-It's **highly encouraged.** The [SteamGridDB](plugins/steamgriddb/README.md)
-plugin — and the custom artwork that other plugins pull in (box art, heroes,
-logos) — needs a free API key to fetch art. Grab one from
-[steamgriddb.com/profile/preferences/api](https://www.steamgriddb.com/profile/preferences/api)
-and paste it into the SteamGridDB plugin's settings; you only enter it once and
-it persists across reinstalls.
-
-### Can I open the overlay with a controller instead?
-
-Yes — that's the main way. In **Settings → Controller** you can bind the overlay
-to **Guide + B** or **Guide + X**. (Guide + A and Guide + Y are deliberately left
-alone — Steam and InputPlumber reserve them for the QAM and Steam menu.) `Ctrl+4`
-on a keyboard always works too, as a fallback.
-
-### How do I update to a new version?
-
-Re-run the same install command — it's idempotent. It pulls the latest release,
-checks for a newer binary and overlay, refreshes the bundled plugins, and leaves
-your config untouched:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/install.sh | sh
-```
-
 To install or roll back to a **specific version**, set `LOADOUT_VERSION` to a
 [release tag](https://github.com/srsholmes/loadout/releases):
 
@@ -199,114 +66,16 @@ To install or roll back to a **specific version**, set `LOADOUT_VERSION` to a
 LOADOUT_VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/install.sh | sh
 ```
 
-### How do I install or manage plugins?
-
-All 20-plus plugins ship **bundled** with the release — there's nothing extra to
-download. Enable or disable individual plugins from **Settings → Plugins**.
-
-### My controller seems dead in Steam — what's going on?
-
-While the overlay is _open_, it exclusively grabs your controller so your inputs
-drive the overlay and don't leak through to the game underneath. That's by
-design — close the overlay and the controller returns to Steam immediately. If a
-pad stays unresponsive while the overlay is _hidden_, make sure you're on the
-latest version.
-
-### Where do my settings live? Do they survive a reinstall?
-
-Everything — theme, UI scale, favourites, home layout, controller shortcuts, and
-per-plugin state — lives in `~/.config/loadout/config.json` (honouring
-`$XDG_CONFIG_HOME`) and survives reinstalls and CEF profile wipes.
-
-### Something's not working — where are the logs?
-
-Backend logs are at `~/.config/loadout/logs/loadout.log`, or follow them live:
-
-```sh
-journalctl -u loadout -f               # backend (system service)
-journalctl --user -u loadout-overlay -f   # overlay (user service)
-```
-
-### How do I report a bug or get help?
-
-[Open an issue](https://github.com/srsholmes/loadout/issues) with your handheld,
-distro, and steps to reproduce — and if you're on an untested device, I'd love
-to hear from you.
-
-### How do I uninstall?
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/uninstall.sh | sh
-```
-
-## How it works
-
-- **TypeScript end to end.** The plugin host, every plugin backend, every
-  plugin UI, and the overlay itself run on [Bun](https://bun.sh). A full
-  plugin — backend + UI — is typically 150–300 lines.
-- **Our own overlay surface.** A standalone CEF window layered over Gamescope
-  via X11 atoms — not an injected panel, so Steam redesigns don't break it. The
-  same window runs as the Desktop Mode app.
-- **Injection only when you want it.** Plugins _can_ reach into Big Picture via
-  CEF's remote-debug protocol (badges, theming) — but it's opt-in, not the
-  default path.
-- **Batteries-included SDK.** `@loadout/ui` gives plugin authors typed RPC,
-  themed React components, gamepad-aware spatial navigation, and persistent
-  settings out of the box.
-
-<details>
-<summary>Build from source &amp; develop</summary>
-
-### Build from source
-
-```sh
-git clone https://github.com/srsholmes/loadout
-cd loadout
-bun install
-bun run build-and-install    # compile + install to ~/.local/share/, enable services
-```
-
-### Developing
-
-The overlay ships a **patched Electrobun native wrapper** (see
-[`apps/loadout-overlay/vendor/README.md`](apps/loadout-overlay/vendor/README.md))
-that fixes a 100% CPU spin in CEF's browser process. The build and install
-scripts swap it in automatically — but `electrobun dev` does not, so the
-**dev-mode overlay runs the stock wrapper and pins a CPU core**.
-
-**Recommended — build and install to see accurate results.** This is the only
-workflow that matches what users actually run: the patched wrapper, the real
-systemd user units, and production CEF flags. Re-run it after each change:
-
-```sh
-bun run build-and-install               # compile + install + enable services
-systemctl --user restart loadout-overlay   # restart the overlay to pick up the build
-journalctl --user -u loadout-overlay -f    # follow overlay logs
-```
-
-CEF DevTools are at `http://localhost:9222` (attach any Chromium or use CDP).
-
-**Fast UI iteration (hot reload).** For quick webview/React work where the
-native runtime doesn't matter, `bun run dev:overlay` starts the loader dev
-server + Electrobun with live reload:
-
-```sh
-bun run dev:overlay
-```
-
-Caveat: dev mode uses the **stock** native wrapper, so expect a busy CPU core
-and none of the patched-wrapper behaviour. Always confirm a change with
-`build-and-install` before trusting it.
+> If this repository is private, the install command will 404 until it's made
+> public; `install.sh` honours a `GITHUB_TOKEN` env var for authenticated
+> installs.
 
 </details>
 
-## Plugins
+## Featured plugins
 
-Twenty-plus and counting — every one TypeScript end-to-end. The screenshots below
-are captured live from the running overlay, so they always match the current
-build.
-
-### Featured
+A few of the 20-plus. The screenshots are captured live from the running
+overlay, so they always match the current build.
 
 <!-- PLUGINS_FEATURED_START — generated by scripts/scaffold-plugin-readmes.ts -->
 
@@ -360,7 +129,30 @@ Install and configure the LSFG-VK Vulkan frame generation layer
 
 <!-- PLUGINS_FEATURED_END -->
 
-### All plugins
+## In Gaming Mode
+
+In Gaming Mode, some plugins reach into Steam's Big Picture UI directly —
+themed, badged, and native.
+
+**[RecompHub](plugins/recomp/README.md)** turns recompiled classics into native
+Steam entries with full artwork — a dedicated collection in your library:
+
+![RecompHub in Big Picture](plugins/recomp/assets/screenshot-big-picture-library.png)
+
+**[Theme Loader](plugins/theme-loader/README.md)** restyles the whole interface
+with community CSS themes:
+
+![Themed Big Picture home](plugins/theme-loader/assets/screenshot-big-picture-home.png)
+
+![Themed Big Picture game page](plugins/theme-loader/assets/screenshot-big-picture-game.png)
+
+The plugins that reach into Big Picture (badges, CSS theming) are
+Gaming-Mode-only by nature; everything else works in either mode.
+
+## All plugins
+
+Every plugin ships **bundled** with the release — nothing extra to download.
+Enable or disable each one from **Settings → Plugins**.
 
 <!-- PLUGINS_GALLERY_START — generated by scripts/scaffold-plugin-readmes.ts -->
 
@@ -369,7 +161,7 @@ Install and configure the LSFG-VK Vulkan frame generation layer
 - **[Bluetooth](plugins/bluetooth/README.md)** — Quick connect/disconnect paired Bluetooth devices without leaving the game
 - **[Disable Controller Input](plugins/disable-controller-input/README.md)** — Silence individual controllers by telling InputPlumber to drop their virtual targets — useful for handhelds where the built-in pad is hogging player 1
 - **[Display Settings](plugins/display-settings/README.md)** — Adjust display brightness and saturation
-- **[Fan Control](plugins/fan-control/README.md)** — Monitor and control fan speed, temperature, and fan curve presets
+- **[Fan Control](plugins/fan-control/README.md)** — Monitor and control fan speed, temperature, and fan curves — presets or a custom curve editor
 - **[Flatpak Manager](plugins/flatpak-manager/README.md)** — Manage and update Flatpak applications without leaving your game
 - **[HLTB](plugins/hltb/README.md)** — Injects HowLongToBeat completion times into Steam library and store pages
 - **[InputPlumber](plugins/input-plumber/README.md)** — Install the InputPlumber input-routing daemon — no-op if a system package or a previous run already installed it
@@ -392,83 +184,81 @@ Install and configure the LSFG-VK Vulkan frame generation layer
 
 <!-- PLUGINS_GALLERY_END -->
 
-## Plugin model
+## Supported devices & testing
 
-A plugin is a directory under `plugins/` with a `package.json` (carrying a
-`plugin` field — the manifest), an optional `backend.ts` (a `PluginBackend`
-class exposing RPC methods), and an `app.tsx` UI entry that renders in the
-overlay. Plugins that want to reach into Steam's own Big Picture UI (badges,
-CSS) drive it from their backend via `@loadout/steam-cdp`. See
-[docs/plugin-development.md](docs/plugin-development.md) for the full API.
+**Loadout is Linux-only by design** — it targets distros that ship Steam Gaming
+Mode. No Windows or macOS build.
 
-## Architecture
+| OS                       | Status       |
+| ------------------------ | ------------ |
+| **SteamOS** (Steam Deck) | ✅ Supported |
+| **Bazzite**              | ✅ Supported |
+| **CachyOS**              | ✅ Supported |
 
-The overlay is an Electrobun (CEF) app at `apps/loadout-overlay/`: `src/bun/`
-is the Bun + libc-FFI main process (the evdev read loop, `EVIOCGRAB`/`EVIOCSMASK`,
-Gamescope X11 atoms, NavController, and the typed RPC surface the webview talks
-to); `src/webview/` is the CEF UI boot shim that pulls in the shared React tree
-from `src/overlay/`. The Bun loader + CLI lives in `apps/loadout/`. See
+**Hardware tested so far:**
+
+| Device            | Status          |
+| ----------------- | --------------- |
+| OneXPlayer APEX   | ✅ Daily-driven |
+| Steam Deck        | ✅ Tested       |
+| OneXPlayer F1 Pro | ✅ Tested       |
+
+> 🙋 **Got a different handheld?** ROG Ally, Legion Go, OneXPlayer, GPD, AYANEO,
+> AOKZOE — I'd love your help testing on other devices.
+> [Open an issue](https://github.com/srsholmes/loadout/issues) with your
+> hardware and let's get Loadout running on it.
+
+See [docs/os-compatibility.md](docs/os-compatibility.md) for per-distro notes
+(including the bundled-glibc caveat on stock SteamOS).
+
+## How it works
+
+- **TypeScript end to end.** The plugin host, every plugin backend, every
+  plugin UI, and the overlay itself run on [Bun](https://bun.sh). A full
+  plugin — backend + UI — is typically 150–300 lines.
+- **Our own overlay surface, not an injected panel.** A standalone CEF window
+  layered over Gamescope via X11 atoms — so Steam redesigns don't break it. The
+  same window runs as the Desktop Mode app. Plugins _can_ reach into Big
+  Picture (badges, theming) via CEF's remote-debug protocol, but that's opt-in.
+- **Batteries-included SDK.** `@loadout/ui` gives plugin authors typed RPC,
+  themed React components, gamepad-aware spatial navigation, and persistent
+  settings out of the box.
+
+Built with [Bun](https://bun.sh), [Electrobun](https://electrobun.dev)
+(CEF + Bun), React, Tailwind v4, and daisyUI. For the full picture, see
 [docs/architecture.md](docs/architecture.md) and
-[docs/overlay-gamescope-integration.md](docs/overlay-gamescope-integration.md).
+[docs/plugin-development.md](docs/plugin-development.md).
 
-```
-loadout/
-├── apps/
-│   ├── loadout/              # Bun loader + CLI: HTTP/WS server, plugin manager, Steam injector
-│   └── loadout-overlay/      # Electrobun (CEF) overlay
-│       ├── src/bun/          #   Bun + libc-FFI main process (evdev, Gamescope atoms, RPC)
-│       ├── src/overlay/      #   Shared React tree (App, plugin host, sidebar, Settings)
-│       └── src/webview/      #   CEF UI boot shim
-├── packages/
-│   ├── types/                # Shared interfaces (PluginBackend, RPC protocol)
-│   ├── ui/                   # @loadout/ui — React SDK + useBackend + spatial nav
-│   ├── exec/                 # Subprocess helpers (command allow-list)
-│   ├── steam-paths/          # Steam install discovery
-│   ├── steam-cdp/            # Chrome DevTools Protocol client (Steam CEF :8080)
-│   ├── steam-cef-badges/     # CEF remote-debug injection into Steam Big Picture
-│   ├── steam-shortcut/       # Steam shortcut writing
-│   ├── vdf/                  # Valve VDF parser
-│   ├── sgdb-art/             # SteamGridDB artwork fetch
-│   ├── game-library/         # Game library helpers
-│   ├── per-game-profiles/    # Per-game profile storage
-│   ├── plugin-storage/       # Plugin state persistence
-│   ├── external-cache/       # XDG cache helpers
-│   ├── file-picker/          # File picker
-│   └── deck-hid/             # HID device access
-├── plugins/                  # The plugin suite (one dir per plugin)
-├── scripts/                  # Build/install + screenshot & README tooling
-└── docs/                     # Architecture, plugin dev, Steam injection, …
+<details>
+<summary>Build from source</summary>
+
+```sh
+git clone https://github.com/srsholmes/loadout
+cd loadout
+bun install
+bun run build-and-install    # compile + install to ~/.local/share/, enable services
 ```
 
-## Scripts
+The overlay ships a **patched Electrobun native wrapper** (see
+[`apps/loadout-overlay/vendor/README.md`](apps/loadout-overlay/vendor/README.md))
+that fixes a 100% CPU spin in CEF's browser process. `build-and-install` swaps
+it in automatically; `electrobun dev` does not, so the dev-mode overlay runs
+the stock wrapper and pins a CPU core. Build and install to see accurate
+results:
 
-| Command                           | Description                                                  |
-| --------------------------------- | ------------------------------------------------------------ |
-| `bun run dev:overlay`             | Loader dev server + Electrobun overlay with hot reload       |
-| `bun run build`                   | Compile loader binary + Electrobun overlay tree              |
-| `bun run build-and-install`       | `build` + install into `~/.local/share/` and enable services |
-| `bun run typecheck`               | `tsc --noEmit`                                               |
-| `bun run test`                    | Backend + UI tests                                           |
-| `bun run lint` / `bun run format` | ESLint 9 flat config / Prettier                              |
+```sh
+bun run build-and-install               # compile + install + enable services
+systemctl --user restart loadout-overlay   # restart the overlay to pick up the build
+journalctl --user -u loadout-overlay -f    # follow overlay logs
+```
 
-> **CI:** every pull request and every push to `main` runs the full
-> typecheck / lint / test suite ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
-> Releases are cut manually via `workflow_dispatch`
-> ([`.github/workflows/release.yml`](.github/workflows/release.yml)).
+CEF DevTools are at `http://localhost:9222` (attach any Chromium or use CDP).
+For fast UI iteration with hot reload, `bun run dev:overlay` starts the loader
+dev server + Electrobun (stock wrapper — always confirm with `build-and-install`
+before trusting a change). Full dev/build/test loop:
+[docs/plugin-development.md](docs/plugin-development.md).
 
-## Persistent user config
-
-User settings — theme, UI scale, favourites, home dashboard layout, controller
-shortcuts, per-plugin state — live in `~/.config/loadout/config.json`
-(honouring `$XDG_CONFIG_HOME`) and survive reinstalls and CEF profile wipes.
-
-## Tech stack
-
-- **Runtime:** [Bun](https://bun.sh) — TypeScript execution + `bun build --compile` single-binary distribution.
-- **Overlay host:** [Electrobun](https://electrobun.dev) — CEF with Bun as the main process.
-- **UI:** React 18 + Tailwind v4 + daisyUI.
-- **Spatial navigation:** `@noriginmedia/norigin-spatial-navigation`.
-- **Service:** a system unit `loadout.service` (backend, runs as root) + a user unit `loadout-overlay.service` (overlay).
+</details>
 
 ## Documentation
 
@@ -484,10 +274,93 @@ shortcuts, per-plugin state — live in `~/.config/loadout/config.json`
 
 See [CHANGELOG.md](CHANGELOG.md) for the release history.
 
+## FAQ
+
+### How do I open it?
+
+In **Gaming Mode**, trigger your configured wake shortcut on the controller to
+bring up the overlay. On the **desktop**, launch Loadout like any other app and
+it opens as a standalone window. In either mode, if you're on a keyboard (or
+your controller shortcut isn't working yet), **`Ctrl+4`** toggles it open and
+closed at any time — handy as a fallback during first-time setup.
+
+### Can I open the overlay with a controller instead?
+
+Yes — that's the main way. In **Settings → Controller** you can bind the overlay
+to **Guide + B** or **Guide + X**. (Guide + A and Guide + Y are deliberately left
+alone — Steam and InputPlumber reserve them for the QAM and Steam menu.) `Ctrl+4`
+on a keyboard always works too, as a fallback.
+
+### What should I do the first time I launch it?
+
+First-time setup is much smoother with a **keyboard attached**. You'll be
+entering a few values (like a SteamGridDB API key) and configuring shortcuts,
+and typing those on a keyboard is far quicker than the on-screen keyboard. Once
+you're set up, day-to-day use is fully controller- and d-pad-friendly.
+
+### Do I need a SteamGridDB API key?
+
+It's **highly encouraged.** The [SteamGridDB](plugins/steamgriddb/README.md)
+plugin — and the custom artwork that other plugins pull in (box art, heroes,
+logos) — needs a free API key to fetch art. Grab one from
+[steamgriddb.com/profile/preferences/api](https://www.steamgriddb.com/profile/preferences/api)
+and paste it into the SteamGridDB plugin's settings; you only enter it once and
+it persists across reinstalls.
+
+### How do I install or manage plugins?
+
+All 20-plus plugins ship **bundled** with the release — there's nothing extra to
+download. Enable or disable individual plugins from **Settings → Plugins**.
+
+### How do I update to a new version?
+
+Re-run the same install command — it's idempotent. It pulls the latest release,
+checks for a newer binary and overlay, refreshes the bundled plugins, and leaves
+your config untouched:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/install.sh | sh
+```
+
+### Where do my settings live? Do they survive a reinstall?
+
+Everything — theme, UI scale, favourites, home dashboard layout, controller
+shortcuts, and per-plugin state — lives in `~/.config/loadout/config.json`
+(honouring `$XDG_CONFIG_HOME`) and survives reinstalls and CEF profile wipes.
+
+### My controller seems dead in Steam — what's going on?
+
+While the overlay is _open_, it exclusively grabs your controller so your inputs
+drive the overlay and don't leak through to the game underneath. That's by
+design — close the overlay and the controller returns to Steam immediately. If a
+pad stays unresponsive while the overlay is _hidden_, make sure you're on the
+latest version.
+
+### Something's not working — where are the logs?
+
+Backend logs are at `~/.config/loadout/logs/loadout.log`, or follow them live:
+
+```sh
+journalctl -u loadout -f                  # backend (system service)
+journalctl --user -u loadout-overlay -f   # overlay (user service)
+```
+
+### How do I report a bug or get help?
+
+[Open an issue](https://github.com/srsholmes/loadout/issues) with your handheld,
+distro, and steps to reproduce — and if you're on an untested device, I'd love
+to hear from you.
+
+### How do I uninstall?
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/uninstall.sh | sh
+```
+
 ## Thanks & acknowledgements
 
-Loadout stands on the shoulders of giants. It would not be anywhere near as good
-as it is without the people and projects below — please go star their work.
+Loadout stands on the shoulders of giants — the people and projects below made
+it possible. Please go star their work.
 
 **A huge thank-you to the [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader)
 community.** Years of hard work on the Linux handheld homebrew ecosystem — and
