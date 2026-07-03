@@ -273,24 +273,22 @@
       "project": "Perfect Dark (native PC port)",
       "platform": "n64",
       "repo": "fgsfdsfgs/perfect_dark",
-      "description": "Native PC port of Rare's Perfect Dark, built on the N64 decompilation. Adds mouselook, dual-analog support, widescreen, configurable FOV, 60+ FPS and basic mod support. On first launch you must supply your own Perfect Dark ROM (NTSC-final recommended), placed as data/pd.ntsc-final.z64 next to the executable.",
+      "description": "Native PC port of Rare's Perfect Dark, built on the N64 decompilation. Adds mouselook, dual-analog support, widescreen, configurable FOV, 60+ FPS and basic mod support. On first launch you must supply your own Perfect Dark ROM (NTSC-final recommended). Linux native build; the port's release ships a per-platform folder, so this entry targets the Linux binary.",
       "installType": "rom_extract",
       "releaseAssets": {
-        "windows": "pd-x86_64-windows.zip",
         "linux": "pd-x86_64-linux.tar.gz"
       },
       "romInfo": {
-        "description": "Provide your legally owned Perfect Dark N64 ROM. Recommended: ntsc-final / US V1.1 (md5 e03b088b6ac9e0080440efed07c1e40f). Also supported: ntsc-1.0 / US V1.0 (7f4171b0c8d17815be37913f535e4e93). PAL and JPN ROMs need a separate executable build.",
+        "description": "Provide your legally owned Perfect Dark N64 ROM. Recommended: ntsc-final / US V1.1 (md5 e03b088b6ac9e0080440efed07c1e40f). Also supported: ntsc-1.0 / US V1.0 (7f4171b0c8d17815be37913f535e4e93).",
         "validChecksums": [
           "e03b088b6ac9e0080440efed07c1e40f",
           "7f4171b0c8d17815be37913f535e4e93"
         ],
         "extractionCommand": "",
-        "placeRomAs": "data/pd.ntsc-final.z64"
+        "placeRomAs": "pd-x86_64-linux/data/pd.ntsc-final.z64"
       },
       "launchCommand": {
-        "windows": "{installDir}/pd.x86_64.exe",
-        "linux": "{installDir}/pd.x86_64"
+        "linux": "{installDir}/pd-x86_64-linux/pd.x86_64"
       },
       "tags": [
         "perfect-dark",
@@ -322,7 +320,7 @@
       },
       "launchCommand": {
         "windows": "{installDir}/Ghostship.exe",
-        "linux": "{installDir}/Ghostship.appimage"
+        "linux": "{installDir}/ghostship.appimage"
       },
       "tags": [
         "mario",
