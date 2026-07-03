@@ -197,6 +197,173 @@
       "steamGridDbId": 1680
     },
     {
+      "id": "bmhero-recomp",
+      "name": "Bomberman Hero",
+      "project": "Bomberman Hero: Recompiled",
+      "platform": "n64",
+      "repo": "RevoSucks/BMHeroRecomp",
+      "description": "Native PC port of Bomberman Hero via static recompilation. Widescreen, higher framerates, and mod support.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "BMHeroRecompiled-Windows-*.zip",
+        "linux": "BMHeroRecompiled-Linux-X64-*.zip"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/BMHeroRecompiled.exe",
+        "linux": "{installDir}/BMHeroRecompiled"
+      },
+      "tags": [
+        "bomberman",
+        "n64",
+        "action",
+        "platformer"
+      ],
+      "latestVersion": "v0.7.1",
+      "steamGridDbId": 38377
+    },
+    {
+      "id": "quest64-recomp",
+      "name": "Quest 64",
+      "project": "Quest 64: Recompiled",
+      "platform": "n64",
+      "repo": "Rainchus/Quest64-Recomp",
+      "description": "Native PC port of Quest 64 via static recompilation, using N64: Recompiled and the RT64 renderer for widescreen, high framerates, and mod support.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "Quest64Recompiledv*.zip"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/Quest64Recompiled.exe"
+      },
+      "tags": [
+        "quest",
+        "n64",
+        "rpg",
+        "3d"
+      ],
+      "latestVersion": "v0.1",
+      "steamGridDbId": 38121
+    },
+    {
+      "id": "chameleon-twist-recomp",
+      "name": "Chameleon Twist",
+      "project": "Chameleon Twist: Recompiled",
+      "platform": "n64",
+      "repo": "Rainchus/ChameleonTwist1-JP-Recomp",
+      "description": "Native PC port of the Japanese version of Chameleon Twist via static recompilation, using RT64 for widescreen, high framerates, and enhanced rendering.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "ChameleonTwistJPRecompiled.zip"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/ChameleonTwistJPRecompiled.exe"
+      },
+      "tags": [
+        "chameleon-twist",
+        "n64",
+        "platformer",
+        "3d"
+      ],
+      "latestVersion": "v0.1",
+      "steamGridDbId": 36237
+    },
+    {
+      "id": "perfect-dark",
+      "name": "Perfect Dark",
+      "project": "Perfect Dark (native PC port)",
+      "platform": "n64",
+      "repo": "fgsfdsfgs/perfect_dark",
+      "description": "Native PC port of Rare's Perfect Dark, built on the N64 decompilation. Adds mouselook, dual-analog support, widescreen, configurable FOV, 60+ FPS and basic mod support. On first launch you must supply your own Perfect Dark ROM (NTSC-final recommended), placed as data/pd.ntsc-final.z64 next to the executable.",
+      "installType": "rom_extract",
+      "releaseAssets": {
+        "windows": "pd-x86_64-windows.zip",
+        "linux": "pd-x86_64-linux.tar.gz"
+      },
+      "romInfo": {
+        "description": "Provide your legally owned Perfect Dark N64 ROM. Recommended: ntsc-final / US V1.1 (md5 e03b088b6ac9e0080440efed07c1e40f). Also supported: ntsc-1.0 / US V1.0 (7f4171b0c8d17815be37913f535e4e93). PAL and JPN ROMs need a separate executable build.",
+        "validChecksums": [
+          "e03b088b6ac9e0080440efed07c1e40f",
+          "7f4171b0c8d17815be37913f535e4e93"
+        ],
+        "extractionCommand": "",
+        "placeRomAs": "data/pd.ntsc-final.z64"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/pd.x86_64.exe",
+        "linux": "{installDir}/pd.x86_64"
+      },
+      "tags": [
+        "perfect-dark",
+        "n64",
+        "fps",
+        "3d"
+      ],
+      "website": "https://github.com/fgsfdsfgs/perfect_dark",
+      "latestVersion": "ci-dev-build",
+      "steamGridDbId": 37787
+    },
+    {
+      "id": "ghostship",
+      "name": "Super Mario 64",
+      "project": "Ghostship",
+      "platform": "n64",
+      "repo": "HarbourMasters/Ghostship",
+      "description": "Native PC port of Super Mario 64 via reverse engineering (HarbourMasters/libultraship engine). First launch processes your ROM into game assets (generates an sm64.o2r); subsequent launches are instant.",
+      "installType": "rom_extract",
+      "releaseAssets": {
+        "windows": "*-Win64.zip",
+        "linux": "*-Linux.zip"
+      },
+      "romInfo": {
+        "description": "Provide your legally owned Super Mario 64 ROM (US or JP) in .z64 format",
+        "validChecksums": [],
+        "extractionCommand": "",
+        "placeRomAs": "sm64.z64"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/Ghostship.exe",
+        "linux": "{installDir}/Ghostship.appimage"
+      },
+      "tags": [
+        "mario",
+        "n64",
+        "platformer",
+        "3d"
+      ],
+      "latestVersion": "2.0.0",
+      "steamGridDbId": 37177
+    },
+    {
+      "id": "spaghettikart",
+      "name": "Mario Kart 64",
+      "project": "SpaghettiKart",
+      "platform": "n64",
+      "repo": "HarbourMasters/SpaghettiKart",
+      "description": "Native PC port of Mario Kart 64 via reverse engineering (HarbourMasters engine). Enhanced with modern features and mod support. First launch processes your ROM into game assets (~30s); subsequent launches are instant.",
+      "installType": "rom_extract",
+      "releaseAssets": {
+        "windows": "spaghetti-windows*.zip",
+        "linux": "spaghetti-linux*.zip"
+      },
+      "romInfo": {
+        "description": "Provide your legally owned Mario Kart 64 ROM (US, .z64 format)",
+        "validChecksums": [],
+        "extractionCommand": "",
+        "placeRomAs": "mk64.z64"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/Spaghettify.exe",
+        "linux": "{installDir}/spaghetti.appimage"
+      },
+      "tags": [
+        "mario",
+        "n64",
+        "racing"
+      ],
+      "latestVersion": "1.0.0",
+      "steamGridDbId": 21164
+    },
+    {
       "id": "mariokart64-recomp",
       "name": "Mario Kart 64",
       "project": "Mario Kart 64: Recompiled",
