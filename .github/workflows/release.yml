@@ -83,10 +83,12 @@ jobs:
         run: |
           set -eu
           TAG="${{ inputs.tag || github.ref_name }}"
-          case "$TAG" in
-            v[0-9]*.[0-9]*.[0-9]*) : ;;
-            *) echo "::error::Refusing to release '$TAG' — expected a vX.Y.Z tag."; exit 1 ;;
-          esac
+          # Strict semver check — the tag-push glob (v*.*.*) is loose (its dots
+          # match any char), so validate properly here before publishing.
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Refusing to release '$TAG' — expected a vX.Y.Z tag."
+            exit 1
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Releasing $TAG"
 
