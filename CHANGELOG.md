@@ -8,10 +8,14 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com).
 
 ---
 
-## [Unreleased]
+## [v0.2.0] — 2026-07-03
 
 ### Added
 - **Open the overlay from Steam's menu** (#169) — An optional **"Loadout"** entry in Steam's main menu that opens the overlay. It lives in Steam's own focus tree, so it stays reachable by D-pad even if the controller wake-shortcut is mis-configured or the pads wedge on wake — a backup way in. Toggle it under **Settings → General → Steam menu**; selecting it opens the overlay without navigating you anywhere.
+- **Seven more recompiled N64 games** (#193, #194) — Bomberman Hero, Quest 64, Chameleon Twist, Perfect Dark, Ghostship, SpaghettiKart, and Mega Man 64 join the Recomp plugin's curated catalogue of native PC ports. Each was installed and launched on-device against its repo's actual latest release before shipping.
+
+### Fixed
+- **Overlay toasts now scale with the UI** (#195) — Toasts ignored the UI Scale setting (the toaster was mounted outside the scaled wrapper), so they were tiny on a TV. They now scale with the rest of the UI and have a larger base size.
 
 ## [v0.1.0] — 2026-07-03
 
