@@ -78,6 +78,18 @@ export interface RouteContext {
     args: unknown[],
   ) => Promise<number>;
 
+  /**
+   * (Re)apply the optional Steam main-menu "Loadout" entry (issue #169).
+   * Backed by the CEF injector, which is constructed after this context —
+   * so it's a capability closure rather than the injector object, and
+   * returns a not-ready error until the injector exists. `mainMenu` is the
+   * explicit desired state from the Settings toggle (avoids a config re-read
+   * race); omit to fall back to persisted config.
+   */
+  readonly refreshOverlayButton: (
+    mainMenu?: boolean,
+  ) => Promise<{ ok: boolean; error?: string }>;
+
   // --- Build helpers ---
   /** Compile a plugin's app.tsx for the overlay — same Bun.build
    *  pipeline the server uses on hot-reload. */

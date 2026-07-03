@@ -334,6 +334,12 @@ export async function startServer(options: ServerOptions = {}) {
   // `dispatchRoute(req, url, ctx)` first; routes that match return
   // a Response, anything that falls through hits the inlined blocks
   // (currently every route) and ultimately the 404.
+  // The CEF injector is constructed further down (it needs broadcast
+  // helpers defined above), but the overlay-button route needs to reach it.
+  // Hold it in a ref the ctx closure reads lazily — until it's assigned,
+  // callers get a not-ready error rather than a crash.
+  const injectorRef: { current: SteamInjector | null } = { current: null };
+
   const ctx: RouteContext = {
     plugins,
     token,
@@ -345,6 +351,10 @@ export async function startServer(options: ServerOptions = {}) {
     broadcastToPlugins,
     compileTsx,
     bunPlugins: [vendorGlobalsPlugin(), sdkGlobalPlugin()],
+    refreshOverlayButton: (mainMenu) =>
+      injectorRef.current
+        ? injectorRef.current.refreshOverlayButton({ mainMenu })
+        : Promise.resolve({ ok: false, error: "Injector not ready yet." }),
   };
 
   // --- HTTP Server ---
@@ -405,22 +415,6 @@ export async function startServer(options: ServerOptions = {}) {
       if (url.pathname.startsWith("/api/") && !validateRequest(req)) {
         return new Response(JSON.stringify({ error: "Unauthorized" }), {
           status: 401,
-          headers: {
-            "Content-Type": "application/json;charset=utf-8",
-            "Access-Control-Allow-Origin": "*",
-          },
-        });
-      }
-
-      // --- Re-apply the optional Steam "open overlay" menu entry on
-      //     demand (issue #169). The overlay Settings UI hits this right
-      //     after the user toggles the setting or edits the label so the
-      //     change lands in Steam immediately (and it can surface a toast
-      //     if injection fails). Authenticated via the /api/* gate above.
-      if (url.pathname === "/api/overlay-button/refresh" && req.method === "POST") {
-        const result = await injector.refreshOverlayButton();
-        return new Response(JSON.stringify(result), {
-          status: result.ok ? 200 : 503,
           headers: {
             "Content-Type": "application/json;charset=utf-8",
             "Access-Control-Allow-Origin": "*",
@@ -501,6 +495,9 @@ export async function startServer(options: ServerOptions = {}) {
       broadcast({ type: "event", plugin: "__system", event: "inject-failed", data: info });
     },
   });
+  // Expose the injector to the overlay-button route (see ctx above).
+  injectorRef.current = injector;
+
   injector.start().catch((err) => {
     log.error(`[injector] Fatal error: ${err}`);
   });

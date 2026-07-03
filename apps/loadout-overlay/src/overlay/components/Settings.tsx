@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   PluginProvider,
   TabBar,
@@ -535,48 +535,43 @@ function SettingsInner({
       .catch(() => {});
   }, []);
 
-  // Push the Steam-menu "open overlay" button change into the running Steam
-  // client (issue #169). Debounced so typing a label doesn't spam the
-  // injector; surfaces a toast when injection fails (e.g. Steam not attached
-  // or desktop mode). Config itself is already persisted by the setters
-  // above — this only re-applies the CEF patch.
-  const steamButtonRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  function scheduleSteamButtonRefresh() {
-    if (steamButtonRefreshTimer.current) clearTimeout(steamButtonRefreshTimer.current);
-    steamButtonRefreshTimer.current = setTimeout(() => {
-      steamButtonRefreshTimer.current = null;
-      const enabled = getConfigValue<boolean>("steamOverlayButtonMainMenu", false);
-      fetch(apiUrl("/api/overlay-button/refresh"), { method: "POST", headers: authHeaders() })
-        .then(async (res) => {
-          const data = (await res.json().catch(() => null)) as
-            | { ok?: boolean; error?: string }
-            | null;
-          const ok = res.ok && data?.ok !== false;
-          // Only nag when the user is trying to *enable* it — a failed
-          // teardown (already gone, Steam closed) isn't worth a toast.
-          if (ok) {
-            if (enabled) {
-              notify("Added the overlay button to Steam's menu.", {
-                kind: "success",
-                id: "steam-overlay-button",
-              });
-            }
-          } else if (enabled) {
-            notify(data?.error ?? "Couldn't add the button to Steam.", {
-              kind: "error",
-              id: "steam-overlay-button",
-            });
-          }
-        })
-        .catch(() => {
-          if (enabled) {
-            notify("Couldn't reach the loader to update Steam.", {
-              kind: "error",
-              id: "steam-overlay-button",
-            });
-          }
+  // Apply the Steam main-menu "Loadout" entry toggle to the running Steam
+  // client (issue #169). Config is already persisted optimistically by
+  // `setSteamMainMenu`; this re-applies the CEF patch and passes the desired
+  // state in the request body so the injector doesn't race the async config
+  // PATCH. Surfaces a toast only when *enabling* fails (a failed teardown —
+  // Steam closed, already gone — isn't worth nagging about).
+  async function applySteamMainMenu(enabled: boolean) {
+    try {
+      const res = await fetch(apiUrl("/api/overlay-button/refresh"), {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ mainMenu: enabled }),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { ok?: boolean; error?: string }
+        | null;
+      const ok = res.ok && data?.ok !== false;
+      if (!enabled) return;
+      if (ok) {
+        notify("Added the overlay button to Steam's menu.", {
+          kind: "success",
+          id: "steam-overlay-button",
         });
-    }, 400);
+      } else {
+        notify(data?.error ?? "Couldn't add the button to Steam.", {
+          kind: "error",
+          id: "steam-overlay-button",
+        });
+      }
+    } catch {
+      if (enabled) {
+        notify("Couldn't reach the loader to update Steam.", {
+          kind: "error",
+          id: "steam-overlay-button",
+        });
+      }
+    }
   }
 
   function handleShortcutChange(key: keyof ControllerShortcuts, value: string) {
@@ -689,7 +684,7 @@ function SettingsInner({
                     checked={steamMainMenu}
                     onChange={(v) => {
                       setSteamMainMenu(v);
-                      scheduleSteamButtonRefresh();
+                      void applySteamMainMenu(v);
                     }}
                   />
                 </div>

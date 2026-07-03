@@ -102,6 +102,27 @@ export function maybeGiveUp(
   return true;
 }
 
+/**
+ * Resolve whether the main-menu "Loadout" entry should be present from a
+ * raw user-config object (issue #169). The new `steamOverlayButtonMainMenu`
+ * key wins once it exists — so toggling it *off* removes the item even for
+ * a config that still carries the legacy `steamOverlayButtonEnabled` flag
+ * (used by the first build of this feature, pre key-rename). The legacy key
+ * is honoured only as a fallback when the new key was never written.
+ *
+ * Pure + exported so the back-compat precedence is unit-testable without a
+ * live CEF connection.
+ */
+export function resolveOverlayMainMenu(cfg: Record<string, unknown>): boolean {
+  const hasNew = Object.prototype.hasOwnProperty.call(
+    cfg,
+    "steamOverlayButtonMainMenu",
+  );
+  return hasNew
+    ? cfg.steamOverlayButtonMainMenu === true
+    : cfg.steamOverlayButtonEnabled === true;
+}
+
 /*
  * The plugin-bundle / panel-mount machinery (injectBPMBundles,
  * PANEL_CONTAINER_STYLE, PanelMountScriptOptions, buildPanelMountScript,
@@ -470,35 +491,42 @@ export class SteamInjector {
    * Idempotent — re-adding an existing binding is a non-fatal no-op.
    */
   private async setupOverlayBinding(): Promise<void> {
-    if (!this.cdp?.connected) return;
+    const cdp = this.cdp;
+    if (!cdp?.connected) return;
+
+    // Attach the client-side listener exactly once — *synchronously*, before
+    // any await, so two concurrent callers (launch-time setup racing a
+    // Settings-toggle refresh) can't both pass the guard and double-add it,
+    // which would fire onOverlayOpen twice per activation. The listener
+    // survives page reloads (it lives on the CDP client, not the page).
+    if (!this.overlayBindingUnsub) {
+      this.overlayBindingUnsub = cdp.on(
+        "Runtime.bindingCalled",
+        (params: Record<string, unknown>) => {
+          if (params.name !== OVERLAY_MENU_BINDING) return;
+          this.log("[injector] Overlay-menu entry activated");
+          try {
+            this.onOverlayOpen?.();
+          } catch (err) {
+            this.log(`[injector] onOverlayOpen hook threw: ${err instanceof Error ? err.message : err}`);
+          }
+        },
+      );
+    }
 
     try {
-      await this.cdp.send("Runtime.enable");
+      await cdp.send("Runtime.enable");
     } catch {
       // May already be enabled — non-fatal.
     }
-    // Always (re)add: CDP drops bindings on page navigation, so this must
-    // run again after a reload even though the listener below persists.
+    // Always (re)add the binding itself: CDP drops bindings on page
+    // navigation, so this must run again after a reload even though the
+    // listener above is attached only once.
     try {
-      await this.cdp.send("Runtime.addBinding", { name: OVERLAY_MENU_BINDING });
+      await cdp.send("Runtime.addBinding", { name: OVERLAY_MENU_BINDING });
     } catch {
       // Binding may already exist from a prior session — non-fatal.
     }
-
-    // Attach the client-side listener exactly once — it survives reloads.
-    if (this.overlayBindingUnsub) return;
-    this.overlayBindingUnsub = this.cdp.on(
-      "Runtime.bindingCalled",
-      (params: Record<string, unknown>) => {
-        if (params.name !== OVERLAY_MENU_BINDING) return;
-        this.log("[injector] Overlay-menu entry activated");
-        try {
-          this.onOverlayOpen?.();
-        } catch (err) {
-          this.log(`[injector] onOverlayOpen hook threw: ${err instanceof Error ? err.message : err}`);
-        }
-      },
-    );
   }
 
   /**
@@ -511,46 +539,54 @@ export class SteamInjector {
    * the legacy `steamOverlayButtonEnabled` key (pre-#169-split) is
    * honoured as an alias so an existing opt-in isn't silently dropped.
    */
-  private async readOverlayButtonConfig(): Promise<{ mainMenu: boolean }> {
+  private async readOverlayButtonConfig(): Promise<boolean | null> {
     try {
       const res = await this.fetchApi("/api/user-config");
-      if (!res.ok) return { mainMenu: false };
+      if (!res.ok) return null;
       const cfg = (await res.json()) as Record<string, unknown>;
-      // The new key wins once it exists — so toggling it *off* removes the
-      // item even for users who still carry the legacy `steamOverlayButtonEnabled`
-      // flag from before the #169 rename. Fall back to the legacy flag only
-      // when the new key was never written.
-      const hasNew = Object.prototype.hasOwnProperty.call(
-        cfg,
-        "steamOverlayButtonMainMenu",
-      );
-      return {
-        mainMenu: hasNew
-          ? cfg.steamOverlayButtonMainMenu === true
-          : cfg.steamOverlayButtonEnabled === true,
-      };
+      return resolveOverlayMainMenu(cfg);
     } catch {
-      return { mainMenu: false };
+      // Distinguish "couldn't read" (null) from "read: disabled" (false) so
+      // callers don't tear down an enabled item on a transient blip.
+      return null;
     }
   }
 
   /**
-   * (Re)apply the main-menu "Loadout" entry to match the current user
-   * config (issue #169). Injects when enabled, tears down when disabled.
-   * Returns a `{ ok, error }` result so the loader's refresh endpoint can
-   * surface a failure toast in the overlay. Safe to call any time; a
-   * no-op-shaped failure (no CEF, desktop mode) returns `ok: false` with
-   * a reason.
+   * (Re)apply the main-menu "Loadout" entry (issue #169). Injects when
+   * enabled, tears down when disabled. Returns a `{ ok, error }` result so
+   * the loader's refresh endpoint can surface a failure toast in the
+   * overlay.
+   *
+   * `opts.mainMenu` carries the *explicit* desired state from the Settings
+   * toggle so we act on it directly instead of re-reading `/api/user-config`
+   * — the config PATCH the toggle fires is async and could otherwise race
+   * this read. Omit it (launch / reinject) to fall back to the persisted
+   * config; a read failure there is surfaced as `ok: false` rather than
+   * silently removing an enabled item.
    */
-  async refreshOverlayButton(): Promise<{ ok: boolean; error?: string }> {
+  async refreshOverlayButton(
+    opts: { mainMenu?: boolean } = {},
+  ): Promise<{ ok: boolean; error?: string }> {
     if (!this.cdp?.connected) {
       return { ok: false, error: "Not connected to Steam — is Steam running?" };
     }
     if (!(await this.isGameMode())) {
       return { ok: false, error: "The Steam overlay button is only available in Gaming Mode." };
     }
+
+    let mainMenu: boolean;
+    if (typeof opts.mainMenu === "boolean") {
+      mainMenu = opts.mainMenu;
+    } else {
+      const read = await this.readOverlayButtonConfig();
+      if (read === null) {
+        return { ok: false, error: "Couldn't read Loadout settings." };
+      }
+      mainMenu = read;
+    }
+
     try {
-      const { mainMenu } = await this.readOverlayButtonConfig();
       // Make sure the binding is live before the entry can be activated.
       await this.setupOverlayBinding();
       if (mainMenu) {

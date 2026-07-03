@@ -126,12 +126,24 @@ export function buildOverlayMenuInjectScript(config: OverlayMenuConfig = {}): st
     }
   } catch (e) {}
 
-  // Safety net: if navigation ever slips through to the sentinel anyway,
-  // open the overlay and step back so the user is never stranded.
+  // Safety net: if navigation ever slips through to the sentinel anyway
+  // (a future Steam build routing the item some other way, or m_history not
+  // being ready when we wrapped above), open the overlay and step back so
+  // the user is never stranded on the blank sentinel page. Re-reads
+  // m_history live each tick — the reference captured above may have been
+  // null — and latches so it fires once per landing, not every 150ms.
+  var sentinelHandled = false;
   var watchId = setInterval(function() {
     if (isSentinel(currentPath())) {
+      if (sentinelHandled) return;
+      sentinelHandled = true;
       fireOverlay();
-      try { if (history && typeof history.goBack === "function") history.goBack(); } catch (e) {}
+      try {
+        var h = window.tempNavStore && window.tempNavStore.m_history;
+        if (h && typeof h.goBack === "function") h.goBack();
+      } catch (e) {}
+    } else {
+      sentinelHandled = false;
     }
   }, 150);
 
