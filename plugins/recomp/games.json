@@ -197,6 +197,30 @@
       "steamGridDbId": 1680
     },
     {
+      "id": "megaman64-recomp",
+      "name": "Mega Man 64",
+      "project": "Mega Man 64: Recompiled",
+      "platform": "n64",
+      "repo": "MegaMan64Recomp/MegaMan64Recompiled",
+      "description": "Native PC port of Mega Man 64 via static recompilation. Widescreen, higher framerates, and mod support.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "MegaMan64Recompiled-*-Windows.zip"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/MegaMan64Recompiled.exe"
+      },
+      "tags": [
+        "mega-man",
+        "n64",
+        "action-adventure",
+        "3d"
+      ],
+      "latestVersion": "v0.9.1",
+      "steamGridDbId": 37399,
+      "_reason": "Windows-only: the upstream Linux build ships as a nested zip->tar.gz the installer doesn't unwrap; the Windows build runs via Proton."
+    },
+    {
       "id": "bmhero-recomp",
       "name": "Bomberman Hero",
       "project": "Bomberman Hero: Recompiled",
