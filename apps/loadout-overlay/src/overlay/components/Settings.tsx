@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { PluginProvider, TabBar, Slider, Button, Select, Toggle, useBackend } from "@loadout/ui";
 import { useSidebarAutoCollapseSetting } from "../hooks/useSidebarCollapse";
+import { OVERLAY_VERSION } from "../version";
 import { useEnabledPlugins } from "../hooks/useEnabledPlugins";
 import { useConfigValue, getConfigValue, setConfigValue } from "../lib/userConfig";
 import {
@@ -33,25 +34,90 @@ interface SettingsProps {
   onShowWelcome?: () => void;
 }
 
-const VERSION = "0.1.0-alpha";
+const VERSION = OVERLAY_VERSION;
 
 /** Loadout's four signature themes. Each swaps the full token set
  *  (surfaces, ink, accent, status colors) — there is no "dark vs light"
  *  toggle independent of theme. `colors` is a 3-dot preview swatch. */
 export const LOADOUT_THEMES = [
-  { id: "midnight", name: "Midnight",    desc: "Deep, quiet dark — default",   colors: ["#2d2a3e", "#7c5bff", "#f4f0ff"] },
-  { id: "paper",    name: "Paper",       desc: "Clean light theme",            colors: ["#ffffff", "#4c2ee8", "#1a1530"] },
-  { id: "synth",    name: "Synth",       desc: "Magenta + cyan retro",         colors: ["#221830", "#ff3de0", "#3df0ff"] },
-  { id: "terminal", name: "Terminal",    desc: "Green on black, mono-first",   colors: ["#0e1712", "#58ff80", "#c7ffd3"] },
-  { id: "nord",     name: "Nord",        desc: "Cool slate, muted pastels",    colors: ["#2e3440", "#88c0d0", "#eceff4"] },
-  { id: "dracula",  name: "Dracula",     desc: "Classic purple + pink",        colors: ["#282a36", "#bd93f9", "#ff79c6"] },
-  { id: "gruvbox",  name: "Gruvbox",     desc: "Warm retro tan + olive",       colors: ["#282828", "#fe8019", "#ebdbb2"] },
-  { id: "tokyo",    name: "Tokyo Night", desc: "Deep indigo + cyan",           colors: ["#1a1b26", "#7dcfff", "#bb9af7"] },
-  { id: "one-dark", name: "One Dark", desc: "Atom's iconic industry-standard dark", colors: ["#282c34", "#61afef", "#abb2bf"] },
-  { id: "monokai-pro", name: "Monokai Pro", desc: "Vibrant pink + lime — the classic", colors: ["#2d2a2e", "#ff6188", "#ffd866"] },
-  { id: "catppuccin-mocha", name: "Catppuccin Mocha", desc: "Pastel dark — community favorite", colors: ["#1e1e2e", "#cba6f7", "#cdd6f4"] },
-  { id: "rose-pine", name: "Rosé Pine", desc: "All-natural pine + faux-fur rose", colors: ["#191724", "#c4a7e7", "#e0def4"] },
-  { id: "solarized-dark", name: "Solarized Dark", desc: "Ethan Schoonover's classic muted", colors: ["#002b36", "#268bd2", "#839496"] },
+  {
+    id: "midnight",
+    name: "Midnight",
+    desc: "Deep, quiet dark — default",
+    colors: ["#2d2a3e", "#7c5bff", "#f4f0ff"],
+  },
+  {
+    id: "paper",
+    name: "Paper",
+    desc: "Clean light theme",
+    colors: ["#ffffff", "#4c2ee8", "#1a1530"],
+  },
+  {
+    id: "synth",
+    name: "Synth",
+    desc: "Magenta + cyan retro",
+    colors: ["#221830", "#ff3de0", "#3df0ff"],
+  },
+  {
+    id: "terminal",
+    name: "Terminal",
+    desc: "Green on black, mono-first",
+    colors: ["#0e1712", "#58ff80", "#c7ffd3"],
+  },
+  {
+    id: "nord",
+    name: "Nord",
+    desc: "Cool slate, muted pastels",
+    colors: ["#2e3440", "#88c0d0", "#eceff4"],
+  },
+  {
+    id: "dracula",
+    name: "Dracula",
+    desc: "Classic purple + pink",
+    colors: ["#282a36", "#bd93f9", "#ff79c6"],
+  },
+  {
+    id: "gruvbox",
+    name: "Gruvbox",
+    desc: "Warm retro tan + olive",
+    colors: ["#282828", "#fe8019", "#ebdbb2"],
+  },
+  {
+    id: "tokyo",
+    name: "Tokyo Night",
+    desc: "Deep indigo + cyan",
+    colors: ["#1a1b26", "#7dcfff", "#bb9af7"],
+  },
+  {
+    id: "one-dark",
+    name: "One Dark",
+    desc: "Atom's iconic industry-standard dark",
+    colors: ["#282c34", "#61afef", "#abb2bf"],
+  },
+  {
+    id: "monokai-pro",
+    name: "Monokai Pro",
+    desc: "Vibrant pink + lime — the classic",
+    colors: ["#2d2a2e", "#ff6188", "#ffd866"],
+  },
+  {
+    id: "catppuccin-mocha",
+    name: "Catppuccin Mocha",
+    desc: "Pastel dark — community favorite",
+    colors: ["#1e1e2e", "#cba6f7", "#cdd6f4"],
+  },
+  {
+    id: "rose-pine",
+    name: "Rosé Pine",
+    desc: "All-natural pine + faux-fur rose",
+    colors: ["#191724", "#c4a7e7", "#e0def4"],
+  },
+  {
+    id: "solarized-dark",
+    name: "Solarized Dark",
+    desc: "Ethan Schoonover's classic muted",
+    colors: ["#002b36", "#268bd2", "#839496"],
+  },
 ] as const;
 
 const THEME_IDS = LOADOUT_THEMES.map((t) => t.id) as readonly string[];
@@ -97,19 +163,25 @@ const BUTTON_LABELS: { key: keyof ControllerShortcuts; label: string }[] = [
 
 function actionToString(action: ShortcutAction): string {
   switch (action.type) {
-    case "None":           return "none";
-    case "ToggleOverlay":  return "toggle_overlay";
-    case "OpenPlugin":     return `plugin:${action.value ?? ""}`;
-    case "OpenSettings":   return "open_settings";
-    case "OpenHome":       return "open_home";
-    case "ToggleKeyboard": return "toggle_keyboard";
+    case "None":
+      return "none";
+    case "ToggleOverlay":
+      return "toggle_overlay";
+    case "OpenPlugin":
+      return `plugin:${action.value ?? ""}`;
+    case "OpenSettings":
+      return "open_settings";
+    case "OpenHome":
+      return "open_home";
+    case "ToggleKeyboard":
+      return "toggle_keyboard";
   }
 }
 
 function stringToAction(s: string): ShortcutAction {
-  if (s === "toggle_overlay")  return { type: "ToggleOverlay" };
-  if (s === "open_settings")   return { type: "OpenSettings" };
-  if (s === "open_home")       return { type: "OpenHome" };
+  if (s === "toggle_overlay") return { type: "ToggleOverlay" };
+  if (s === "open_settings") return { type: "OpenSettings" };
+  if (s === "open_home") return { type: "OpenHome" };
   if (s === "toggle_keyboard") return { type: "ToggleKeyboard" };
   if (s.startsWith("plugin:")) return { type: "OpenPlugin", value: s.slice(7) };
   return { type: "None" };
@@ -153,7 +225,15 @@ function ThemeSwatch({
         </div>
         {active && (
           <div className="w-5 h-5 rounded-full bg-primary text-primary-content flex items-center justify-center shrink-0 ml-2">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={3}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="w-3 h-3"
+            >
               <polyline points="20 6 9 17 4 12" />
             </svg>
           </div>
@@ -225,16 +305,22 @@ function MaintenanceActionRow({ action }: { action: MaintenanceAction }) {
   }
 
   const label =
-    status === "arming" ? "Click again to confirm"
-    : status === "running" ? action.runningLabel
-    : status === "success" ? action.successLabel
-    : status === "error" ? "Failed"
-    : action.idleLabel;
+    status === "arming"
+      ? "Click again to confirm"
+      : status === "running"
+        ? action.runningLabel
+        : status === "success"
+          ? action.successLabel
+          : status === "error"
+            ? "Failed"
+            : action.idleLabel;
 
   const variant =
-    status === "arming" || status === "error" ? "danger"
-    : status === "success" ? "primary"
-    : "default";
+    status === "arming" || status === "error"
+      ? "danger"
+      : status === "success"
+        ? "primary"
+        : "default";
 
   return (
     <div className="flex justify-between items-center min-h-[44px]">
@@ -247,11 +333,7 @@ function MaintenanceActionRow({ action }: { action: MaintenanceAction }) {
           )}
         </div>
       </div>
-      <Button
-        onClick={handleClick}
-        disabled={status === "running"}
-        variant={variant}
-      >
+      <Button onClick={handleClick} disabled={status === "running"} variant={variant}>
         {label}
       </Button>
     </div>
@@ -279,7 +361,8 @@ const RESTART_SERVER_ACTION: MaintenanceAction = {
 
 const RESTART_STEAM_ACTION: MaintenanceAction = {
   title: "Restart Steam",
-  description: "Restarts the Steam process without rebooting. Use this if Steam crashed or froze after applying a CSS theme.",
+  description:
+    "Restarts the Steam process without rebooting. Use this if Steam crashed or froze after applying a CSS theme.",
   idleLabel: "Restart Steam",
   runningLabel: "Restarting...",
   successLabel: "Restarted",
@@ -288,7 +371,8 @@ const RESTART_STEAM_ACTION: MaintenanceAction = {
 
 const UNFREEZE_STEAM_ACTION: MaintenanceAction = {
   title: "Unfreeze Steam",
-  description: "Sends SIGCONT to the Steam process. Use this if Steam's menu is visible but buttons don't respond after closing the overlay.",
+  description:
+    "Sends SIGCONT to the Steam process. Use this if Steam's menu is visible but buttons don't respond after closing the overlay.",
   idleLabel: "Unfreeze Steam",
   runningLabel: "Unfreezing...",
   successLabel: "Unfrozen",
@@ -312,7 +396,6 @@ const REBOOT_ACTION: MaintenanceAction = {
   successLabel: "Restarting",
   invoke: systemReboot,
 };
-
 
 /**
  * "Clear all data caches" — fans `clearExternalCache` out via
@@ -433,7 +516,9 @@ function SettingsInner({
   }, [theme]);
 
   useEffect(() => {
-    getControllerShortcuts().then(setShortcuts).catch(() => {});
+    getControllerShortcuts()
+      .then(setShortcuts)
+      .catch(() => {});
   }, []);
 
   function handleShortcutChange(key: keyof ControllerShortcuts, value: string) {
@@ -456,19 +541,17 @@ function SettingsInner({
           <>
             {/* Appearance */}
             <section className="mb-6">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">Appearance</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">
+                Appearance
+              </h3>
               <div className="bg-base-200 rounded-2xl border border-base-300 p-5">
                 <div className="flex justify-between items-center mb-3">
                   <span className="text-sm text-base-content">UI Scale</span>
-                  <span className="text-sm font-mono text-primary font-bold">{scale.toFixed(2)}x</span>
+                  <span className="text-sm font-mono text-primary font-bold">
+                    {scale.toFixed(2)}x
+                  </span>
                 </div>
-                <Slider
-                  min={0.75}
-                  max={2}
-                  step={0.05}
-                  value={scale}
-                  onChange={onScaleChange}
-                />
+                <Slider min={0.75} max={2} step={0.05} value={scale} onChange={onScaleChange} />
                 <div className="flex justify-between text-xs text-base-content/30 mt-1.5">
                   <span>0.75x</span>
                   <span>1.0x</span>
@@ -479,7 +562,9 @@ function SettingsInner({
 
             {/* Homepage */}
             <section className="mb-6">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">Homepage</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">
+                Homepage
+              </h3>
               <div className="bg-base-200 rounded-2xl border border-base-300 p-5 space-y-4 divide-y divide-base-300 [&>*]:pt-4 [&>*:first-child]:pt-0">
                 <div className="flex justify-between items-center min-h-[44px]">
                   <span className="text-sm text-base-content">On startup</span>
@@ -509,7 +594,9 @@ function SettingsInner({
 
             {/* Sidebar */}
             <section className="mb-6">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">Sidebar</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">
+                Sidebar
+              </h3>
               <div className="bg-base-200 rounded-2xl border border-base-300 p-5">
                 <div className="flex justify-between items-center min-h-[44px]">
                   <div className="pr-4">
@@ -526,7 +613,9 @@ function SettingsInner({
             {/* Theme — four Loadout themes with big preview swatch cards */}
             <section className="mb-6">
               <div className="flex items-baseline justify-between mb-4">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40">Theme</h3>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40">
+                  Theme
+                </h3>
                 <span className="chip chip-accent">
                   {LOADOUT_THEMES.find((t) => t.id === theme)?.name ?? "Midnight"}
                 </span>
@@ -545,7 +634,9 @@ function SettingsInner({
 
             {/* Maintenance */}
             <section className="mb-6">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">Maintenance</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">
+                Maintenance
+              </h3>
               <div className="bg-base-200 rounded-2xl border border-base-300 p-5 space-y-4 divide-y divide-base-300 [&>*]:pt-4 [&>*:first-child]:pt-0">
                 <MaintenanceActionRow action={EXPORT_LOGS_ACTION} />
                 <ClearDataCachesActionRow />
@@ -559,11 +650,15 @@ function SettingsInner({
 
             {/* About */}
             <section>
-              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">About</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">
+                About
+              </h3>
               <div className="bg-base-200 rounded-2xl border border-base-300 p-5">
                 <div className="flex justify-between items-center min-h-[44px]">
                   <span className="text-sm text-base-content">Version</span>
-                  <code className="text-sm text-primary bg-primary/10 px-3 py-1 rounded-lg font-mono">{VERSION}</code>
+                  <code className="text-sm text-primary bg-primary/10 px-3 py-1 rounded-lg font-mono">
+                    {VERSION}
+                  </code>
                 </div>
               </div>
             </section>
@@ -644,9 +739,7 @@ function SettingsInner({
                     plugins={plugins}
                   />
                 ))}
-              {!shortcuts && (
-                <div className="text-sm text-base-content/40">Loading...</div>
-              )}
+              {!shortcuts && <div className="text-sm text-base-content/40">Loading...</div>}
             </div>
           </section>
         )}

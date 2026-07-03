@@ -12,8 +12,8 @@ your Epic library, install a recompiled N64 classic — then get straight back t
 playing. Twenty-plus plugins, one slick d-pad-friendly UI.
 
 **Works in both Gaming Mode and Desktop Mode.** In Steam's Gaming Mode it runs
-as an *in-game overlay* layered over your game; on the desktop it runs as a
-*standalone app* in its own window. Loadout detects which mode you're in and
+as an _in-game overlay_ layered over your game; on the desktop it runs as a
+_standalone app_ in its own window. Loadout detects which mode you're in and
 adapts automatically.
 
 [**Install →**](#install) · [Plugins](#plugins) · [Supported devices](#supported-devices--testing) · [Build from source](#build-from-source)
@@ -57,7 +57,7 @@ you're in (it looks for Gamescope) and adapts:
   desktop — no game underneath to freeze, controller input still grabbed so it
   stays d-pad-friendly.
 
-A handful of plugins that reach *into* Steam's Big Picture UI (badges, CSS
+A handful of plugins that reach _into_ Steam's Big Picture UI (badges, CSS
 theming) are Gaming-Mode-only by nature; everything else works in either mode.
 
 ## In Gaming Mode
@@ -82,19 +82,19 @@ with community CSS themes:
 **Loadout is Linux-only by design** — it targets distros that ship Steam Gaming
 Mode. No Windows or macOS build.
 
-| OS | Status |
-|---|---|
+| OS                       | Status       |
+| ------------------------ | ------------ |
 | **SteamOS** (Steam Deck) | ✅ Supported |
-| **Bazzite** | ✅ Supported |
-| **CachyOS** | ✅ Supported |
+| **Bazzite**              | ✅ Supported |
+| **CachyOS**              | ✅ Supported |
 
 **Hardware tested so far:**
 
-| Device | Status |
-|---|---|
-| OneXPlayer APEX | ✅ Daily-driven |
-| Steam Deck | ✅ Tested |
-| OneXPlayer F1 Pro | ✅ Tested |
+| Device            | Status          |
+| ----------------- | --------------- |
+| OneXPlayer APEX   | ✅ Daily-driven |
+| Steam Deck        | ✅ Tested       |
+| OneXPlayer F1 Pro | ✅ Tested       |
 
 > 🙋 **Got a different handheld?** ROG Ally, Legion Go, OneXPlayer, GPD, AYANEO,
 > AOKZOE — I'd love your help. **I'm actively looking for testers on other
@@ -184,11 +184,19 @@ on a keyboard always works too, as a fallback.
 
 ### How do I update to a new version?
 
-Re-run the same install command — it's idempotent. It checks for a newer binary
-and overlay, refreshes the bundled plugins, and leaves your config untouched:
+Re-run the same install command — it's idempotent. It pulls the latest release,
+checks for a newer binary and overlay, refreshes the bundled plugins, and leaves
+your config untouched:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/install.sh | sh
+```
+
+To install or roll back to a **specific version**, set `LOADOUT_VERSION` to a
+[release tag](https://github.com/srsholmes/loadout/releases):
+
+```sh
+LOADOUT_VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/install.sh | sh
 ```
 
 ### How do I install or manage plugins?
@@ -198,10 +206,10 @@ download. Enable or disable individual plugins from **Settings → Plugins**.
 
 ### My controller seems dead in Steam — what's going on?
 
-While the overlay is *open*, it exclusively grabs your controller so your inputs
+While the overlay is _open_, it exclusively grabs your controller so your inputs
 drive the overlay and don't leak through to the game underneath. That's by
 design — close the overlay and the controller returns to Steam immediately. If a
-pad stays unresponsive while the overlay is *hidden*, make sure you're on the
+pad stays unresponsive while the overlay is _hidden_, make sure you're on the
 latest version.
 
 ### Where do my settings live? Do they survive a reinstall?
@@ -239,7 +247,7 @@ curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/unin
 - **Our own overlay surface.** A standalone CEF window layered over Gamescope
   via X11 atoms — not an injected panel, so Steam redesigns don't break it. The
   same window runs as the Desktop Mode app.
-- **Injection only when you want it.** Plugins *can* reach into Big Picture via
+- **Injection only when you want it.** Plugins _can_ reach into Big Picture via
   CEF's remote-debug protocol (badges, theming) — but it's opt-in, not the
   default path.
 - **Batteries-included SDK.** `@loadout/ui` gives plugin authors typed RPC,
@@ -434,14 +442,14 @@ loadout/
 
 ## Scripts
 
-| Command | Description |
-|---|---|
-| `bun run dev:overlay` | Loader dev server + Electrobun overlay with hot reload |
-| `bun run build` | Compile loader binary + Electrobun overlay tree |
-| `bun run build-and-install` | `build` + install into `~/.local/share/` and enable services |
-| `bun run typecheck` | `tsc --noEmit` |
-| `bun run test` | Backend + UI tests |
-| `bun run lint` / `bun run format` | ESLint 9 flat config / Prettier |
+| Command                           | Description                                                  |
+| --------------------------------- | ------------------------------------------------------------ |
+| `bun run dev:overlay`             | Loader dev server + Electrobun overlay with hot reload       |
+| `bun run build`                   | Compile loader binary + Electrobun overlay tree              |
+| `bun run build-and-install`       | `build` + install into `~/.local/share/` and enable services |
+| `bun run typecheck`               | `tsc --noEmit`                                               |
+| `bun run test`                    | Backend + UI tests                                           |
+| `bun run lint` / `bun run format` | ESLint 9 flat config / Prettier                              |
 
 > **CI:** every pull request and every push to `main` runs the full
 > typecheck / lint / test suite ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
@@ -464,14 +472,17 @@ shortcuts, per-plugin state — live in `~/.config/loadout/config.json`
 
 ## Documentation
 
-| Document | Description |
-|---|---|
-| [Architecture](docs/architecture.md) | Loader architecture, plugin structure, startup sequence |
-| [Plugin Development](docs/plugin-development.md) | Plugin structure, backend/frontend APIs, examples |
-| [Steam UI Injection](docs/steam-ui-injection.md) | Injectable surfaces, SteamClient API, Gamescope notes |
-| [Overlay / Gamescope](docs/overlay-gamescope-integration.md) | X11 atoms, input grab, display detection |
-| [Gamepad Navigation](docs/gamepad-navigation-guide.md) | Spatial navigation, focus management |
-| [OS Compatibility](docs/os-compatibility.md) | SteamOS, Bazzite, CachyOS specifics |
+| Document                                                     | Description                                             |
+| ------------------------------------------------------------ | ------------------------------------------------------- |
+| [Architecture](docs/architecture.md)                         | Loader architecture, plugin structure, startup sequence |
+| [Plugin Development](docs/plugin-development.md)             | Plugin structure, backend/frontend APIs, examples       |
+| [Steam UI Injection](docs/steam-ui-injection.md)             | Injectable surfaces, SteamClient API, Gamescope notes   |
+| [Overlay / Gamescope](docs/overlay-gamescope-integration.md) | X11 atoms, input grab, display detection                |
+| [Gamepad Navigation](docs/gamepad-navigation-guide.md)       | Spatial navigation, focus management                    |
+| [OS Compatibility](docs/os-compatibility.md)                 | SteamOS, Bazzite, CachyOS specifics                     |
+| [Releasing](docs/releasing.md)                               | Versioning policy + how releases are cut                |
+
+See [CHANGELOG.md](CHANGELOG.md) for the release history.
 
 ## Thanks & acknowledgements
 
