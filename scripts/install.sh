@@ -324,6 +324,15 @@ phase1() {
         fi
     fi
 
+    # A pinned version that doesn't resolve (typo, or a tag with no published
+    # release) leaves RELEASE_JSON empty. Fail loudly here instead of falling
+    # through to the "latest"-literal URL below, which 404s with a misleading
+    # error and hides the real problem.
+    if [ -n "$LOADOUT_VERSION" ] && [ -z "${RELEASE_JSON:-}" ]; then
+        error "Pinned release $LOADOUT_VERSION not found (no such tag, or it has no published release). See https://github.com/$REPO/releases"
+        exit 1
+    fi
+
     if [ -z "$DOWNLOAD_URL" ]; then
         if [ -n "$GITHUB_TOKEN" ]; then
             error "Could not resolve a release asset URL. Check that GITHUB_TOKEN has Contents: read on $REPO and that a release with tag 'main' exists."

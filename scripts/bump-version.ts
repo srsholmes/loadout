@@ -6,6 +6,10 @@
  * `plugins/*` are deliberately left at their own versions (private, unpublished,
  * not user-visible) — see docs/releasing.md.
  *
+ * Edits only the top-level `"version"` field in place (a targeted text replace),
+ * leaving all other bytes untouched — so it never reformats the file or fights
+ * Prettier (e.g. the root package.json's multi-line `workspaces` array).
+ *
  * Called by scripts/release.sh; runnable directly:
  *   bun scripts/bump-version.ts <X.Y.Z>
  */
@@ -21,16 +25,20 @@ if (!version || !/^\d+\.\d+\.\d+$/.test(version)) {
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TARGETS = ["package.json", "apps/loadout/package.json", "apps/loadout-overlay/package.json"];
 
+// The top-level version field. package.json lists it near the top, before any
+// nested object, and none of these files have another `"version"` key, so the
+// first match is always the product version.
+const VERSION_RE = /"version":\s*"([^"]*)"/;
+
 for (const rel of TARGETS) {
   const path = resolve(ROOT, rel);
-  const pkg = JSON.parse(await Bun.file(path).text()) as {
-    version?: string;
-    [k: string]: unknown;
-  };
-  const prev = pkg.version ?? "(none)";
-  pkg.version = version;
-  // 2-space indent + trailing newline to match the repo's existing package.json
-  // formatting (and Prettier).
-  await Bun.write(path, `${JSON.stringify(pkg, null, 2)}\n`);
+  const text = await Bun.file(path).text();
+  const m = text.match(VERSION_RE);
+  if (!m) {
+    console.error(`  ${rel}: no "version" field found — aborting`);
+    process.exit(1);
+  }
+  const prev = m[1];
+  await Bun.write(path, text.replace(VERSION_RE, `"version": "${version}"`));
   console.log(`  ${rel}: ${prev} -> ${version}`);
 }

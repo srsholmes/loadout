@@ -57,6 +57,11 @@ jobs:
       - name: Spec coverage
         run: bun run check:specs
 
+      # bsdtar (libarchive) backs the recomp plugin's archive tests, which call
+      # it directly; the ubuntu runner doesn't ship it by default. Mirrors ci.yml.
+      - name: Install system test deps (bsdtar)
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools
+
       - name: Tests
         run: bun run test
 
