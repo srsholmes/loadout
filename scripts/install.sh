@@ -922,6 +922,11 @@ SERVICEEOF
     # Audit 2026-05 H-001.
     if [ -x "$OVERLAY_LAUNCHER" ]; then
         info "Writing overlay systemd user service file..."
+        # ~/.config/systemd/user doesn't exist yet on a fresh install where
+        # the user has never enabled a systemd --user unit (common on
+        # Bazzite). Without this the `cat >` redirect below fails with
+        # "no such file or directory" and `set -e` aborts the whole install.
+        mkdir -p "$SERVICE_DIR"
         cat > "$OVERLAY_SERVICE_FILE" <<'OVERLAYEOF'
 [Unit]
 Description=Loadout Overlay
