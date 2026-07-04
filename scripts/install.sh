@@ -922,6 +922,11 @@ SERVICEEOF
     # Audit 2026-05 H-001.
     if [ -x "$OVERLAY_LAUNCHER" ]; then
         info "Writing overlay systemd user service file..."
+        # ~/.config/systemd/user doesn't exist yet on a fresh install where
+        # the user has never enabled a systemd --user unit (common on
+        # Bazzite). Without this the `cat >` redirect below fails with
+        # "no such file or directory" and `set -e` aborts the whole install.
+        mkdir -p "$SERVICE_DIR"
         cat > "$OVERLAY_SERVICE_FILE" <<'OVERLAYEOF'
 [Unit]
 Description=Loadout Overlay
@@ -1020,9 +1025,20 @@ WantedBy=graphical-session.target
 OVERLAYEOF
         success "Overlay service file written to $OVERLAY_SERVICE_FILE"
 
-        systemctl --user daemon-reload
-        systemctl --user enable loadout-overlay
-        success "Overlay service enabled (starts with graphical session)"
+        # Guard the --user calls: on a sessionless install (curl|sh over SSH
+        # with no graphical session and no lingering, or run as root) the
+        # per-user systemd bus is unavailable and these fail. Without `|| true`
+        # `set -e` would abort here — right after the unit was written but
+        # before the user-facing summary — leaving a confusing half-install.
+        # The unit file is on disk regardless, so it'll be picked up on the
+        # next graphical login even if we couldn't reload/enable now.
+        if systemctl --user daemon-reload 2>/dev/null && systemctl --user enable loadout-overlay 2>/dev/null; then
+            success "Overlay service enabled (starts with graphical session)"
+        else
+            warn "Couldn't enable the overlay user service now (no active user session?)."
+            warn "It'll be picked up on your next graphical login; or enable it manually:"
+            warn "  systemctl --user enable --now loadout-overlay"
+        fi
 
         # Start it right now (not just on next login) and pop the window so
         # the user can set their wake button immediately — no reboot, no
