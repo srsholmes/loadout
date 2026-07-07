@@ -8,6 +8,11 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com).
 
 ---
 
+## [v0.3.1] — 2026-07-07
+
+### Fixed
+- **Controller shortcuts survive a restart** (#203) — A controller button bound to *Toggle Overlay* (or any non-default action) quietly reverted to its default whenever the overlay restarted, so a custom binding stopped working until you re-set it in Settings. The overlay now loads your saved shortcuts from disk at startup — before it begins listening for input — so your bindings stick across restarts and reboots.
+
 ## [v0.3.0] — 2026-07-07
 
 ### Added
