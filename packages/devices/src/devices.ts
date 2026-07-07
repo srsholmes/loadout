@@ -98,6 +98,17 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     profiles: { Silent: 15, Balanced: 30, Performance: 50 },
   },
   {
+    // Ryzen AI Max+ 395 (Strix Halo) tablet. 45 W air-cooled default,
+    // 120 W with the external Frost Bay liquid cooler; 90 W is a realistic
+    // AC ceiling between the two. Same APU family as the APEX above.
+    match: "ONEXPLAYER SUPER X",
+    name: "OneXPlayer Super X",
+    minTdp: 5,
+    maxTdp: 90,
+    batteryMaxTdp: 65,
+    profiles: { Silent: 15, Balanced: 45, Performance: 75 },
+  },
+  {
     match: "ONEXPLAYER Mini Pro",
     name: "OneXPlayer Mini Pro",
     minTdp: 5,
