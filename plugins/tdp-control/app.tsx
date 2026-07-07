@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { FaBolt, FaMicrochip } from "react-icons/fa6";
+import { FaBolt, FaMicrochip, FaGear } from "react-icons/fa6";
 import {
   mountComponent,
+  mountHeaderStub,
   useBackend,
   useCurrentGame,
   Button,
@@ -13,6 +14,9 @@ import {
   SegmentedItem,
   Toggle,
   TextInput,
+  PluginHeader,
+  HeaderBackButton,
+  IconButton,
 } from "@loadout/ui";
 import { steamArtworkUrls } from "@loadout/steam-paths/artwork";
 import type { CustomDevice } from "./lib/custom-device";
@@ -84,6 +88,9 @@ function TdpControl() {
   const [applying, setApplying] = useState(false);
   const [perGameEnabled, setPerGameEnabled] = useState<boolean>(false);
   const [gameProfiles, setGameProfiles] = useState<SavedGameProfile[]>([]);
+  // Landing (TDP controls) vs the settings sub-view (custom-device form),
+  // reached via the header gear — mirrors the convention other plugins use.
+  const [view, setView] = useState<"main" | "settings">("main");
   const debounceTimer = useRef<Timer | null>(null);
   const slidingRef = useRef(false);
 
@@ -384,22 +391,74 @@ function TdpControl() {
     [call],
   );
 
-  if (!info) {
-    return (
-      <div className="p-7 h-full overflow-y-auto">
-        <div className="page-content">
-          <div className="flex items-center justify-center h-64">
-            <Spinner size={32} />
-          </div>
+  // Shared header portaled into the shell topbar: title + device subtitle,
+  // with a cog on the landing view and a back button on the settings view.
+  const header = (
+    <PluginHeader>
+      <div className="flex items-center justify-between gap-4 w-full min-w-0">
+        <div className="flex flex-col gap-0.5 min-w-0">
+          <h1 className="text-xl font-semibold tracking-[-0.015em] m-0 leading-tight">
+            TDP Control
+          </h1>
+          <span className="text-[11.5px] text-base-content/55 tracking-[0.02em] truncate leading-tight">
+            {info?.deviceName ? `${info.deviceName} · ` : ""}CPU/GPU power limits
+          </span>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {view === "settings" ? (
+            <HeaderBackButton
+              onBack={() => setView("main")}
+              title="Back to TDP Control"
+            />
+          ) : (
+            <IconButton
+              onClick={() => setView("settings")}
+              title="Custom device settings"
+              ariaLabel="Custom device settings"
+            >
+              <FaGear size={11} />
+            </IconButton>
+          )}
         </div>
       </div>
+    </PluginHeader>
+  );
+
+  if (!info) {
+    return (
+      <>
+        {header}
+        <div className="p-7 h-full overflow-y-auto">
+          <div className="page-content">
+            <div className="flex items-center justify-center h-64">
+              <Spinner size={32} />
+            </div>
+          </div>
+        </div>
+      </>
     );
   }
 
   const isUnavailable = info.method === "none";
 
+  // Settings sub-view: the custom-device form on its own page.
+  if (view === "settings") {
+    return (
+      <>
+        {header}
+        <div className="p-7 h-full overflow-y-auto">
+          <div className="page-content">
+            <CustomDeviceForm info={info} />
+          </div>
+        </div>
+      </>
+    );
+  }
+
   return (
-    <div className="p-7 h-full overflow-y-auto">
+    <>
+      {header}
+      <div className="p-7 h-full overflow-y-auto">
       <div className="page-content">
         {/* CURRENT TDP — main card with big centered number + slider */}
         <div className="card">
@@ -632,10 +691,6 @@ function TdpControl() {
           </div>
         </div>
 
-        {/* CUSTOM DEVICE — let users on newer/unlisted handhelds define their
-            own TDP range + presets. When saved it becomes the default device. */}
-        <CustomDeviceForm info={info} />
-
         {error && (
           <div className="card">
             <div className="card-body p-4.5">
@@ -655,7 +710,8 @@ function TdpControl() {
           </div>
         )}
       </div>
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -1098,39 +1154,10 @@ function TdpHomeWidget() {
 /** Full settings page — mounted by the overlay shell when the plugin opens. */
 export const mount = mountComponent(TdpControl);
 
-function Header() {
-  const { call } = useBackend("tdp-control");
-  const [deviceName, setDeviceName] = useState<string>("");
-
-  // Pull the detected device name from the backend rather than hardcoding
-  // it — the subtitle must reflect whatever handheld this is running on.
-  useEffect(() => {
-    let cancelled = false;
-    call("getSystemInfo")
-      .then((info: unknown) => {
-        const name = (info as { deviceName?: string } | null)?.deviceName;
-        if (!cancelled && name) setDeviceName(name);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [call]);
-
-  return (
-    <div className="flex flex-col gap-0.5 min-w-0">
-      <h1 className="text-xl font-semibold tracking-[-0.015em] m-0 leading-tight">
-        TDP Control
-      </h1>
-      <span className="text-[11.5px] text-base-content/55 tracking-[0.02em] truncate leading-tight">
-        {deviceName ? `${deviceName} · ` : ""}CPU/GPU power limits
-      </span>
-    </div>
-  );
-}
-
 /** Homepage widget — TDP slider + preset buttons. */
 export const mountHomeWidget = mountComponent(TdpHomeWidget);
 
-/** Compact header strip (device name + title). */
-export const mountHeader = mountComponent(Header);
+// The header (title + device subtitle + settings cog) is portaled into the
+// shell topbar from inside `mount()` via `<PluginHeader>`, so the header mount
+// is just a stub whose presence tells the shell this plugin owns its topbar.
+export const mountHeader = mountHeaderStub;
