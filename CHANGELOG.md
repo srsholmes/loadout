@@ -8,6 +8,15 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com).
 
 ---
 
+## [v0.3.0] — 2026-07-07
+
+### Added
+- **Custom TDP device** (#201) — On a newer or unlisted handheld? A new **settings page in the TDP plugin** (the gear in the top-right) lets you enter your device's own TDP range, battery cap, and Silent / Balanced / Performance presets by hand. Once saved it becomes the default device the TDP control uses, overriding auto-detection — so you can tune power on a device Loadout doesn't ship a profile for yet, without waiting for a release. Clear it to revert to auto-detection.
+- **OneXPlayer Super X** (#200) — Added a built-in TDP profile for the OneXPlayer Super X (Ryzen AI Max+ 395 / Strix Halo): a 5–90 W range, capped at 65 W on battery.
+
+### Fixed
+- **Installer on fresh / sessionless systems** (#198) — The installer now creates the systemd user directory and guards the `--user` service enable, so a first-time or headless install no longer fails partway through.
+
 ## [v0.2.0] — 2026-07-03
 
 ### Added
