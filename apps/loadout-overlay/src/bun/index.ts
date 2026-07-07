@@ -52,6 +52,7 @@ import {
 import { trace } from "./native/trace";
 import { createOverlayState } from "./lib/overlay-state";
 import { routeWake } from "./lib/wake-routing";
+import { loadPersistedShortcuts } from "./lib/persisted-shortcuts";
 
 // ---- State ------------------------------------------------------------------
 // PendingFlags + the flag-lifecycle helpers live in lib/overlay-state.ts so
@@ -67,8 +68,10 @@ const DESKTOP_SMOKE_TEST = process.env.DECK_OVERLAY_DESKTOP_DEV === "1";
 
 const state = createOverlayState(DESKTOP_SMOKE_TEST);
 
-// TODO(stage-2): persist to disk (XDG config) like the Rust version does —
-// currently this resets on every process restart.
+// These are the fallback defaults. The persisted user config is loaded from
+// disk in the startup IIFE below (loadPersistedShortcuts) and overwrites
+// `current` before the input loop starts — so a saved binding survives a
+// process restart instead of reverting until the user re-edits it.
 //
 // Guide+A and Guide+Y are reserved by Steam / InputPlumber on Bazzite
 // (QAM and guide menu respectively). Even if a saved user config has them
@@ -591,6 +594,17 @@ function onWake(event: WakeEvent): void {
 // external IP-managed pad IS present, IP's DBus stream drives nav and the
 // virtual pad is a mirror we only grab — so we DON'T read it (would double).
 void (async () => {
+  // Seed the wake-routing engine from the persisted config BEFORE either
+  // intercept starts — no wake event can arrive until they do, so the ref
+  // is guaranteed populated before routeWake() first reads it. Falls back
+  // to the hardcoded default (already in `shortcuts.current`) when there's
+  // no saved config or it's malformed.
+  const persisted = await loadPersistedShortcuts();
+  if (persisted) {
+    shortcuts.current = persisted;
+    console.log("[overlay] seeded controller shortcuts from config", persisted);
+  }
+
   let ipHandle: IpInterceptHandle | null = null;
   try {
     ipHandle = await startIpIntercept({

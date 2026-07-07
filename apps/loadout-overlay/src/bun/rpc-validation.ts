@@ -39,6 +39,18 @@ function isValidControllerShortcuts(value: unknown): value is ControllerShortcut
 }
 
 /**
+ * Validate a bare {@link ControllerShortcuts} value (not wrapped in an RPC
+ * params envelope). Returns the typed shortcuts on success, or null if the
+ * shape is malformed. Used when seeding the wake-routing engine from the
+ * persisted config file at startup.
+ */
+export function validateControllerShortcuts(
+  value: unknown,
+): ControllerShortcuts | null {
+  return isValidControllerShortcuts(value) ? value : null;
+}
+
+/**
  * Validate the params passed to the `setControllerShortcuts` RPC handler.
  * Returns the typed shortcuts on success, or null if the payload is
  * malformed (caller logs + ignores). Fixes audit B-001 — previously the
