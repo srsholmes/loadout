@@ -114,6 +114,21 @@ export function validateCustomDevice(input: unknown): ValidationResult {
     profiles[key] = value;
   }
 
+  // Presets must be ascending: Silent <= Balanced <= Performance. The
+  // platform_profile method maps watts to low/balanced/performance using the
+  // midpoints between these, which assumes ascending order — non-monotonic
+  // presets yield a nonsensical mapping.
+  if (
+    profiles.Silent > profiles.Balanced ||
+    profiles.Balanced > profiles.Performance
+  ) {
+    return {
+      ok: false,
+      error:
+        "Presets must be ascending: Silent ≤ Balanced ≤ Performance",
+    };
+  }
+
   return {
     ok: true,
     device: { name, minTdp, maxTdp, batteryMaxTdp, profiles },

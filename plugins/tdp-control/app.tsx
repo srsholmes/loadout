@@ -24,6 +24,10 @@ interface TdpInfo {
   tdpReadSource: "read" | "tracked" | "estimated";
   minWatts: number;
   maxWatts: number;
+  /** Full ceiling when plugged into AC (>= maxWatts). */
+  pluggedMaxWatts: number;
+  /** Ceiling when on battery (<= pluggedMaxWatts). */
+  batteryMaxWatts: number;
   platform: string;
   deviceName: string;
   method: string;
@@ -703,15 +707,21 @@ function CustomDeviceForm({ info }: { info: TdpInfo }) {
 
   const fillFromDetected = useCallback(() => {
     const i = infoRef.current;
+    // `maxWatts` is the power-state-aware *effective* cap (== battery cap when
+    // on battery), so seed the true device ceiling from `pluggedMaxWatts` and
+    // the battery cap from `batteryMaxWatts`. Fall back to `maxWatts` for
+    // older backends that don't report the split ceilings.
+    const trueMax = i.pluggedMaxWatts ?? i.maxWatts;
+    const batteryMax = i.batteryMaxWatts ?? i.maxWatts;
     setName(i.deviceName && i.deviceName !== "Unknown" ? i.deviceName : "");
     setMinTdp(String(i.minWatts));
-    setMaxTdp(String(i.maxWatts));
-    setBatteryMaxTdp(String(i.maxWatts));
+    setMaxTdp(String(trueMax));
+    setBatteryMaxTdp(String(batteryMax));
     setSilent(String(i.profiles.Silent ?? i.minWatts));
     setBalanced(
-      String(i.profiles.Balanced ?? Math.round((i.minWatts + i.maxWatts) / 2)),
+      String(i.profiles.Balanced ?? Math.round((i.minWatts + trueMax) / 2)),
     );
-    setPerformance(String(i.profiles.Performance ?? i.maxWatts));
+    setPerformance(String(i.profiles.Performance ?? trueMax));
   }, []);
 
   // Seed the form on mount: from the saved custom device if one exists,
@@ -941,6 +951,30 @@ function TdpHomeWidget() {
     handler: useCallback((data: unknown) => {
       const { maxWatts } = data as { online: boolean; maxWatts: number };
       if (typeof maxWatts === "number") setMaxW(maxWatts);
+    }, []),
+  });
+
+  // The active device changed (custom device saved/cleared) — refresh the
+  // range, presets, and device name, and clamp the shown TDP into the new
+  // bounds so the widget doesn't stay stale until it remounts.
+  useEvent({
+    event: "deviceChanged",
+    handler: useCallback((data: unknown) => {
+      const d = data as {
+        deviceName: string;
+        minWatts: number;
+        maxWatts: number;
+        profiles: Record<string, number>;
+      };
+      setMinW(d.minWatts);
+      setMaxW(d.maxWatts);
+      setProfiles(d.profiles);
+      setDeviceName(d.deviceName);
+      if (!slidingRef.current) {
+        setTdp((v) =>
+          v === null ? v : Math.max(d.minWatts, Math.min(d.maxWatts, v)),
+        );
+      }
     }, []),
   });
 

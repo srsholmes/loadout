@@ -64,6 +64,30 @@ describe("validateCustomDevice", () => {
     expect(validateCustomDevice({ ...VALID, minTdp: 0 }).ok).toBe(false);
   });
 
+  test("rejects non-ascending presets", () => {
+    // Balanced below Silent, and Performance below Balanced — both break the
+    // ascending order the platform_profile midpoint mapping assumes.
+    expect(
+      validateCustomDevice({
+        ...VALID,
+        profiles: { Silent: 25, Balanced: 20, Performance: 40 },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCustomDevice({
+        ...VALID,
+        profiles: { Silent: 10, Balanced: 30, Performance: 25 },
+      }).ok,
+    ).toBe(false);
+    // Equal adjacent presets are allowed (ascending, not strictly increasing).
+    expect(
+      validateCustomDevice({
+        ...VALID,
+        profiles: { Silent: 20, Balanced: 20, Performance: 40 },
+      }).ok,
+    ).toBe(true);
+  });
+
   test("rejects missing profiles", () => {
     const { profiles, ...rest } = VALID;
     void profiles;
