@@ -15,6 +15,13 @@ import {
   PLATFORM_PROFILE_TDP_MAP,
   type CpuVendor,
 } from "@loadout/devices";
+import {
+  readCustomDevice,
+  writeCustomDevice,
+  clearCustomDevice,
+  validateCustomDevice,
+  type CustomDevice,
+} from "./lib/custom-device";
 
 // ---------------------------------------------------------------------------
 // Constants: sysfs paths
@@ -209,6 +216,8 @@ interface TdpInfo {
   currentGovernor: string | null;
   supportsSmt: boolean;
   supportsCpuBoost: boolean;
+  /** Whether the active device is a user-defined custom device (vs auto-detected). */
+  usingCustomDevice: boolean;
   gpuInfo: GpuInfo | null;
   smtEnabled: boolean | null;
   cpuBoostEnabled: boolean | null;
@@ -249,6 +258,13 @@ export default class TdpControlBackend implements PluginBackend {
   private deviceName = "Unknown";
   private cpuVendor: CpuVendor = "Unknown";
   private cpuModel = "Unknown";
+  /**
+   * User-defined device override. When set it takes precedence over DMI
+   * auto-detection for the TDP range + presets. Loaded on startup and
+   * mutated by the setCustomDevice/clearCustomDevice RPCs. Only one is ever
+   * stored — this is a single override, not a profiles feature.
+   */
+  private customDevice: CustomDevice | null = null;
 
   // TDP method & state
   private method: TdpMethod = "none";
@@ -324,7 +340,11 @@ export default class TdpControlBackend implements PluginBackend {
       this.detectCpuInfo(),
     ]);
 
-    // Apply device-specific ranges
+    // Load the user's custom device (if any) BEFORE applying defaults so it
+    // takes precedence over DMI auto-detection.
+    this.customDevice = await readCustomDevice("tdp-control");
+
+    // Apply device-specific ranges (custom device wins when present)
     this.applyDeviceDefaults();
 
     // Detect capabilities in parallel
@@ -460,6 +480,7 @@ export default class TdpControlBackend implements PluginBackend {
       currentGovernor,
       supportsSmt: this.supportsSmt,
       supportsCpuBoost: this.supportsCpuBoost,
+      usingCustomDevice: this.customDevice !== null,
       gpuInfo,
       smtEnabled,
       cpuBoostEnabled,
@@ -585,6 +606,83 @@ export default class TdpControlBackend implements PluginBackend {
       supportsGpuControl: this.gpuCardPath !== null,
       supportsChargeLimit,
     };
+  }
+
+  // -----------------------------------------------------------------------
+  // RPC: Custom device
+  // -----------------------------------------------------------------------
+
+  /** The user's custom device override, or null when auto-detecting. */
+  async getCustomDevice(): Promise<CustomDevice | null> {
+    return this.customDevice;
+  }
+
+  /**
+   * Save a user-defined device. Once saved it becomes the DEFAULT device the
+   * plugin uses (its TDP range + presets), overriding auto-detection. Only a
+   * single custom device is stored — saving again replaces it. To remove it,
+   * the user clears it via clearCustomDevice().
+   */
+  async setCustomDevice(
+    device: unknown,
+  ): Promise<{ success: boolean; error?: string }> {
+    const result = validateCustomDevice(device);
+    if (!result.ok) {
+      return { success: false, error: result.error };
+    }
+    try {
+      await writeCustomDevice("tdp-control", result.device);
+      this.customDevice = result.device;
+      this.applyDeviceDefaults();
+      await this.onDeviceConfigChanged();
+      console.log(
+        `[tdp-control] Custom device saved: ${result.device.name} (${result.device.minTdp}-${result.device.maxTdp}W)`,
+      );
+      return { success: true };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { success: false, error: msg };
+    }
+  }
+
+  /** Remove the custom device, reverting to auto-detection. */
+  async clearCustomDevice(): Promise<{ success: boolean; error?: string }> {
+    try {
+      await clearCustomDevice("tdp-control");
+      this.customDevice = null;
+      this.applyDeviceDefaults();
+      await this.onDeviceConfigChanged();
+      console.log("[tdp-control] Custom device cleared; reverting to auto-detection");
+      return { success: true };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { success: false, error: msg };
+    }
+  }
+
+  /**
+   * Re-apply state after the active device changed (custom saved or cleared):
+   * refresh the active-profile match, tell the UI the new range + presets,
+   * and re-clamp the standing TDP into the new range on hardware.
+   */
+  private async onDeviceConfigChanged(): Promise<void> {
+    this.activeProfile = this.matchProfile(this.currentTdp);
+    this.emit?.({
+      event: "deviceChanged",
+      data: {
+        deviceName: this.deviceName,
+        minWatts: this.minWatts,
+        maxWatts: this.effectiveMaxWatts(),
+        profiles: { ...this.profiles },
+        usingCustomDevice: this.customDevice !== null,
+      },
+    });
+    // Re-apply the standing intent through the new clamp so a value now out of
+    // range is corrected on hardware (setTdp emits its own tdpChanged).
+    const intent = this.desiredTdp ?? this.currentTdp;
+    if (intent !== null && this.method !== "none") {
+      await this.setTdp(intent);
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -1055,6 +1153,17 @@ export default class TdpControlBackend implements PluginBackend {
   }
 
   private applyDeviceDefaults(): void {
+    // A user-defined custom device is the default when present — it overrides
+    // whatever DMI matching would have picked.
+    if (this.customDevice) {
+      const d = this.customDevice;
+      this.deviceName = d.name;
+      this.minWatts = d.minTdp;
+      this.maxWatts = d.maxTdp;
+      this.batteryMaxWatts = d.batteryMaxTdp;
+      this.profiles = { ...d.profiles };
+      return;
+    }
     const device = matchDevice(this.dmiProductName, this.cpuVendor);
     this.deviceName = device.name;
     this.minWatts = device.minTdp;
