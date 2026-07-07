@@ -3,7 +3,7 @@ import { describe, it, expect, mock, beforeEach } from "bun:test";
 // module for the partial-mock spread. (bun's mock.module is not hoisted,
 // unlike vitest's vi.mock — static imports evaluate first.)
 import * as actualUi from "@loadout/ui";
-import { waitFor } from "../../test/render";
+import { waitFor, fireEvent } from "../../test/render";
 
 const callMock = mock((_method: string) => Promise.resolve(null) as Promise<unknown>);
 const eventHandlers = new Map<string, (data: unknown) => void>();
@@ -13,6 +13,9 @@ let currentGameValue: { appId: number; gameName: string } | null = null;
 mock.module("@loadout/ui", () => ({
   ...actualUi,
   PluginProvider: ({ children }: any) => children,
+  // PluginHeader normally portals into the loader-allocated topbar slot,
+  // which doesn't exist in tests — render its children inline instead.
+  PluginHeader: ({ children }: any) => children,
   useBackend: () => ({
     call: callMock,
     useEvent: ({ event, handler }: any) => {
@@ -28,8 +31,11 @@ const mockTdpInfo = {
   tdpReadSource: "read" as const,
   minWatts: 5,
   maxWatts: 30,
+  pluggedMaxWatts: 30,
+  batteryMaxWatts: 25,
   platform: "generic",
   deviceName: "Steam Deck",
+  usingCustomDevice: false,
   method: "ryzenadj",
   profiles: { silent: 8, balanced: 15, performance: 25 },
   activeProfile: "balanced",
@@ -58,11 +64,49 @@ describe("tdp-control plugin", () => {
   });
 
   it("mounts and renders the heading", async () => {
+    // The header is now portaled from the main mount() via <PluginHeader>
+    // (mounted inline by the mock above); mountHeader is a stub.
     const container = document.createElement("div");
-    const { mountHeader } = await import("./app");
-    mountHeader(container);
+    const { mount } = await import("./app");
+    mount(container);
     await waitFor(() => {
       expect(container.querySelector("h1")?.textContent).toBe("TDP Control");
+    });
+  });
+
+  it("opens the custom-device form from the header gear and returns via Back", async () => {
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    // Landing view: TDP controls are shown, the custom-device form is not.
+    await waitFor(() => {
+      expect(container.textContent).toContain("15W");
+    });
+    expect(container.textContent).not.toContain("CUSTOM DEVICE");
+
+    // The header gear opens the settings sub-view holding the form.
+    const gear = container.querySelector(
+      '[aria-label="Custom device settings"]',
+    ) as HTMLButtonElement;
+    expect(gear).toBeTruthy();
+    fireEvent.click(gear);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("CUSTOM DEVICE");
+      expect(container.textContent).toContain("Device name");
+    });
+
+    // The back button returns to the landing (TDP controls) view.
+    const back = container.querySelector(
+      '[aria-label="Back to TDP Control"]',
+    ) as HTMLButtonElement;
+    expect(back).toBeTruthy();
+    fireEvent.click(back);
+
+    await waitFor(() => {
+      expect(container.textContent).not.toContain("CUSTOM DEVICE");
+      expect(container.textContent).toContain("15W");
     });
   });
 

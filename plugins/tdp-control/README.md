@@ -6,7 +6,13 @@ Set your CPU/APU power limit (TDP) with quick presets and a slider, optionally p
 
 ## Screenshots
 
-![TDP Control](./assets/screenshot.png)
+### Overview
+
+![TDP Control — Overview](./assets/screenshot.png)
+
+### Settings
+
+![TDP Control — Settings](./assets/screenshot-settings.png)
 
 ## See also
 

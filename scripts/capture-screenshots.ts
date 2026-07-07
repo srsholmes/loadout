@@ -92,6 +92,12 @@ const PAGE_RECIPES: Record<string, PageShot[]> = {
     { name: "presets", steps: [{ kind: "aria", label: "Manage presets" }] },
   ],
   steamgriddb: [{ name: "detail", steps: [{ kind: "tile" }] }],
+  // The custom-device form lives on its own sub-view behind the header gear —
+  // a real feature page (define TDP limits for an unlisted handheld), not a
+  // generic settings screen, so it's worth capturing.
+  "tdp-control": [
+    { name: "settings", steps: [{ kind: "aria", label: "Custom device settings" }] },
+  ],
   // Custom fan-curve editor only renders in Manual mode after the Custom
   // preset is selected — flip Manual (header), then pick Custom to reveal
   // the curve graph + per-point sliders.

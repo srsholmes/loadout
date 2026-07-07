@@ -1,5 +1,5 @@
 import { renameSync } from "node:fs";
-import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
+import { readPluginStorage, mutatePluginStorage } from "@loadout/plugin-storage";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -203,7 +203,20 @@ export function createTdpProfileEngine(options: TdpProfileEngineOptions) {
 
   async function writeRaw(): Promise<void> {
     if (pluginId) {
-      await writePluginStorage(pluginId, store);
+      // Merge (don't overwrite) so co-tenant keys in the same plugin file —
+      // notably the custom-device override (see lib/custom-device.ts) — are
+      // preserved through a profile save. mutatePluginStorage serializes the
+      // read-modify-write against other writers on this file.
+      await mutatePluginStorage<Record<string, unknown>>(
+        pluginId,
+        (existing) => ({
+          ...existing,
+          version: store.version,
+          defaultTdp: store.defaultTdp,
+          profiles: store.profiles,
+          perGameEnabled: store.perGameEnabled,
+        }),
+      );
       return;
     }
     // configPath mode (tests). Mirror the atomic-write semantics of the

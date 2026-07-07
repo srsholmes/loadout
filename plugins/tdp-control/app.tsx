@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { FaBolt, FaMicrochip } from "react-icons/fa6";
+import { FaBolt, FaMicrochip, FaGear } from "react-icons/fa6";
 import {
   mountComponent,
+  mountHeaderStub,
   useBackend,
   useCurrentGame,
   Button,
@@ -12,8 +13,13 @@ import {
   Slider,
   SegmentedItem,
   Toggle,
+  TextInput,
+  PluginHeader,
+  HeaderBackButton,
+  IconButton,
 } from "@loadout/ui";
 import { steamArtworkUrls } from "@loadout/steam-paths/artwork";
+import type { CustomDevice } from "./lib/custom-device";
 
 export const icon = FaBolt;
 
@@ -22,6 +28,10 @@ interface TdpInfo {
   tdpReadSource: "read" | "tracked" | "estimated";
   minWatts: number;
   maxWatts: number;
+  /** Full ceiling when plugged into AC (>= maxWatts). */
+  pluggedMaxWatts: number;
+  /** Ceiling when on battery (<= pluggedMaxWatts). */
+  batteryMaxWatts: number;
   platform: string;
   deviceName: string;
   method: string;
@@ -38,6 +48,7 @@ interface TdpInfo {
   currentGovernor: string | null;
   supportsSmt: boolean;
   supportsCpuBoost: boolean;
+  usingCustomDevice: boolean;
 }
 
 /** Human-friendly labels for TDP control methods. */
@@ -77,6 +88,9 @@ function TdpControl() {
   const [applying, setApplying] = useState(false);
   const [perGameEnabled, setPerGameEnabled] = useState<boolean>(false);
   const [gameProfiles, setGameProfiles] = useState<SavedGameProfile[]>([]);
+  // Landing (TDP controls) vs the settings sub-view (custom-device form),
+  // reached via the header gear — mirrors the convention other plugins use.
+  const [view, setView] = useState<"main" | "settings">("main");
   const debounceTimer = useRef<Timer | null>(null);
   const slidingRef = useRef(false);
 
@@ -121,6 +135,36 @@ function TdpControl() {
       const { maxWatts } = data as { online: boolean; maxWatts: number };
       if (typeof maxWatts === "number") {
         setInfo((prev) => (prev ? { ...prev, maxWatts } : prev));
+      }
+    },
+  });
+
+  // The active device changed (custom device saved/cleared) — refresh the
+  // range, presets, device name, and clamp the slider into the new bounds.
+  useEvent({
+    event: "deviceChanged",
+    handler: (data) => {
+      const d = data as {
+        deviceName: string;
+        minWatts: number;
+        maxWatts: number;
+        profiles: Record<string, number>;
+        usingCustomDevice: boolean;
+      };
+      setInfo((prev) =>
+        prev
+          ? {
+              ...prev,
+              deviceName: d.deviceName,
+              minWatts: d.minWatts,
+              maxWatts: d.maxWatts,
+              profiles: d.profiles,
+              usingCustomDevice: d.usingCustomDevice,
+            }
+          : prev,
+      );
+      if (!slidingRef.current) {
+        setSliderValue((v) => Math.max(d.minWatts, Math.min(d.maxWatts, v)));
       }
     },
   });
@@ -347,22 +391,74 @@ function TdpControl() {
     [call],
   );
 
-  if (!info) {
-    return (
-      <div className="p-7 h-full overflow-y-auto">
-        <div className="page-content">
-          <div className="flex items-center justify-center h-64">
-            <Spinner size={32} />
-          </div>
+  // Shared header portaled into the shell topbar: title + device subtitle,
+  // with a cog on the landing view and a back button on the settings view.
+  const header = (
+    <PluginHeader>
+      <div className="flex items-center justify-between gap-4 w-full min-w-0">
+        <div className="flex flex-col gap-0.5 min-w-0">
+          <h1 className="text-xl font-semibold tracking-[-0.015em] m-0 leading-tight">
+            TDP Control
+          </h1>
+          <span className="text-[11.5px] text-base-content/55 tracking-[0.02em] truncate leading-tight">
+            {info?.deviceName ? `${info.deviceName} · ` : ""}CPU/GPU power limits
+          </span>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {view === "settings" ? (
+            <HeaderBackButton
+              onBack={() => setView("main")}
+              title="Back to TDP Control"
+            />
+          ) : (
+            <IconButton
+              onClick={() => setView("settings")}
+              title="Custom device settings"
+              ariaLabel="Custom device settings"
+            >
+              <FaGear size={11} />
+            </IconButton>
+          )}
         </div>
       </div>
+    </PluginHeader>
+  );
+
+  if (!info) {
+    return (
+      <>
+        {header}
+        <div className="p-7 h-full overflow-y-auto">
+          <div className="page-content">
+            <div className="flex items-center justify-center h-64">
+              <Spinner size={32} />
+            </div>
+          </div>
+        </div>
+      </>
     );
   }
 
   const isUnavailable = info.method === "none";
 
+  // Settings sub-view: the custom-device form on its own page.
+  if (view === "settings") {
+    return (
+      <>
+        {header}
+        <div className="p-7 h-full overflow-y-auto">
+          <div className="page-content">
+            <CustomDeviceForm info={info} />
+          </div>
+        </div>
+      </>
+    );
+  }
+
   return (
-    <div className="p-7 h-full overflow-y-auto">
+    <>
+      {header}
+      <div className="p-7 h-full overflow-y-auto">
       <div className="page-content">
         {/* CURRENT TDP — main card with big centered number + slider */}
         <div className="card">
@@ -575,7 +671,13 @@ function TdpControl() {
 
           <div className="subsection">
             <div className="subsection-label">System</div>
-            <div className="row"><span className="row-label">Device</span>         <span className="row-value">{info.deviceName}</span></div>
+            <div className="row">
+              <span className="row-label">Device</span>
+              <span className="row-value flex items-center gap-1.5">
+                {info.deviceName}
+                {info.usingCustomDevice && <span className="chip chip-accent">Custom</span>}
+              </span>
+            </div>
             <div className="row"><span className="row-label">CPU</span>            <span className="row-value">{info.cpuModel}</span></div>
             <div className="row"><span className="row-label">Vendor</span>         <span className="row-value">{info.cpuVendor}</span></div>
             {info.scalingDriver && (
@@ -608,7 +710,8 @@ function TdpControl() {
           </div>
         )}
       </div>
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -619,6 +722,227 @@ function wattColor(watts: number, max: number): string {
   if (ratio <= 0.33) return "oklch(var(--su))";
   if (ratio <= 0.66) return "oklch(var(--wa))";
   return "oklch(var(--er))";
+}
+
+/**
+ * Custom-device form. Lets users on newer/unlisted handhelds enter their own
+ * TDP range + power presets (the `@loadout/devices` schema, minus the DMI
+ * match). Saving persists a single custom device that becomes the default the
+ * TDP control uses; "Clear" removes it and reverts to auto-detection. The
+ * backend validates and, on success, emits `deviceChanged` which refreshes the
+ * rest of the page.
+ */
+function CustomDeviceForm({ info }: { info: TdpInfo }) {
+  const { call } = useBackend("tdp-control");
+  // Latest detected info without making it an effect dependency — used to seed
+  // the form with sensible starting values when there's no custom device.
+  const infoRef = useRef(info);
+  infoRef.current = info;
+
+  const [name, setName] = useState("");
+  const [minTdp, setMinTdp] = useState("");
+  const [maxTdp, setMaxTdp] = useState("");
+  const [batteryMaxTdp, setBatteryMaxTdp] = useState("");
+  const [silent, setSilent] = useState("");
+  const [balanced, setBalanced] = useState("");
+  const [performance, setPerformance] = useState("");
+  const [hasCustom, setHasCustom] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const fillFrom = useCallback((d: CustomDevice) => {
+    setName(d.name);
+    setMinTdp(String(d.minTdp));
+    setMaxTdp(String(d.maxTdp));
+    setBatteryMaxTdp(String(d.batteryMaxTdp));
+    setSilent(String(d.profiles.Silent));
+    setBalanced(String(d.profiles.Balanced));
+    setPerformance(String(d.profiles.Performance));
+  }, []);
+
+  const fillFromDetected = useCallback(() => {
+    const i = infoRef.current;
+    // `maxWatts` is the power-state-aware *effective* cap (== battery cap when
+    // on battery), so seed the true device ceiling from `pluggedMaxWatts` and
+    // the battery cap from `batteryMaxWatts`. Fall back to `maxWatts` for
+    // older backends that don't report the split ceilings.
+    const trueMax = i.pluggedMaxWatts ?? i.maxWatts;
+    const batteryMax = i.batteryMaxWatts ?? i.maxWatts;
+    setName(i.deviceName && i.deviceName !== "Unknown" ? i.deviceName : "");
+    setMinTdp(String(i.minWatts));
+    setMaxTdp(String(trueMax));
+    setBatteryMaxTdp(String(batteryMax));
+    setSilent(String(i.profiles.Silent ?? i.minWatts));
+    setBalanced(
+      String(i.profiles.Balanced ?? Math.round((i.minWatts + trueMax) / 2)),
+    );
+    setPerformance(String(i.profiles.Performance ?? trueMax));
+  }, []);
+
+  // Seed the form on mount: from the saved custom device if one exists,
+  // otherwise from the auto-detected device as a starting point.
+  useEffect(() => {
+    let alive = true;
+    call("getCustomDevice")
+      .then((d) => {
+        if (!alive) return;
+        if (d) {
+          fillFrom(d as CustomDevice);
+          setHasCustom(true);
+        } else {
+          fillFromDetected();
+          setHasCustom(false);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [call, fillFrom, fillFromDetected]);
+
+  const parse = (v: string): number => (v.trim() === "" ? NaN : Number(v));
+
+  const handleSave = useCallback(async () => {
+    setBusy(true);
+    setFormError(null);
+    setSaved(false);
+    const device = {
+      name: name.trim(),
+      minTdp: parse(minTdp),
+      maxTdp: parse(maxTdp),
+      batteryMaxTdp: parse(batteryMaxTdp),
+      profiles: {
+        Silent: parse(silent),
+        Balanced: parse(balanced),
+        Performance: parse(performance),
+      },
+    };
+    try {
+      const res = (await call("setCustomDevice", device)) as {
+        success: boolean;
+        error?: string;
+      };
+      if (!res.success) {
+        setFormError(res.error ?? "Failed to save device");
+      } else {
+        setHasCustom(true);
+        setSaved(true);
+      }
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : "Failed to save device");
+    } finally {
+      setBusy(false);
+    }
+  }, [call, name, minTdp, maxTdp, batteryMaxTdp, silent, balanced, performance]);
+
+  const handleClear = useCallback(async () => {
+    setBusy(true);
+    setFormError(null);
+    setSaved(false);
+    try {
+      const res = (await call("clearCustomDevice")) as {
+        success: boolean;
+        error?: string;
+      };
+      if (!res.success) {
+        setFormError(res.error ?? "Failed to clear device");
+      } else {
+        setHasCustom(false);
+        // Re-seed from the now auto-detected device.
+        const detected = (await call("getTdpInfo").catch(() => null)) as
+          | TdpInfo
+          | null;
+        if (detected) {
+          infoRef.current = detected;
+          fillFromDetected();
+        }
+      }
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : "Failed to clear device");
+    } finally {
+      setBusy(false);
+    }
+  }, [call, fillFromDetected]);
+
+  const numberFields: Array<[string, string, (v: string) => void]> = [
+    ["Min TDP (W)", minTdp, setMinTdp],
+    ["Max TDP (W)", maxTdp, setMaxTdp],
+    ["Battery max TDP (W)", batteryMaxTdp, setBatteryMaxTdp],
+    ["Silent preset (W)", silent, setSilent],
+    ["Balanced preset (W)", balanced, setBalanced],
+    ["Performance preset (W)", performance, setPerformance],
+  ];
+
+  return (
+    <div className="card">
+      <div className="card-header flex items-center justify-between py-3.5 px-4.5 border-b border-base-300">
+        <div className="card-title flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-base-content/50">
+          <FaMicrochip className="w-3 h-3" /> CUSTOM DEVICE
+        </div>
+        {hasCustom && <span className="chip chip-accent">Active</span>}
+      </div>
+      <div className="subsection">
+        <div className="subsection-desc" style={{ marginBottom: 10 }}>
+          On a newer or unlisted handheld? Enter your device's TDP range and
+          power presets. Once saved it becomes the default device used by TDP
+          control, overriding auto-detection. Clear it to return to
+          auto-detection.
+        </div>
+
+        <div style={{ marginBottom: 10 }}>
+          <div className="subsection-label" style={{ marginBottom: 4 }}>
+            Device name
+          </div>
+          <TextInput
+            value={name}
+            onChange={setName}
+            placeholder="My Handheld"
+            disabled={busy}
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
+          {numberFields.map(([label, value, setter]) => (
+            <div key={label}>
+              <div className="subsection-label" style={{ marginBottom: 4 }}>
+                {label}
+              </div>
+              <TextInput
+                value={value}
+                onChange={setter}
+                inputMode="numeric"
+                placeholder="W"
+                disabled={busy}
+              />
+            </div>
+          ))}
+        </div>
+
+        {formError && (
+          <div className="text-sm mt-3" style={{ color: "var(--color-error)" }}>
+            {formError}
+          </div>
+        )}
+        {saved && !formError && (
+          <div className="text-sm mt-3" style={{ color: "oklch(var(--su))" }}>
+            Custom device saved.
+          </div>
+        )}
+
+        <div className="flex gap-2 mt-3.5">
+          <Button variant="primary" onClick={handleSave} disabled={busy}>
+            {hasCustom ? "Update device" : "Save device"}
+          </Button>
+          {hasCustom && (
+            <Button variant="danger" onClick={handleClear} disabled={busy}>
+              Clear
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -683,6 +1007,30 @@ function TdpHomeWidget() {
     handler: useCallback((data: unknown) => {
       const { maxWatts } = data as { online: boolean; maxWatts: number };
       if (typeof maxWatts === "number") setMaxW(maxWatts);
+    }, []),
+  });
+
+  // The active device changed (custom device saved/cleared) — refresh the
+  // range, presets, and device name, and clamp the shown TDP into the new
+  // bounds so the widget doesn't stay stale until it remounts.
+  useEvent({
+    event: "deviceChanged",
+    handler: useCallback((data: unknown) => {
+      const d = data as {
+        deviceName: string;
+        minWatts: number;
+        maxWatts: number;
+        profiles: Record<string, number>;
+      };
+      setMinW(d.minWatts);
+      setMaxW(d.maxWatts);
+      setProfiles(d.profiles);
+      setDeviceName(d.deviceName);
+      if (!slidingRef.current) {
+        setTdp((v) =>
+          v === null ? v : Math.max(d.minWatts, Math.min(d.maxWatts, v)),
+        );
+      }
     }, []),
   });
 
@@ -806,39 +1154,10 @@ function TdpHomeWidget() {
 /** Full settings page — mounted by the overlay shell when the plugin opens. */
 export const mount = mountComponent(TdpControl);
 
-function Header() {
-  const { call } = useBackend("tdp-control");
-  const [deviceName, setDeviceName] = useState<string>("");
-
-  // Pull the detected device name from the backend rather than hardcoding
-  // it — the subtitle must reflect whatever handheld this is running on.
-  useEffect(() => {
-    let cancelled = false;
-    call("getSystemInfo")
-      .then((info: unknown) => {
-        const name = (info as { deviceName?: string } | null)?.deviceName;
-        if (!cancelled && name) setDeviceName(name);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [call]);
-
-  return (
-    <div className="flex flex-col gap-0.5 min-w-0">
-      <h1 className="text-xl font-semibold tracking-[-0.015em] m-0 leading-tight">
-        TDP Control
-      </h1>
-      <span className="text-[11.5px] text-base-content/55 tracking-[0.02em] truncate leading-tight">
-        {deviceName ? `${deviceName} · ` : ""}CPU/GPU power limits
-      </span>
-    </div>
-  );
-}
-
 /** Homepage widget — TDP slider + preset buttons. */
 export const mountHomeWidget = mountComponent(TdpHomeWidget);
 
-/** Compact header strip (device name + title). */
-export const mountHeader = mountComponent(Header);
+// The header (title + device subtitle + settings cog) is portaled into the
+// shell topbar from inside `mount()` via `<PluginHeader>`, so the header mount
+// is just a stub whose presence tells the shell this plugin owns its topbar.
+export const mountHeader = mountHeaderStub;
