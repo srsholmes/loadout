@@ -48,8 +48,14 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Typecheck
+      # Primary typecheck is tsgo (Go-native, pinned); run via `bun run` so it
+      # works without a node install. tsc is kept as a safety-net backstop
+      # below since tsgo is still a -dev preview.
+      - name: Typecheck (tsgo, Go-native — primary)
         run: bun run typecheck
+
+      - name: Typecheck (tsc — safety net)
+        run: bun run typecheck:tsc
 
       - name: Lint
         run: bun run lint

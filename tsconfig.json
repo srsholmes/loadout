@@ -45,7 +45,9 @@
     "plugins/*/lib/**/*.ts",
     "plugins/*/lib/**/*.tsx",
     "plugins/*/components/**/*.ts",
-    "plugins/*/components/**/*.tsx"
+    "plugins/*/components/**/*.tsx",
+    "plugins/*/games/**/*.ts",
+    "plugins/*/scripts/**/*.ts"
   ],
   "exclude": [
     "node_modules",
@@ -54,6 +56,7 @@
     "**/.cache/**",
     "**/*.test.ts",
     "**/*.test.tsx",
+    "**/*.spec.ts",
     "**/*.spec.tsx"
   ]
 }
