@@ -22,6 +22,7 @@ import {
   validateCustomDevice,
   type CustomDevice,
 } from "./lib/custom-device";
+import { readSavedTdp, writeSavedTdp } from "./lib/saved-tdp";
 
 // ---------------------------------------------------------------------------
 // Constants: sysfs paths
@@ -286,6 +287,14 @@ export default class TdpControlBackend implements PluginBackend {
    * battery, spring back up on AC) without ever mutating saved profiles.
    */
   private desiredTdp: number | null = null;
+  /**
+   * The last user-requested wattage persisted to disk, loaded on startup.
+   * Restored to hardware in onLoad() so the user's TDP choice survives a
+   * shutdown (hardware limits reset to firmware defaults on reboot). Only
+   * user-initiated setTdp()/applyProfile() calls update this — automatic
+   * applies (per-game profiles, AC transitions, resume) do not.
+   */
+  private savedTdp: number | null = null;
   private tdpReadSource: TdpReadSource = "estimated";
   private activeProfile: string | null = null;
   private trackedTdp: number | null = null;
@@ -344,6 +353,9 @@ export default class TdpControlBackend implements PluginBackend {
     // takes precedence over DMI auto-detection.
     this.customDevice = await readCustomDevice("tdp-control");
 
+    // Load the user's persisted manual TDP (restored to hardware below).
+    this.savedTdp = await readSavedTdp("tdp-control");
+
     // Apply device-specific ranges (custom device wins when present)
     this.applyDeviceDefaults();
 
@@ -386,7 +398,9 @@ export default class TdpControlBackend implements PluginBackend {
     this.profileEngine = createTdpProfileEngine({
       pluginId: "tdp-control",
       onApplyTdp: async (watts: number) => {
-        await this.setTdp(watts);
+        // Per-game applies are automatic — don't clobber the user's saved
+        // manual TDP with a game's profile value.
+        await this.applyTdp(watts);
       },
       onProfileChanged: (profile: TdpProfile | null, gameName: string) => {
         this.emit?.({
@@ -398,23 +412,41 @@ export default class TdpControlBackend implements PluginBackend {
           },
         });
       },
+      // The user's saved manual TDP is the authoritative "no game" value —
+      // the engine applies it on game exit / for games without a profile,
+      // ahead of its own stored default.
+      getNoGameTdp: () => this.savedTdp,
     });
     await this.profileEngine.loadProfiles();
     console.log("[tdp-control] Per-game TDP profile engine initialized");
 
-    // Apply the profile engine's default TDP on startup when we can't
-    // directly read the hardware (estimated/fallback) AND per-game
-    // profiles is enabled. Otherwise leave the user's manual TDP alone.
-    if (
-      this.tdpReadSource === "estimated" &&
-      this.method !== "none" &&
-      this.profileEngine.getPerGameEnabled()
-    ) {
-      const defaultTdp = this.profileEngine.getDefaultTdp();
-      console.log(
-        `[tdp-control] Applying default TDP ${defaultTdp}W (source was estimated, per-game enabled)`,
-      );
-      await this.setTdp(defaultTdp);
+    // Restore TDP on startup. Hardware limits reset to firmware defaults on
+    // reboot, so re-apply what the user left. Precedence:
+    //   - Per-game profiles enabled → the engine owns TDP; apply its default
+    //     when we can't read the hardware directly (existing behavior).
+    //   - Otherwise → restore the user's persisted manual TDP, if any.
+    if (this.method !== "none") {
+      // No game is running at startup, so the value to restore is the user's
+      // "no game" TDP. The saved manual TDP (set from the slider / home
+      // widget) is authoritative — it applies whether or not per-game
+      // profiles are enabled. A per-game profile still takes over later, when
+      // its game actually launches. The engine's stored default TDP is only a
+      // fallback for users who never set a manual value.
+      if (this.savedTdp !== null) {
+        console.log(
+          `[tdp-control] Restoring saved manual TDP ${this.savedTdp}W`,
+        );
+        await this.applyTdp(this.savedTdp);
+      } else if (
+        this.profileEngine.getPerGameEnabled() &&
+        this.tdpReadSource === "estimated"
+      ) {
+        const defaultTdp = this.profileEngine.getDefaultTdp();
+        console.log(
+          `[tdp-control] Applying default TDP ${defaultTdp}W (source was estimated, per-game enabled, no saved manual TDP)`,
+        );
+        await this.applyTdp(defaultTdp);
+      }
     }
 
     console.log(
@@ -494,6 +526,42 @@ export default class TdpControlBackend implements PluginBackend {
   // -----------------------------------------------------------------------
 
   async setTdp(
+    watts: number,
+  ): Promise<{ success: boolean; error?: string }> {
+    const result = await this.applyTdp(watts);
+    // Persist the user's choice as the manual "no game" TDP so it survives a
+    // shutdown. Only this RPC path (the slider + power presets via
+    // applyProfile) persists; automatic applies go straight to applyTdp() and
+    // leave the saved value untouched.
+    //
+    // BUT don't overwrite it while a per-game profile is actively governing
+    // TDP (per-game enabled + a game running): in that state the slider is
+    // tuning THAT game's profile (the frontend routes it to setGameProfile),
+    // so persisting here would let an in-game tweak silently redefine the
+    // menu/default TDP that gets restored on game exit and reboot.
+    const state = this.profileEngine?.getCurrentState();
+    const gameGoverning =
+      (state?.perGameEnabled ?? false) && (state?.isGameRunning ?? false);
+    if (result.success && this.desiredTdp !== null && !gameGoverning) {
+      this.savedTdp = this.desiredTdp;
+      try {
+        await writeSavedTdp("tdp-control", this.desiredTdp);
+      } catch (e) {
+        // Persistence is best-effort — a failed disk write must not fail the
+        // TDP apply the user just requested (it's already on hardware).
+        console.error(`[tdp-control] Failed to persist TDP: ${e}`);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Apply a TDP to hardware WITHOUT persisting it as the user's saved value.
+   * This is the shared implementation behind the setTdp RPC and every
+   * automatic re-apply (per-game profiles, AC transitions, resume, device
+   * changes). The public setTdp() wraps this and persists on success.
+   */
+  private async applyTdp(
     watts: number,
   ): Promise<{ success: boolean; error?: string }> {
     watts = Math.round(watts);
@@ -678,10 +746,11 @@ export default class TdpControlBackend implements PluginBackend {
       },
     });
     // Re-apply the standing intent through the new clamp so a value now out of
-    // range is corrected on hardware (setTdp emits its own tdpChanged).
+    // range is corrected on hardware (applyTdp emits its own tdpChanged). This
+    // is an automatic re-clamp, not a fresh user choice, so it doesn't persist.
     const intent = this.desiredTdp ?? this.currentTdp;
     if (intent !== null && this.method !== "none") {
-      await this.setTdp(intent);
+      await this.applyTdp(intent);
     }
   }
 
@@ -1114,7 +1183,7 @@ export default class TdpControlBackend implements PluginBackend {
 
       // Re-apply current TDP profile
       if (this.trackedTdp !== null) {
-        await this.setTdp(this.trackedTdp);
+        await this.applyTdp(this.trackedTdp);
         console.log(`[tdp-control] Resume: re-applied TDP ${this.trackedTdp}W`);
       }
       return { success: true };
@@ -1717,7 +1786,7 @@ export default class TdpControlBackend implements PluginBackend {
             // its own tdpChanged with the applied value.
             const intent = this.desiredTdp ?? this.currentTdp;
             if (intent !== null && this.method !== "none") {
-              await this.setTdp(intent);
+              await this.applyTdp(intent);
             }
             this.emit?.({
               event: "acPowerChanged",

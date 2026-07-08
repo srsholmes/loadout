@@ -50,6 +50,18 @@ function createEngine() {
   });
 }
 
+// Engine wired with the backend's `getNoGameTdp` injection — mirrors
+// production, where the user's persisted manual TDP is the authoritative
+// "no game" value (ahead of the engine's stored `defaultTdp`).
+function createEngineWithNoGameTdp(getNoGameTdp: () => number | null) {
+  return createTdpProfileEngine({
+    configPath,
+    onApplyTdp,
+    onProfileChanged,
+    getNoGameTdp,
+  });
+}
+
 async function writeConfig(store: Partial<TdpProfileStore> & {
   defaultTdp: number;
   profiles: Array<TdpProfile>;
@@ -342,6 +354,117 @@ describe("TDP Profile Engine", () => {
       expect(state.isGameRunning).toBe(false);
       expect(state.currentTdp).toBe(15);
       expect(state.activeProfile).toBeNull();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // getNoGameTdp — the manual "no game" TDP takes precedence over defaultTdp
+  // -------------------------------------------------------------------------
+
+  describe("getNoGameTdp (manual no-game TDP)", () => {
+    test("handleGameExit restores the manual TDP, not defaultTdp", async () => {
+      await writeConfig({
+        defaultTdp: 12,
+        profiles: [{ appId: 730, gameName: "CS2", tdpWatts: 25 }],
+      });
+      // User's persisted manual TDP is 35W; engine default is 12W.
+      const engine = createEngineWithNoGameTdp(() => 35);
+      await engine.loadProfiles();
+
+      await engine.handleGameLaunch(730, "CS2"); // 25W (profile)
+      appliedTdpValues = [];
+
+      await engine.handleGameExit(730);
+
+      expect(appliedTdpValues).toEqual([35]); // manual, not the 12W default
+    });
+
+    test("falls back to defaultTdp when getNoGameTdp returns null", async () => {
+      await writeConfig({
+        defaultTdp: 12,
+        profiles: [{ appId: 730, gameName: "CS2", tdpWatts: 25 }],
+      });
+      const engine = createEngineWithNoGameTdp(() => null);
+      await engine.loadProfiles();
+
+      await engine.handleGameLaunch(730, "CS2");
+      appliedTdpValues = [];
+
+      await engine.handleGameExit(730);
+
+      expect(appliedTdpValues).toEqual([12]);
+    });
+
+    test("falls back to defaultTdp when the callback is not provided", async () => {
+      await writeConfig({
+        defaultTdp: 12,
+        profiles: [{ appId: 730, gameName: "CS2", tdpWatts: 25 }],
+      });
+      const engine = createEngine(); // no getNoGameTdp injection
+      await engine.loadProfiles();
+
+      await engine.handleGameLaunch(730, "CS2");
+      appliedTdpValues = [];
+
+      await engine.handleGameExit(730);
+
+      expect(appliedTdpValues).toEqual([12]);
+    });
+
+    test("launching a game WITHOUT a profile applies the manual TDP", async () => {
+      await writeConfig({ defaultTdp: 12, profiles: [] });
+      const engine = createEngineWithNoGameTdp(() => 35);
+      await engine.loadProfiles();
+
+      await engine.handleGameLaunch(999, "Unprofiled Game");
+
+      expect(appliedTdpValues).toEqual([35]);
+    });
+
+    test("a recognized per-game profile still wins over the manual TDP", async () => {
+      await writeConfig({
+        defaultTdp: 12,
+        profiles: [{ appId: 730, gameName: "CS2", tdpWatts: 25 }],
+      });
+      const engine = createEngineWithNoGameTdp(() => 35);
+      await engine.loadProfiles();
+
+      await engine.handleGameLaunch(730, "CS2");
+
+      expect(appliedTdpValues).toEqual([25]); // profile precedence intact
+    });
+
+    test("removing the running game's profile falls back to the manual TDP", async () => {
+      await writeConfig({
+        defaultTdp: 12,
+        profiles: [{ appId: 730, gameName: "CS2", tdpWatts: 25 }],
+      });
+      const engine = createEngineWithNoGameTdp(() => 35);
+      await engine.loadProfiles();
+
+      await engine.handleGameLaunch(730, "CS2"); // 25W
+      appliedTdpValues = [];
+
+      await engine.removeProfile(730);
+
+      expect(appliedTdpValues).toEqual([35]); // manual, consistent with exit
+    });
+
+    test("enabling per-game while an unprofiled game runs applies the manual TDP", async () => {
+      await writeConfig({
+        defaultTdp: 12,
+        profiles: [],
+        perGameEnabled: false,
+      });
+      const engine = createEngineWithNoGameTdp(() => 35);
+      await engine.loadProfiles();
+
+      await engine.handleGameLaunch(999, "Unprofiled Game"); // no apply (off)
+      appliedTdpValues = [];
+
+      await engine.setPerGameEnabled(true);
+
+      expect(appliedTdpValues).toEqual([35]);
     });
   });
 
