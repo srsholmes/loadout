@@ -563,6 +563,45 @@ export async function reloadPersistedProfile(): Promise<WakeOpResult> {
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * Boot reconciliation with retry. `reloadPersistedProfile()` can transiently
+ * fail on a cold boot when InputPlumber is up (so its internal `waitForIp`
+ * passes) but the composite device hasn't been enumerated yet — it returns
+ * "Bound device not connected", and a single-shot reload would drop the wake
+ * binding for the whole session (the button silently reverts to its OS
+ * default). Retrying a few times lets the pad finish enumerating.
+ *
+ * Cheap when nothing is bound: `reloadPersistedProfile()` returns `ok`
+ * immediately, so the loop breaks on the first attempt with no delay.
+ *
+ * `reload` and `wait` are injectable so the retry logic is unit-testable
+ * without real DBus or real multi-second sleeps.
+ */
+export async function reloadPersistedProfileWithRetry(
+  opts: {
+    attempts?: number;
+    delayMs?: number;
+    reload?: () => Promise<WakeOpResult>;
+    wait?: (ms: number) => Promise<void>;
+    onRetry?: (attempt: number, error: string) => void;
+  } = {},
+): Promise<WakeOpResult> {
+  const attempts = Math.max(1, opts.attempts ?? 5);
+  const delayMs = opts.delayMs ?? 2000;
+  const reload = opts.reload ?? reloadPersistedProfile;
+  const wait = opts.wait ?? delay;
+
+  let last: WakeOpResult = { ok: true };
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    last = await reload();
+    if (last.ok) break;
+    opts.onRetry?.(attempt + 1, last.error ?? "unknown");
+    // No sleep after the final attempt — nothing follows it.
+    if (attempt < attempts - 1) await wait(delayMs);
+  }
+  return last;
+}
+
+/**
  * User-triggered recovery: restart the InputPlumber daemon, then re-load the
  * wake profile onto the freshly-recreated composite device.
  *

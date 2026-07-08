@@ -98,28 +98,25 @@ export default class InputPlumberBackend implements PluginBackend {
     // OS default until the user re-binds. Mirrors restartInputPlumber()'s
     // retry. reloadPersistedProfile() returns ok immediately when nothing is
     // bound, so this is a no-op on setups without a wake button.
-    void (async () => {
-      let last = { ok: true } as Awaited<
-        ReturnType<typeof wake.reloadPersistedProfile>
-      >;
-      for (let attempt = 0; attempt < 5; attempt++) {
-        last = await wake.reloadPersistedProfile();
-        if (last.ok) break;
-        this.log?.info(
-          `wake reload: attempt ${attempt + 1} not ready (${last.error ?? "unknown"}); retrying`,
-        );
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-      if (!last.ok && last.error) this.log?.warn(`wake reload: ${last.error}`);
-      else
-        this.log?.info(
-          "wake reload: completed (see [input-plumber] logs for detail)",
-        );
-    })().catch((e) =>
-      this.log?.warn(
-        `wake reload threw: ${e instanceof Error ? e.message : String(e)}`,
-      ),
-    );
+    void wake
+      .reloadPersistedProfileWithRetry({
+        onRetry: (attempt, error) =>
+          this.log?.info(
+            `wake reload: attempt ${attempt} not ready (${error}); retrying`,
+          ),
+      })
+      .then((last) => {
+        if (!last.ok && last.error) this.log?.warn(`wake reload: ${last.error}`);
+        else
+          this.log?.info(
+            "wake reload: completed (see [input-plumber] logs for detail)",
+          );
+      })
+      .catch((e) =>
+        this.log?.warn(
+          `wake reload threw: ${e instanceof Error ? e.message : String(e)}`,
+        ),
+      );
     this.log?.info("Plugin loaded");
   }
 
