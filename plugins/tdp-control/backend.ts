@@ -529,10 +529,20 @@ export default class TdpControlBackend implements PluginBackend {
     watts: number,
   ): Promise<{ success: boolean; error?: string }> {
     const result = await this.applyTdp(watts);
-    // Persist the user's choice so it survives a shutdown. Only this RPC path
-    // (the slider + power presets via applyProfile) persists; automatic
-    // applies go straight to applyTdp() and leave the saved value untouched.
-    if (result.success && this.desiredTdp !== null) {
+    // Persist the user's choice as the manual "no game" TDP so it survives a
+    // shutdown. Only this RPC path (the slider + power presets via
+    // applyProfile) persists; automatic applies go straight to applyTdp() and
+    // leave the saved value untouched.
+    //
+    // BUT don't overwrite it while a per-game profile is actively governing
+    // TDP (per-game enabled + a game running): in that state the slider is
+    // tuning THAT game's profile (the frontend routes it to setGameProfile),
+    // so persisting here would let an in-game tweak silently redefine the
+    // menu/default TDP that gets restored on game exit and reboot.
+    const state = this.profileEngine?.getCurrentState();
+    const gameGoverning =
+      (state?.perGameEnabled ?? false) && (state?.isGameRunning ?? false);
+    if (result.success && this.desiredTdp !== null && !gameGoverning) {
       this.savedTdp = this.desiredTdp;
       try {
         await writeSavedTdp("tdp-control", this.desiredTdp);

@@ -344,6 +344,44 @@ describe("TdpControlBackend", () => {
       await b.applyTdp(12);
       expect(await readSavedTdp("tdp-control")).toBe(28);
     });
+
+    it("setTdp does NOT overwrite the saved value while a per-game profile governs TDP", async () => {
+      const b = configure();
+      // Establish the manual "no game" value (no engine → nothing governs).
+      await backend.setTdp(35);
+      expect(await readSavedTdp("tdp-control")).toBe(35);
+
+      // Now a per-game profile is actively governing TDP: the frontend routes
+      // the slider to setGameProfile, and the parallel setTdp must NOT clobber
+      // the manual no-game value with the in-game watts.
+      (b as unknown as { profileEngine: unknown }).profileEngine = {
+        getCurrentState: () => ({
+          activeProfile: null,
+          currentTdp: 35,
+          isGameRunning: true,
+          perGameEnabled: true,
+        }),
+      };
+      const result = await backend.setTdp(20);
+      expect(result.success).toBe(true); // still applied to hardware
+      expect(await readSavedTdp("tdp-control")).toBe(35); // saved value intact
+    });
+
+    it("setTdp DOES persist when a game runs but per-game is disabled", async () => {
+      const b = configure();
+      // Per-game off → setTdp is the only TDP control, so it must persist even
+      // if a game happens to be tracked as running.
+      (b as unknown as { profileEngine: unknown }).profileEngine = {
+        getCurrentState: () => ({
+          activeProfile: null,
+          currentTdp: 15,
+          isGameRunning: true,
+          perGameEnabled: false,
+        }),
+      };
+      await backend.setTdp(22);
+      expect(await readSavedTdp("tdp-control")).toBe(22);
+    });
   });
 
   // ── getProfiles ───────────────────────────────────────────────────

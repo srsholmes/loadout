@@ -343,8 +343,11 @@ export function createTdpProfileEngine(options: TdpProfileEngineOptions) {
     if (isGameRunning && activeAppId === appId) {
       activeProfile = null;
       if (store.perGameEnabled) {
-        currentTdp = store.defaultTdp;
-        await commitTdp(store.defaultTdp);
+        // The running game no longer has a profile → same "no profile in
+        // effect" state as a game exit, so fall back to the manual no-game
+        // TDP (matches handleGameExit), not the raw engine default.
+        currentTdp = noGameTdp();
+        await commitTdp(currentTdp);
       }
       onProfileChanged(null, "");
     }
