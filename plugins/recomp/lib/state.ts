@@ -59,7 +59,7 @@ export async function loadState(): Promise<PersistedState> {
  * the caller doesn't have to think about it.
  */
 export async function setRomPath(
-  state: PersistedState,
+  _state: PersistedState,
   gameId: string,
   path: string | null,
 ): Promise<PersistedState> {
@@ -149,7 +149,7 @@ export async function saveState(state: PersistedState): Promise<void> {
 }
 
 export async function updateInstalledGame(
-  state: PersistedState,
+  _state: PersistedState,
   gameId: string,
   game: InstalledGame,
 ): Promise<PersistedState> {
@@ -167,7 +167,7 @@ export async function updateInstalledGame(
  * that entry already clears them — no separate step needed.
  */
 export async function removeInstalledGame(
-  state: PersistedState,
+  _state: PersistedState,
   gameId: string,
 ): Promise<PersistedState> {
   return mutateState((current) => {
@@ -182,7 +182,7 @@ export async function removeInstalledGame(
 }
 
 export async function updateSettings(
-  state: PersistedState,
+  _state: PersistedState,
   settings: Partial<Settings>,
 ): Promise<PersistedState> {
   return mutateState((current) => ({
@@ -201,7 +201,7 @@ export async function updateSettings(
  * instead of an unhandled rejection that flips the install state.
  */
 export async function recordInstalledMod(
-  state: PersistedState,
+  _state: PersistedState,
   gameId: string,
   modId: string,
   entry: InstalledModEntry,
@@ -228,7 +228,7 @@ export async function recordInstalledMod(
  * path that v0.1 doesn't expose but the test suite covers).
  */
 export async function removeInstalledMod(
-  state: PersistedState,
+  _state: PersistedState,
   gameId: string,
   modId: string,
 ): Promise<PersistedState> {

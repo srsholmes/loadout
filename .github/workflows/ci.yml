@@ -37,6 +37,13 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      # Second, faster typecheck with the Go-native compiler (tsgo,
+      # @typescript/native-preview, pinned exactly). ~9x faster than tsc and
+      # occasionally stricter — it caught a real generic-inference hole tsc
+      # missed. tsc above stays the authoritative gate; this adds coverage.
+      - name: Typecheck (tsgo, Go-native)
+        run: bun run typecheck:go
+
       - name: ESLint
         run: bun run lint
 
