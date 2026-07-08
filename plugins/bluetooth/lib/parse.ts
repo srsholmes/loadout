@@ -61,7 +61,8 @@ export function parseBoolProp(line: string): boolean | null {
 export function parseStringProp(line: string): string | null {
   const m = line.trim().match(/^s\s+"((?:\\.|[^"\\])*)"$/);
   if (!m) return null;
-  return m[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  // Group 1 always captures when the match succeeds.
+  return m[1]!.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
 }
 
 /** Split multi-property `busctl get-property` output into per-line value
@@ -78,7 +79,8 @@ export function splitPropLines(stdout: string): string[] {
 export function macFromDevicePath(path: string): string | null {
   const m = path.match(/\/dev_([0-9A-Fa-f]{2}(?:_[0-9A-Fa-f]{2}){5})$/);
   if (!m) return null;
-  return m[1].replace(/_/g, ":").toUpperCase();
+  // Group 1 always captures when the match succeeds.
+  return m[1]!.replace(/_/g, ":").toUpperCase();
 }
 
 /** `AA:BB:CC:DD:EE:0B` → `/org/bluez/hci0/dev_AA_BB_CC_DD_EE_0B` under

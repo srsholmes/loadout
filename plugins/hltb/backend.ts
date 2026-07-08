@@ -758,8 +758,8 @@ export default class HltbBackend implements PluginBackend {
             return b.obj.comp_all_count - a.obj.comp_all_count;
           return b.score - a.score;
         });
-        if (sorted.length > 0 && sorted[0].score >= FUZZY_SCORE_THRESHOLD) {
-          match = sorted[0].obj;
+        if (sorted.length > 0 && sorted[0]!.score >= FUZZY_SCORE_THRESHOLD) {
+          match = sorted[0]!.obj;
         }
       }
 
@@ -920,7 +920,7 @@ export default class HltbBackend implements PluginBackend {
       if (!Array.isArray(gameDataList) || gameDataList.length === 0)
         return null;
 
-      const game = gameDataList[0];
+      const game = gameDataList[0]!; // length checked !== 0 above.
       return this.toGameDetail(game);
     } catch (error) {
       console.warn("[hltb] Error fetching game detail:", error);
@@ -1009,7 +1009,7 @@ export default class HltbBackend implements PluginBackend {
       const match = html.match(
         /\/_next\/static\/([^/]+)\/(?:_ssgManifest|_buildManifest)\.js/,
       );
-      return match ? match[1] : null;
+      return match?.[1] ?? null;
     } catch {
       return null;
     }

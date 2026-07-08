@@ -135,5 +135,6 @@ export async function findQuickAccessTab(options: GetTabsOptions): Promise<CEFTa
   }
 
   // Return the first one — typically the Big Picture Mode QAM
-  return qaTabs[0];
+  // Non-null: qaTabs.length was checked > 0 above.
+  return qaTabs[0]!;
 }

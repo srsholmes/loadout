@@ -1379,8 +1379,8 @@ export default class FanControlBackend implements PluginBackend {
     try {
       const { stdout } = await run(["ectool", "pwmgetfanrpm"]);
       // Output format: "Current fan RPM: 3200"
-      const match = stdout.match(/(\d+)/);
-      return match ? parseInt(match[1], 10) : 0;
+      const digits = stdout.match(/(\d+)/)?.[1];
+      return digits ? parseInt(digits, 10) : 0;
     } catch {
       return 0;
     }

@@ -110,7 +110,8 @@ export function collectionBadgeVariant(name: string): BadgeVariant {
   for (let i = 0; i < name.length; i++) {
     h = ((h << 5) - h + name.charCodeAt(i)) | 0;
   }
-  return COLLECTION_PALETTE[Math.abs(h) % COLLECTION_PALETTE.length];
+  // Non-null: index is a modulo of the palette length, always in bounds.
+  return COLLECTION_PALETTE[Math.abs(h) % COLLECTION_PALETTE.length]!;
 }
 
 type Phase = "primary" | "fallback" | "placeholder";

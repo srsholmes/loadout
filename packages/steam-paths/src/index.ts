@@ -56,7 +56,8 @@ export async function getLibraryPaths(): Promise<string[]> {
     const pathRegex = /"path"\s+"([^"]+)"/gi;
     let match: RegExpExecArray | null;
     while ((match = pathRegex.exec(content)) !== null) {
-      const libPath = join(match[1], "steamapps");
+      // Non-null: match is non-null, group 1 is a required capture.
+      const libPath = join(match[1]!, "steamapps");
       if (!paths.includes(libPath)) {
         paths.push(libPath);
       }
@@ -120,7 +121,9 @@ export async function listInstalledGames(): Promise<InstalledGame[]> {
         const appIdMatch = content.match(/"appid"\s+"(\d+)"/);
         const nameMatch = content.match(/"name"\s+"([^"]+)"/);
         if (!appIdMatch || !nameMatch) continue;
-        const appId = appIdMatch[1];
+        // Non-null: both matches are truthy, group 1 is a required capture.
+        const appId = appIdMatch[1]!;
+        const name = nameMatch[1]!;
         // Skip Steam itself + Steam-runtime / Proton tooling apps.
         // They're "installed" technically but they don't carry user
         // game art, HLTB times, or any other library-level metadata
@@ -129,14 +132,14 @@ export async function listInstalledGames(): Promise<InstalledGame[]> {
           appId === "0" ||
           appId === "7" ||
           appId === "228980" ||
-          /^steamlinuxruntime/i.test(nameMatch[1]) ||
-          /^proton/i.test(nameMatch[1])
+          /^steamlinuxruntime/i.test(name) ||
+          /^proton/i.test(name)
         ) {
           continue;
         }
         // Library paths can overlap (rare but possible). Last write
         // wins — names are typically identical.
-        seen.set(appId, nameMatch[1]);
+        seen.set(appId, name);
       } catch {
         /* skip unreadable manifest */
       }

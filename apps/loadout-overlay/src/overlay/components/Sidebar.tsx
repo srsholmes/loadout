@@ -83,7 +83,8 @@ export function Sidebar({
       }
       bucket[cat].push(p);
     }
-    const result = order.map((name) => ({ name, items: bucket[name] }));
+    // Every name in `order` was pushed alongside its bucket entry above.
+    const result = order.map((name) => ({ name, items: bucket[name] ?? [] }));
     if (favSet.size > 0) {
       const favPlugins = favorites
         .map((id) => plugins.find((p) => p.id === id))
@@ -263,7 +264,7 @@ export function Sidebar({
                                     aria-hidden
                                   />
                                 ) : (
-                                  <span>{(plugin.icon ?? plugin.name)[0].toUpperCase()}</span>
+                                  <span>{(plugin.icon ?? plugin.name).charAt(0).toUpperCase()}</span>
                                 )
                               }
                               label={plugin.name}

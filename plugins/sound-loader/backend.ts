@@ -322,7 +322,7 @@ export default class SoundLoaderBackend implements PluginBackend {
       }
 
       if (loaded.length === 1) {
-        mappings[event] = loaded[0];
+        mappings[event] = loaded[0]!; // length checked === 1 above.
       } else if (loaded.length > 1) {
         mappings[event] = { files: loaded };
       }
@@ -376,7 +376,8 @@ export default class SoundLoaderBackend implements PluginBackend {
 
     // If multiple files, pick a random one (matching SDH-AudioLoader behavior)
     const files = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles];
-    const filename = files[Math.floor(Math.random() * files.length)];
+    // Random index is within [0, files.length), and files is non-empty.
+    const filename = files[Math.floor(Math.random() * files.length)]!;
 
     const audioData = await this._readAudioFile(entry.dir, filename);
     if (!audioData) {
@@ -598,7 +599,7 @@ export default class SoundLoaderBackend implements PluginBackend {
         if (deckyMappings && deckyFilename in deckyMappings) {
           // The Decky pack.json remaps this filename to a custom file
           const customFile = deckyMappings[deckyFilename];
-          if (audioFiles.includes(customFile)) {
+          if (customFile && audioFiles.includes(customFile)) {
             actualFilename = customFile;
           }
         }

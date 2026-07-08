@@ -50,7 +50,8 @@ export const pluginAppBundleRoute: RouteHandler = {
   match: (_req, url) => APP_BUNDLE_PATTERN.test(url.pathname),
   async handle(_req, url, ctx) {
     const match = url.pathname.match(APP_BUNDLE_PATTERN)!;
-    const pluginId = match[1];
+    // Non-null: group 1 is a required capture in APP_BUNDLE_PATTERN.
+    const pluginId = match[1]!;
     let code = ctx.bundleCache.get(pluginId);
     if (!code) {
       const appPath = join(ctx.pluginsDir, pluginId, "app.tsx");
@@ -66,8 +67,9 @@ export const pluginAssetRoute: RouteHandler = {
   match: (_req, url) => ASSET_PATTERN.test(url.pathname),
   async handle(_req, url, ctx) {
     const match = url.pathname.match(ASSET_PATTERN)!;
-    const pluginId = match[1];
-    const relPath = decodeURIComponent(match[2]);
+    // Non-null: groups 1 and 2 are required captures in ASSET_PATTERN.
+    const pluginId = match[1]!;
+    const relPath = decodeURIComponent(match[2]!);
     if (!ctx.plugins.has(pluginId)) {
       return new Response("Not Found", { status: 404 });
     }

@@ -90,7 +90,8 @@ function makeStore(): OskStore {
       // Walk handlers end → start; first to return `true` consumes.
       for (let i = this.handlers.length - 1; i >= 0; i--) {
         try {
-          if (this.handlers[i](k) === true) return;
+          // Non-null: i iterates within handlers bounds.
+          if (this.handlers[i]!(k) === true) return;
         } catch (err) {
           console.warn("[osk] handler threw", err);
         }

@@ -340,8 +340,9 @@ function manualImportPlatform(entry: GameEntry): PlatformName {
  */
 async function flattenSingleRoot(dir: string): Promise<void> {
   const entries = await readdir(dir, { withFileTypes: true });
-  if (entries.length !== 1 || !entries[0].isDirectory()) return;
-  const inner = join(dir, entries[0].name);
+  const only = entries[0];
+  if (entries.length !== 1 || !only || !only.isDirectory()) return;
+  const inner = join(dir, only.name);
   for (const name of await readdir(inner)) {
     await rename(join(inner, name), join(dir, name));
   }

@@ -286,7 +286,7 @@ export class GamescopeAtoms {
         for (const line of lines) {
           if (!line.startsWith(prefix + "(")) continue;
           const m = line.match(/=\s*"((?:[^"\\]|\\.)*)"/);
-          if (m) return m[1];
+          if (m) return m[1] ?? null;
         }
       }
       return null;
@@ -311,6 +311,9 @@ export class GamescopeAtoms {
         managed.push(id);
       }
     }
+    // The sole caller only invokes this with a non-empty candidate set
+    // (findSteamWindow returns early when allIds is empty), so pool is
+    // guaranteed non-empty and pool[0] below is always defined.
     const pool = managed.length > 0 ? managed : candidates;
 
     // Prefer a pool window currently claiming overlay/focus.
@@ -326,7 +329,7 @@ export class GamescopeAtoms {
         return id;
       }
     }
-    return pool[0];
+    return pool[0]!;
   }
 
   /** True if `atom` is set on `windowId`. Uses xprop output to
@@ -851,7 +854,9 @@ export class GamescopeAtoms {
         const m = line.match(/^(\w+)\([^)]+\)\s*=\s*(-?\d+)/);
         if (!m) continue;
         const n = Number(m[2]);
-        if (Number.isFinite(n)) out.set(m[1], n);
+        // Both capture groups are mandatory in the regex, so on a match
+        // m[1] is always present.
+        if (Number.isFinite(n)) out.set(m[1]!, n);
       }
     } catch (err) {
       console.warn(

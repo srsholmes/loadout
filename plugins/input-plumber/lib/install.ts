@@ -54,7 +54,8 @@ async function inputplumberVersion(binary: string): Promise<string | null> {
   const r = await runFull([binary, "--version"], { timeoutMs: 5_000 });
   if (r.exitCode !== 0) return null;
   const m = r.stdout.trim().match(/(\d+\.\d+\.\d+(?:-\S+)?)/);
-  return m ? m[1] : r.stdout.trim() || null;
+  // Capture group 1 is mandatory, so on a match it is always present.
+  return m ? m[1]! : r.stdout.trim() || null;
 }
 
 async function isUnitActive(unit: string): Promise<boolean> {

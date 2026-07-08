@@ -115,7 +115,8 @@ export default class BatteryTrackerBackend implements PluginBackend {
 
       if (candidates.length === 0) return null;
       candidates.sort((a, b) => b.score - a.score);
-      const picked = candidates[0];
+      // Non-empty: the length === 0 case returned above.
+      const picked = candidates[0]!;
       if (candidates.length > 1) {
         console.log(
           `[battery-tracker] battery candidates: ${candidates

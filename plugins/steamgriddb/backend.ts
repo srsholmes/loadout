@@ -512,12 +512,13 @@ export default class SteamGridDBBackend implements PluginBackend {
     );
     const writableUserDirs: string[] = [];
     for (let i = 0; i < mkdirResults.length; i++) {
-      const r = mkdirResults[i];
+      // i < length, so both index accesses are in-bounds.
+      const r = mkdirResults[i]!;
       if (r.status === "fulfilled") {
         writableUserDirs.push(r.value);
       } else {
         console.warn(
-          `[steamgriddb] skipping user ${validUserDirs[i]}: mkdir failed (${r.reason}).`,
+          `[steamgriddb] skipping user ${validUserDirs[i]!}: mkdir failed (${r.reason}).`,
         );
       }
     }
@@ -534,12 +535,14 @@ export default class SteamGridDBBackend implements PluginBackend {
     );
     const savedPaths: string[] = [];
     for (let i = 0; i < writeResults.length; i++) {
-      const r = writeResults[i];
+      // i < length and writeResults/targets are index-aligned, so both
+      // index accesses are in-bounds.
+      const r = writeResults[i]!;
       if (r.status === "fulfilled") {
-        savedPaths.push(targets[i].outputPath);
+        savedPaths.push(targets[i]!.outputPath);
       } else {
         console.warn(
-          `[steamgriddb] write failed for ${targets[i].outputPath}: ${r.reason}`,
+          `[steamgriddb] write failed for ${targets[i]!.outputPath}: ${r.reason}`,
         );
       }
     }

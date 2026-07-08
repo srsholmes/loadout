@@ -39,10 +39,12 @@ function findTabsArray(): TabEntry[] | null {
   const divs = document.querySelectorAll("div");
 
   for (let i = 0; i < divs.length; i++) {
-    const keys = Object.keys(divs[i]);
+    const div = divs[i];
+    if (!div) continue;
+    const keys = Object.keys(div);
     for (const key of keys) {
       if (!key.startsWith("__reactFiber")) continue;
-      const fiber = (divs[i] as unknown as Record<string, unknown>)[key] as {
+      const fiber = (div as unknown as Record<string, unknown>)[key] as {
         memoizedProps?: { tabs?: TabEntry[]; activeTab?: unknown };
         child?: unknown;
         sibling?: unknown;
@@ -105,7 +107,8 @@ export function hideTab(keyOrTitle: string | number): () => void {
     return () => {};
   }
 
-  const removed = tabs.splice(idx, 1)[0];
+  // Non-null: idx is a valid index (checked !== -1), so splice removes one entry.
+  const removed = tabs.splice(idx, 1)[0]!;
   console.log(`[loadout:qam] Hidden tab: ${removed.strTitle ?? removed.key}`);
 
   return function unhide() {

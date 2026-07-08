@@ -206,7 +206,7 @@ function FanControl() {
       const data = info as FanInfo;
       setFanInfo(data);
       if (data.fans.length > 0) {
-        setSliderValue(data.fans[0].percent);
+        setSliderValue(data.fans[0]!.percent);
       }
       setActivePreset(data.activePreset ? (data.activePreset as Preset) : null);
       setCustomActive(Boolean(data.customCurveActive));
@@ -571,13 +571,14 @@ function FanControl() {
               <div className="subsection">
                 {(() => {
                   const sel = customPoints[selectedPoint] ?? customPoints[0];
+                  if (!sel) return null;
                   const minTemp =
                     selectedPoint > 0
-                      ? customPoints[selectedPoint - 1].tempC + 1
+                      ? customPoints[selectedPoint - 1]!.tempC + 1
                       : CURVE_TEMP_MIN;
                   const maxTemp =
                     selectedPoint < customPoints.length - 1
-                      ? customPoints[selectedPoint + 1].tempC - 1
+                      ? customPoints[selectedPoint + 1]!.tempC - 1
                       : CURVE_TEMP_MAX;
                   return (
                     <>
@@ -845,14 +846,14 @@ export function editCurvePoint(
 ): FanCurvePoint[] {
   if (index < 0 || index >= points.length) return points;
   const pts = points.map((p) => ({ ...p }));
-  const point = pts[index];
+  const point = pts[index]!; // index bounds-checked above
   if (typeof next.percent === "number") {
     point.percent = Math.max(0, Math.min(100, Math.round(next.percent)));
   }
   if (typeof next.tempC === "number") {
-    const minT = index > 0 ? pts[index - 1].tempC + 1 : CURVE_TEMP_MIN;
+    const minT = index > 0 ? pts[index - 1]!.tempC + 1 : CURVE_TEMP_MIN;
     const maxT =
-      index < pts.length - 1 ? pts[index + 1].tempC - 1 : CURVE_TEMP_MAX;
+      index < pts.length - 1 ? pts[index + 1]!.tempC - 1 : CURVE_TEMP_MAX;
     point.tempC = Math.max(minT, Math.min(maxT, Math.round(next.tempC)));
   }
   return pts;
@@ -867,7 +868,7 @@ export function insertCurvePoint(points: FanCurvePoint[]): {
   let gapIdx = 0;
   let gapSize = -1;
   for (let i = 0; i < points.length - 1; i++) {
-    const size = points[i + 1].tempC - points[i].tempC;
+    const size = points[i + 1]!.tempC - points[i]!.tempC; // i < length - 1
     if (size > gapSize) {
       gapSize = size;
       gapIdx = i;
@@ -875,6 +876,7 @@ export function insertCurvePoint(points: FanCurvePoint[]): {
   }
   const lo = points[gapIdx];
   const hi = points[gapIdx + 1];
+  if (!lo || !hi) return { points, index: gapIdx };
   const mid: FanCurvePoint = {
     tempC: Math.round((lo.tempC + hi.tempC) / 2),
     percent: Math.round((lo.percent + hi.percent) / 2),
@@ -941,19 +943,19 @@ function FanHomeWidget() {
   // ectool-only hardware where the EC's duty isn't readable.
   const deriveAutoDuty = useCallback((info: FanInfo): number => {
     if (!info.fans || info.fans.length === 0) return 0;
-    return Math.max(0, Math.min(100, info.fans[0].percent));
+    return Math.max(0, Math.min(100, info.fans[0]!.percent));
   }, []);
 
   useEffect(() => {
     call("getFanInfo").then((result) => {
       const info = result as FanInfo;
       if (info.fans.length > 0) {
-        setRpm(info.fans[0].rpm);
+        setRpm(info.fans[0]!.rpm);
         // Seed manualSpeed from the live percent only if the backend
         // can actually report it (direct hwmon). On ectool we leave the
         // 50 default so the slider doesn't snap to 0 when the user
         // flips to Manual.
-        const reported = info.fans[0].percent;
+        const reported = info.fans[0]!.percent;
         if (reported > 0) setManualSpeed(reported);
         setAutoDuty(deriveAutoDuty(info));
       }
@@ -968,7 +970,7 @@ function FanHomeWidget() {
     handler: useCallback((data: unknown) => {
       const info = data as FanInfo;
       if (info.fans?.length > 0) {
-        setRpm(info.fans[0].rpm);
+        setRpm(info.fans[0]!.rpm);
         // Always refresh the auto-duty estimate. The render-time selector
         // below picks whether to display it (mode === "auto") or the
         // user's manualSpeed (mode === "manual"). This keeps the slider

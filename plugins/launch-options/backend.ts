@@ -375,7 +375,7 @@ export default class LaunchOptionsBackend implements PluginBackend {
     }
 
     // Prefer the config that already has this appId
-    let targetPath = configs[0];
+    let targetPath = configs[0]!; // length checked !== 0 above.
     for (const configPath of configs) {
       try {
         const content = await readFile(configPath, "utf-8");

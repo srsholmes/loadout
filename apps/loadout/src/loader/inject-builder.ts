@@ -129,7 +129,8 @@ import * as ReactDOMClient from "react-dom/client";
         target: "browser",
       });
       if (vendorResult.success && vendorResult.outputs.length > 0) {
-        vendorBundle = await Bun.file(vendorResult.outputs[0].path).text();
+        // Non-null: outputs.length was checked > 0 above.
+        vendorBundle = await Bun.file(vendorResult.outputs[0]!.path).text();
       } else {
         console.error("Failed to build vendor bundle:", vendorResult.logs);
       }
@@ -169,7 +170,8 @@ import * as ReactDOMClient from "react-dom/client";
     });
 
     if (sdkResult.success && sdkResult.outputs.length > 0) {
-      const sdkCode = await Bun.file(sdkResult.outputs[0].path).text();
+      // Non-null: outputs.length was checked > 0 above.
+      const sdkCode = await Bun.file(sdkResult.outputs[0]!.path).text();
       sdkBundle = transformToIIFE(sdkCode, "__LOADOUT_SDK");
     } else {
       console.error("Failed to build inject SDK:", sdkResult.logs);
@@ -205,17 +207,20 @@ function transformToIIFE(esmCode: string, globalName: string): string {
     coreCode = esmCode.slice(0, exportMatch.index).trimEnd();
 
     // Parse export names (handle `name as alias` syntax)
-    const names = exportMatch[1].split(",").map((s) => s.trim());
+    // Non-null: exportMatch is truthy, group 1 is a required capture.
+    const names = exportMatch[1]!.split(",").map((s) => s.trim());
     for (const name of names) {
       const parts = name.split(/\s+as\s+/);
-      // Use the original name (before "as"), which is the local variable
-      exportNames.push(parts[0].trim());
+      // Use the original name (before "as"), which is the local variable.
+      // Non-null: split always yields at least one element.
+      exportNames.push(parts[0]!.trim());
     }
   }
 
   if (defaultExportMatch && !exportMatch) {
     coreCode = esmCode.slice(0, defaultExportMatch.index).trimEnd();
-    exportNames.push(defaultExportMatch[1]);
+    // Non-null: defaultExportMatch is truthy, group 1 is a required capture.
+    exportNames.push(defaultExportMatch[1]!);
   }
 
   // Build the assignments

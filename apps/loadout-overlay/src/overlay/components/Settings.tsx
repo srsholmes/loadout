@@ -777,7 +777,7 @@ function SettingsInner({
                           : "bg-base-300/70 text-base-content/50"
                       }`}
                     >
-                      {(plugin.icon ?? plugin.name)[0].toUpperCase()}
+                      {(plugin.icon ?? plugin.name).charAt(0).toUpperCase()}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-base-content truncate">

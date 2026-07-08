@@ -642,7 +642,7 @@ export class SteamInjector {
             menuPlugins.push({
               pluginId: plugin.id,
               title: t.title ?? plugin.name,
-              route: t.route ?? (plugin.routes ? Object.keys(plugin.routes)[0] : ""),
+              route: t.route ?? (plugin.routes ? (Object.keys(plugin.routes)[0] ?? "") : ""),
               position: typeof t.position === "number" ? t.position : undefined,
               icon: t.icon,
             });

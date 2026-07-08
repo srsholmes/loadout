@@ -102,7 +102,8 @@ export function WelcomeScreen({
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const [stepIndex, setStepIndex] = useState(0);
-  const stepId = STEPS[stepIndex].id;
+  // stepIndex is clamped to [0, STEPS.length) by the nav handlers.
+  const stepId = STEPS[stepIndex]!.id;
 
   // Theme — controlled locally during the flow so navigating around
   // applies the preview immediately, then we persist on completion.
@@ -423,7 +424,8 @@ function StepHeader({
       sub: "Press Open Loadout to head to your home dashboard. Everything below can be tweaked from the Settings page.",
     },
   };
-  const stepId = STEPS[stepIndex].id;
+  // stepIndex is clamped to [0, STEPS.length) by the nav handlers.
+  const stepId = STEPS[stepIndex]!.id;
   const h = headers[stepId];
   return (
     <div className="px-9 pt-8 pb-4">
@@ -1375,7 +1377,7 @@ function StepPlugins({
                     : "bg-base-300/70 text-base-content/50"
                 }`}
               >
-                {(plugin.icon ?? plugin.name)[0].toUpperCase()}
+                {(plugin.icon ?? plugin.name).charAt(0).toUpperCase()}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium text-base-content truncate">

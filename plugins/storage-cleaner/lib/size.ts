@@ -20,7 +20,7 @@ export function parseSizeToGB(s: string): number {
   if (!s) return 0;
   const m = s.match(/^([\d.]+)\s*([KMGTP]?)/i);
   if (!m) return 0;
-  const n = parseFloat(m[1]);
+  const n = parseFloat(m[1]!); // group 1 is required, present on match
   const unit = (m[2] || "G").toUpperCase();
   switch (unit) {
     case "K": return n / (1024 * 1024);

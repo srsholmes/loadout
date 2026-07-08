@@ -319,8 +319,9 @@ function ProtonDBBadges() {
     const idx = list.findIndex((g) => g.appId === runningAppId);
     if (idx <= 0) return list;
     const next = list.slice();
+    // idx is a valid found index (> 0), so splice yields exactly one element.
     const [running] = next.splice(idx, 1);
-    next.unshift(running);
+    next.unshift(running!);
     return next;
   }, [installed, currentGame, searchQuery]);
 

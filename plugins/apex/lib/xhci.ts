@@ -90,7 +90,7 @@ export function parseDeadController(dmesg: string): string | null {
   const re = /xhci_hcd (0000:[0-9a-f]{2}:[0-9a-f]{2}\.[0-9a-f]):.*(?:HC died|assume dead)/gi;
   let match: RegExpExecArray | null;
   let last: string | null = null;
-  while ((match = re.exec(dmesg)) !== null) last = match[1];
+  while ((match = re.exec(dmesg)) !== null) last = match[1]!; // group 1 present per pattern
   return last;
 }
 

@@ -128,15 +128,17 @@ export function parseHidUEvent(content: string): HidUEvent {
       // Format: BUS:VENDOR:PRODUCT, all hex, vendor/product zero-padded to 8.
       const parts = value.split(":");
       if (parts.length === 3) {
-        out.bus = parseInt(parts[0], 16);
-        out.vendor = parseInt(parts[1], 16);
-        out.product = parseInt(parts[2], 16);
+        // Non-null: parts.length was checked === 3 above.
+        out.bus = parseInt(parts[0]!, 16);
+        out.vendor = parseInt(parts[1]!, 16);
+        out.product = parseInt(parts[2]!, 16);
       }
     } else if (key === "HID_PHYS") {
       out.hidPhys = value;
       // Tail "/inputN" — the kernel encodes the USB interface number here.
       const m = value.match(/\/input(\d+)\s*$/);
-      if (m) out.interfaceNum = parseInt(m[1], 10);
+      // Non-null: m is truthy, group 1 is a required capture.
+      if (m) out.interfaceNum = parseInt(m[1]!, 10);
     }
   }
   return out;
@@ -199,7 +201,7 @@ export function decodeButtons(report: Buffer): Map<string, boolean> | null {
   if (report[0] !== REPORT_ID_INPUT) return null;
   const out = new Map<string, boolean>();
   for (const [byteIdx, defs] of DECK_BUTTONS_BY_BYTE) {
-    const v = report[byteIdx];
+    const v = report[byteIdx] ?? 0;
     for (const { bit, name } of defs) {
       out.set(name, (v & (1 << bit)) !== 0);
     }

@@ -190,7 +190,8 @@ export default class LsfgVkBackend implements PluginBackend {
     ];
 
     for (const { cmd, tool } of candidates) {
-      if (!(await commandExists(cmd[0]))) continue;
+      // Each candidate's cmd literal always has cmd[0] as the tool name.
+      if (!(await commandExists(cmd[0]!))) continue;
       try {
         const { stderr, exitCode } = await runFull(cmd, { stdin: text });
         if (exitCode === 0) return { success: true };

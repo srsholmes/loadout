@@ -121,7 +121,7 @@ export function mergeIwdDriverQuirks(existing: string): string {
 
   let secStart = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (isQuirkSection(lines[i])) { secStart = i; break; }
+    if (isQuirkSection(lines[i]!)) { secStart = i; break; } // i < length
   }
 
   if (secStart === -1) {
@@ -132,12 +132,12 @@ export function mergeIwdDriverQuirks(existing: string): string {
 
   let secEnd = lines.length;
   for (let i = secStart + 1; i < lines.length; i++) {
-    if (isSectionHeader(lines[i])) { secEnd = i; break; }
+    if (isSectionHeader(lines[i]!)) { secEnd = i; break; } // i < length
   }
 
   let keyIdx = -1;
   for (let i = secStart + 1; i < secEnd; i++) {
-    if (isQuirkKey(lines[i])) { keyIdx = i; break; }
+    if (isQuirkKey(lines[i]!)) { keyIdx = i; break; } // i < secEnd <= length
   }
   if (keyIdx !== -1) lines[keyIdx] = `${QUIRK_KEY}=${QUIRK_VAL}`;
   else lines.splice(secStart + 1, 0, `${QUIRK_KEY}=${QUIRK_VAL}`);
@@ -158,13 +158,14 @@ export function stripIwdDriverQuirks(existing: string): string {
   const out: string[] = [];
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    const line = lines[i]!; // i < length
     if (isQuirkSection(line)) {
       // Collect this section's body (until the next header), dropping our key.
       const body: string[] = [];
       let j = i + 1;
-      for (; j < lines.length && !isSectionHeader(lines[j]); j++) {
-        if (!isQuirkKey(lines[j])) body.push(lines[j]);
+      for (; j < lines.length && !isSectionHeader(lines[j]!); j++) {
+        const bodyLine = lines[j]!; // j < length
+        if (!isQuirkKey(bodyLine)) body.push(bodyLine);
       }
       // Keep the section only if it still has a non-blank line.
       if (body.some((l) => l.trim() !== "")) {
@@ -183,7 +184,7 @@ export function stripIwdDriverQuirks(existing: string): string {
 /** Parse `iw dev <iface> get power_save` → "on" | "off" | null. */
 export function parsePowerSave(out: string): "on" | "off" | null {
   const m = /power\s*save:\s*(on|off)/i.exec(out);
-  return m ? (m[1].toLowerCase() as "on" | "off") : null;
+  return m?.[1] ? (m[1].toLowerCase() as "on" | "off") : null;
 }
 
 // --- impure orchestration ----------------------------------------------------
