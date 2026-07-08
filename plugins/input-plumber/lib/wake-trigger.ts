@@ -245,6 +245,9 @@ export async function setWakeButton(raw: string): Promise<WakeOpResult> {
   }
 
   await writeWake({ selectedRaw: raw, deviceName: device.name });
+  console.log(
+    `[input-plumber] wake bound + persisted (setWakeButton): raw="${raw}" device="${device.name}"`,
+  );
   return { ok: true };
 }
 
@@ -426,6 +429,9 @@ async function captureWakeButtonInner(timeoutMs: number): Promise<WakeCaptureRes
   }
 
   await writeWake({ selectedRaw: raw, deviceName: device.name });
+  console.log(
+    `[input-plumber] wake bound + persisted (capture): raw="${raw}" device="${device.name}"`,
+  );
   return {
     ok: true,
     capturedRaw: raw,
@@ -490,19 +496,49 @@ export async function clearWakeButton(): Promise<WakeOpResult> {
 export async function reloadPersistedProfile(): Promise<WakeOpResult> {
   if (await isSteamDeck()) return wakeDeck.reloadPersistedProfile();
   const wake = await readWake();
-  if (!wake?.selectedRaw) return { ok: true };
+  if (!wake?.selectedRaw) {
+    // Not an error, but log it: a lost/empty binding here is exactly how the
+    // wake button silently reverts to its OS default after a reboot.
+    console.log(
+      `[input-plumber] wake reload: no persisted binding (${JSON.stringify(wake ?? null)}) — nothing to restore`,
+    );
+    return { ok: true };
+  }
+  console.log(
+    `[input-plumber] wake reload: restoring binding raw="${wake.selectedRaw}" device="${wake.deviceName ?? "?"}"`,
+  );
 
   // The IP service may have just started; give it a window to come up
   // before we conclude it's broken. 15s covers cold boot on slower handhelds.
   if (!(await waitForIp(15_000))) {
+    console.warn(
+      "[input-plumber] wake reload: InputPlumber did not come up within 15s — wake button NOT restored",
+    );
     return { ok: false, error: "InputPlumber did not come up; wake button not reloaded." };
   }
 
   const composites = await listCompositeDevices();
+  console.log(
+    `[input-plumber] wake reload: IP up, ${composites.length} composite device(s): [${composites
+      .map((d) => d.name)
+      .join(", ")}]`,
+  );
   const device = pickDevice(composites, wake.selectedRaw, wake.deviceName);
   if (!device) {
+    console.warn(
+      `[input-plumber] wake reload: bound device not found (wanted name="${wake.deviceName ?? "?"}" / cap="${wake.selectedRaw}") — wake button NOT restored`,
+    );
     return { ok: false, error: "Bound device not connected; wake button not reloaded." };
   }
+  // A capability-string mismatch (e.g. after an InputPlumber update renamed
+  // the button) is a prime suspect for a reload that "succeeds" but doesn't
+  // actually map anything — surface whether the saved cap is still present.
+  const capPresent = device.capabilities.includes(wake.selectedRaw);
+  console.log(
+    `[input-plumber] wake reload: applying to device "${device.name}" (${device.path}); saved cap "${wake.selectedRaw}" ${
+      capPresent ? "present" : "NOT PRESENT in device capabilities"
+    }`,
+  );
 
   // Re-render from the live targets in case the device's emulation changed,
   // then load. (The file may already exist from a prior boot, but re-rendering
@@ -510,12 +546,60 @@ export async function reloadPersistedProfile(): Promise<WakeOpResult> {
   const targets = await getTargetKinds(device.path);
   await writeFileMkdir(PROFILE_PATH, renderProfile(parseCapability(wake.selectedRaw), targets));
   const loaded = await loadProfilePath(device.path, PROFILE_PATH);
-  return loaded.ok
-    ? { ok: true }
-    : { ok: false, error: `LoadProfilePath failed: exit ${loaded.code}` };
+  if (loaded.ok) {
+    console.log(
+      `[input-plumber] wake reload: LoadProfilePath OK — wake button "${wake.selectedRaw}" restored on "${device.name}"`,
+    );
+    return { ok: true };
+  }
+  console.warn(
+    `[input-plumber] wake reload: LoadProfilePath FAILED (exit ${loaded.code}${
+      loaded.stderr ? `: ${loaded.stderr.trim()}` : ""
+    })`,
+  );
+  return { ok: false, error: `LoadProfilePath failed: exit ${loaded.code}` };
 }
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Boot reconciliation with retry. `reloadPersistedProfile()` can transiently
+ * fail on a cold boot when InputPlumber is up (so its internal `waitForIp`
+ * passes) but the composite device hasn't been enumerated yet — it returns
+ * "Bound device not connected", and a single-shot reload would drop the wake
+ * binding for the whole session (the button silently reverts to its OS
+ * default). Retrying a few times lets the pad finish enumerating.
+ *
+ * Cheap when nothing is bound: `reloadPersistedProfile()` returns `ok`
+ * immediately, so the loop breaks on the first attempt with no delay.
+ *
+ * `reload` and `wait` are injectable so the retry logic is unit-testable
+ * without real DBus or real multi-second sleeps.
+ */
+export async function reloadPersistedProfileWithRetry(
+  opts: {
+    attempts?: number;
+    delayMs?: number;
+    reload?: () => Promise<WakeOpResult>;
+    wait?: (ms: number) => Promise<void>;
+    onRetry?: (attempt: number, error: string) => void;
+  } = {},
+): Promise<WakeOpResult> {
+  const attempts = Math.max(1, opts.attempts ?? 5);
+  const delayMs = opts.delayMs ?? 2000;
+  const reload = opts.reload ?? reloadPersistedProfile;
+  const wait = opts.wait ?? delay;
+
+  let last: WakeOpResult = { ok: true };
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    last = await reload();
+    if (last.ok) break;
+    opts.onRetry?.(attempt + 1, last.error ?? "unknown");
+    // No sleep after the final attempt — nothing follows it.
+    if (attempt < attempts - 1) await wait(delayMs);
+  }
+  return last;
+}
 
 /**
  * User-triggered recovery: restart the InputPlumber daemon, then re-load the

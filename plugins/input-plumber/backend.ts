@@ -90,10 +90,27 @@ export default class InputPlumberBackend implements PluginBackend {
     // `/up` before the overlay user-service starts, and `reloadPersistedProfile`
     // waits internally for IP, so the keyboard exists before the overlay
     // enumerates devices. Non-blocking so a slow/absent IP can't stall onLoad.
+    //
+    // Retry the reload a few times: on a cold boot IP can be *up* (so the
+    // internal waitForIp passes) but the composite device not yet enumerated,
+    // which returns "Bound device not connected" and would otherwise drop the
+    // binding for the whole session — the wake button silently reverts to its
+    // OS default until the user re-binds. Mirrors restartInputPlumber()'s
+    // retry. reloadPersistedProfile() returns ok immediately when nothing is
+    // bound, so this is a no-op on setups without a wake button.
     void wake
-      .reloadPersistedProfile()
-      .then((r) => {
-        if (!r.ok && r.error) this.log?.warn(`wake reload: ${r.error}`);
+      .reloadPersistedProfileWithRetry({
+        onRetry: (attempt, error) =>
+          this.log?.info(
+            `wake reload: attempt ${attempt} not ready (${error}); retrying`,
+          ),
+      })
+      .then((last) => {
+        if (!last.ok && last.error) this.log?.warn(`wake reload: ${last.error}`);
+        else
+          this.log?.info(
+            "wake reload: completed (see [input-plumber] logs for detail)",
+          );
       })
       .catch((e) =>
         this.log?.warn(
