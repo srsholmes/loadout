@@ -1,6 +1,10 @@
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { EmitPayload } from "@loadout/types";
 import TdpControlBackend from "./backend";
+import { readSavedTdp } from "./lib/saved-tdp";
 
 /**
  * TdpControlBackend tests.
@@ -268,6 +272,77 @@ describe("TdpControlBackend", () => {
       expect(info.maxWatts).toBe(55); // effective (on battery)
       expect(info.pluggedMaxWatts).toBe(80);
       expect(info.batteryMaxWatts).toBe(55);
+    });
+  });
+
+  // ── manual TDP persistence ────────────────────────────────────────
+  //
+  // The user's chosen TDP must survive a shutdown: setTdp() persists it to
+  // the plugin config file, and automatic applies (per-game/AC/resume, which
+  // route through the private applyTdp()) must NOT overwrite it.
+
+  describe("manual TDP persistence", () => {
+    let dir: string;
+    let prevXdg: string | undefined;
+
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "tdp-persist-test-"));
+      prevXdg = process.env.XDG_CONFIG_HOME;
+      process.env.XDG_CONFIG_HOME = dir;
+    });
+
+    afterEach(() => {
+      if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevXdg;
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    function configure() {
+      const b = backend as unknown as {
+        method: string;
+        minWatts: number;
+        maxWatts: number;
+        batteryMaxWatts: number;
+        acPowerOnline: boolean | null;
+        setTdpViaRyzenadj: (w: number) => Promise<void>;
+        applyTdp: (w: number) => Promise<{ success: boolean }>;
+      };
+      b.method = "ryzenadj";
+      b.minWatts = 5;
+      b.maxWatts = 80;
+      b.batteryMaxWatts = 55;
+      b.acPowerOnline = true;
+      b.setTdpViaRyzenadj = async () => {}; // stub the SMU write
+      return b;
+    }
+
+    it("setTdp persists the user's chosen value", async () => {
+      configure();
+      const result = await backend.setTdp(28);
+      expect(result.success).toBe(true);
+      expect(await readSavedTdp("tdp-control")).toBe(28);
+    });
+
+    it("applyProfile persists the preset value", async () => {
+      const b = configure();
+      // Seed a known preset so applyProfile has something to apply.
+      (b as unknown as { profiles: Record<string, number> }).profiles = {
+        Silent: 10,
+        Balanced: 18,
+        Performance: 40,
+      };
+      const result = await backend.applyProfile("Balanced");
+      expect(result.success).toBe(true);
+      expect(await readSavedTdp("tdp-control")).toBe(18);
+    });
+
+    it("automatic applyTdp does NOT overwrite the saved value", async () => {
+      const b = configure();
+      await backend.setTdp(28);
+      expect(await readSavedTdp("tdp-control")).toBe(28);
+      // Simulate an automatic re-apply (per-game profile / AC / resume).
+      await b.applyTdp(12);
+      expect(await readSavedTdp("tdp-control")).toBe(28);
     });
   });
 
