@@ -97,7 +97,7 @@ function StorageCleaner() {
   const primary = useMemo<DiskPartition | null>(() => {
     if (!diskUsage.length) return null;
     const rootMount = diskUsage.find((d) => d.mountpoint === "/");
-    return rootMount ?? diskUsage[0];
+    return rootMount ?? diskUsage[0]!; // length checked above
   }, [diskUsage]);
 
   const totalGB = primary ? parseSizeToGB(primary.size) : 0;

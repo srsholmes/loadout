@@ -338,7 +338,7 @@ export default class RgbControlBackend implements PluginBackend {
           if (intensity) {
             const parts = intensity.split(/\s+/).map(Number);
             if (parts.length >= 3) {
-              color = { r: parts[0], g: parts[1], b: parts[2] };
+              color = { r: parts[0]!, g: parts[1]!, b: parts[2]! }; // length >= 3
             }
           }
         }

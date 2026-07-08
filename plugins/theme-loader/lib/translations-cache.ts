@@ -58,10 +58,12 @@ function buildMap(data: RawTranslations): Map<string, string> {
   const map = new Map<string, string>();
   for (const variants of Object.values(data)) {
     if (!Array.isArray(variants) || variants.length < 2) continue;
-    const current = variants[variants.length - 1];
+    // length >= 2, so both the last element and every i below it exist.
+    const current = variants[variants.length - 1]!;
     for (let i = 0; i < variants.length - 1; i++) {
-      if (variants[i] !== current) {
-        map.set(variants[i], current);
+      const variant = variants[i]!;
+      if (variant !== current) {
+        map.set(variant, current);
       }
     }
   }

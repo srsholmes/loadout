@@ -293,7 +293,8 @@ function SteamGridDB() {
       const idx = ranked.findIndex(
         (g) => String(g.appId) === String(currentAppId),
       );
-      if (idx > 0) ranked.unshift(ranked.splice(idx, 1)[0]);
+      // idx came from findIndex, so splice returns exactly one element.
+      if (idx > 0) ranked.unshift(ranked.splice(idx, 1)[0]!);
     }
     return ranked;
   }, [library, filter, searchQuery, currentAppId]);
@@ -344,7 +345,8 @@ function SteamGridDB() {
           verified: boolean;
         }>;
         if (results.length > 0) {
-          const top = results.find((r) => r.verified) ?? results[0];
+          // results.length > 0, so results[0] is in-bounds.
+          const top = results.find((r) => r.verified) ?? results[0]!;
           await call("saveSgdbMatch", game.appId, top.id, top.name);
           return {
             appId: game.appId,

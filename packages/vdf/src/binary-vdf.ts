@@ -83,7 +83,7 @@ export function parseBinaryVdf(buf: Buffer | Uint8Array): BinaryVdfObject {
   function readObject(): BinaryVdfObject {
     const obj: BinaryVdfObject = {};
     while (offset < view.length) {
-      const type = view[offset++];
+      const type = view[offset++]!; // offset < view.length, so in bounds
       if (type === TYPE_END || type === TYPE_END_ALT) {
         return obj;
       }

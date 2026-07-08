@@ -280,7 +280,7 @@ export class SteamCefBadgeInjector<TBadgeData> {
         "(window.tempNavStore && window.tempNavStore.m_history && window.tempNavStore.m_history.location && window.tempNavStore.m_history.location.pathname) || window.location.pathname || ''",
       )) as string;
       const match = pathname?.match?.(/^\/(?:routes\/)?library\/app\/(\d+)/);
-      const newAppId = match ? match[1] : null;
+      const newAppId = match ? (match[1] ?? null) : null;
 
       if (newAppId !== this.currentAppId) {
         this.currentAppId = newAppId;
@@ -502,7 +502,8 @@ export class SteamCefBadgeInjector<TBadgeData> {
           /store\.steampowered\.com\/app\/(\d+)/,
         );
         const badgeData = appIdMatch
-          ? await this.cfg.fetchBadgeData(appIdMatch[1])
+          // Non-null: appIdMatch is truthy, group 1 is a required capture.
+          ? await this.cfg.fetchBadgeData(appIdMatch[1]!)
           : null;
 
         await this._injectCSSToTab(conn, css);

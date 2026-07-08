@@ -157,7 +157,7 @@ export function getWeeklyBreakdown(
     const dayStart = startOfDay(now - i * 86_400_000);
     const dayEnd = dayStart + 86_400_000;
     const date = new Date(dayStart);
-    const dayLabel = DAY_NAMES[date.getDay()];
+    const dayLabel = DAY_NAMES[date.getDay()]!; // getDay() is 0-6, DAY_NAMES has 7.
 
     let totalMs = 0;
     for (const s of sessions) {
@@ -190,7 +190,7 @@ export function getDailyGameBreakdown(
     const dayStart = startOfDay(now - i * 86_400_000);
     const dayEnd = dayStart + 86_400_000;
     const date = new Date(dayStart);
-    const dayLabel = DAY_NAMES[date.getDay()];
+    const dayLabel = DAY_NAMES[date.getDay()]!; // getDay() is 0-6, DAY_NAMES has 7.
 
     const gameMap = new Map<string, GameStats>();
     let totalMs = 0;
@@ -384,7 +384,7 @@ export function daysForRange(
       if (sessions.length === 0) return null;
       const earliest = sessions.reduce(
         (min, s) => (s.startTime < min ? s.startTime : min),
-        sessions[0].startTime,
+        sessions[0]!.startTime, // length checked !== 0 above.
       );
       const days = Math.max(
         1,

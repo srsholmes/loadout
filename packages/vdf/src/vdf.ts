@@ -40,7 +40,7 @@ export function parseVdf(content: string): VdfObject {
     if (line === "{") {
       const obj: VdfObject = {};
       const parent = stack[stack.length - 1];
-      if (pendingKey !== null) {
+      if (parent && pendingKey !== null) {
         parent[pendingKey] = obj;
         pendingKey = null;
       }
@@ -58,14 +58,16 @@ export function parseVdf(content: string): VdfObject {
     const kvMatch = line.match(/^"([^"]*)"[\t\s]+"([^"]*)"$/);
     if (kvMatch) {
       const parent = stack[stack.length - 1];
-      parent[kvMatch[1]] = kvMatch[2];
+      // The regex guarantees both capture groups when it matches.
+      const [, key = "", value = ""] = kvMatch;
+      if (parent) parent[key] = value;
       continue;
     }
 
     // Otherwise it should be a standalone "key" (section header)
     const keyMatch = line.match(/^"([^"]*)"$/);
     if (keyMatch) {
-      pendingKey = keyMatch[1];
+      pendingKey = keyMatch[1] ?? null;
       continue;
     }
   }
@@ -141,7 +143,7 @@ export function patchVdfValue(
   let targetBraceDepth = 0;
 
   for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
+    const trimmed = lines[i]!.trim(); // i < lines.length, so in bounds
     if (!trimmed || trimmed.startsWith("//")) continue;
 
     if (trimmed === "{") {
@@ -184,14 +186,15 @@ export function patchVdfValue(
       const kvMatch = trimmed.match(/^"([^"]*)"([\t\s]+)"([^"]*)"$/);
       if (kvMatch && kvMatch[1] === targetKey) {
         // Replace just the value portion in the original (non-trimmed) line.
-        const original = lines[i];
+        const original = lines[i]!; // i < lines.length, so in bounds
+        const oldValue = kvMatch[3] ?? ""; // group 3 present when regex matches
         // Find the last quoted value in the line and replace it.
-        const lastQuotePair = original.lastIndexOf(`"${kvMatch[3]}"`);
+        const lastQuotePair = original.lastIndexOf(`"${oldValue}"`);
         if (lastQuotePair !== -1) {
           lines[i] =
             original.substring(0, lastQuotePair) +
             `"${newValue}"` +
-            original.substring(lastQuotePair + kvMatch[3].length + 2);
+            original.substring(lastQuotePair + oldValue.length + 2);
           return lines.join("\n");
         }
       }
@@ -252,7 +255,7 @@ export function removeVdfKey(content: string, keyPath: string[]): string {
   let targetBraceDepth = 0;
 
   for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
+    const trimmed = lines[i]!.trim(); // i < lines.length, so in bounds
     if (!trimmed || trimmed.startsWith("//")) continue;
 
     if (trimmed === "{") {
@@ -299,7 +302,7 @@ export function removeVdfKey(content: string, keyPath: string[]): string {
         let j = i + 1;
         // Find the opening brace.
         while (j < lines.length) {
-          const t = lines[j].trim();
+          const t = lines[j]!.trim(); // j < lines.length, so in bounds
           if (!t || t.startsWith("//")) {
             j++;
             continue;
@@ -307,12 +310,12 @@ export function removeVdfKey(content: string, keyPath: string[]): string {
           if (t === "{") break;
           break; // unexpected — bail
         }
-        if (j < lines.length && lines[j].trim() === "{") {
+        if (j < lines.length && lines[j]!.trim() === "{") {
           // Find the matching closing brace.
           let depth = 1;
           let k = j + 1;
           while (k < lines.length && depth > 0) {
-            const t = lines[k].trim();
+            const t = lines[k]!.trim(); // k < lines.length, so in bounds
             if (t === "{") depth++;
             else if (t === "}") depth--;
             k++;

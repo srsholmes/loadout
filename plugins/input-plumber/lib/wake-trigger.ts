@@ -192,7 +192,8 @@ function pickDevice(
     const byName = composites.find((d) => d.name === rememberedName);
     if (byName) return byName;
   }
-  return composites[0];
+  // Guarded above: composites is non-empty, so composites[0] is present.
+  return composites[0]!;
 }
 
 // ── public operations ───────────────────────────────────────────────────────
@@ -273,7 +274,8 @@ export function findEventNode(procContent: string, name: string): string | null 
     if (!nameMatch || nameMatch[1] !== name) continue;
     const handlersMatch = block.match(/^H:\s+Handlers=(.*)$/m);
     if (!handlersMatch) continue;
-    const ev = handlersMatch[1].split(/\s+/).find((h) => /^event\d+$/.test(h));
+    // Capture group 1 is mandatory, so on a match it is always present.
+    const ev = handlersMatch[1]!.split(/\s+/).find((h) => /^event\d+$/.test(h));
     if (!ev) continue;
     const num = parseInt(ev.slice(5), 10);
     if (best === null || num > best.num) {

@@ -257,7 +257,8 @@ export function GamePicker({
     const currentId = String(currentGame.appId);
     const idx = filtered.findIndex((g) => g.appId === currentId);
     if (idx <= 0) return filtered;
-    return [filtered[idx], ...filtered.slice(0, idx), ...filtered.slice(idx + 1)];
+    // idx came from findIndex and is > 0, so filtered[idx] is present.
+    return [filtered[idx]!, ...filtered.slice(0, idx), ...filtered.slice(idx + 1)];
   }, [library, search, currentGame, collectionFilter]);
 
   return (

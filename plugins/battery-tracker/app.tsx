@@ -65,7 +65,7 @@ function HistoryChart({ history }: { history: HistoryEntry[] }) {
       <div className="flex justify-between mt-1.5 mono text-[10.5px] text-base-content/50">
         <span>
           {entries.length > 1
-            ? `${Math.round((Date.now() - entries[0].timestamp) / 60000)}m ago`
+            ? `${Math.round((Date.now() - entries[0]!.timestamp) / 60000)}m ago`
             : ""}
         </span>
         <span>now</span>

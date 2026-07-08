@@ -131,7 +131,9 @@ export async function startDeckHidrawWatcher(
       // button map per frame is unnecessary on the hot path — chase the one
       // bit and bail. (Less GC pressure than building a Map every report.)
       if (bound) {
-        const cur = (report[bound.byte] & (1 << bound.bit)) !== 0;
+        // splitReports only yields full REPORT_LEN (64-byte) frames and
+        // bound.byte is always < 64, so this index is provably in-bounds.
+        const cur = (report[bound.byte]! & (1 << bound.bit)) !== 0;
         if (cur && !lastBitValue && !suppressNextEdge) {
           opts.onWake("QamToggle");
         }

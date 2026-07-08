@@ -186,7 +186,7 @@ export default class DisplaySettingsBackend implements PluginBackend {
       const { readdir } = await import("node:fs/promises");
       const entries = await readdir("/sys/class/backlight");
       if (entries.length > 0) {
-        this.backlightName = entries[0];
+        this.backlightName = entries[0]!; // non-empty: length checked above
         this.backlightPath = `/sys/class/backlight/${this.backlightName}`;
         const maxStr = await Bun.file(`${this.backlightPath}/max_brightness`).text();
         this.maxBrightness = parseInt(maxStr.trim(), 10);
@@ -206,7 +206,8 @@ export default class DisplaySettingsBackend implements PluginBackend {
       );
       const res = await exec(cmd, env);
       if (res.ok && res.stdout.includes("=")) {
-        const rawVal = parseInt(res.stdout.split("=")[1].trim(), 10);
+        // stdout contains "=", so split yields at least two parts.
+        const rawVal = parseInt(res.stdout.split("=")[1]!.trim(), 10);
         const floatVal = longToFloat(rawVal);
         this.state.saturation = Math.round(floatVal * 200);
       }

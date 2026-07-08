@@ -390,6 +390,7 @@ export default class DisableControllerInputBackend implements PluginBackend {
       const idx = this.state.devices.findIndex((d) => d.hash === hash);
       if (idx === -1) return { ok: false, error: "Unknown device" };
       const dev = this.state.devices[idx];
+      if (!dev) return { ok: false, error: "Unknown device" };
 
       // Don't strand a silenced target on the bus. Re-enable first if
       // the device is reachable. If the re-enable busctl call itself

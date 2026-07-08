@@ -51,7 +51,8 @@ export function extFromUrl(url: string): string {
   }
   // Drop query/hash defensively (URL.pathname already does, but
   // a passed-in raw fragment of a URL might not).
-  pathname = pathname.split("?")[0].split("#")[0];
+  // split() always yields at least one element, so [0] is in-bounds.
+  pathname = pathname.split("?")[0]!.split("#")[0]!;
   // Only the final path segment can carry the extension.
   const segment = pathname.split("/").pop() ?? "";
   const dotIdx = segment.lastIndexOf(".");

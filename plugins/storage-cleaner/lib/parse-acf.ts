@@ -22,7 +22,7 @@ function tokenize(content: string): Token[] {
   while ((m = TOKEN_RE.exec(content)) !== null) {
     if (m[0] === "{") tokens.push({ type: "open" });
     else if (m[0] === "}") tokens.push({ type: "close" });
-    else tokens.push({ type: "string", value: m[1] });
+    else tokens.push({ type: "string", value: m[1] ?? "" });
   }
   return tokens;
 }
@@ -33,8 +33,8 @@ export function parseAcf(content: string): AcfManifest | null {
   // Locate `"AppState" {` at the outermost level.
   let bodyStart = -1;
   for (let i = 0; i < tokens.length - 1; i++) {
-    const t = tokens[i];
-    const next = tokens[i + 1];
+    const t = tokens[i]!; // i < length - 1, in bounds
+    const next = tokens[i + 1]!; // i + 1 < length, in bounds
     if (t.type === "string" && t.value === "AppState" && next.type === "open") {
       bodyStart = i + 2;
       break;
@@ -52,7 +52,7 @@ export function parseAcf(content: string): AcfManifest | null {
   let name: string | null = null;
 
   for (let i = bodyStart; i < tokens.length && depth > 0; i++) {
-    const tok = tokens[i];
+    const tok = tokens[i]!; // i < length, in bounds
     if (tok.type === "open") {
       depth++;
       if (depth === 2) pendingKey = null;

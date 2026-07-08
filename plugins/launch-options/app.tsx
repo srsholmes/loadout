@@ -167,7 +167,8 @@ function LaunchOptionsManager() {
     const runningId = String(currentGame.appId);
     const idx = list.findIndex((g) => g.appId === runningId);
     if (idx <= 0) return list;
-    return [list[idx], ...list.slice(0, idx), ...list.slice(idx + 1)];
+    // idx came from findIndex and is > 0, so list[idx] is present.
+    return [list[idx]!, ...list.slice(0, idx), ...list.slice(idx + 1)];
   }, [library, collectionFilter, searchQuery, currentGame]);
 
   const collectionOptions = useMemo(() => {

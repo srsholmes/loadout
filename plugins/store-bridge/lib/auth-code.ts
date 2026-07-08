@@ -52,7 +52,8 @@ export function extractAuthCode(input: string): string | null {
   // that URL constructors choke on without a base.
   const queryMatch = trimmed.match(/[?&]code=([^&#\s"']+)/);
   if (queryMatch) {
-    const decoded = decodeURIComponent(queryMatch[1]);
+    // Group 1 always captures when the match succeeds.
+    const decoded = decodeURIComponent(queryMatch[1]!);
     return plausible(decoded) ? decoded : null;
   }
 

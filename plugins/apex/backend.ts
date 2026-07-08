@@ -167,7 +167,7 @@ export default class ApexBackend implements PluginBackend {
         try {
           const t = await readFile("/etc/os-release", "utf-8");
           const m = t.match(/^ID=(.*)$/m);
-          return m ? m[1].replace(/["']/g, "").trim() : "";
+          return m?.[1] ? m[1].replace(/["']/g, "").trim() : "";
         } catch {
           return "";
         }

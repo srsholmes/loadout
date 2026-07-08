@@ -77,7 +77,7 @@ export function parseCapability(raw: string): Capability {
     .map((s) => s.trim())
     .filter(Boolean);
   const category = (parts[0] ?? "").toLowerCase();
-  const name = parts.length > 0 ? parts[parts.length - 1] : raw.trim();
+  const name = parts.length > 0 ? parts[parts.length - 1]! : raw.trim();
   return { raw: raw.trim(), category, name };
 }
 
@@ -303,8 +303,10 @@ export function renderCaptureProfile(
   const recommended = buttons.filter((b) => b.recommended);
   const limit = Math.min(recommended.length, SENTINEL_KEYS.length);
   for (let i = 0; i < limit; i++) {
-    const b = recommended[i];
-    const sentinel = SENTINEL_KEYS[i];
+    // limit = min(recommended.length, SENTINEL_KEYS.length), so both
+    // indexes are in-bounds for i < limit.
+    const b = recommended[i]!;
+    const sentinel = SENTINEL_KEYS[i]!;
     sentinelToRaw.set(sentinel.code, b.raw);
     const cap = parseCapability(b.raw);
     const sourceEvent =

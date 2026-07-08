@@ -211,7 +211,9 @@ function buildBitmask(codes: readonly number[]): Uint8Array {
   if (byteLen < 8) byteLen = 8;
   const bits = new Uint8Array(byteLen);
   for (const code of codes) {
-    bits[code >> 3] |= 1 << (code & 7);
+    // byteLen covers (maxCode >> 3) + 1 bytes and code <= maxCode, so
+    // code >> 3 is always in-bounds.
+    bits[code >> 3]! |= 1 << (code & 7);
   }
   return bits;
 }
@@ -411,7 +413,9 @@ function readModifierState(fd: number): { guide: boolean; select: boolean } {
   const buf = new Uint8Array(96);
   const rc = libc.symbols.ioctl(fd, eviocgkey(buf.length), ptr(buf));
   if (rc < 0) return { guide: false, select: false };
-  const bit = (code: number) => (buf[code >> 3] & (1 << (code & 7))) !== 0;
+  // The 96-byte buffer covers codes 0..767, past every code we query, so
+  // code >> 3 is always in-bounds.
+  const bit = (code: number) => (buf[code >> 3]! & (1 << (code & 7))) !== 0;
   return { guide: bit(BTN_MODE), select: bit(BTN_SELECT) };
 }
 
@@ -979,6 +983,7 @@ export async function startInputIntercept(
     const idx = tracked.findIndex((t) => t.path === eventPath);
     if (idx < 0) return;
     const [t] = tracked.splice(idx, 1);
+    if (!t) return;
     // Drop any deferred-grab entry before closing the fd: a stale entry would
     // make pollOnce ioctl a closed (possibly OS-reused) fd next tick.
     pendingGrabs.delete(t);

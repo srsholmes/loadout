@@ -275,8 +275,9 @@ export default class PlaytimeBackend implements PluginBackend {
               );
               const appIdMatch = content.match(/"appid"\s+"(\d+)"/);
               const nameMatch = content.match(/"name"\s+"([^"]+)"/);
+              // Group 1 is present whenever the pattern matches.
               return appIdMatch && nameMatch
-                ? ([appIdMatch[1], nameMatch[1]] as const)
+                ? ([appIdMatch[1]!, nameMatch[1]!] as const)
                 : null;
             } catch {
               return null;

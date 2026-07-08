@@ -302,7 +302,7 @@ export async function stagePackFiles(
     if (!fileOrFiles) continue;
     const files = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles];
     if (files.length === 0) continue;
-    const sourceFilename = files[0];
+    const sourceFilename = files[0]!; // length checked !== 0 above.
     const ext = extname(sourceFilename).toLowerCase();
     if (![".wav", ".mp3", ".ogg"].includes(ext)) continue;
 
@@ -312,7 +312,7 @@ export async function stagePackFiles(
       .map(([decky]) => decky);
     if (deckyNames.length === 0) continue;
 
-    const stagedName = deckyNames[0];
+    const stagedName = deckyNames[0]!; // length checked !== 0 above.
     const sourcePath = join(entry.dir, sourceFilename);
     const targetPath = join(stagingDir, stagedName);
 

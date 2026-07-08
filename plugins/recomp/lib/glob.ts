@@ -27,7 +27,7 @@ export function globMatches(pattern: string, text: string): boolean {
 
   let pos = 0;
   for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
+    const part = parts[i]!; // i < parts.length
     if (part === "") continue;
 
     const found = t.indexOf(part, pos);

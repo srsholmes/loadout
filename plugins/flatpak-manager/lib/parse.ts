@@ -33,12 +33,13 @@ export function parseInstalled(output: string): InstalledApp[] {
     const parts = line.split("\t");
     if (parts.length < 5) continue;
 
+    // Indices 0-4 are provably present: length checked >= 5 above.
     apps.push({
-      name: parts[0].trim(),
-      appId: parts[1].trim(),
-      version: parts[2].trim(),
-      size: parts[3].trim(),
-      origin: parts[4].trim(),
+      name: parts[0]!.trim(),
+      appId: parts[1]!.trim(),
+      version: parts[2]!.trim(),
+      size: parts[3]!.trim(),
+      origin: parts[4]!.trim(),
     });
   }
 
@@ -56,10 +57,11 @@ export function parseUpdates(output: string): UpdateInfo[] {
     const parts = line.split("\t");
     if (parts.length < 3) continue;
 
+    // Indices 0-2 are provably present: length checked >= 3 above.
     updates.push({
-      name: parts[0].trim(),
-      appId: parts[1].trim(),
-      newVersion: parts[2].trim(),
+      name: parts[0]!.trim(),
+      appId: parts[1]!.trim(),
+      newVersion: parts[2]!.trim(),
     });
   }
 

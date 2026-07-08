@@ -23,8 +23,10 @@ import {
  */
 export function resolveTargetUser(argv: readonly string[] = process.argv): string {
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--user" && argv[i + 1]) return argv[i + 1];
-    if (argv[i].startsWith("--user=")) return argv[i].slice("--user=".length);
+    const arg = argv[i]!; // i < length, in bounds
+    const nextArg = argv[i + 1];
+    if (arg === "--user" && nextArg) return nextArg;
+    if (arg.startsWith("--user=")) return arg.slice("--user=".length);
   }
   const home = process.env.HOME || homedir();
   const base = home.replace(/\/+$/, "").split("/").pop();
