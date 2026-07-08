@@ -412,6 +412,10 @@ export default class TdpControlBackend implements PluginBackend {
           },
         });
       },
+      // The user's saved manual TDP is the authoritative "no game" value —
+      // the engine applies it on game exit / for games without a profile,
+      // ahead of its own stored default.
+      getNoGameTdp: () => this.savedTdp,
     });
     await this.profileEngine.loadProfiles();
     console.log("[tdp-control] Per-game TDP profile engine initialized");
@@ -422,19 +426,26 @@ export default class TdpControlBackend implements PluginBackend {
     //     when we can't read the hardware directly (existing behavior).
     //   - Otherwise → restore the user's persisted manual TDP, if any.
     if (this.method !== "none") {
-      if (this.profileEngine.getPerGameEnabled()) {
-        if (this.tdpReadSource === "estimated") {
-          const defaultTdp = this.profileEngine.getDefaultTdp();
-          console.log(
-            `[tdp-control] Applying default TDP ${defaultTdp}W (source was estimated, per-game enabled)`,
-          );
-          await this.applyTdp(defaultTdp);
-        }
-      } else if (this.savedTdp !== null) {
+      // No game is running at startup, so the value to restore is the user's
+      // "no game" TDP. The saved manual TDP (set from the slider / home
+      // widget) is authoritative — it applies whether or not per-game
+      // profiles are enabled. A per-game profile still takes over later, when
+      // its game actually launches. The engine's stored default TDP is only a
+      // fallback for users who never set a manual value.
+      if (this.savedTdp !== null) {
         console.log(
           `[tdp-control] Restoring saved manual TDP ${this.savedTdp}W`,
         );
         await this.applyTdp(this.savedTdp);
+      } else if (
+        this.profileEngine.getPerGameEnabled() &&
+        this.tdpReadSource === "estimated"
+      ) {
+        const defaultTdp = this.profileEngine.getDefaultTdp();
+        console.log(
+          `[tdp-control] Applying default TDP ${defaultTdp}W (source was estimated, per-game enabled, no saved manual TDP)`,
+        );
+        await this.applyTdp(defaultTdp);
       }
     }
 
