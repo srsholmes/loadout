@@ -207,7 +207,7 @@ async function resolveRelease(pinned?: string): Promise<GitHubRelease> {
 export function parseVersion(stdout: string): string {
   const m = stdout.match(/version\s+(\S+)/i);
   // Group 1 always captures when the match succeeds.
-  return m ? m[1]!.replace(/[,.]$/, "") : stdout.split(/\s+/)[1] ?? "unknown";
+  return m ? (m[1] ?? "").replace(/[,.]$/, "") : stdout.split(/\s+/)[1] ?? "unknown";
 }
 
 function formatMiB(bytes: number): string {

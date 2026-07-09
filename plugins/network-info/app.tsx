@@ -148,7 +148,8 @@ class SpeedTestEngine {
   private percentile(sorted: number[], p: number): number {
     if (sorted.length === 0) return 0;
     const i = Math.ceil(p * sorted.length) - 1;
-    return sorted[Math.max(0, Math.min(i, sorted.length - 1))]!; // clamped, length > 0
+    const idx = Math.max(0, Math.min(i, sorted.length - 1)); // in-bounds: length > 0
+    return sorted[idx] ?? 0;
   }
 
   private calcBandwidth(points: Measurement[]): number {

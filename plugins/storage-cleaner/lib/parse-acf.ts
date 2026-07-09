@@ -33,8 +33,9 @@ export function parseAcf(content: string): AcfManifest | null {
   // Locate `"AppState" {` at the outermost level.
   let bodyStart = -1;
   for (let i = 0; i < tokens.length - 1; i++) {
-    const t = tokens[i]!; // i < length - 1, in bounds
-    const next = tokens[i + 1]!; // i + 1 < length, in bounds
+    const t = tokens[i]; // i < length - 1, so present
+    const next = tokens[i + 1]; // i + 1 < length, so present
+    if (t === undefined || next === undefined) continue;
     if (t.type === "string" && t.value === "AppState" && next.type === "open") {
       bodyStart = i + 2;
       break;
@@ -52,7 +53,8 @@ export function parseAcf(content: string): AcfManifest | null {
   let name: string | null = null;
 
   for (let i = bodyStart; i < tokens.length && depth > 0; i++) {
-    const tok = tokens[i]!; // i < length, in bounds
+    const tok = tokens[i]; // i < length, so present
+    if (tok === undefined) continue;
     if (tok.type === "open") {
       depth++;
       if (depth === 2) pendingKey = null;

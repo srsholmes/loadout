@@ -132,8 +132,9 @@ export async function startDeckHidrawWatcher(
       // bit and bail. (Less GC pressure than building a Map every report.)
       if (bound) {
         // splitReports only yields full REPORT_LEN (64-byte) frames and
-        // bound.byte is always < 64, so this index is provably in-bounds.
-        const cur = (report[bound.byte]! & (1 << bound.bit)) !== 0;
+        // bound.byte is always < 64, so this index is provably in-bounds;
+        // ?? 0 is behaviour-identical for the bitwise test and drops the `!`.
+        const cur = ((report[bound.byte] ?? 0) & (1 << bound.bit)) !== 0;
         if (cur && !lastBitValue && !suppressNextEdge) {
           opts.onWake("QamToggle");
         }

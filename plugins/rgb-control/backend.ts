@@ -336,9 +336,9 @@ export default class RgbControlBackend implements PluginBackend {
             `cat ${basePath}/multi_intensity 2>/dev/null`
           );
           if (intensity) {
-            const parts = intensity.split(/\s+/).map(Number);
-            if (parts.length >= 3) {
-              color = { r: parts[0]!, g: parts[1]!, b: parts[2]! }; // length >= 3
+            const [pr, pg, pb] = intensity.split(/\s+/).map(Number);
+            if (pr !== undefined && pg !== undefined && pb !== undefined) {
+              color = { r: pr, g: pg, b: pb };
             }
           }
         }

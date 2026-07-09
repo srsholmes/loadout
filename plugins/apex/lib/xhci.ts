@@ -90,7 +90,13 @@ export function parseDeadController(dmesg: string): string | null {
   const re = /xhci_hcd (0000:[0-9a-f]{2}:[0-9a-f]{2}\.[0-9a-f]):.*(?:HC died|assume dead)/gi;
   let match: RegExpExecArray | null;
   let last: string | null = null;
-  while ((match = re.exec(dmesg)) !== null) last = match[1]!; // group 1 present per pattern
+  while ((match = re.exec(dmesg)) !== null) {
+    // Group 1 (the PCI address) is a mandatory capture, so it's always present
+    // on a successful match; guard rather than assert so a would-be undefined
+    // leaves the previous value instead of crashing.
+    const addr = match[1];
+    if (addr !== undefined) last = addr;
+  }
   return last;
 }
 

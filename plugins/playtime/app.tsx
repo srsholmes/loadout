@@ -342,7 +342,7 @@ function PlayTime() {
   const gridTotalMs = gridGames.reduce((sum, g) => sum + g.totalMs, 0);
   const totalHours = formatHoursNumber(gridTotalMs);
   const gamesCount = gridGames.length;
-  const topGameMs = gridGames.length > 0 ? gridGames[0]!.totalMs : 0;
+  const topGameMs = gridGames[0]?.totalMs ?? 0;
 
   // AVG/DAY divisor: selected-day count for the week view, day-of-month
   // for month, 1 for today. Hidden for all-time — lifetime Steam totals

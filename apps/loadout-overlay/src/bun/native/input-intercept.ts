@@ -211,9 +211,11 @@ function buildBitmask(codes: readonly number[]): Uint8Array {
   if (byteLen < 8) byteLen = 8;
   const bits = new Uint8Array(byteLen);
   for (const code of codes) {
-    // byteLen covers (maxCode >> 3) + 1 bytes and code <= maxCode, so
-    // code >> 3 is always in-bounds.
-    bits[code >> 3]! |= 1 << (code & 7);
+    const idx = code >> 3;
+    // byteLen covers (maxCode >> 3) + 1 bytes and code <= maxCode, so idx is
+    // always in-bounds; the ?? 0 keeps the OR total for the type-checker
+    // without changing the value (an in-bounds Uint8Array read is a number).
+    bits[idx] = (bits[idx] ?? 0) | (1 << (code & 7));
   }
   return bits;
 }
@@ -414,8 +416,9 @@ function readModifierState(fd: number): { guide: boolean; select: boolean } {
   const rc = libc.symbols.ioctl(fd, eviocgkey(buf.length), ptr(buf));
   if (rc < 0) return { guide: false, select: false };
   // The 96-byte buffer covers codes 0..767, past every code we query, so
-  // code >> 3 is always in-bounds.
-  const bit = (code: number) => (buf[code >> 3]! & (1 << (code & 7))) !== 0;
+  // code >> 3 is always in-bounds; ?? 0 is behaviour-identical for the
+  // bitwise test (an in-bounds read is a number) and drops the non-null `!`.
+  const bit = (code: number) => ((buf[code >> 3] ?? 0) & (1 << (code & 7))) !== 0;
   return { guide: bit(BTN_MODE), select: bit(BTN_SELECT) };
 }
 

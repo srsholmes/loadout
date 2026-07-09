@@ -33,13 +33,25 @@ export function parseInstalled(output: string): InstalledApp[] {
     const parts = line.split("\t");
     if (parts.length < 5) continue;
 
-    // Indices 0-4 are provably present: length checked >= 5 above.
+    // Indices 0-4 are expected present (length checked >= 5 above); guard
+    // and skip the line if any is somehow missing, matching the length skip.
+    const [name, appId, version, size, origin] = parts;
+    if (
+      name === undefined ||
+      appId === undefined ||
+      version === undefined ||
+      size === undefined ||
+      origin === undefined
+    ) {
+      console.warn("[flatpak-manager] unexpected missing field in installed list line");
+      continue;
+    }
     apps.push({
-      name: parts[0]!.trim(),
-      appId: parts[1]!.trim(),
-      version: parts[2]!.trim(),
-      size: parts[3]!.trim(),
-      origin: parts[4]!.trim(),
+      name: name.trim(),
+      appId: appId.trim(),
+      version: version.trim(),
+      size: size.trim(),
+      origin: origin.trim(),
     });
   }
 
@@ -57,11 +69,17 @@ export function parseUpdates(output: string): UpdateInfo[] {
     const parts = line.split("\t");
     if (parts.length < 3) continue;
 
-    // Indices 0-2 are provably present: length checked >= 3 above.
+    // Indices 0-2 are expected present (length checked >= 3 above); guard
+    // and skip the line if any is somehow missing, matching the length skip.
+    const [name, appId, newVersion] = parts;
+    if (name === undefined || appId === undefined || newVersion === undefined) {
+      console.warn("[flatpak-manager] unexpected missing field in updates list line");
+      continue;
+    }
     updates.push({
-      name: parts[0]!.trim(),
-      appId: parts[1]!.trim(),
-      newVersion: parts[2]!.trim(),
+      name: name.trim(),
+      appId: appId.trim(),
+      newVersion: newVersion.trim(),
     });
   }
 

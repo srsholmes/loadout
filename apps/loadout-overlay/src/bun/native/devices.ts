@@ -164,8 +164,9 @@ export function hasCapability(caps: Uint8Array, code: number): boolean {
   const byteIdx = code >> 3;
   const bitIdx = code & 0x07;
   if (byteIdx >= caps.length) return false;
-  // Guarded above: byteIdx < caps.length, so this index is in-bounds.
-  return (caps[byteIdx]! & (1 << bitIdx)) !== 0;
+  // Guarded above: byteIdx < caps.length, so this index is in-bounds; ?? 0
+  // is behaviour-identical for the bitwise test and drops the non-null `!`.
+  return ((caps[byteIdx] ?? 0) & (1 << bitIdx)) !== 0;
 }
 
 /**

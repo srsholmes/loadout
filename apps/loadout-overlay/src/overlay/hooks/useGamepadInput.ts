@@ -152,9 +152,10 @@ export function useGamepadInput(onBack?: () => void) {
 
         // Left stick → arrow keys
         if (gp.axes.length >= 2) {
-          // Guarded by length >= 2, so axes[0] and axes[1] are present.
-          const lx = gp.axes[0]!;
-          const ly = gp.axes[1]!;
+          // Guarded by length >= 2, so axes[0]/axes[1] are present; the ?? 0
+          // (neutral stick) only satisfies the checker and never fires here.
+          const lx = gp.axes[0] ?? 0;
+          const ly = gp.axes[1] ?? 0;
           handlePress("stick-left", "ArrowLeft", lx < -STICK_DEADZONE, now);
           handlePress("stick-right", "ArrowRight", lx > STICK_DEADZONE, now);
           handlePress("stick-up", "ArrowUp", ly < -STICK_DEADZONE, now);
@@ -166,9 +167,10 @@ export function useGamepadInput(onBack?: () => void) {
         // pairs beyond the two sticks (axes 0-3).
         for (let ai = 4; ai < gp.axes.length; ai += 2) {
           if (ai + 1 >= gp.axes.length) break;
-          // Guarded above: ai and ai + 1 are both < axes.length.
-          const dx = gp.axes[ai]!;
-          const dy = gp.axes[ai + 1]!;
+          // Guarded above: ai and ai + 1 are both < axes.length; the ?? 0
+          // (neutral) only satisfies the checker and never fires here.
+          const dx = gp.axes[ai] ?? 0;
+          const dy = gp.axes[ai + 1] ?? 0;
           handlePress(`daxis${ai}-left`, "ArrowLeft", dx < -STICK_DEADZONE, now);
           handlePress(`daxis${ai}-right`, "ArrowRight", dx > STICK_DEADZONE, now);
           handlePress(`daxis${ai}-up`, "ArrowUp", dy < -STICK_DEADZONE, now);
@@ -177,8 +179,9 @@ export function useGamepadInput(onBack?: () => void) {
 
         // Right stick → smooth analog scroll with momentum
         if (gp.axes.length >= 4) {
-          // Guarded by length >= 4, so axes[3] is present.
-          const ry = gp.axes[3]!;
+          // Guarded by length >= 4, so axes[3] is present; the ?? 0 (neutral
+          // stick) only satisfies the checker and never fires here.
+          const ry = gp.axes[3] ?? 0;
           if (Math.abs(ry) > RIGHT_STICK_DEADZONE) {
             scrollVelocity = ry * RIGHT_STICK_SPEED;
           } else {

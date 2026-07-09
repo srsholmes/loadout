@@ -83,7 +83,10 @@ export function parseBinaryVdf(buf: Buffer | Uint8Array): BinaryVdfObject {
   function readObject(): BinaryVdfObject {
     const obj: BinaryVdfObject = {};
     while (offset < view.length) {
-      const type = view[offset++]!; // offset < view.length, so in bounds
+      // offset < view.length, so the byte is present; `?? 0` is a no-op
+      // for the real (numeric) reads and only used for its bit/equality
+      // value below, never in arithmetic.
+      const type = view[offset++] ?? 0;
       if (type === TYPE_END || type === TYPE_END_ALT) {
         return obj;
       }

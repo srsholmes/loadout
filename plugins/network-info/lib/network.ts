@@ -100,7 +100,9 @@ export function parseProcNetWireless(content: string): number | null {
   for (const line of dataLines) {
     const parts = line.trim().split(/\s+/);
     if (parts.length < 4) continue;
-    const level = parseFloat(parts[3]!); // parts.length >= 4
+    const rawLevel = parts[3]; // present: parts.length >= 4
+    if (rawLevel === undefined) continue;
+    const level = parseFloat(rawLevel);
     if (isNaN(level)) continue;
     if (level < 0) {
       return Math.max(0, Math.min(100, 2 * (level + 100)));

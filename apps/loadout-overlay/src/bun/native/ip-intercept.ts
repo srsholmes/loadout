@@ -203,11 +203,12 @@ export function parseInputEventLine(
 ): { cap: string; value: number } | null {
   const m = line.match(/\.InputEvent\s+\('([^']+)',\s*([-0-9.eE]+)\)/);
   if (!m) return null;
-  // Both capture groups are mandatory in the regex, so on a match m[1]
-  // and m[2] are always present.
-  const value = Number.parseFloat(m[2]!);
+  // Both capture groups are mandatory in the regex, so on a match m[1] and
+  // m[2] are always present; the ?? "" fallbacks are unreachable for a real
+  // match (parseFloat("")→NaN would be filtered) and just drop the `!`.
+  const value = Number.parseFloat(m[2] ?? "");
   if (Number.isNaN(value)) return null;
-  return { cap: m[1]!, value };
+  return { cap: m[1] ?? "", value };
 }
 
 // ---- Public API ------------------------------------------------------------

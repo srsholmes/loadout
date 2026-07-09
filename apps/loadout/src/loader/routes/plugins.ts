@@ -49,9 +49,13 @@ export const pluginAppBundleRoute: RouteHandler = {
   name: "plugins.app-bundle",
   match: (_req, url) => APP_BUNDLE_PATTERN.test(url.pathname),
   async handle(_req, url, ctx) {
-    const match = url.pathname.match(APP_BUNDLE_PATTERN)!;
-    // Non-null: group 1 is a required capture in APP_BUNDLE_PATTERN.
-    const pluginId = match[1]!;
+    const match = url.pathname.match(APP_BUNDLE_PATTERN);
+    if (!match) {
+      return new Response("Not Found", { status: 404 });
+    }
+    // Group 1 is a required capture in APP_BUNDLE_PATTERN, so it is always
+    // present; `?? ""` only satisfies the type checker.
+    const pluginId = match[1] ?? "";
     let code = ctx.bundleCache.get(pluginId);
     if (!code) {
       const appPath = join(ctx.pluginsDir, pluginId, "app.tsx");
@@ -66,10 +70,14 @@ export const pluginAssetRoute: RouteHandler = {
   name: "plugins.asset",
   match: (_req, url) => ASSET_PATTERN.test(url.pathname),
   async handle(_req, url, ctx) {
-    const match = url.pathname.match(ASSET_PATTERN)!;
-    // Non-null: groups 1 and 2 are required captures in ASSET_PATTERN.
-    const pluginId = match[1]!;
-    const relPath = decodeURIComponent(match[2]!);
+    const match = url.pathname.match(ASSET_PATTERN);
+    if (!match) {
+      return new Response("Not Found", { status: 404 });
+    }
+    // Groups 1 and 2 are required captures in ASSET_PATTERN, so they are
+    // always present; `?? ""` only satisfies the type checker.
+    const pluginId = match[1] ?? "";
+    const relPath = decodeURIComponent(match[2] ?? "");
     if (!ctx.plugins.has(pluginId)) {
       return new Response("Not Found", { status: 404 });
     }

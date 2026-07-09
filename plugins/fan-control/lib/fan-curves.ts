@@ -58,8 +58,11 @@ export function interpolateCurve(curve: FanCurvePoint[], tempC: number): number 
   if (tempC >= last.tempC) return last.percent;
 
   for (let i = 0; i < curve.length - 1; i++) {
-    const lo = curve[i]!; // i < curve.length - 1, so i and i+1 are in bounds
-    const hi = curve[i + 1]!;
+    // i < curve.length - 1, so both are in bounds for any valid curve; the
+    // guard only degrades a would-be undefined (impossible here) to a skip.
+    const lo = curve[i];
+    const hi = curve[i + 1];
+    if (!lo || !hi) continue;
     if (tempC >= lo.tempC && tempC <= hi.tempC) {
       const ratio = (tempC - lo.tempC) / (hi.tempC - lo.tempC);
       return Math.round(lo.percent + ratio * (hi.percent - lo.percent));

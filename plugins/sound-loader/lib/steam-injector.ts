@@ -302,7 +302,12 @@ export async function stagePackFiles(
     if (!fileOrFiles) continue;
     const files = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles];
     if (files.length === 0) continue;
-    const sourceFilename = files[0]!; // length checked !== 0 above.
+    const sourceFilename = files[0];
+    if (sourceFilename === undefined) {
+      // Unreachable: length checked !== 0 above. Degrade like the length guard.
+      console.warn(`[sound-loader:steam] stagePackFiles: empty file list for event "${event}"`);
+      continue;
+    }
     const ext = extname(sourceFilename).toLowerCase();
     if (![".wav", ".mp3", ".ogg"].includes(ext)) continue;
 
@@ -312,7 +317,12 @@ export async function stagePackFiles(
       .map(([decky]) => decky);
     if (deckyNames.length === 0) continue;
 
-    const stagedName = deckyNames[0]!; // length checked !== 0 above.
+    const stagedName = deckyNames[0];
+    if (stagedName === undefined) {
+      // Unreachable: length checked !== 0 above. Degrade like the length guard.
+      console.warn(`[sound-loader:steam] stagePackFiles: no Decky name for event "${event}"`);
+      continue;
+    }
     const sourcePath = join(entry.dir, sourceFilename);
     const targetPath = join(stagingDir, stagedName);
 

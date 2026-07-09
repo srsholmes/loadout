@@ -115,8 +115,9 @@ export default class BatteryTrackerBackend implements PluginBackend {
 
       if (candidates.length === 0) return null;
       candidates.sort((a, b) => b.score - a.score);
-      // Non-empty: the length === 0 case returned above.
-      const picked = candidates[0]!;
+      // Non-empty: the length === 0 case returned above; guard degrades identically.
+      const picked = candidates[0];
+      if (!picked) return null;
       if (candidates.length > 1) {
         console.log(
           `[battery-tracker] battery candidates: ${candidates
@@ -148,7 +149,10 @@ export default class BatteryTrackerBackend implements PluginBackend {
 
   /** Read all battery info from sysfs */
   private async _readBattery(): Promise<BatteryInfo> {
-    const base = this.batteryPath!;
+    // Every caller guards batteryPath before invoking; throwing on a null
+    // path mirrors the sysfs read rejection the callers already catch.
+    const base = this.batteryPath;
+    if (!base) throw new Error("[battery-tracker] _readBattery called with no battery path");
 
     const [percentage, statusRaw, powerNowMicro, voltageNowMicro, energyNowMicro, energyFullMicro, energyFullDesignMicro] =
       await Promise.all([

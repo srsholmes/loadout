@@ -375,7 +375,11 @@ export default class LaunchOptionsBackend implements PluginBackend {
     }
 
     // Prefer the config that already has this appId
-    let targetPath = configs[0]!; // length checked !== 0 above.
+    const firstConfig = configs[0]; // length checked !== 0 above.
+    if (firstConfig === undefined) {
+      throw new Error("No Steam userdata directories found");
+    }
+    let targetPath = firstConfig;
     for (const configPath of configs) {
       try {
         const content = await readFile(configPath, "utf-8");

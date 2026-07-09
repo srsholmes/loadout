@@ -45,9 +45,11 @@ export function resolveUser(
     if (f.length >= 6 && f[0] === name) {
       const uid = Number(f[2]);
       const gid = Number(f[3]);
-      if (Number.isFinite(uid) && Number.isFinite(gid)) {
-        // Non-null: f.length was checked >= 6 above.
-        return { uid, gid, home: f[5]! };
+      const home = f[5];
+      // f.length was checked >= 6, so f[5] is always present; the guard
+      // only satisfies the type checker.
+      if (Number.isFinite(uid) && Number.isFinite(gid) && home !== undefined) {
+        return { uid, gid, home };
       }
     }
   }

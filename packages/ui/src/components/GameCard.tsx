@@ -110,8 +110,10 @@ export function collectionBadgeVariant(name: string): BadgeVariant {
   for (let i = 0; i < name.length; i++) {
     h = ((h << 5) - h + name.charCodeAt(i)) | 0;
   }
-  // Non-null: index is a modulo of the palette length, always in bounds.
-  return COLLECTION_PALETTE[Math.abs(h) % COLLECTION_PALETTE.length]!;
+  // The index is a modulo of the non-empty const palette, so it is always
+  // in bounds; the fallback only satisfies the type and never runs.
+  const variant = COLLECTION_PALETTE[Math.abs(h) % COLLECTION_PALETTE.length];
+  return variant ?? "primary";
 }
 
 type Phase = "primary" | "fallback" | "placeholder";

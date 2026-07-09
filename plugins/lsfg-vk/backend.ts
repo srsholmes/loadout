@@ -191,7 +191,9 @@ export default class LsfgVkBackend implements PluginBackend {
 
     for (const { cmd, tool } of candidates) {
       // Each candidate's cmd literal always has cmd[0] as the tool name.
-      if (!(await commandExists(cmd[0]!))) continue;
+      const bin = cmd[0];
+      if (bin === undefined) continue; // unreachable: literals above always have cmd[0].
+      if (!(await commandExists(bin))) continue;
       try {
         const { stderr, exitCode } = await runFull(cmd, { stdin: text });
         if (exitCode === 0) return { success: true };
@@ -525,7 +527,8 @@ export default class LsfgVkBackend implements PluginBackend {
   private async _findNestedLayerZip(dir: string): Promise<string | null> {
     const queue: string[] = [dir];
     while (queue.length) {
-      const cur = queue.shift()!;
+      const cur = queue.shift();
+      if (cur === undefined) break; // unreachable: loop guard ensures non-empty.
       const entries = await readdir(cur, { withFileTypes: true });
       for (const e of entries) {
         const path = join(cur, e.name);
@@ -634,7 +637,8 @@ export default class LsfgVkBackend implements PluginBackend {
     let so: string | null = null;
     let json: string | null = null;
     while (queue.length) {
-      const cur = queue.shift()!;
+      const cur = queue.shift();
+      if (cur === undefined) break; // unreachable: loop guard ensures non-empty.
       const entries = await readdir(cur, { withFileTypes: true });
       for (const e of entries) {
         const path = join(cur, e.name);

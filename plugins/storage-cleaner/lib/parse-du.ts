@@ -15,7 +15,9 @@ export function parseDuOutput(stdout: string): Map<string, number> {
     // to nothing.
     const m = line.match(/^(\d+)\s+(.+)$/);
     if (!m) continue;
-    sizes.set(m[2]!, parseInt(m[1]!, 10)); // both groups present on match
+    // Both groups are mandatory, so on a match they are always present;
+    // `?? ""` is a no-op there and keeps the types string.
+    sizes.set(m[2] ?? "", parseInt(m[1] ?? "", 10));
   }
   return sizes;
 }

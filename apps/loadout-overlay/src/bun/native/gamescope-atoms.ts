@@ -329,7 +329,9 @@ export class GamescopeAtoms {
         return id;
       }
     }
-    return pool[0]!;
+    // pool is non-empty (guarded above), so pool[0] is always defined; the
+    // ?? "" only satisfies the checker and never fires for real inputs.
+    return pool[0] ?? "";
   }
 
   /** True if `atom` is set on `windowId`. Uses xprop output to
@@ -855,8 +857,8 @@ export class GamescopeAtoms {
         if (!m) continue;
         const n = Number(m[2]);
         // Both capture groups are mandatory in the regex, so on a match
-        // m[1] is always present.
-        if (Number.isFinite(n)) out.set(m[1]!, n);
+        // m[1] is always present; ?? "" just drops the `!` (unreachable).
+        if (Number.isFinite(n)) out.set(m[1] ?? "", n);
       }
     } catch (err) {
       console.warn(

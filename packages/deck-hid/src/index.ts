@@ -128,17 +128,29 @@ export function parseHidUEvent(content: string): HidUEvent {
       // Format: BUS:VENDOR:PRODUCT, all hex, vendor/product zero-padded to 8.
       const parts = value.split(":");
       if (parts.length === 3) {
-        // Non-null: parts.length was checked === 3 above.
-        out.bus = parseInt(parts[0]!, 16);
-        out.vendor = parseInt(parts[1]!, 16);
-        out.product = parseInt(parts[2]!, 16);
+        // parts.length was checked === 3, so all three are present; the
+        // guard only satisfies the type checker.
+        const [busStr, vendorStr, productStr] = parts;
+        if (
+          busStr !== undefined &&
+          vendorStr !== undefined &&
+          productStr !== undefined
+        ) {
+          out.bus = parseInt(busStr, 16);
+          out.vendor = parseInt(vendorStr, 16);
+          out.product = parseInt(productStr, 16);
+        }
       }
     } else if (key === "HID_PHYS") {
       out.hidPhys = value;
       // Tail "/inputN" — the kernel encodes the USB interface number here.
       const m = value.match(/\/input(\d+)\s*$/);
-      // Non-null: m is truthy, group 1 is a required capture.
-      if (m) out.interfaceNum = parseInt(m[1]!, 10);
+      // group 1 is a required capture, so it is always present when m
+      // matched; the guard only satisfies the type checker.
+      if (m) {
+        const iface = m[1];
+        if (iface !== undefined) out.interfaceNum = parseInt(iface, 10);
+      }
     }
   }
   return out;

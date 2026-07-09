@@ -192,8 +192,10 @@ function pickDevice(
     const byName = composites.find((d) => d.name === rememberedName);
     if (byName) return byName;
   }
-  // Guarded above: composites is non-empty, so composites[0] is present.
-  return composites[0]!;
+  // Guarded above: composites is non-empty, so composites[0] is present; the
+  // ?? null only satisfies the checker (return type already allows null) and
+  // never fires for real inputs.
+  return composites[0] ?? null;
 }
 
 // ── public operations ───────────────────────────────────────────────────────
@@ -274,8 +276,9 @@ export function findEventNode(procContent: string, name: string): string | null 
     if (!nameMatch || nameMatch[1] !== name) continue;
     const handlersMatch = block.match(/^H:\s+Handlers=(.*)$/m);
     if (!handlersMatch) continue;
-    // Capture group 1 is mandatory, so on a match it is always present.
-    const ev = handlersMatch[1]!.split(/\s+/).find((h) => /^event\d+$/.test(h));
+    // Capture group 1 is mandatory, so on a match it is always present; ?? ""
+    // only drops the `!` and is unreachable for a real match.
+    const ev = (handlersMatch[1] ?? "").split(/\s+/).find((h) => /^event\d+$/.test(h));
     if (!ev) continue;
     const num = parseInt(ev.slice(5), 10);
     if (best === null || num > best.num) {
@@ -417,7 +420,15 @@ async function captureWakeButtonInner(timeoutMs: number): Promise<WakeCaptureRes
     return { ok: false, timedOut: true, error: "No button pressed within the timeout." };
   }
 
-  const raw = sentinelToRaw.get(code)!;
+  // `code` is one of sentinelToRaw's own keys (the `accept` set was built
+  // from sentinelToRaw.keys()), so this lookup is always defined; the guard
+  // drops the non-null `!` and restores like the other failure branches if
+  // that invariant ever breaks (unreachable today).
+  const raw = sentinelToRaw.get(code);
+  if (raw === undefined) {
+    await restorePreviousBinding(device, wake);
+    return { ok: false, error: "Captured key was not in the sentinel map." };
+  }
   // Render the real profile binding the captured button → F16.
   const realYaml = renderProfile(parseCapability(raw), targets);
   await writeFileMkdir(PROFILE_PATH, realYaml);

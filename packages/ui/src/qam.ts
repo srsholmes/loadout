@@ -107,8 +107,12 @@ export function hideTab(keyOrTitle: string | number): () => void {
     return () => {};
   }
 
-  // Non-null: idx is a valid index (checked !== -1), so splice removes one entry.
-  const removed = tabs.splice(idx, 1)[0]!;
+  // idx is a valid index (checked !== -1), so splice removes one entry.
+  const removed = tabs.splice(idx, 1)[0];
+  if (!removed) {
+    console.warn(`[loadout:qam] Tab not found: ${keyOrTitle}`);
+    return () => {};
+  }
   console.log(`[loadout:qam] Hidden tab: ${removed.strTitle ?? removed.key}`);
 
   return function unhide() {

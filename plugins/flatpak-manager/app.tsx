@@ -101,13 +101,12 @@ function FlatpakManager() {
    */
   const handleUpdateAll = useCallback(async () => {
     const queue = [...updates];
-    if (queue.length === 0) return;
+    const first = queue[0];
+    if (first === undefined) return; // empty queue → nothing to do
     setUpdatingAll(true);
-    // queue[0] is present: length checked > 0 above.
-    setUpdateProgress({ current: 0, total: queue.length, currentName: queue[0]!.name });
+    setUpdateProgress({ current: 0, total: queue.length, currentName: first.name });
     try {
-      for (let i = 0; i < queue.length; i++) {
-        const u = queue[i]!; // i < queue.length, so u is present.
+      for (const [i, u] of queue.entries()) {
         setUpdateProgress({ current: i, total: queue.length, currentName: u.name });
         try {
           await call("updateApp", u.appId);

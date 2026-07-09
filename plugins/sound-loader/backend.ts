@@ -322,7 +322,8 @@ export default class SoundLoaderBackend implements PluginBackend {
       }
 
       if (loaded.length === 1) {
-        mappings[event] = loaded[0]!; // length checked === 1 above.
+        const only = loaded[0]; // length checked === 1 above.
+        if (only !== undefined) mappings[event] = only;
       } else if (loaded.length > 1) {
         mappings[event] = { files: loaded };
       }
@@ -376,8 +377,15 @@ export default class SoundLoaderBackend implements PluginBackend {
 
     // If multiple files, pick a random one (matching SDH-AudioLoader behavior)
     const files = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles];
-    // Random index is within [0, files.length), and files is non-empty.
-    const filename = files[Math.floor(Math.random() * files.length)]!;
+    // An empty array is truthy and slips past the `!fileOrFiles` guard above.
+    if (files.length === 0) {
+      return { error: `Sound event "${event}" has no files in pack "${packId}"` };
+    }
+    // Random index is within [0, files.length), and files is non-empty here.
+    const filename = files[Math.floor(Math.random() * files.length)];
+    if (filename === undefined) {
+      return { error: "Audio file not found" };
+    }
 
     const audioData = await this._readAudioFile(entry.dir, filename);
     if (!audioData) {

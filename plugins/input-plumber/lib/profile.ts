@@ -77,7 +77,10 @@ export function parseCapability(raw: string): Capability {
     .map((s) => s.trim())
     .filter(Boolean);
   const category = (parts[0] ?? "").toLowerCase();
-  const name = parts.length > 0 ? parts[parts.length - 1]! : raw.trim();
+  // parts[len-1] is defined whenever parts is non-empty; when empty the read
+  // is undefined and we fall back to raw.trim() — identical to the previous
+  // `parts.length > 0 ? …! : raw.trim()` ternary, minus the non-null `!`.
+  const name = parts[parts.length - 1] ?? raw.trim();
   return { raw: raw.trim(), category, name };
 }
 
@@ -303,10 +306,12 @@ export function renderCaptureProfile(
   const recommended = buttons.filter((b) => b.recommended);
   const limit = Math.min(recommended.length, SENTINEL_KEYS.length);
   for (let i = 0; i < limit; i++) {
-    // limit = min(recommended.length, SENTINEL_KEYS.length), so both
-    // indexes are in-bounds for i < limit.
-    const b = recommended[i]!;
-    const sentinel = SENTINEL_KEYS[i]!;
+    // limit = min(recommended.length, SENTINEL_KEYS.length), so both indexes
+    // are in-bounds for i < limit. The guard drops the non-null `!` and only
+    // skips defensively if that invariant ever changes (unreachable today).
+    const b = recommended[i];
+    const sentinel = SENTINEL_KEYS[i];
+    if (!b || !sentinel) continue;
     sentinelToRaw.set(sentinel.code, b.raw);
     const cap = parseCapability(b.raw);
     const sourceEvent =

@@ -249,7 +249,11 @@ export default class PlaytimeBackend implements PluginBackend {
   // --- Private Helpers ---
 
   private _buildCurrentSession(): CurrentSession {
-    const s = this.activeSession!;
+    // Both callers guarantee a live session (they check `activeSession`
+    // first / assign it just before); guard rather than assert so a
+    // future caller can't silently read a null field.
+    const s = this.activeSession;
+    if (!s) throw new Error("[playtime] _buildCurrentSession: no active session");
     return {
       appId: s.appId,
       gameName: s.gameName,
@@ -275,9 +279,10 @@ export default class PlaytimeBackend implements PluginBackend {
               );
               const appIdMatch = content.match(/"appid"\s+"(\d+)"/);
               const nameMatch = content.match(/"name"\s+"([^"]+)"/);
-              // Group 1 is present whenever the pattern matches.
+              // Group 1 is present whenever the pattern matches; `?? ""`
+              // only guards the impossible no-capture case.
               return appIdMatch && nameMatch
-                ? ([appIdMatch[1]!, nameMatch[1]!] as const)
+                ? ([appIdMatch[1] ?? "", nameMatch[1] ?? ""] as const)
                 : null;
             } catch {
               return null;

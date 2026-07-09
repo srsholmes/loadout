@@ -86,7 +86,10 @@ function parseGithub(source: string | undefined): { repo: string | null; url: st
   const clean = source.replace(/\s*@\s*[0-9a-f]+\s*$/i, "").trim();
   const m = clean.match(/^https?:\/\/github\.com\/([^/\s]+\/[^/\s]+?)(?:\/|\.git)?$/i);
   // Group 1 always captures when the match succeeds.
-  if (m) return { repo: m[1]!, url: `https://github.com/${m[1]}` };
+  if (m) {
+    const repo = m[1] ?? "";
+    return { repo, url: `https://github.com/${repo}` };
+  }
   return { repo: null, url: null };
 }
 

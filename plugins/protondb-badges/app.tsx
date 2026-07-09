@@ -321,7 +321,7 @@ function ProtonDBBadges() {
     const next = list.slice();
     // idx is a valid found index (> 0), so splice yields exactly one element.
     const [running] = next.splice(idx, 1);
-    next.unshift(running!);
+    if (running !== undefined) next.unshift(running);
     return next;
   }, [installed, currentGame, searchQuery]);
 
@@ -469,7 +469,7 @@ function ProtonDBBadges() {
             </div>
           ) : (
             <GameCardGrid>
-              {visibleGames!.map((game) => (
+              {(visibleGames ?? []).map((game) => (
                 <ProtonDBGameCard
                   key={game.appId}
                   game={game}

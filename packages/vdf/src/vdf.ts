@@ -143,7 +143,9 @@ export function patchVdfValue(
   let targetBraceDepth = 0;
 
   for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i]!.trim(); // i < lines.length, so in bounds
+    const line = lines[i]; // i < lines.length, so present
+    if (line === undefined) continue;
+    const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("//")) continue;
 
     if (trimmed === "{") {
@@ -186,7 +188,7 @@ export function patchVdfValue(
       const kvMatch = trimmed.match(/^"([^"]*)"([\t\s]+)"([^"]*)"$/);
       if (kvMatch && kvMatch[1] === targetKey) {
         // Replace just the value portion in the original (non-trimmed) line.
-        const original = lines[i]!; // i < lines.length, so in bounds
+        const original = line; // same in-bounds element read at the loop top
         const oldValue = kvMatch[3] ?? ""; // group 3 present when regex matches
         // Find the last quoted value in the line and replace it.
         const lastQuotePair = original.lastIndexOf(`"${oldValue}"`);
@@ -255,7 +257,9 @@ export function removeVdfKey(content: string, keyPath: string[]): string {
   let targetBraceDepth = 0;
 
   for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i]!.trim(); // i < lines.length, so in bounds
+    const line = lines[i]; // i < lines.length, so present
+    if (line === undefined) continue;
+    const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("//")) continue;
 
     if (trimmed === "{") {
@@ -302,7 +306,7 @@ export function removeVdfKey(content: string, keyPath: string[]): string {
         let j = i + 1;
         // Find the opening brace.
         while (j < lines.length) {
-          const t = lines[j]!.trim(); // j < lines.length, so in bounds
+          const t = lines[j]?.trim(); // j < lines.length, so present
           if (!t || t.startsWith("//")) {
             j++;
             continue;
@@ -310,12 +314,12 @@ export function removeVdfKey(content: string, keyPath: string[]): string {
           if (t === "{") break;
           break; // unexpected — bail
         }
-        if (j < lines.length && lines[j]!.trim() === "{") {
+        if (j < lines.length && lines[j]?.trim() === "{") {
           // Find the matching closing brace.
           let depth = 1;
           let k = j + 1;
           while (k < lines.length && depth > 0) {
-            const t = lines[k]!.trim(); // k < lines.length, so in bounds
+            const t = lines[k]?.trim(); // k < lines.length, so present
             if (t === "{") depth++;
             else if (t === "}") depth--;
             k++;

@@ -977,7 +977,8 @@ async function runCommandTemplate(
   const tokens = template.trim().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) throw new Error("Empty command template");
   const [exeTemplate, ...argTemplates] = tokens;
-  const exe = resolveTemplate(exeTemplate!, cwd, romPath);
+  if (exeTemplate === undefined) throw new Error("Empty command template");
+  const exe = resolveTemplate(exeTemplate, cwd, romPath);
   const args = argTemplates.map((t) => resolveTemplate(t, cwd, romPath));
 
   const { realpath } = await import("node:fs/promises");

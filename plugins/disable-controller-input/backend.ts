@@ -436,7 +436,10 @@ export default class DisableControllerInputBackend implements PluginBackend {
    */
   private async _serialize<T>(fn: () => Promise<T>): Promise<T> {
     const prev = this.opLock;
-    let release!: () => void;
+    // Initialised to a no-op so `release` is never possibly-undefined; the
+    // Promise executor runs synchronously and always overwrites it with the
+    // real resolver before we await, so the no-op is never actually called.
+    let release: () => void = () => {};
     this.opLock = new Promise<void>((r) => (release = r));
     await prev;
     try {

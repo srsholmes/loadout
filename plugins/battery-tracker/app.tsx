@@ -36,6 +36,7 @@ function percentageColor(pct: number, charging: boolean): string {
  *  thin bars; thicker top cap for charging samples. */
 function HistoryChart({ history }: { history: HistoryEntry[] }) {
   const entries = history.slice(-30);
+  const oldest = entries[0];
   if (entries.length === 0) {
     return (
       <div className="subsection-desc" style={{ textAlign: "center", padding: "18px 0" }}>
@@ -64,8 +65,8 @@ function HistoryChart({ history }: { history: HistoryEntry[] }) {
       </div>
       <div className="flex justify-between mt-1.5 mono text-[10.5px] text-base-content/50">
         <span>
-          {entries.length > 1
-            ? `${Math.round((Date.now() - entries[0]!.timestamp) / 60000)}m ago`
+          {entries.length > 1 && oldest
+            ? `${Math.round((Date.now() - oldest.timestamp) / 60000)}m ago`
             : ""}
         </span>
         <span>now</span>

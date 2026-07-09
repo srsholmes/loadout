@@ -23,7 +23,8 @@ import {
  */
 export function resolveTargetUser(argv: readonly string[] = process.argv): string {
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!; // i < length, in bounds
+    const arg = argv[i]; // i < length, in bounds
+    if (arg === undefined) continue; // unreachable: i < argv.length.
     const nextArg = argv[i + 1];
     if (arg === "--user" && nextArg) return nextArg;
     if (arg.startsWith("--user=")) return arg.slice("--user=".length);

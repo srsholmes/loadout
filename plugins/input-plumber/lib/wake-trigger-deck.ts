@@ -331,8 +331,9 @@ async function captureInner(timeoutMs: number): Promise<WakeCaptureResult> {
         if (report[0] !== REPORT_ID_INPUT) continue;
         for (const b of DECK_BUTTONS) {
           // splitReports only yields full REPORT_LEN (64-byte) frames and
-          // b.byte is always < 64, so this index is provably in-bounds.
-          const cur = (report[b.byte]! & (1 << b.bit)) !== 0;
+          // b.byte is always < 64, so this index is provably in-bounds;
+          // ?? 0 is behaviour-identical for the bitwise test and drops the `!`.
+          const cur = ((report[b.byte] ?? 0) & (1 << b.bit)) !== 0;
           const prevHeld = held.get(b.name) ?? false;
           held.set(b.name, cur);
           if (cur && !prevHeld && !pressed) pressed = b;

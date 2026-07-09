@@ -382,9 +382,11 @@ export function daysForRange(
       return new Date(now).getDate();
     case "allTime": {
       if (sessions.length === 0) return null;
+      const first = sessions[0];
+      if (first === undefined) return null; // unreachable: length checked !== 0 above.
       const earliest = sessions.reduce(
         (min, s) => (s.startTime < min ? s.startTime : min),
-        sessions[0]!.startTime, // length checked !== 0 above.
+        first.startTime,
       );
       const days = Math.max(
         1,

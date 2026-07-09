@@ -102,8 +102,9 @@ export function WelcomeScreen({
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const [stepIndex, setStepIndex] = useState(0);
-  // stepIndex is clamped to [0, STEPS.length) by the nav handlers.
-  const stepId = STEPS[stepIndex]!.id;
+  // stepIndex is clamped to [0, STEPS.length) by the nav handlers, so the
+  // fallback to the first step's id never runs for real input.
+  const stepId = STEPS[stepIndex]?.id ?? "welcome";
 
   // Theme — controlled locally during the flow so navigating around
   // applies the preview immediately, then we persist on completion.
@@ -424,8 +425,9 @@ function StepHeader({
       sub: "Press Open Loadout to head to your home dashboard. Everything below can be tweaked from the Settings page.",
     },
   };
-  // stepIndex is clamped to [0, STEPS.length) by the nav handlers.
-  const stepId = STEPS[stepIndex]!.id;
+  // stepIndex is clamped to [0, STEPS.length) by the nav handlers, so the
+  // fallback to the first step's id never runs for real input.
+  const stepId = STEPS[stepIndex]?.id ?? "welcome";
   const h = headers[stepId];
   return (
     <div className="px-9 pt-8 pb-4">

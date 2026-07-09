@@ -511,17 +511,20 @@ export default class SteamGridDBBackend implements PluginBackend {
       }),
     );
     const writableUserDirs: string[] = [];
-    for (let i = 0; i < mkdirResults.length; i++) {
-      // i < length, so both index accesses are in-bounds.
-      const r = mkdirResults[i]!;
+    // mkdirResults is index-aligned with validUserDirs (same .map source),
+    // so iterating validUserDirs and reading the paired result keeps both
+    // sides in bounds without an index assertion.
+    validUserDirs.forEach((userDir, i) => {
+      const r = mkdirResults[i];
+      if (!r) return;
       if (r.status === "fulfilled") {
         writableUserDirs.push(r.value);
       } else {
         console.warn(
-          `[steamgriddb] skipping user ${validUserDirs[i]!}: mkdir failed (${r.reason}).`,
+          `[steamgriddb] skipping user ${userDir}: mkdir failed (${r.reason}).`,
         );
       }
-    }
+    });
     const targets = writableUserDirs.flatMap((userDir) =>
       filenames.map((filename) => ({
         userDir,
@@ -534,18 +537,20 @@ export default class SteamGridDBBackend implements PluginBackend {
       targets.map((t) => Bun.write(t.outputPath, imageData)),
     );
     const savedPaths: string[] = [];
-    for (let i = 0; i < writeResults.length; i++) {
-      // i < length and writeResults/targets are index-aligned, so both
-      // index accesses are in-bounds.
-      const r = writeResults[i]!;
+    // writeResults is index-aligned with targets (same .map source), so
+    // iterating targets and reading the paired result keeps both sides in
+    // bounds without an index assertion.
+    targets.forEach((target, i) => {
+      const r = writeResults[i];
+      if (!r) return;
       if (r.status === "fulfilled") {
-        savedPaths.push(targets[i]!.outputPath);
+        savedPaths.push(target.outputPath);
       } else {
         console.warn(
-          `[steamgriddb] write failed for ${targets[i]!.outputPath}: ${r.reason}`,
+          `[steamgriddb] write failed for ${target.outputPath}: ${r.reason}`,
         );
       }
-    }
+    });
 
     if (savedPaths.length === 0 && !instant) {
       throw new Error("No Steam user profiles found in userdata");

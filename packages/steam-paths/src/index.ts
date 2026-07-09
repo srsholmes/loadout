@@ -56,8 +56,9 @@ export async function getLibraryPaths(): Promise<string[]> {
     const pathRegex = /"path"\s+"([^"]+)"/gi;
     let match: RegExpExecArray | null;
     while ((match = pathRegex.exec(content)) !== null) {
-      // Non-null: match is non-null, group 1 is a required capture.
-      const libPath = join(match[1]!, "steamapps");
+      // Group 1 is a required capture, so it is always present; `?? ""`
+      // only satisfies the type checker.
+      const libPath = join(match[1] ?? "", "steamapps");
       if (!paths.includes(libPath)) {
         paths.push(libPath);
       }
@@ -121,9 +122,10 @@ export async function listInstalledGames(): Promise<InstalledGame[]> {
         const appIdMatch = content.match(/"appid"\s+"(\d+)"/);
         const nameMatch = content.match(/"name"\s+"([^"]+)"/);
         if (!appIdMatch || !nameMatch) continue;
-        // Non-null: both matches are truthy, group 1 is a required capture.
-        const appId = appIdMatch[1]!;
-        const name = nameMatch[1]!;
+        // Both matches are truthy and group 1 is a required capture in each,
+        // so they are always present; `?? ""` only satisfies the type checker.
+        const appId = appIdMatch[1] ?? "";
+        const name = nameMatch[1] ?? "";
         // Skip Steam itself + Steam-runtime / Proton tooling apps.
         // They're "installed" technically but they don't carry user
         // game art, HLTB times, or any other library-level metadata

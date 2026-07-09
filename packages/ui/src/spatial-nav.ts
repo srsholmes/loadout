@@ -290,8 +290,9 @@ export function pushBackInterceptor(fn: BackInterceptor): () => void {
 export function tryRunBackInterceptor(): boolean {
   const stack = getBackStack();
   for (let i = stack.length - 1; i >= 0; i--) {
-    // Non-null: i iterates within stack bounds.
-    if (stack[i]!()) return true;
+    // i iterates within stack bounds; the guard only degrades a torn stack.
+    const fn = stack[i];
+    if (fn && fn()) return true;
   }
   return false;
 }

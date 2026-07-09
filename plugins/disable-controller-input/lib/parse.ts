@@ -27,8 +27,9 @@ export function parseStringProp(stdout: string): string | null {
   const trimmed = stdout.trim();
   const m = trimmed.match(/^s\s+"((?:\\.|[^"\\])*)"$/);
   if (!m) return null;
-  // Capture group 1 is mandatory, so on a match it is always present.
-  return m[1]!.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  // Capture group 1 is mandatory, so on a match it is always present;
+  // `?? ""` is a no-op there.
+  return (m[1] ?? "").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
 }
 
 /** Parse a `ao N "/p1" "/p2" …` busctl property line. Returns null if
@@ -38,13 +39,13 @@ export function parseObjectPathArrayProp(stdout: string): string[] | null {
   const m = trimmed.match(/^ao\s+(\d+)((?:\s+"[^"]*")*)$/);
   if (!m) return null;
   // Both capture groups are mandatory, so on a match m[1] and m[2] are
-  // always present.
-  const count = parseInt(m[1]!, 10);
+  // always present; `?? ""` is a no-op there.
+  const count = parseInt(m[1] ?? "", 10);
   if (count === 0) return [];
   const paths: string[] = [];
   const re = /"([^"]*)"/g;
   let p: RegExpExecArray | null;
-  while ((p = re.exec(m[2]!)) !== null) paths.push(p[1]!);
+  while ((p = re.exec(m[2] ?? "")) !== null) paths.push(p[1] ?? "");
   return paths;
 }
 

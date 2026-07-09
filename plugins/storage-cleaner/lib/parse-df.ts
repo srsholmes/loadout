@@ -20,17 +20,27 @@ export function parseDfOutput(stdout: string): DiskPartition[] {
 
   for (const line of lines) {
     const parts = line.split(/\s+/);
-    if (parts.length < 6) continue; // guarantees parts[0..5] present
-    const filesystem = parts[0]!;
+    if (parts.length < 6) continue; // expect parts[0..5] present
+    const [filesystem, size, used, available, usePercent] = parts;
+    if (
+      filesystem === undefined ||
+      size === undefined ||
+      used === undefined ||
+      available === undefined ||
+      usePercent === undefined
+    ) {
+      console.warn("[storage-cleaner] unexpected missing df column");
+      continue;
+    }
     if (seen.has(filesystem)) continue;
     seen.add(filesystem);
 
     partitions.push({
       filesystem,
-      size: parts[1]!,
-      used: parts[2]!,
-      available: parts[3]!,
-      usePercent: parts[4]!,
+      size,
+      used,
+      available,
+      usePercent,
       // Mountpoint can contain spaces (rare — user-mounted volumes
       // with literal spaces in their label). The fixed columns 0..4
       // are always single tokens, so everything from index 5 onwards

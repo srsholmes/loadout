@@ -205,8 +205,8 @@ function RgbControl() {
     ]).then(([rgbInfo, presetList]) => {
       setInfo(rgbInfo);
       setPresets(presetList);
-      if (rgbInfo.zones.length > 0) {
-        const first = rgbInfo.zones[0]!; // length > 0
+      const first = rgbInfo.zones[0];
+      if (first) {
         setSelectedZone(first.id);
         setSliderR(first.color.r);
         setSliderG(first.color.g);
@@ -350,8 +350,9 @@ function RgbControl() {
     setLoading(true);
     const newInfo = (await call("rescan")) as RgbInfo;
     setInfo(newInfo);
-    if (newInfo.zones.length > 0 && !selectedZone) {
-      setSelectedZone(newInfo.zones[0]!.id); // length > 0
+    const first = newInfo.zones[0];
+    if (first && !selectedZone) {
+      setSelectedZone(first.id);
     }
     setLoading(false);
   }, [call, selectedZone]);
@@ -630,8 +631,9 @@ function RgbHomeWidget() {
       .then(([rgbInfo, presetList]) => {
         setInfo(rgbInfo);
         setPresets(presetList ?? []);
-        if (rgbInfo.zones.length > 0) {
-          setBrightness(rgbInfo.zones[0]!.brightness); // length > 0
+        const first = rgbInfo.zones[0];
+        if (first) {
+          setBrightness(first.brightness);
         }
       })
       .catch(() => setError(true));

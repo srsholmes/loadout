@@ -120,8 +120,8 @@ export function mergeIwdDriverQuirks(existing: string): string {
   const lines = existing.replace(/\r\n/g, "\n").split("\n");
 
   let secStart = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (isQuirkSection(lines[i]!)) { secStart = i; break; } // i < length
+  for (const [i, line] of lines.entries()) {
+    if (isQuirkSection(line)) { secStart = i; break; }
   }
 
   if (secStart === -1) {
@@ -132,12 +132,14 @@ export function mergeIwdDriverQuirks(existing: string): string {
 
   let secEnd = lines.length;
   for (let i = secStart + 1; i < lines.length; i++) {
-    if (isSectionHeader(lines[i]!)) { secEnd = i; break; } // i < length
+    const line = lines[i]; // in-bounds: i < length
+    if (line !== undefined && isSectionHeader(line)) { secEnd = i; break; }
   }
 
   let keyIdx = -1;
   for (let i = secStart + 1; i < secEnd; i++) {
-    if (isQuirkKey(lines[i]!)) { keyIdx = i; break; } // i < secEnd <= length
+    const line = lines[i]; // in-bounds: i < secEnd <= length
+    if (line !== undefined && isQuirkKey(line)) { keyIdx = i; break; }
   }
   if (keyIdx !== -1) lines[keyIdx] = `${QUIRK_KEY}=${QUIRK_VAL}`;
   else lines.splice(secStart + 1, 0, `${QUIRK_KEY}=${QUIRK_VAL}`);
@@ -158,13 +160,15 @@ export function stripIwdDriverQuirks(existing: string): string {
   const out: string[] = [];
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!; // i < length
+    const line = lines[i]; // in-bounds: i < length
+    if (line === undefined) continue;
     if (isQuirkSection(line)) {
       // Collect this section's body (until the next header), dropping our key.
       const body: string[] = [];
       let j = i + 1;
-      for (; j < lines.length && !isSectionHeader(lines[j]!); j++) {
-        const bodyLine = lines[j]!; // j < length
+      for (; j < lines.length; j++) {
+        const bodyLine = lines[j]; // in-bounds: j < length
+        if (bodyLine === undefined || isSectionHeader(bodyLine)) break;
         if (!isQuirkKey(bodyLine)) body.push(bodyLine);
       }
       // Keep the section only if it still has a non-blank line.
