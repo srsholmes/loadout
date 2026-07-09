@@ -1,6 +1,6 @@
 {
   "name": "@loadout/loadout-server",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "type": "module",
   "dependencies": {
     "@loadout/types": "workspace:*",
