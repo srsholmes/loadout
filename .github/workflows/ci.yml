@@ -34,8 +34,19 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Typecheck
+      # Primary typecheck: the Go-native compiler (tsgo,
+      # @typescript/native-preview, pinned exactly). ~9x faster than tsc and
+      # slightly stricter — it caught a generic-inference hole tsc missed.
+      # NOTE: tsgo's bin shim is `#!/usr/bin/env node`; always invoke it via
+      # `bun run` (bun runs it with no node installed) — a naked `tsgo` would
+      # need node on PATH.
+      - name: Typecheck (tsgo, Go-native — primary)
         run: bun run typecheck
+
+      # Safety net: stock tsc. tsgo is still a -dev preview and can have
+      # false negatives, so we keep tsc as a backstop until it GAs.
+      - name: Typecheck (tsc — safety net)
+        run: bun run typecheck:tsc
 
       - name: ESLint
         run: bun run lint

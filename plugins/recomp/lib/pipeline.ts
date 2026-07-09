@@ -340,8 +340,9 @@ function manualImportPlatform(entry: GameEntry): PlatformName {
  */
 async function flattenSingleRoot(dir: string): Promise<void> {
   const entries = await readdir(dir, { withFileTypes: true });
-  if (entries.length !== 1 || !entries[0].isDirectory()) return;
-  const inner = join(dir, entries[0].name);
+  const only = entries[0];
+  if (entries.length !== 1 || !only || !only.isDirectory()) return;
+  const inner = join(dir, only.name);
   for (const name of await readdir(inner)) {
     await rename(join(inner, name), join(dir, name));
   }
@@ -976,7 +977,8 @@ async function runCommandTemplate(
   const tokens = template.trim().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) throw new Error("Empty command template");
   const [exeTemplate, ...argTemplates] = tokens;
-  const exe = resolveTemplate(exeTemplate!, cwd, romPath);
+  if (exeTemplate === undefined) throw new Error("Empty command template");
+  const exe = resolveTemplate(exeTemplate, cwd, romPath);
   const args = argTemplates.map((t) => resolveTemplate(t, cwd, romPath));
 
   const { realpath } = await import("node:fs/promises");

@@ -64,7 +64,9 @@ function busctl(args: string[]): Promise<ExecResult> {
 export function parseStringProp(stdout: string): string | null {
   const m = stdout.trim().match(/^s\s+"((?:\\.|[^"\\])*)"$/);
   if (!m) return null;
-  return m[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  // Capture group 1 is mandatory, so on a match it is always present; ?? ""
+  // only drops the `!` and is unreachable for a real match.
+  return (m[1] ?? "").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
 }
 
 /** Parse a `as N "a" "b" …` busctl string-array property line. Returns `[]`
@@ -73,12 +75,15 @@ export function parseStringArrayProp(stdout: string): string[] | null {
   const trimmed = stdout.trim();
   const m = trimmed.match(/^as\s+(\d+)((?:\s+"(?:\\.|[^"\\])*")*)$/);
   if (!m) return null;
-  if (parseInt(m[1], 10) === 0) return [];
+  // Both capture groups are mandatory, so on a match m[1] and m[2] are
+  // always present; each exec match's group 1 likewise. The ?? "" fallbacks
+  // only drop the `!` and are unreachable for a real match.
+  if (parseInt(m[1] ?? "", 10) === 0) return [];
   const out: string[] = [];
   const re = /"((?:\\.|[^"\\])*)"/g;
   let p: RegExpExecArray | null;
-  while ((p = re.exec(m[2])) !== null) {
-    out.push(p[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\"));
+  while ((p = re.exec(m[2] ?? "")) !== null) {
+    out.push((p[1] ?? "").replace(/\\"/g, '"').replace(/\\\\/g, "\\"));
   }
   return out;
 }
@@ -91,11 +96,14 @@ export function parseStringArrayProp(stdout: string): string[] | null {
 export function parseObjectPathArrayProp(stdout: string): string[] | null {
   const m = stdout.trim().match(/^a[os]\s+(\d+)((?:\s+"[^"]*")*)$/);
   if (!m) return null;
-  if (parseInt(m[1], 10) === 0) return [];
+  // Both capture groups are mandatory, so on a match m[1] and m[2] are
+  // always present; each exec match's group 1 likewise. The ?? "" fallbacks
+  // only drop the `!` and are unreachable for a real match.
+  if (parseInt(m[1] ?? "", 10) === 0) return [];
   const out: string[] = [];
   const re = /"([^"]*)"/g;
   let p: RegExpExecArray | null;
-  while ((p = re.exec(m[2])) !== null) out.push(p[1]);
+  while ((p = re.exec(m[2] ?? "")) !== null) out.push(p[1] ?? "");
   return out;
 }
 

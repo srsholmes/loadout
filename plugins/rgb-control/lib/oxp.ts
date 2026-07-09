@@ -67,7 +67,7 @@ export function oxpCmd(cid: number, payload: number[]): Buffer {
   const buf = Buffer.alloc(64);
   buf[0] = cid;
   buf[1] = 0xFF;
-  for (let i = 0; i < payload.length; i++) buf[2 + i] = payload[i];
+  for (const [i, byte] of payload.entries()) buf[2 + i] = byte;
   return buf;
 }
 

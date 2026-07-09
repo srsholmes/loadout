@@ -85,7 +85,11 @@ function parseGithub(source: string | undefined): { repo: string | null; url: st
   // Strip a trailing `@<sha>` reference (used by some upstream entries).
   const clean = source.replace(/\s*@\s*[0-9a-f]+\s*$/i, "").trim();
   const m = clean.match(/^https?:\/\/github\.com\/([^/\s]+\/[^/\s]+?)(?:\/|\.git)?$/i);
-  if (m) return { repo: m[1], url: `https://github.com/${m[1]}` };
+  // Group 1 always captures when the match succeeds.
+  if (m) {
+    const repo = m[1] ?? "";
+    return { repo, url: `https://github.com/${repo}` };
+  }
   return { repo: null, url: null };
 }
 

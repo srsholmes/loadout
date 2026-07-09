@@ -8,7 +8,10 @@
     "strict": true,
     "noFallthroughCasesInSwitch": true,
     "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noUncheckedIndexedAccess": true,
     "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
@@ -37,6 +40,24 @@
     "apps/*/src/**/*.tsx",
     "plugins/*/backend.ts",
     "plugins/*/panel.tsx",
-    "plugins/*/app.tsx"
+    "plugins/*/app.tsx",
+    "plugins/*/*.ts",
+    "plugins/*/*.tsx",
+    "plugins/*/lib/**/*.ts",
+    "plugins/*/lib/**/*.tsx",
+    "plugins/*/components/**/*.ts",
+    "plugins/*/components/**/*.tsx",
+    "plugins/*/games/**/*.ts",
+    "plugins/*/scripts/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/build/**",
+    "**/.cache/**",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx"
   ]
 }

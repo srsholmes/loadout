@@ -95,9 +95,10 @@ function StorageCleaner() {
 
   // Pick the primary partition (usually `/` or the largest). Fallback to first.
   const primary = useMemo<DiskPartition | null>(() => {
-    if (!diskUsage.length) return null;
+    const first = diskUsage[0];
+    if (first === undefined) return null; // empty list → no primary
     const rootMount = diskUsage.find((d) => d.mountpoint === "/");
-    return rootMount ?? diskUsage[0];
+    return rootMount ?? first;
   }, [diskUsage]);
 
   const totalGB = primary ? parseSizeToGB(primary.size) : 0;

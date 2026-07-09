@@ -127,13 +127,16 @@ export async function findQuickAccessTab(options: GetTabsOptions): Promise<CEFTa
   const tabs = await getTabs(options);
   const qaTabs = tabs.filter(isQuickAccessTab);
 
-  if (qaTabs.length === 0) {
+  // Return the first one — typically the Big Picture Mode QAM. An empty
+  // qaTabs is equivalent to the old `length === 0` check, so this throws
+  // the same error and drops the index assertion.
+  const first = qaTabs[0];
+  if (!first) {
     const available = tabs.map((t) => `"${t.title}" (${t.url})`).join(", ");
     throw new Error(
       `QuickAccess tab not found. Available tabs: ${available}`,
     );
   }
 
-  // Return the first one — typically the Big Picture Mode QAM
-  return qaTabs[0];
+  return first;
 }

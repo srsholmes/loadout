@@ -153,7 +153,7 @@ export function WidgetPicker({
             {!probing &&
               availablePlugins.map((plugin) => {
                 const isAdded = favorites.includes(plugin.id);
-                const initial = (plugin.icon ?? plugin.name)[0].toUpperCase();
+                const initial = (plugin.icon ?? plugin.name).charAt(0).toUpperCase();
                 return (
                   <Focusable
                     key={plugin.id}

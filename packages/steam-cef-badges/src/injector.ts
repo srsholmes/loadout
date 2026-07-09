@@ -280,7 +280,7 @@ export class SteamCefBadgeInjector<TBadgeData> {
         "(window.tempNavStore && window.tempNavStore.m_history && window.tempNavStore.m_history.location && window.tempNavStore.m_history.location.pathname) || window.location.pathname || ''",
       )) as string;
       const match = pathname?.match?.(/^\/(?:routes\/)?library\/app\/(\d+)/);
-      const newAppId = match ? match[1] : null;
+      const newAppId = match ? (match[1] ?? null) : null;
 
       if (newAppId !== this.currentAppId) {
         this.currentAppId = newAppId;
@@ -322,8 +322,12 @@ export class SteamCefBadgeInjector<TBadgeData> {
 
         const pushed: string[] = [];
         for (const t of targets) {
+          // targets was filtered to entries with a live conn, so this is
+          // always set; the guard only satisfies the type checker.
+          const conn = t.conn;
+          if (!conn) continue;
           try {
-            await this._cdpEvaluate(t.conn!, expr);
+            await this._cdpEvaluate(conn, expr);
             pushed.push(t.key);
           } catch (err) {
             this.warn(`Failed to push badge data to ${t.key}:`, err);
@@ -470,9 +474,13 @@ export class SteamCefBadgeInjector<TBadgeData> {
 
     if (bpmConns.length > 0) {
       for (const t of bpmConns) {
+        // bpmConns was filtered to entries with a live conn, so this is
+        // always set; the guard only satisfies the type checker.
+        const conn = t.conn;
+        if (!conn) continue;
         try {
-          await this._injectCSSToTab(t.conn!, css);
-          await this._cdpEvaluate(t.conn!, this.cfg.bpmScript);
+          await this._injectCSSToTab(conn, css);
+          await this._cdpEvaluate(conn, this.cfg.bpmScript);
           this.log(`Injected badge system into ${t.key}`);
         } catch (err) {
           this.warn(`Failed to inject into ${t.key}:`, err);
@@ -502,7 +510,9 @@ export class SteamCefBadgeInjector<TBadgeData> {
           /store\.steampowered\.com\/app\/(\d+)/,
         );
         const badgeData = appIdMatch
-          ? await this.cfg.fetchBadgeData(appIdMatch[1])
+          // group 1 is a required capture, so it is always present when
+          // appIdMatch matched; `?? ""` only satisfies the type checker.
+          ? await this.cfg.fetchBadgeData(appIdMatch[1] ?? "")
           : null;
 
         await this._injectCSSToTab(conn, css);

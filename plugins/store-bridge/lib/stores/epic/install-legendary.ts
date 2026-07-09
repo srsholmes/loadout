@@ -206,7 +206,8 @@ async function resolveRelease(pinned?: string): Promise<GitHubRelease> {
 /** "legendary version 0.20.34, codename Snowflake" → "0.20.34". */
 export function parseVersion(stdout: string): string {
   const m = stdout.match(/version\s+(\S+)/i);
-  return m ? m[1].replace(/[,.]$/, "") : stdout.split(/\s+/)[1] ?? "unknown";
+  // Group 1 always captures when the match succeeds.
+  return m ? (m[1] ?? "").replace(/[,.]$/, "") : stdout.split(/\s+/)[1] ?? "unknown";
 }
 
 function formatMiB(bytes: number): string {

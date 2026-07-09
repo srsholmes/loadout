@@ -178,6 +178,7 @@ async function getOnlineCpus(): Promise<number[]> {
   for (const part of text.split(",")) {
     if (part.includes("-")) {
       const [start, end] = part.split("-").map(Number);
+      if (start === undefined || end === undefined) continue;
       for (let i = start; i <= end; i++) result.push(i);
     } else {
       result.push(Number(part));
@@ -383,7 +384,7 @@ export default class TdpControlBackend implements PluginBackend {
       this.tdpReadSource = initialReading.source;
     } else {
       // Fall back to silent profile value (conservative default)
-      this.currentTdp = this.profiles["Silent"];
+      this.currentTdp = this.profiles["Silent"] ?? 10;
       this.tdpReadSource = "estimated";
     }
     this.activeProfile = this.matchProfile(this.currentTdp);
@@ -1216,7 +1217,7 @@ export default class TdpControlBackend implements PluginBackend {
 
     // Model name
     const modelMatch = cpuinfo.match(/model name\s*:\s*(.*)/);
-    if (modelMatch) {
+    if (modelMatch?.[1]) {
       this.cpuModel = modelMatch[1].trim();
     }
   }
@@ -1544,7 +1545,7 @@ export default class TdpControlBackend implements PluginBackend {
           const rangeMatch = odText.match(
             /OD_RANGE:\s*\n\s*SCLK:\s*(\d+)Mhz\s+(\d+)Mhz/,
           );
-          if (rangeMatch) {
+          if (rangeMatch?.[1] && rangeMatch[2]) {
             minFreq = parseInt(rangeMatch[1], 10);
             maxFreq = parseInt(rangeMatch[2], 10);
           }
@@ -1649,7 +1650,7 @@ export default class TdpControlBackend implements PluginBackend {
       for (const line of stdout.split("\n")) {
         if (line.includes("STAPM LIMIT")) {
           const match = line.match(/([\d.]+)/);
-          if (match) return Math.round(parseFloat(match[1]));
+          if (match?.[1]) return Math.round(parseFloat(match[1]));
         }
       }
     } catch {

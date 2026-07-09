@@ -174,8 +174,9 @@ async function compileTsx(
       },
     });
 
-    if (result.success && result.outputs.length > 0) {
-      const code = await result.outputs[0].text();
+    const output = result.success ? result.outputs[0] : undefined;
+    if (output) {
+      const code = await output.text();
       return { code, ok: true };
     }
 

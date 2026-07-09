@@ -285,7 +285,7 @@ export function fstabHasUuid(content: string, uuid: string): boolean {
     .some((line) => {
       const t = line.trim();
       if (!t || t.startsWith("#")) return false;
-      return t.split(/\s+/)[0].toLowerCase() === marker;
+      return (t.split(/\s+/)[0] ?? "").toLowerCase() === marker; // t non-empty ⇒ [0] present
     });
 }
 
@@ -302,7 +302,7 @@ export function removeFstabEntry(content: string, uuid: string): string {
     .filter((line) => {
       const t = line.trim();
       if (!t || t.startsWith("#")) return true;
-      return t.split(/\s+/)[0].toLowerCase() !== marker;
+      return (t.split(/\s+/)[0] ?? "").toLowerCase() !== marker; // t non-empty ⇒ [0] present
     })
     .join("\n");
 }

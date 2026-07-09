@@ -13,14 +13,14 @@
 export function floatToLong(x: number): number {
   const buf = new ArrayBuffer(4);
   new Float32Array(buf)[0] = x;
-  return new Uint32Array(buf)[0];
+  return new Uint32Array(buf)[0] ?? 0; // 4-byte buffer, index 0 always present
 }
 
 /** Unpack a uint32 back to a float32 (little-endian bit-cast). */
 export function longToFloat(x: number): number {
   const buf = new ArrayBuffer(4);
   new Uint32Array(buf)[0] = x;
-  return new Float32Array(buf)[0];
+  return new Float32Array(buf)[0] ?? 0; // 4-byte buffer, index 0 always present
 }
 
 /**

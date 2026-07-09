@@ -52,7 +52,8 @@ export async function detectDisplayResolution(): Promise<DisplayResolution> {
       const first = modes.split("\n")[0]?.trim();
       const m = first?.match(/^(\d+)x(\d+)/);
       if (m) {
-        return { width: parseInt(m[1], 10), height: parseInt(m[2], 10) };
+        // Both groups always capture when the match succeeds.
+        return { width: parseInt(m[1] ?? "", 10), height: parseInt(m[2] ?? "", 10) };
       }
     } catch {
       /* keep probing */

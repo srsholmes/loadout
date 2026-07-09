@@ -138,11 +138,13 @@ function usePerGameProfiles(
   const boundToGame = perGameEnabled && currentGame !== null;
   const persistGameProfile = useCallback(
     (mode: "auto" | "manual", speed?: number) => {
-      if (!boundToGame) return;
+      // boundToGame already implies currentGame is non-null; the explicit
+      // check just narrows the type without changing the early-return outcome.
+      if (!boundToGame || currentGame === null) return;
       call(
         "setGameProfile",
-        currentGame!.appId,
-        currentGame!.gameName,
+        currentGame.appId,
+        currentGame.gameName,
         { mode, speed },
       ).catch(() => {});
     },
@@ -205,8 +207,9 @@ function FanControl() {
     call("getFanInfo").then((info) => {
       const data = info as FanInfo;
       setFanInfo(data);
-      if (data.fans.length > 0) {
-        setSliderValue(data.fans[0].percent);
+      const primary = data.fans[0];
+      if (primary) {
+        setSliderValue(primary.percent);
       }
       setActivePreset(data.activePreset ? (data.activePreset as Preset) : null);
       setCustomActive(Boolean(data.customCurveActive));
@@ -273,9 +276,10 @@ function FanControl() {
       const res = (await call("setCustomCurve", pts).catch(() => null)) as
         | { curve?: FanCurvePoint[] }
         | null;
-      if (res?.curve && Array.isArray(res.curve)) {
-        setCustomPoints(res.curve);
-        setSelectedPoint((i) => Math.min(i, res.curve!.length - 1));
+      const curve = res?.curve;
+      if (curve && Array.isArray(curve)) {
+        setCustomPoints(curve);
+        setSelectedPoint((i) => Math.min(i, curve.length - 1));
       }
     },
     [call],
@@ -571,14 +575,17 @@ function FanControl() {
               <div className="subsection">
                 {(() => {
                   const sel = customPoints[selectedPoint] ?? customPoints[0];
-                  const minTemp =
+                  if (!sel) return null;
+                  const prev =
                     selectedPoint > 0
-                      ? customPoints[selectedPoint - 1].tempC + 1
-                      : CURVE_TEMP_MIN;
-                  const maxTemp =
+                      ? customPoints[selectedPoint - 1]
+                      : undefined;
+                  const next =
                     selectedPoint < customPoints.length - 1
-                      ? customPoints[selectedPoint + 1].tempC - 1
-                      : CURVE_TEMP_MAX;
+                      ? customPoints[selectedPoint + 1]
+                      : undefined;
+                  const minTemp = prev ? prev.tempC + 1 : CURVE_TEMP_MIN;
+                  const maxTemp = next ? next.tempC - 1 : CURVE_TEMP_MAX;
                   return (
                     <>
                       <div className="flex items-center justify-between mb-3">
@@ -845,14 +852,16 @@ export function editCurvePoint(
 ): FanCurvePoint[] {
   if (index < 0 || index >= points.length) return points;
   const pts = points.map((p) => ({ ...p }));
-  const point = pts[index];
+  const point = pts[index]; // in-bounds: index checked above
+  if (!point) return points;
   if (typeof next.percent === "number") {
     point.percent = Math.max(0, Math.min(100, Math.round(next.percent)));
   }
   if (typeof next.tempC === "number") {
-    const minT = index > 0 ? pts[index - 1].tempC + 1 : CURVE_TEMP_MIN;
-    const maxT =
-      index < pts.length - 1 ? pts[index + 1].tempC - 1 : CURVE_TEMP_MAX;
+    const prev = index > 0 ? pts[index - 1] : undefined;
+    const nextPt = index < pts.length - 1 ? pts[index + 1] : undefined;
+    const minT = prev ? prev.tempC + 1 : CURVE_TEMP_MIN;
+    const maxT = nextPt ? nextPt.tempC - 1 : CURVE_TEMP_MAX;
     point.tempC = Math.max(minT, Math.min(maxT, Math.round(next.tempC)));
   }
   return pts;
@@ -867,7 +876,10 @@ export function insertCurvePoint(points: FanCurvePoint[]): {
   let gapIdx = 0;
   let gapSize = -1;
   for (let i = 0; i < points.length - 1; i++) {
-    const size = points[i + 1].tempC - points[i].tempC;
+    const lo = points[i]; // both in-bounds: i < length - 1
+    const hi = points[i + 1];
+    if (!lo || !hi) continue;
+    const size = hi.tempC - lo.tempC;
     if (size > gapSize) {
       gapSize = size;
       gapIdx = i;
@@ -875,6 +887,7 @@ export function insertCurvePoint(points: FanCurvePoint[]): {
   }
   const lo = points[gapIdx];
   const hi = points[gapIdx + 1];
+  if (!lo || !hi) return { points, index: gapIdx };
   const mid: FanCurvePoint = {
     tempC: Math.round((lo.tempC + hi.tempC) / 2),
     percent: Math.round((lo.percent + hi.percent) / 2),
@@ -940,20 +953,22 @@ function FanHomeWidget() {
   // Returns the backend's PWM-derived `percent` directly. Will be 0 on
   // ectool-only hardware where the EC's duty isn't readable.
   const deriveAutoDuty = useCallback((info: FanInfo): number => {
-    if (!info.fans || info.fans.length === 0) return 0;
-    return Math.max(0, Math.min(100, info.fans[0].percent));
+    const first = info.fans?.[0];
+    if (!first) return 0;
+    return Math.max(0, Math.min(100, first.percent));
   }, []);
 
   useEffect(() => {
     call("getFanInfo").then((result) => {
       const info = result as FanInfo;
-      if (info.fans.length > 0) {
-        setRpm(info.fans[0].rpm);
+      const primary = info.fans[0];
+      if (primary) {
+        setRpm(primary.rpm);
         // Seed manualSpeed from the live percent only if the backend
         // can actually report it (direct hwmon). On ectool we leave the
         // 50 default so the slider doesn't snap to 0 when the user
         // flips to Manual.
-        const reported = info.fans[0].percent;
+        const reported = primary.percent;
         if (reported > 0) setManualSpeed(reported);
         setAutoDuty(deriveAutoDuty(info));
       }
@@ -967,8 +982,9 @@ function FanHomeWidget() {
     event: "fan-update",
     handler: useCallback((data: unknown) => {
       const info = data as FanInfo;
-      if (info.fans?.length > 0) {
-        setRpm(info.fans[0].rpm);
+      const primary = info.fans?.[0];
+      if (primary) {
+        setRpm(primary.rpm);
         // Always refresh the auto-duty estimate. The render-time selector
         // below picks whether to display it (mode === "auto") or the
         // user's manualSpeed (mode === "manual"). This keeps the slider
@@ -996,13 +1012,17 @@ function FanHomeWidget() {
   const sliderDisabled = mode !== "manual";
   // Match TDP's chip semantics so per-game state reads identically across
   // the two performance widgets.
-  const savedProfile = boundToGame
-    ? gameProfiles.find((p) => p.appId === currentGame!.appId)
-    : undefined;
-  const profileLabel = boundToGame
+  // boundToGame already implies currentGame is non-null; the extra check
+  // narrows the type without changing which branch runs.
+  const savedProfile =
+    boundToGame && currentGame
+      ? gameProfiles.find((p) => p.appId === currentGame.appId)
+      : undefined;
+  const profileLabel =
+    boundToGame && currentGame
     ? savedProfile
-      ? `Saved · ${currentGame!.gameName || `App ${currentGame!.appId}`}`
-      : `Set for ${currentGame!.gameName || `App ${currentGame!.appId}`}`
+      ? `Saved · ${currentGame.gameName || `App ${currentGame.appId}`}`
+      : `Set for ${currentGame.gameName || `App ${currentGame.appId}`}`
     : mode === "manual"
     ? "Manual"
     : mode === "full"

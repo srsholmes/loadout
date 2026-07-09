@@ -35,12 +35,13 @@ export function parseIpAddrOutput(output: string): Array<{ name: string; ip: str
     if (!match) continue;
 
     const [, name, family, addrWithPrefix] = match;
+    if (!name || !family || !addrWithPrefix) continue;
     if (family !== "inet") continue;
     if (name === "lo") continue;
     if (seen.has(name)) continue;
     seen.add(name);
 
-    const ip = addrWithPrefix.split("/")[0];
+    const ip = addrWithPrefix.split("/")[0] ?? addrWithPrefix;
     result.push({ name, ip });
   }
 
@@ -75,7 +76,7 @@ export function parseIwconfigOutput(output: string): Partial<ConnectionInfo> {
   if (ssidMatch) result.ssid = ssidMatch[1];
 
   const signalMatch = output.match(/Signal level[=:](-?\d+)\s*dBm/);
-  if (signalMatch) {
+  if (signalMatch?.[1]) {
     const dBm = parseInt(signalMatch[1], 10);
     // Convert dBm to percentage (rough approximation)
     result.signal = Math.max(0, Math.min(100, 2 * (dBm + 100)));
@@ -99,7 +100,9 @@ export function parseProcNetWireless(content: string): number | null {
   for (const line of dataLines) {
     const parts = line.trim().split(/\s+/);
     if (parts.length < 4) continue;
-    const level = parseFloat(parts[3]);
+    const rawLevel = parts[3]; // present: parts.length >= 4
+    if (rawLevel === undefined) continue;
+    const level = parseFloat(rawLevel);
     if (isNaN(level)) continue;
     if (level < 0) {
       return Math.max(0, Math.min(100, 2 * (level + 100)));

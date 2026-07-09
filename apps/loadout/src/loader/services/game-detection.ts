@@ -44,7 +44,12 @@ export class GameDetectionService implements PluginBackend {
     const endTime = Date.now();
     const idx = this.recent.findIndex((s) => s.appId === appId && s.endTime === undefined);
     if (idx >= 0) {
-      this.recent[idx] = { ...this.recent[idx], endTime };
+      // idx comes from findIndex and is >= 0, so the element is in bounds;
+      // the guard only satisfies the type checker.
+      const session = this.recent[idx];
+      if (session) {
+        this.recent[idx] = { ...session, endTime };
+      }
     }
     if (this.current && this.current.appId === appId) {
       this.current = null;

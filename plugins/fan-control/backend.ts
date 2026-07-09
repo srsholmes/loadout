@@ -418,23 +418,30 @@ export default class FanControlBackend implements PluginBackend {
   // RPC Methods
   // -----------------------------------------------------------------------
 
+  /** The "no controllable fan hardware" snapshot — returned when neither a
+   *  hwmon device nor ectool is available, and as the fail-safe when a device
+   *  we expected has gone away. */
+  private unavailableFanInfo(): FanInfoResult {
+    return {
+      fans: [],
+      mode: "unknown",
+      temps: [],
+      cpuTempC: 0,
+      chipName: "none",
+      fanCount: 0,
+      available: false,
+      activePreset: this.activePreset,
+      customCurveActive: this.customCurveActive,
+      usingEctool: false,
+      warning: null,
+      safetyEngaged: false,
+    };
+  }
+
   /** Returns comprehensive fan status. */
   async getFanInfo(): Promise<FanInfoResult> {
     if (!this.activeFanDevice && !this.useEctool) {
-      return {
-        fans: [],
-        mode: "unknown",
-        temps: [],
-        cpuTempC: 0,
-        chipName: "none",
-        fanCount: 0,
-        available: false,
-        activePreset: this.activePreset,
-        customCurveActive: this.customCurveActive,
-        usingEctool: false,
-        warning: null,
-        safetyEngaged: false,
-      };
+      return this.unavailableFanInfo();
     }
 
     const temps = await this.getTemperatures();
@@ -477,7 +484,14 @@ export default class FanControlBackend implements PluginBackend {
       };
     }
 
-    const device = this.activeFanDevice!;
+    // Unreachable: the both-null early return above and the ectool branch
+    // (which fires whenever hasPwmControl is false — including when
+    // activeFanDevice is null) guarantee a device here. Guard rather than
+    // assert, degrading to the unavailable snapshot instead of crashing.
+    const device = this.activeFanDevice;
+    if (!device) {
+      return this.unavailableFanInfo();
+    }
     const fanReadings: FanInfoResult["fans"] = [];
     let mode: FanInfoResult["mode"] = "unknown";
 
@@ -1379,8 +1393,8 @@ export default class FanControlBackend implements PluginBackend {
     try {
       const { stdout } = await run(["ectool", "pwmgetfanrpm"]);
       // Output format: "Current fan RPM: 3200"
-      const match = stdout.match(/(\d+)/);
-      return match ? parseInt(match[1], 10) : 0;
+      const digits = stdout.match(/(\d+)/)?.[1];
+      return digits ? parseInt(digits, 10) : 0;
     } catch {
       return 0;
     }

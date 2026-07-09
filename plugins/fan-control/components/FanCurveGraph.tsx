@@ -89,11 +89,11 @@ export function FanCurveGraph({
       CURVE_TEMP_MIN + fracX * (CURVE_TEMP_MAX - CURVE_TEMP_MIN);
     const rawPct = (1 - fracY) * 100;
 
-    const minTemp = index > 0 ? points[index - 1].tempC + 1 : CURVE_TEMP_MIN;
-    const maxTemp =
-      index < points.length - 1
-        ? points[index + 1].tempC - 1
-        : CURVE_TEMP_MAX;
+    const prev = index > 0 ? points[index - 1] : undefined;
+    const next =
+      index < points.length - 1 ? points[index + 1] : undefined;
+    const minTemp = prev ? prev.tempC + 1 : CURVE_TEMP_MIN;
+    const maxTemp = next ? next.tempC - 1 : CURVE_TEMP_MAX;
 
     const tempC = Math.max(minTemp, Math.min(maxTemp, Math.round(rawTemp)));
     const percent = Math.max(0, Math.min(100, Math.round(rawPct)));
@@ -128,6 +128,7 @@ export function FanCurveGraph({
   // every node, then a flat hold out to the right edge.
   const first = points[0];
   const last = points[points.length - 1];
+  if (!first || !last) return null;
   const linePath =
     `M ${PAD_L} ${pctToY(first.percent)} ` +
     points.map((p) => `L ${tempToX(p.tempC)} ${pctToY(p.percent)}`).join(" ") +

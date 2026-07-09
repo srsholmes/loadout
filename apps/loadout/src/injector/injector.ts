@@ -191,6 +191,21 @@ export class SteamInjector {
     }
   }
 
+  /**
+   * The SharedJSContext CDP client, guaranteed connected. `this.cdp` is
+   * set by connectAndInject() before any of the inject/patch steps run, so
+   * for real call flows this always returns it. If it were somehow null the
+   * previous `this.cdp!` would have thrown a TypeError here too — this
+   * throws an explicit error instead, which the surrounding retry/try-catch
+   * paths handle identically.
+   */
+  private requireCdp(): CDPClient {
+    if (!this.cdp) {
+      throw new Error("[injector] CDP client is not connected");
+    }
+    return this.cdp;
+  }
+
   /** Fetch from the loader API with session token auth. */
   private async fetchApi(path: string): Promise<Response> {
     return fetch(`http://localhost:${this.loaderPort}${path}`, {
@@ -240,7 +255,7 @@ export class SteamInjector {
       onRetry: (reason) => this.log(`[injector] ${reason}`),
     };
 
-    let tab: CEFTab;
+    let tab: CEFTab | undefined;
     while (this.running) {
       try {
         tab = await findSharedJSContext(tabOptions);
@@ -253,15 +268,18 @@ export class SteamInjector {
     }
 
     if (!this.running) return;
+    // The loop only breaks after assigning `tab`, so once we're still
+    // running it is set; the guard only satisfies the type checker.
+    if (!tab) return;
 
-    this.log(`[injector] Found SharedJSContext: "${tab!.title}" (${tab!.url})`);
+    this.log(`[injector] Found SharedJSContext: "${tab.title}" (${tab.url})`);
 
     // Step 2: Connect via CDP WebSocket (direct or through multiplexer)
     if (this.cdpFactory) {
-      this.cdp = await this.cdpFactory(tab!.webSocketDebuggerUrl);
+      this.cdp = await this.cdpFactory(tab.webSocketDebuggerUrl);
       this.log("[injector] Connected to CDP via multiplexer");
     } else {
-      this.cdp = new CDPClient(tab!.webSocketDebuggerUrl);
+      this.cdp = new CDPClient(tab.webSocketDebuggerUrl);
       await this.cdp.connect();
       this.log("[injector] Connected to CDP WebSocket");
     }
@@ -341,11 +359,11 @@ export class SteamInjector {
     // Step 1: Discover Steam's React/ReactDOM from webpack and alias __VENDOR_* globals.
     // This MUST run before anything that references __VENDOR_REACT for its
     // hooks/createElement. Two React instances = crash.
-    await this.cdp!.evaluate(DISCOVER_STEAM_REACT);
+    await this.requireCdp().evaluate(DISCOVER_STEAM_REACT);
     this.log("[injector] Steam React discovered and aliased");
 
     // Step 2: Set the loaded flag
-    await this.cdp!.evaluate(`window.loadoutHasLoaded = true;`);
+    await this.requireCdp().evaluate(`window.loadoutHasLoaded = true;`);
   }
 
   /**
@@ -374,7 +392,7 @@ export class SteamInjector {
       }
 
       const script = buildWebpackPatcherScript(patchEntries);
-      await this.cdp!.evaluate(script, { awaitPromise: true });
+      await this.requireCdp().evaluate(script, { awaitPromise: true });
 
       if (patchEntries.length > 0) {
         this.log("[injector] Webpack patcher installed");
@@ -430,9 +448,9 @@ export class SteamInjector {
     try {
       this.log("[injector] Running Steam component discovery...");
       // Clear previous discovery flag to force re-discovery (code may have changed)
-      await this.cdp!.evaluate("delete window.__steamComponentsDiscovered");
+      await this.requireCdp().evaluate("delete window.__steamComponentsDiscovered");
       const script = buildComponentDiscoveryScript(this.loaderPort);
-      await this.cdp!.evaluate(script, { awaitPromise: true });
+      await this.requireCdp().evaluate(script, { awaitPromise: true });
       this.log("[injector] Steam component discovery complete");
     } catch (err) {
       this.log(`[injector] Component discovery failed (non-fatal): ${err instanceof Error ? err.message : err}`);
@@ -642,7 +660,7 @@ export class SteamInjector {
             menuPlugins.push({
               pluginId: plugin.id,
               title: t.title ?? plugin.name,
-              route: t.route ?? (plugin.routes ? Object.keys(plugin.routes)[0] : ""),
+              route: t.route ?? (plugin.routes ? (Object.keys(plugin.routes)[0] ?? "") : ""),
               position: typeof t.position === "number" ? t.position : undefined,
               icon: t.icon,
             });
@@ -680,7 +698,7 @@ export class SteamInjector {
       if (routes.length > 0) {
         this.log(`[injector] Patching router with ${routes.length} route(s)...`);
         const routeScript = buildRoutePatchScript(routes);
-        await this.cdp!.evaluate(routeScript, { awaitPromise: true });
+        await this.requireCdp().evaluate(routeScript, { awaitPromise: true });
         this.log("[injector] Route patch applied");
       }
 
@@ -688,7 +706,7 @@ export class SteamInjector {
       if (menuPlugins.length > 0) {
         this.log(`[injector] Patching main menu with ${menuPlugins.length} item(s)...`);
         const menuScript = buildMenuPatchScript(menuPlugins);
-        await this.cdp!.evaluate(menuScript, { awaitPromise: true });
+        await this.requireCdp().evaluate(menuScript, { awaitPromise: true });
         this.log("[injector] Main menu patch applied");
       }
 
@@ -765,18 +783,22 @@ export class SteamInjector {
   // never populated (no plugin ships a panel.tsx), so it always bailed.
 
   private async monitor(): Promise<void> {
-    if (!this.cdp) return;
+    // Capture the connected client once: within a single monitor lifetime
+    // this.cdp is only cleared by cleanup() (which also unsubscribes these
+    // listeners), so the local mirrors this.cdp without the assertion.
+    const cdp = this.cdp;
+    if (!cdp) return;
 
     return new Promise<void>((resolve) => {
       // Re-inject on page reload
-      const unsubDom = this.cdp!.on("Page.domContentEventFired", async () => {
+      const unsubDom = cdp.on("Page.domContentEventFired", async () => {
         this.log("[injector] Page reloaded, checking if re-injection needed...");
         try {
           // Re-injection is gated on Gaming Mode too (issue #111) — a reload
           // in the desktop client must not re-add plugin injection. The game
           // session monitor is re-armed in both modes.
           const gameMode = await this.isGameMode();
-          const loaded = await this.cdp!.hasGlobalVar(GLOBAL_FLAG);
+          const loaded = await cdp.hasGlobalVar(GLOBAL_FLAG);
           if (gameMode && !loaded) {
             await this.inject();
             await this.connectBPM();
@@ -789,7 +811,7 @@ export class SteamInjector {
       });
 
       // Handle detach (Steam restart, etc.)
-      const unsubDetach = this.cdp!.on("Inspector.detached", () => {
+      const unsubDetach = cdp.on("Inspector.detached", () => {
         this.log("[injector] CEF requested detach (Steam may be restarting)");
         cleanup();
         resolve();

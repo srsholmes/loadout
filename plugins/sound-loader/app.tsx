@@ -210,7 +210,9 @@ async function installSoundOverrides(
         )).filter((b): b is AudioBuffer => b !== null);
         if (buffers.length > 0) {
           overrides[event] = () => {
-            playBuffer(buffers[Math.floor(Math.random() * buffers.length)]);
+            // Random index is within [0, buffers.length); buffers is non-empty (checked above).
+            const buf = buffers[Math.floor(Math.random() * buffers.length)];
+            if (buf) playBuffer(buf);
           };
         }
       } else {

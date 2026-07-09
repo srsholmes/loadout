@@ -58,10 +58,12 @@ function buildMap(data: RawTranslations): Map<string, string> {
   const map = new Map<string, string>();
   for (const variants of Object.values(data)) {
     if (!Array.isArray(variants) || variants.length < 2) continue;
+    // length >= 2 guarantees a last element; the guard matches the skip above.
     const current = variants[variants.length - 1];
-    for (let i = 0; i < variants.length - 1; i++) {
-      if (variants[i] !== current) {
-        map.set(variants[i], current);
+    if (current === undefined) continue;
+    for (const variant of variants.slice(0, -1)) {
+      if (variant !== current) {
+        map.set(variant, current);
       }
     }
   }
