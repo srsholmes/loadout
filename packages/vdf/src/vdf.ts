@@ -29,6 +29,7 @@ export function parseVdf(content: string): VdfObject {
   const root: VdfObject = {};
   const stack: VdfObject[] = [root];
   let pendingKey: string | null = null;
+  let warnedUnderflow = false;
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
@@ -50,6 +51,16 @@ export function parseVdf(content: string): VdfObject {
 
     // Closing brace — pop the stack
     if (line === "}") {
+      if (stack.length === 1 && !warnedUnderflow) {
+        // Underflow: more "}" than "{" (corrupt/truncated VDF). We keep
+        // parsing leniently — kv lines below this point are dropped by the
+        // `if (parent)` guards — but say so once, because a silent partial
+        // parse is indistinguishable from a complete one to callers.
+        console.warn(
+          "[vdf] brace underflow while parsing — input is malformed, result may be partial",
+        );
+        warnedUnderflow = true;
+      }
       stack.pop();
       continue;
     }
