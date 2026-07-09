@@ -8,7 +8,14 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com).
 
 ---
 
-## [v0.3.1] — 2026-07-07
+## [v0.3.2] — 2026-07-09
+
+### Fixed
+- **Your TDP setting survives a reboot** (#205) — A manually-set TDP was lost on every shutdown (hardware power limits reset to firmware defaults), so the device came back at whatever the per-game default was — e.g. set 35 W, reboot, get 12 W. The last TDP you set by hand is now saved to disk and restored on startup, and it's treated as the "no game running" wattage even with per-game profiles enabled — a game's saved profile still takes over when that game launches, and adjusting TDP mid-game no longer overwrites your idle setting.
+- **Wake button recovers after system updates** (#206) — When a SteamOS/InputPlumber update wiped the overlay wake-button mapping, the boot-time restore could silently fail (device not yet enumerated) and the button reverted to its OS default (opening the on-screen keyboard) with nothing in the logs. The restore now retries while InputPlumber finishes coming up, and logs each step — so a failed restore is diagnosable with `journalctl -u loadout.service -b | grep "wake reload"`.
+
+### Changed
+- **Type-safety hardening across the codebase** (#207) — Enabled TypeScript's strictest indexed-access checking and reworked ~330 spots where array/object lookups could silently produce `undefined` into explicit guards and safe fallbacks; corrupt Steam config files (VDF) now log a warning when partially parsed instead of failing silently. Also adopted the Go-native TypeScript compiler (`tsgo`) as the primary typecheck — ~9× faster and slightly stricter (it caught a real type hole in the LSFG-VK layer-version picker). No behavior changes for valid inputs; two adversarial review rounds verified this on-device.
 
 ### Fixed
 - **Controller shortcuts survive a restart** (#203) — A controller button bound to *Toggle Overlay* (or any non-default action) quietly reverted to its default whenever the overlay restarted, so a custom binding stopped working until you re-set it in Settings. The overlay now loads your saved shortcuts from disk at startup — before it begins listening for input — so your bindings stick across restarts and reboots.
