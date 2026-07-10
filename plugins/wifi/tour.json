@@ -1,0 +1,31 @@
+{
+  "title": "WiFi · stop the drops",
+  "fps": 15,
+  "tailMs": 900,
+  "steps": [
+    {
+      "kind": "wait",
+      "ms": 1300
+    },
+    {
+      "kind": "wait",
+      "ms": 1600,
+      "caption": "WiFi drops after sleep?"
+    },
+    {
+      "kind": "wait",
+      "ms": 1600,
+      "caption": "One toggle keeps it alive"
+    },
+    {
+      "kind": "wait",
+      "ms": 1500,
+      "caption": "Re-applies on every wake"
+    },
+    {
+      "kind": "wait",
+      "ms": 1300,
+      "caption": "Reversible anytime"
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "title": "Fan Control · tune your cooling",
+  "fps": 15,
+  "tailMs": 900,
+  "steps": [
+    {
+      "kind": "wait",
+      "ms": 1500,
+      "caption": "Live fan RPM & temps"
+    },
+    {
+      "kind": "text",
+      "label": "Manual",
+      "caption": "Take manual control"
+    },
+    {
+      "kind": "wait",
+      "ms": 1000
+    },
+    {
+      "kind": "text",
+      "label": "Performance",
+      "caption": "Quick cooling presets"
+    },
+    {
+      "kind": "wait",
+      "ms": 1000
+    },
+    {
+      "kind": "text",
+      "label": "Custom",
+      "caption": "Or design your own"
+    },
+    {
+      "kind": "wait",
+      "ms": 1700,
+      "caption": "Draw a fan curve"
+    }
+  ]
+}

@@ -4,6 +4,10 @@
 
 Browse, install, and toggle community CSS themes for Steam's Big Picture UI, restyling the interface to taste from inside Gaming Mode.
 
+## Demo
+
+![Theme Loader demo](./assets/demo.webp)
+
 ## Screenshots
 
 ### Plugin

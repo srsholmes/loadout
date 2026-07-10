@@ -1,0 +1,36 @@
+{
+  "title": "ProtonDB · Steam compatibility at a glance",
+  "fps": 10,
+  "width": 560,
+  "tailMs": 900,
+  "steps": [
+    {
+      "kind": "wait",
+      "ms": 1500,
+      "caption": "Your library, Proton-rated"
+    },
+    {
+      "kind": "wait",
+      "ms": 1400,
+      "caption": "A tier badge per game"
+    },
+    {
+      "kind": "aria",
+      "label": "Plugin preferences",
+      "caption": "See your breakdown"
+    },
+    {
+      "kind": "wait",
+      "ms": 1800,
+      "caption": "Platinum to Borked, counted"
+    },
+    {
+      "kind": "aria",
+      "label": "Back to library"
+    },
+    {
+      "kind": "wait",
+      "ms": 800
+    }
+  ]
+}

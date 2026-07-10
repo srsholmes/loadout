@@ -1,0 +1,37 @@
+{
+  "title": "Flatpak · manage & update your apps",
+  "fps": 15,
+  "tailMs": 900,
+  "steps": [
+    {
+      "kind": "wait",
+      "ms": 1500,
+      "caption": "Every Flatpak app"
+    },
+    {
+      "kind": "text",
+      "label": "Updates",
+      "caption": "See what's outdated"
+    },
+    {
+      "kind": "wait",
+      "ms": 900,
+      "caption": "Updates at a glance"
+    },
+    {
+      "kind": "text",
+      "label": "Installed",
+      "caption": "Back to your apps"
+    },
+    {
+      "kind": "aria",
+      "label": "Refresh",
+      "caption": "One-tap refresh"
+    },
+    {
+      "kind": "wait",
+      "ms": 1200,
+      "caption": "Always up to date"
+    }
+  ]
+}

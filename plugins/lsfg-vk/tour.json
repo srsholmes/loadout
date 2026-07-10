@@ -1,0 +1,33 @@
+{
+  "title": "LSFG-VK · boost your frame rate",
+  "fps": 13,
+  "width": 820,
+  "tailMs": 900,
+  "steps": [
+    {
+      "kind": "wait",
+      "ms": 1400,
+      "caption": "Frame generation per game"
+    },
+    {
+      "kind": "aria",
+      "label": "Plugin preferences",
+      "caption": "Open plugin settings"
+    },
+    {
+      "kind": "wait",
+      "ms": 1500,
+      "caption": "Install and tune LSFG"
+    },
+    {
+      "kind": "aria",
+      "label": "Back to library",
+      "caption": "Back to your games"
+    },
+    {
+      "kind": "wait",
+      "ms": 1200,
+      "caption": "Apply with one tap"
+    }
+  ]
+}

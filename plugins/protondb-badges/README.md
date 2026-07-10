@@ -4,6 +4,10 @@
 
 Adds ProtonDB compatibility ratings to your Steam library — a tier badge on every game tile plus per-game detail in the home widget — so you know whether something is likely to run well on Linux/Proton before you install it.
 
+## Demo
+
+![ProtonDB Badges demo](./assets/demo.webp)
+
 ## Screenshots
 
 ### Plugin

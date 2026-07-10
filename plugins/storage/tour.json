@@ -1,0 +1,36 @@
+{
+  "title": "Storage · mount lost game drives",
+  "fps": 15,
+  "tailMs": 900,
+  "steps": [
+    {
+      "kind": "wait",
+      "ms": 1200
+    },
+    {
+      "kind": "wait",
+      "ms": 1300,
+      "caption": "Game drive vanished?"
+    },
+    {
+      "kind": "text",
+      "label": "Detect",
+      "caption": "Scan for unmounted drives"
+    },
+    {
+      "kind": "wait",
+      "ms": 1800,
+      "caption": "Finds your Steam library"
+    },
+    {
+      "kind": "wait",
+      "ms": 1400,
+      "caption": "Mounts where Steam looks"
+    },
+    {
+      "kind": "wait",
+      "ms": 1300,
+      "caption": "Pin it so it stays"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "title": "Apex · gamepad recovery",
+  "fps": 15,
+  "width": 1024,
+  "tailMs": 900,
+  "steps": [
+    {
+      "kind": "wait",
+      "ms": 1200
+    },
+    {
+      "kind": "wait",
+      "ms": 1400,
+      "caption": "Gamepad dies on wake?"
+    },
+    {
+      "kind": "text",
+      "label": "Recover",
+      "caption": "One tap to revive it"
+    },
+    {
+      "kind": "wait",
+      "ms": 1600,
+      "caption": "Safe if already working"
+    },
+    {
+      "kind": "wait",
+      "ms": 1400,
+      "caption": "Or auto-fix every wake"
+    },
+    {
+      "kind": "wait",
+      "ms": 1300,
+      "caption": "Block fingerprint wake too"
+    }
+  ]
+}

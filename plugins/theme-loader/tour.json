@@ -1,0 +1,38 @@
+{
+  "title": "Theme Loader · restyle Steam Big Picture",
+  "fps": 14,
+  "width": 980,
+  "tailMs": 900,
+  "steps": [
+    {
+      "kind": "wait",
+      "ms": 1500,
+      "caption": "Your installed themes"
+    },
+    {
+      "kind": "text",
+      "label": "Community",
+      "caption": "Browse DeckThemes"
+    },
+    {
+      "kind": "wait",
+      "ms": 2000,
+      "caption": "Hundreds of themes"
+    },
+    {
+      "kind": "wait",
+      "ms": 1000,
+      "caption": "One-tap install"
+    },
+    {
+      "kind": "aria",
+      "label": "Back to themes",
+      "caption": "Back to your themes"
+    },
+    {
+      "kind": "wait",
+      "ms": 900,
+      "caption": "Reapply anytime"
+    }
+  ]
+}

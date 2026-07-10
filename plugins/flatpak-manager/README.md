@@ -4,6 +4,10 @@
 
 List and update your installed Flatpak apps without dropping to the desktop, so emulators and launchers stay current from inside Gaming Mode.
 
+## Demo
+
+![Flatpak Manager demo](./assets/demo.webp)
+
 ## Screenshots
 
 ![Flatpak Manager](./assets/screenshot.png)

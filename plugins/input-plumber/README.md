@@ -4,6 +4,10 @@
 
 Installs the InputPlumber input-routing daemon that other controller features rely on, and quietly does nothing if it's already present. Mostly a one-time setup helper so the rest 'just works'.
 
+## Demo
+
+![InputPlumber demo](./assets/demo.webp)
+
 ## Screenshots
 
 ![InputPlumber](./assets/screenshot.png)

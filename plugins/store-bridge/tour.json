@@ -1,0 +1,40 @@
+{
+  "title": "Store Bridge · Epic games in Steam",
+  "fps": 12,
+  "width": 800,
+  "tailMs": 900,
+  "steps": [
+    {
+      "kind": "wait",
+      "ms": 1500,
+      "caption": "Epic library, in Steam"
+    },
+    {
+      "kind": "text",
+      "label": "Installed",
+      "caption": "Filter to installed"
+    },
+    {
+      "kind": "wait",
+      "ms": 1100
+    },
+    {
+      "kind": "text",
+      "label": "Library",
+      "caption": "Browse the full library"
+    },
+    {
+      "kind": "wait",
+      "ms": 1000
+    },
+    {
+      "kind": "tile",
+      "caption": "Open any game"
+    },
+    {
+      "kind": "wait",
+      "ms": 1800,
+      "caption": "Install & add to Steam"
+    }
+  ]
+}

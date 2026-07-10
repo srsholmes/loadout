@@ -1,0 +1,32 @@
+{
+  "title": "Disable Controller Input · silence rogue pads",
+  "fps": 15,
+  "tailMs": 900,
+  "steps": [
+    {
+      "kind": "wait",
+      "ms": 1300,
+      "caption": "Fix player-one conflicts"
+    },
+    {
+      "kind": "wait",
+      "ms": 1500,
+      "caption": "See every connected pad"
+    },
+    {
+      "kind": "text",
+      "label": "Refresh",
+      "caption": "Rescan controllers live"
+    },
+    {
+      "kind": "wait",
+      "ms": 1400,
+      "caption": "Silence with one toggle"
+    },
+    {
+      "kind": "wait",
+      "ms": 1100,
+      "caption": "Stays hidden from games"
+    }
+  ]
+}

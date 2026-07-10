@@ -1,0 +1,37 @@
+{
+  "title": "RGB Zones · light up your handheld",
+  "fps": 15,
+  "tailMs": 900,
+  "steps": [
+    {
+      "kind": "wait",
+      "ms": 1300,
+      "caption": "Control every LED zone"
+    },
+    {
+      "kind": "text",
+      "label": "Aurora",
+      "caption": "Cycle animated effects"
+    },
+    {
+      "kind": "text",
+      "label": "Static",
+      "caption": "Lock one solid color"
+    },
+    {
+      "kind": "wait",
+      "ms": 1300,
+      "caption": "Fine-tune R, G, B"
+    },
+    {
+      "kind": "text",
+      "label": "Rescan hardware",
+      "caption": "Re-detect LED devices"
+    },
+    {
+      "kind": "wait",
+      "ms": 1100,
+      "caption": "Presets and brightness too"
+    }
+  ]
+}

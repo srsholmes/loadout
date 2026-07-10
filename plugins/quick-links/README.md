@@ -13,6 +13,10 @@ User-added templates and per-game pins / custom links live in
 plugin storage; built-ins ship in `DEFAULT_TEMPLATES` and re-seed
 on every `onLoad()` so version bumps add new sites for free.
 
+## Demo
+
+![Quick Links demo](./assets/demo.webp)
+
 ## Screenshots
 
 ![Quick Links](./assets/screenshot.png)

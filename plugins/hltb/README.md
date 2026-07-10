@@ -4,6 +4,10 @@
 
 Pulls HowLongToBeat completion times into Steam's library and store pages, so you can see at a glance how long a game takes to finish and pick something that fits the time you have.
 
+## Demo
+
+![HLTB demo](./assets/demo.webp)
+
 ## Screenshots
 
 ### Overview

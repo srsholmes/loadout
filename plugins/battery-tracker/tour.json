@@ -1,0 +1,32 @@
+{
+  "title": "Battery · real-time power monitoring",
+  "fps": 15,
+  "tailMs": 900,
+  "steps": [
+    {
+      "kind": "wait",
+      "ms": 1300,
+      "caption": "See charge in real time"
+    },
+    {
+      "kind": "wait",
+      "ms": 1500,
+      "caption": "Watts, volts, amps live"
+    },
+    {
+      "kind": "wait",
+      "ms": 1400,
+      "caption": "Track battery wear"
+    },
+    {
+      "kind": "text",
+      "label": "Refresh",
+      "caption": "Update the readings"
+    },
+    {
+      "kind": "wait",
+      "ms": 1100,
+      "caption": "30-minute drain history"
+    }
+  ]
+}

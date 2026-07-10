@@ -1,0 +1,42 @@
+{
+  "title": "SteamGridDB · custom art for every game",
+  "fps": 13,
+  "width": 820,
+  "tailMs": 900,
+  "steps": [
+    {
+      "kind": "wait",
+      "ms": 1500,
+      "caption": "Your Steam library"
+    },
+    {
+      "kind": "tile",
+      "caption": "Pick any game"
+    },
+    {
+      "kind": "wait",
+      "ms": 1800,
+      "caption": "Fresh box art"
+    },
+    {
+      "kind": "text",
+      "label": "Hero",
+      "caption": "Cinematic hero banners"
+    },
+    {
+      "kind": "wait",
+      "ms": 1200,
+      "caption": "Big splash art"
+    },
+    {
+      "kind": "text",
+      "label": "Logo",
+      "caption": "Transparent logos"
+    },
+    {
+      "kind": "wait",
+      "ms": 1000,
+      "caption": "Art in seconds"
+    }
+  ]
+}

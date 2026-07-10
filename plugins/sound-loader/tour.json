@@ -1,0 +1,38 @@
+{
+  "title": "Sound Loader · custom UI sound packs",
+  "fps": 13,
+  "width": 900,
+  "tailMs": 900,
+  "steps": [
+    {
+      "kind": "wait",
+      "ms": 1500,
+      "caption": "Custom UI sounds"
+    },
+    {
+      "kind": "text",
+      "label": "Synthesized",
+      "caption": "Switch sound modes"
+    },
+    {
+      "kind": "wait",
+      "ms": 800,
+      "caption": "Instant preview"
+    },
+    {
+      "kind": "text",
+      "label": "Default",
+      "caption": "Steam or synth"
+    },
+    {
+      "kind": "text",
+      "label": "Community",
+      "caption": "Browse DeckThemes"
+    },
+    {
+      "kind": "wait",
+      "ms": 1800,
+      "caption": "Hundreds of packs"
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "title": "Quick Links · one launcher for every site",
+  "fps": 15,
+  "width": 1024,
+  "tailMs": 900,
+  "steps": [
+    {
+      "kind": "wait",
+      "ms": 1500,
+      "caption": "Contextual links per game"
+    },
+    {
+      "kind": "aria",
+      "label": "Quick Links settings",
+      "caption": "Open the link catalog"
+    },
+    {
+      "kind": "wait",
+      "ms": 1700,
+      "caption": "YouTube, ProtonDB, HLTB…"
+    },
+    {
+      "kind": "wait",
+      "ms": 1200,
+      "caption": "Add your own"
+    },
+    {
+      "kind": "aria",
+      "label": "Back to Quick Links"
+    },
+    {
+      "kind": "wait",
+      "ms": 800
+    }
+  ]
+}

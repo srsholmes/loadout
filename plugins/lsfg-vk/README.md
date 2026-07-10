@@ -13,6 +13,10 @@ work without it. The plugin downloads the open-source
 [`lsfg-vk`](https://github.com/PancakeTAS/lsfg-vk) Vulkan layer itself, but the
 underlying frame-gen tech is not free or bundled.
 
+## Demo
+
+![LSFG-VK demo](./assets/demo.webp)
+
 ## Screenshots
 
 ![LSFG-VK](./assets/screenshot.png)

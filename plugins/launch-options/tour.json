@@ -1,0 +1,40 @@
+{
+  "title": "Launch Options · per-game launch tweaks",
+  "fps": 13,
+  "width": 860,
+  "tailMs": 900,
+  "steps": [
+    {
+      "kind": "wait",
+      "ms": 1500,
+      "caption": "Tune game launch options"
+    },
+    {
+      "kind": "aria",
+      "label": "Manage presets",
+      "caption": "Save reusable presets"
+    },
+    {
+      "kind": "wait",
+      "ms": 1400,
+      "caption": "mangohud, gamemoderun…"
+    },
+    {
+      "kind": "aria",
+      "label": "Back to library"
+    },
+    {
+      "kind": "wait",
+      "ms": 700
+    },
+    {
+      "kind": "tile",
+      "caption": "Open any game"
+    },
+    {
+      "kind": "wait",
+      "ms": 1500,
+      "caption": "Set its launch command"
+    }
+  ]
+}

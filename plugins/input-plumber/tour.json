@@ -1,0 +1,32 @@
+{
+  "title": "InputPlumber · controller routing",
+  "fps": 15,
+  "width": 1024,
+  "tailMs": 900,
+  "steps": [
+    {
+      "kind": "wait",
+      "ms": 1200
+    },
+    {
+      "kind": "wait",
+      "ms": 1600,
+      "caption": "Input routing for handhelds"
+    },
+    {
+      "kind": "wait",
+      "ms": 1700,
+      "caption": "Bind a physical wake button"
+    },
+    {
+      "kind": "wait",
+      "ms": 1600,
+      "caption": "Opens the overlay in-game"
+    },
+    {
+      "kind": "wait",
+      "ms": 1400,
+      "caption": "Restart to revive a pad"
+    }
+  ]
+}

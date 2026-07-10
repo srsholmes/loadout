@@ -73,12 +73,24 @@ const rel = (p: string) => relative(ROOT, p);
 
 type Format = "webp" | "gif" | "mp4";
 
-// Plugins whose UI renders identifying / personal data that must NEVER be
-// recorded into a committed clip. `network-info` leaks MAC/SSID/IP; `playtime`
-// reveals personal play history. Enforced two ways: tours are opt-in (no
-// `tour.json` → no tour) AND these are hard-skipped even if a `tour.json`
-// exists. Mirrors PRIVACY_SKIP in capture-screenshots.ts.
-const TOUR_SKIP = new Set(["network-info", "playtime"]);
+// Plugins never toured — either they render identifying / personal data that
+// must not be committed, or they're poor tour material. Enforced two ways:
+// tours are opt-in (no `tour.json` → no tour) AND these are hard-skipped even
+// if a `tour.json` exists.
+//   network-info      — MAC / SSID / IP
+//   playtime          — personal play history
+//   bluetooth         — paired device names
+//   storage-cleaner   — excluded per maintainer request
+//   display-settings  — excluded per maintainer request
+//   recomp            — excluded per maintainer request (heavy game-art clip)
+const TOUR_SKIP = new Set([
+  "network-info",
+  "playtime",
+  "bluetooth",
+  "storage-cleaner",
+  "display-settings",
+  "recomp",
+]);
 
 // ── Per-plugin tour recipes (plugins/<id>/tour.json) ────────────────────────
 //
@@ -94,6 +106,12 @@ interface Tour {
   title?: string;
   /** Output frame rate for this tour (default `DEFAULT_FPS`). */
   fps?: number;
+  /**
+   * Output width in px for this tour (default `--width` / `DEFAULT_WIDTH`).
+   * Art-heavy library grids don't compress in WebP, so those tours drop to a
+   * smaller width to keep the file reasonable while the caption stays legible.
+   */
+  width?: number;
   /** Hold time on the final frame, ms (default 600). */
   tailMs?: number;
   steps: TourStep[];
@@ -519,16 +537,17 @@ async function captureTour(
   if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
   const { list, totalSec } = writeFrames(dir, frames, (tour.tailMs ?? 600) / 1000);
   const fps = opts.fpsOverride ?? tour.fps ?? DEFAULT_FPS;
+  const width = tour.width ?? opts.width;
   const caps =
     font && raw.length
-      ? captionFilters(resolveCaptions(raw, frames[0]!.t, totalSec), font, dir, opts.width)
+      ? captionFilters(resolveCaptions(raw, frames[0]!.t, totalSec), font, dir, width)
       : "";
   if (!font && raw.length) {
     console.warn("  ↷ no sans font found (install fontconfig/dejavu) — encoding without captions");
   }
 
   mkdirSync(REVIEW, { recursive: true });
-  encodeAll(join(REVIEW, `${id}.webp`), list, dir, caps, opts.formats, opts.width, fps);
+  encodeAll(join(REVIEW, `${id}.webp`), list, dir, caps, opts.formats, width, fps);
   console.log(`  review: ${rel(join(REVIEW, `${id}.webp`))} — promote with --promote=${id}`);
   if (!opts.keepFrames) rmSync(dir, { recursive: true, force: true });
 }
