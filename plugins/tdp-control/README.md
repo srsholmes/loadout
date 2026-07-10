@@ -4,6 +4,10 @@
 
 Set your CPU/APU power limit (TDP) with quick presets and a slider, optionally per game, to balance performance against battery life and heat — the single biggest knob for tuning a handheld.
 
+## Demo
+
+![TDP Control demo](./assets/demo.webp)
+
 ## Screenshots
 
 ### Overview

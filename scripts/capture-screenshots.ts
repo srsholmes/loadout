@@ -13,16 +13,21 @@
  * reached by clicking DOM elements over CDP, driven by the per-plugin
  * `PAGE_RECIPES` table below (the shared `<GameCard>` carries a stable
  * `data-game-card` hook; gears/tabs/back are matched by aria-label / text).
+ *
+ * The CDP connection + hash navigation + recipe-step machinery is shared
+ * with `capture-videos.ts` and lives in `lib/overlay-cdp.ts`.
  */
-import {
-  readdirSync,
-  existsSync,
-  mkdirSync,
-  writeFileSync,
-  copyFileSync,
-  rmSync,
-} from "node:fs";
+import { readdirSync, existsSync, mkdirSync, copyFileSync, rmSync } from "node:fs";
 import { join, resolve, relative } from "node:path";
+import {
+  CDP,
+  cdpWs,
+  navigate,
+  runSteps,
+  setSidebarCollapsed,
+  waitForIdle,
+  type Step,
+} from "./lib/overlay-cdp";
 
 // Repo root, derived from this script's location so the capture
 // script runs the same way for every contributor regardless of where
@@ -56,19 +61,11 @@ const PLUGINS = readdirSync(join(ROOT, "plugins"), { withFileTypes: true })
 
 // ── Per-plugin sub-page recipes ────────────────────────────────────────────
 //
-// A `Step` is a single CDP-driven action. `tile` clicks the first shared
-// GameCard (`[data-game-card]`) to open a detail page; `aria`/`text` click a
-// control by aria-label / visible text (gears, tabs); `wait` adds settle time.
-//
 // Each page is captured from a freshly-(re)navigated plugin landing, so steps
 // describe the path from the landing — no need to back out between pages. If a
 // step's target isn't on screen (e.g. an empty library has no tile), the page
-// is skipped rather than producing a misleading shot.
-type Step =
-  | { kind: "tile" }
-  | { kind: "aria"; label: string }
-  | { kind: "text"; label: string }
-  | { kind: "wait"; ms: number };
+// is skipped rather than producing a misleading shot. See the `Step`
+// vocabulary in `lib/overlay-cdp.ts`.
 
 interface PageShot {
   /** Suffix in the filename: `NN-<plugin>-<name>.png`. */
@@ -84,9 +81,7 @@ const PAGE_RECIPES: Record<string, PageShot[]> = {
   // The landing shot is the Library (available games) tab; only the
   // Installed tab is captured as a sub-page. Downloads/Detected/detail
   // shots were dropped — they're empty/low-signal on a fresh install.
-  "store-bridge": [
-    { name: "installed", steps: [{ kind: "text", label: "Installed" }] },
-  ],
+  "store-bridge": [{ name: "installed", steps: [{ kind: "text", label: "Installed" }] }],
   "launch-options": [
     { name: "detail", steps: [{ kind: "tile" }] },
     { name: "presets", steps: [{ kind: "aria", label: "Manage presets" }] },
@@ -95,9 +90,7 @@ const PAGE_RECIPES: Record<string, PageShot[]> = {
   // The custom-device form lives on its own sub-view behind the header gear —
   // a real feature page (define TDP limits for an unlisted handheld), not a
   // generic settings screen, so it's worth capturing.
-  "tdp-control": [
-    { name: "settings", steps: [{ kind: "aria", label: "Custom device settings" }] },
-  ],
+  "tdp-control": [{ name: "settings", steps: [{ kind: "aria", label: "Custom device settings" }] }],
   // Custom fan-curve editor only renders in Manual mode after the Custom
   // preset is selected — flip Manual (header), then pick Custom to reveal
   // the curve graph + per-point sliders.
@@ -118,130 +111,6 @@ const PAGE_RECIPES: Record<string, PageShot[]> = {
 const LANDING_SETUP: Record<string, Step[]> = {
   playtime: [{ kind: "text", label: "All" }],
 };
-
-const sleep = (ms: number) => Bun.sleep(ms);
-// Brief settle for the route swap + first paint before we poll for idle.
-const SETTLE_MS = 300;
-// Async-loading wait: many plugins fetch over the network on mount
-// (ProtonDB, HLTB, SteamGridDB, store libraries), so a fixed sleep either
-// over-waits or fires mid-spinner. Poll until no loading indicators remain.
-const IDLE_TIMEOUT_MS = 8000;
-const IDLE_POLL_MS = 200;
-// The DOM must stay idle this long before we trust it — guards the gap
-// between one fetch's spinner clearing and the next appearing.
-const IDLE_STABLE_MS = 400;
-
-async function cdpWs(): Promise<string> {
-  const res = await fetch("http://localhost:9222/json");
-  const targets = (await res.json()) as Array<{
-    title?: string;
-    webSocketDebuggerUrl: string;
-  }>;
-  const overlay = targets.find((t) => t.title === "Loadout Overlay");
-  if (!overlay) {
-    console.error("overlay target not found");
-    process.exit(1);
-  }
-  return overlay.webSocketDebuggerUrl;
-}
-
-class CDP {
-  private ws!: WebSocket;
-  private id = 0;
-  private pending = new Map<number, (msg: Record<string, unknown>) => void>();
-
-  static async connect(url: string): Promise<CDP> {
-    const cdp = new CDP();
-    cdp.ws = new WebSocket(url);
-    cdp.ws.addEventListener("message", (ev: MessageEvent) => {
-      const msg = JSON.parse(
-        typeof ev.data === "string" ? ev.data : ev.data.toString(),
-      );
-      // Responses carry an `id`; CDP events don't — ignore the latter.
-      if (typeof msg.id === "number" && cdp.pending.has(msg.id)) {
-        cdp.pending.get(msg.id)!(msg);
-        cdp.pending.delete(msg.id);
-      }
-    });
-    await new Promise<void>((res, rej) => {
-      cdp.ws.addEventListener("open", () => res(), { once: true });
-      cdp.ws.addEventListener("error", () => rej(new Error("CDP ws error")), {
-        once: true,
-      });
-    });
-    return cdp;
-  }
-
-  call(
-    method: string,
-    params: Record<string, unknown> = {},
-  ): Promise<Record<string, unknown>> {
-    const id = ++this.id;
-    return new Promise((res) => {
-      this.pending.set(id, res);
-      this.ws.send(JSON.stringify({ id, method, params }));
-    });
-  }
-
-  async eval(expr: string, awaitPromise = false): Promise<unknown> {
-    const r = (await this.call("Runtime.evaluate", {
-      expression: expr,
-      returnByValue: true,
-      awaitPromise,
-    })) as { result?: { result?: { value?: unknown } } };
-    return r.result?.result?.value;
-  }
-
-  async screenshot(path: string): Promise<void> {
-    const r = (await this.call("Page.captureScreenshot", {
-      format: "png",
-      captureBeyondViewport: false,
-    })) as { result?: { data?: string } };
-    const data = r.result?.data;
-    if (!data) throw new Error(`no data: ${JSON.stringify(r)}`);
-    mkdirSync(join(path, ".."), { recursive: true });
-    writeFileSync(path, Buffer.from(data, "base64"));
-    console.log(`  → ${rel(path)}`);
-  }
-}
-
-// "Busy" if any DaisyUI `.loading` spinner / `animate-spin` icon is
-// present, OR any *in-viewport* image hasn't finished decoding. The image
-// check is what stops us shooting game/detail art before it paints —
-// spinners alone don't cover lazy <img> loads. Off-screen lazy images are
-// ignored (they never load until scrolled to, so they'd never settle).
-const BUSY_EXPR = `(() => {
-  if (document.querySelectorAll('.loading, [class*="animate-spin"]').length) return true;
-  const vw = innerWidth, vh = innerHeight;
-  for (const img of document.images) {
-    const r = img.getBoundingClientRect();
-    const inView = r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw && r.width > 0 && r.height > 0;
-    if (inView && (!img.complete || img.naturalWidth === 0)) return true;
-  }
-  return false;
-})()`;
-
-/**
- * Wait until the overlay has no visible loading state — no spinners and
- * no in-viewport image still decoding — staying clear for `IDLE_STABLE_MS`
- * so we don't fire in the gap between two sequential fetches. Falls
- * through after `IDLE_TIMEOUT_MS` so a perpetually-loading view still gets
- * captured.
- */
-async function waitForIdle(cdp: CDP): Promise<void> {
-  const start = Date.now();
-  let idleSince: number | null = null;
-  while (Date.now() - start < IDLE_TIMEOUT_MS) {
-    const busy = (await cdp.eval(BUSY_EXPR)) === true;
-    if (busy) {
-      idleSince = null;
-    } else {
-      idleSince ??= Date.now();
-      if (Date.now() - idleSince >= IDLE_STABLE_MS) return;
-    }
-    await sleep(IDLE_POLL_MS);
-  }
-}
 
 /**
  * Scroll the plugin's main scroll container to a random position so the
@@ -276,101 +145,9 @@ const NO_SCROLL = new Set(["recomp", "tdp-control", "playtime"]);
  */
 async function varyGridView(cdp: CDP, pluginId: string): Promise<void> {
   if (NO_SCROLL.has(pluginId)) return;
-  const tiles = (await cdp.eval(
-    `document.querySelectorAll('[data-game-card]').length`,
-  )) as number;
+  const tiles = (await cdp.eval(`document.querySelectorAll('[data-game-card]').length`)) as number;
   if (tiles < GRID_TILE_THRESHOLD) return;
   if (await scrollRandom(cdp)) await waitForIdle(cdp);
-}
-
-async function navigate(cdp: CDP, hashPath: string): Promise<void> {
-  await cdp.eval(`location.hash='${hashPath}'; void 0`);
-  await sleep(SETTLE_MS); // let the route swap + mount begin
-  await waitForIdle(cdp); // then wait out any async loading
-}
-
-async function setSidebarCollapsed(cdp: CDP, collapsed: boolean): Promise<void> {
-  // The toggle is a Focusable button; flipping the checkbox directly
-  // updates the drawer classes but not React state. Instead click the
-  // actual button so React's onClick runs.
-  const expr = `
-  (function(){
-    const input = document.getElementById('sl-drawer');
-    if (input.checked === ${collapsed ? "false" : "true"}) return 'already';
-    const btn = document.querySelector('[aria-label="Toggle sidebar"]');
-    btn && btn.click();
-    return 'clicked';
-  })()
-  `;
-  await cdp.eval(expr);
-  await sleep(250);
-}
-
-// ── Recipe step execution ──────────────────────────────────────────────────
-
-/** Click the first element matching `selector`. Returns whether it existed. */
-async function clickSelector(cdp: CDP, selector: string): Promise<boolean> {
-  const expr = `(() => {
-    const el = document.querySelector(${JSON.stringify(selector)});
-    if (!el) return false;
-    el.click();
-    return true;
-  })()`;
-  return (await cdp.eval(expr)) === true;
-}
-
-/** Click the first button/[role=button] whose text starts with `label`. */
-async function clickText(cdp: CDP, label: string): Promise<boolean> {
-  const expr = `(() => {
-    const els = [...document.querySelectorAll('button, [role="button"]')];
-    const el = els.find((e) => (e.textContent || "").trim().startsWith(${JSON.stringify(label)}));
-    if (!el) return false;
-    el.click();
-    return true;
-  })()`;
-  return (await cdp.eval(expr)) === true;
-}
-
-// A click target may not exist yet — plugin headers/grids that fetch data
-// (recomp, hltb, steamgriddb, launch-options) render their gear/tiles only
-// after the load resolves. Poll for the element before giving up so a slow
-// fetch doesn't read as "page absent".
-const CLICK_TRIES = 6;
-const CLICK_RETRY_MS = 500;
-
-async function clickWithRetry(
-  cdp: CDP,
-  fn: () => Promise<boolean>,
-): Promise<boolean> {
-  for (let i = 0; i < CLICK_TRIES; i++) {
-    if (await fn()) return true;
-    await sleep(CLICK_RETRY_MS);
-  }
-  return false;
-}
-
-/** Run a page recipe's steps. Returns false (page unreachable) if any
- *  click target never appears. */
-async function runSteps(cdp: CDP, steps: Step[]): Promise<boolean> {
-  for (const step of steps) {
-    if (step.kind === "wait") {
-      await sleep(step.ms);
-      continue;
-    }
-    let ok = false;
-    if (step.kind === "tile")
-      ok = await clickWithRetry(cdp, () => clickSelector(cdp, "[data-game-card]"));
-    else if (step.kind === "aria")
-      ok = await clickWithRetry(cdp, () =>
-        clickSelector(cdp, `[aria-label="${step.label}"]`),
-      );
-    else if (step.kind === "text")
-      ok = await clickWithRetry(cdp, () => clickText(cdp, step.label));
-    if (!ok) return false;
-    await sleep(SETTLE_MS);
-    await waitForIdle(cdp); // sub-page may fetch on open (detail pages)
-  }
-  return true;
 }
 
 // ── Post-processing: copy to plugin assets + cull stale shots ──────────────
@@ -459,9 +236,7 @@ async function main(): Promise<void> {
   // theme — pass `--theme=<name>` (default `midnight`) to pick the source
   // theme dir for the asset copy.
   const args = new Set(process.argv.slice(2));
-  const themeArg = [...args]
-    .find((a) => a.startsWith("--theme="))
-    ?.split("=")[1];
+  const themeArg = [...args].find((a) => a.startsWith("--theme="))?.split("=")[1];
 
   // `--plugins=a,b,c` (or `--plugin=a`) limits capture to a subset. When set,
   // the global home shots are skipped and stale-culling is disabled, so a
@@ -472,7 +247,10 @@ async function main(): Promise<void> {
     ?.split("=")[1];
   let only: Set<string> | null = null;
   if (onlyArg) {
-    const requested = onlyArg.split(",").map((s) => s.trim()).filter(Boolean);
+    const requested = onlyArg
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     const unknown = requested.filter((p) => !PLUGINS.includes(p));
     if (unknown.length) {
       console.error(`[capture] unknown plugin(s): ${unknown.join(", ")}`);
@@ -493,9 +271,8 @@ async function main(): Promise<void> {
 
   // Capture whatever theme the overlay is currently in — never change it.
   const theme =
-    ((await cdp.eval(
-      `document.documentElement.getAttribute('data-theme')`,
-    )) as string | null) ?? "midnight";
+    ((await cdp.eval(`document.documentElement.getAttribute('data-theme')`)) as string | null) ??
+    "midnight";
   console.log(`[theme] capturing current theme: ${theme}`);
 
   // Global surfaces (home only — the settings page isn't a useful shot).
@@ -503,10 +280,12 @@ async function main(): Promise<void> {
   if (!only) {
     await setSidebarCollapsed(cdp, false);
     await navigate(cdp, "#/");
-    await cdp.screenshot(join(OUT, theme, "00-home.png"));
+    const home = join(OUT, theme, "00-home.png");
+    await cdp.screenshot(home, rel(home));
     await navigate(cdp, "#/");
     await setSidebarCollapsed(cdp, true);
-    await cdp.screenshot(join(OUT, theme, "02-home-sidebar-collapsed.png"));
+    const collapsed = join(OUT, theme, "02-home-sidebar-collapsed.png");
+    await cdp.screenshot(collapsed, rel(collapsed));
     await setSidebarCollapsed(cdp, false);
   }
 
@@ -518,7 +297,8 @@ async function main(): Promise<void> {
     await navigate(cdp, `#/plugin/${pid}`);
     if (LANDING_SETUP[pid]) await runSteps(cdp, LANDING_SETUP[pid]);
     await varyGridView(cdp, pid);
-    await cdp.screenshot(join(OUT, theme, `${nn}-${pid}.png`));
+    const landing = join(OUT, theme, `${nn}-${pid}.png`);
+    await cdp.screenshot(landing, rel(landing));
 
     for (const page of PAGE_RECIPES[pid] ?? []) {
       // Reset to the plugin landing so each page starts from a clean base.
@@ -533,7 +313,8 @@ async function main(): Promise<void> {
         continue;
       }
       await varyGridView(cdp, pid); // grid sub-pages (e.g. store tabs) vary too
-      await cdp.screenshot(join(OUT, theme, `${nn}-${pid}-${page.name}.png`));
+      const sub = join(OUT, theme, `${nn}-${pid}-${page.name}.png`);
+      await cdp.screenshot(sub, rel(sub));
     }
   }
 

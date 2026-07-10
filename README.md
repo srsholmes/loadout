@@ -13,11 +13,21 @@ N64 classic — without leaving your game. It runs as an **in-game overlay** in
 Steam's Gaming Mode and as a **standalone app** on the desktop, detecting which
 mode you're in and adapting automatically.
 
-[**Install →**](#install) · [Featured plugins](#featured-plugins) · [All plugins](#all-plugins) · [Supported devices](#supported-devices--testing) · [Docs](#documentation)
+[**Install →**](#install) · [See it in action](#see-it-in-action) · [Featured plugins](#featured-plugins) · [All plugins](#all-plugins) · [Supported devices](#supported-devices--testing) · [Docs](#documentation)
 
 > 🚧 **Pre-launch.** Daily-driven on OneXPlayer devices and tested on Valve's
 > Steam Deck. I'm [looking for testers](#supported-devices--testing) on other
 > handhelds.
+
+## See it in action
+
+Set your power limit without leaving your game — TDP presets and a live slider,
+right in the overlay:
+
+![Loadout — TDP control in the overlay](plugins/tdp-control/assets/demo.webp)
+
+<sub>Clips are captured straight from the running overlay — see
+[docs/media-capture.md](docs/media-capture.md).</sub>
 
 ## Install
 
@@ -271,6 +281,7 @@ before trusting a change). Full dev/build/test loop:
 | [Gamepad Navigation](docs/gamepad-navigation-guide.md)       | Spatial navigation, focus management                    |
 | [OS Compatibility](docs/os-compatibility.md)                 | SteamOS, Bazzite, CachyOS specifics                     |
 | [Releasing](docs/releasing.md)                               | Versioning policy + how releases are cut                |
+| [Media Capture](docs/media-capture.md)                       | Capturing overlay screenshots + video clips             |
 
 See [CHANGELOG.md](CHANGELOG.md) for the release history.
 

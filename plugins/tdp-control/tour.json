@@ -1,0 +1,18 @@
+{
+  "title": "TDP Control · power tuning",
+  "fps": 15,
+  "tailMs": 900,
+  "steps": [
+    { "kind": "wait", "ms": 1300 },
+    { "kind": "text", "label": "Silent", "caption": "Quiet & cool for the couch" },
+    { "kind": "wait", "ms": 1100 },
+    { "kind": "text", "label": "Balanced", "caption": "Balanced for everyday play" },
+    { "kind": "wait", "ms": 1100 },
+    { "kind": "text", "label": "Performance", "caption": "…or push for maximum performance" },
+    { "kind": "wait", "ms": 1300 },
+    { "kind": "aria", "label": "Custom device settings", "caption": "Add limits for an unlisted device" },
+    { "kind": "wait", "ms": 1700 },
+    { "kind": "aria", "label": "Back to TDP Control" },
+    { "kind": "wait", "ms": 900 }
+  ]
+}

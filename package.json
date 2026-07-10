@@ -47,6 +47,8 @@
     "test:coverage": "bun test test.ts --isolate --coverage --coverage-dir=coverage/backend && bun test spec.tsx --preload ./test/bun-test-setup.ts --isolate --coverage --coverage-dir=coverage/ui",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "capture:screenshots": "bun run scripts/capture-screenshots.ts",
+    "capture:videos": "bun run scripts/capture-videos.ts",
     "check:specs": "sh scripts/check-plugin-specs.sh",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

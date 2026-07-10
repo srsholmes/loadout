@@ -55,6 +55,9 @@ screenshots/
 # Local screenshot scratch folder (capture-steam-interval.ts output)
 screenshot-review/
 
+# Raw screencast frames + intermediate encodes (capture-videos.ts scratch).
+videos/
+
 # background-agent git worktrees — never track
 .worktrees/
 

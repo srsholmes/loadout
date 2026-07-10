@@ -139,9 +139,7 @@ function loadPluginMeta(id: string): PluginMeta | null {
   // `pkg.name` — that's the npm-style "@loadout/plugin-<id>"
   // which would render as ugly user-facing text.
   const name =
-    DISPLAY_NAME_OVERRIDES[id] ??
-    pickString(manifest.name, pkgPlugin.name) ??
-    toDisplayName(id);
+    DISPLAY_NAME_OVERRIDES[id] ?? pickString(manifest.name, pkgPlugin.name) ?? toDisplayName(id);
   const description =
     pickString(manifest.description, pkgPlugin.description, pkg.description) ??
     "(No description yet — add one to plugin.json or package.json:plugin.description.)";
@@ -256,8 +254,15 @@ const PLUGIN_ABOUT: Record<string, string> = {
     "Browse, install, and toggle community CSS themes for Steam's Big Picture UI, restyling the interface to taste from inside Gaming Mode.",
 };
 
+/** An animated demo clip (`assets/demo.webp`) produced by
+ *  `scripts/capture-videos.ts`, if the plugin has one. */
+function pluginDemo(id: string): string | null {
+  return existsSync(join(PLUGINS_DIR, id, "assets", "demo.webp")) ? "demo.webp" : null;
+}
+
 function templateFor(meta: PluginMeta): string {
   const shots = pluginScreenshots(meta.id);
+  const demo = pluginDemo(meta.id);
   const about = PLUGIN_ABOUT[meta.id];
   // One screenshot → show it untitled (a heading would be noise). More
   // than one → title each so the reader knows which view they're seeing.
@@ -269,16 +274,16 @@ function templateFor(meta: PluginMeta): string {
           `![${meta.name} — ${s.title}](./assets/${s.file})`,
           "",
         ])
-      : [
-          `![${meta.name}](./assets/${shots[0]?.file ?? "screenshot.png"})`,
-          "",
-        ];
+      : [`![${meta.name}](./assets/${shots[0]?.file ?? "screenshot.png"})`, ""];
   return [
     `# ${meta.name}`,
     "",
     `> ${meta.description}`,
     "",
     ...(about ? [about, ""] : []),
+    // A short animated demo (WebP) leads the media, if one was captured —
+    // it shows the plugin in motion in a way a still can't.
+    ...(demo ? ["## Demo", "", `![${meta.name} demo](./assets/${demo})`, ""] : []),
     "## Screenshots",
     "",
     ...shotBlock,
@@ -361,24 +366,12 @@ function replaceBetween(
   return { text: next, status: next === text ? "unchanged" : "updated" };
 }
 
-function updateRootGallery(
-  metas: PluginMeta[],
-): "updated" | "unchanged" | "no-markers" {
+function updateRootGallery(metas: PluginMeta[]): "updated" | "unchanged" | "no-markers" {
   const readmePath = join(ROOT, "README.md");
   let text = readFileSync(readmePath, "utf8");
-  const featured = replaceBetween(
-    text,
-    FEATURED_START,
-    FEATURED_END,
-    buildFeaturedMarkdown(metas),
-  );
+  const featured = replaceBetween(text, FEATURED_START, FEATURED_END, buildFeaturedMarkdown(metas));
   text = featured.text;
-  const gallery = replaceBetween(
-    text,
-    GALLERY_START,
-    GALLERY_END,
-    buildGalleryMarkdown(metas),
-  );
+  const gallery = replaceBetween(text, GALLERY_START, GALLERY_END, buildGalleryMarkdown(metas));
   text = gallery.text;
   if (featured.status === "no-markers" || gallery.status === "no-markers") {
     return "no-markers";
