@@ -1,6 +1,6 @@
 # Apex
 
-> OneXPlayer Apex device fixes: recover the internal gamepad when its xHCI controller dies on resume (or blacklist the hid-oxp driver to prevent the drop-out), and block the fingerprint reader from waking the device on a light touch.
+> OneXPlayer Apex device fixes: recover the internal gamepad when its xHCI controller dies on resume, and block the fingerprint reader from waking the device on a light touch.
 
 ## Screenshots
 
