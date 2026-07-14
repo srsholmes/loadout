@@ -990,6 +990,14 @@ ExecStart=/bin/sh -c '\
   if [ -n "$PID" ] && [ -r "/proc/$PID/environ" ]; then \
     GS_DISPLAY=$(tr "\\0" "\\n" < "/proc/$PID/environ" | sed -n "s/^GAMESCOPE_DISPLAY=//p" | head -n1); \
     GS_WAYLAND=$(tr "\\0" "\\n" < "/proc/$PID/environ" | sed -n "s/^GAMESCOPE_WAYLAND_DISPLAY=//p" | head -n1); \
+    # SteamOS exports GAMESCOPE_WAYLAND_DISPLAY into steam's environment but
+    # not GAMESCOPE_DISPLAY, so the sed above comes back empty in Gaming Mode
+    # and the pgrep branch below is what actually resolves the display there.
+    # Steam already knows the inner X display, so read it rather than letting
+    # the fallback assume ":0".
+    if [ -z "$GS_DISPLAY" ] && [ -n "$GS_WAYLAND" ]; then \
+      GS_DISPLAY=$(tr "\\0" "\\n" < "/proc/$PID/environ" | sed -n "s/^DISPLAY=//p" | head -n1); \
+    fi; \
   fi; \
   # gamescope's kernel comm name on Linux is "gamescope-wl", so a bare
   # `pgrep -x gamescope` misses it — match the real comm instead.
