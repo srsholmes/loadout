@@ -76,6 +76,28 @@ ExecStart=/bin/sh -c '\
     export DISPLAY="${DISPLAY:-:0}"; \
   fi; \
   echo "[loadout-overlay] DISPLAY=$DISPLAY GAMESCOPE_DISPLAY=${GAMESCOPE_DISPLAY:-unset} GAMESCOPE_WAYLAND_DISPLAY=${GAMESCOPE_WAYLAND_DISPLAY:-unset}"; \
+  # GL driver fallback. The bundled CEF can segfault during GL init on \
+  # AMD radeonsi, inside startEventLoop() before any of our code runs, \
+  # which leaves the overlay crash-looping on Restart=on-failure and \
+  # never opening. Routing GL through Vulkan (zink on RADV) avoids it and \
+  # keeps hardware acceleration. \
+  # \
+  # We deliberately do NOT try to predict which machines are affected. \
+  # The trigger is not the mesa version: the crash reproduces on mesa \
+  # 26.0.5 and 26.1.4, llvm 22.1.3 and 22.1.8, and libdrm 2.4.131 and \
+  # 2.4.134 alike, so any version predicate would be both wrong and \
+  # silently stale. Instead, let the failure select the driver: try the \
+  # normal one, and if the overlay dies, ExecStopPost drops a marker and \
+  # Restart=on-failure brings us back here to retry with zink. \
+  # \
+  # The marker lives under %t (/run/user/<uid>), which is cleared on every \
+  # boot, so radeonsi is re-tried once per boot. When the underlying bug \
+  # is fixed upstream the fallback simply stops engaging on its own -- no \
+  # version gate to go stale, nothing to remember to revert. \
+  if [ -z "${MESA_LOADER_DRIVER_OVERRIDE:-}" ] && [ -e "%t/loadout-overlay-gl-fallback" ]; then \
+    export MESA_LOADER_DRIVER_OVERRIDE=zink; \
+    echo "[loadout-overlay] previous start failed - retrying GL via zink"; \
+  fi; \
   exec %h/.local/share/loadout-overlay/bin/launcher'
 
 WorkingDirectory=%h/.local/share/loadout-overlay
@@ -89,6 +111,17 @@ RestartSec=5
 # of exit status ('-' prefix) and is a no-op if Steam is already
 # running.
 ExecStopPost=-/bin/sh -c 'pkill -CONT -x steam || true'
+
+# Arm the GL fallback (see the ExecStart comment). If the overlay exited
+# for any reason other than a clean stop, leave a marker so the next start
+# retries with zink instead of radeonsi. $SERVICE_RESULT is "success" on a
+# deliberate `systemctl stop` and "exit-code" / "signal" / "core-dump" etc.
+# on a real failure, so a normal stop never arms the fallback.
+#
+# Marker lives under %t (/run/user/<uid>) so the boot clears it and the
+# normal driver is tried again next boot. If zink fails too the marker
+# just stays put and we keep retrying zink -- no worse than before.
+ExecStopPost=-/bin/sh -c '[ "$SERVICE_RESULT" = "success" ] || touch "%t/loadout-overlay-gl-fallback"'
 
 [Install]
 WantedBy=graphical-session.target
