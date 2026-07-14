@@ -16,7 +16,7 @@ const DISPLAY = detectOverlayDisplay();
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore — resolved at runtime once electrobun is installed.
 import { BrowserWindow, BrowserView, GlobalShortcut } from "electrobun/bun";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import type {
   ControllerShortcuts,
 } from "../webview/lib/electrobun";
@@ -772,6 +772,22 @@ if (!shortcutRegistered) {
     `[overlay] failed to register ${TOGGLE_ACCELERATOR} global shortcut — ` +
       "another process may already have it grabbed.",
   );
+}
+
+// Tell the unit we survived CEF's GL init. loadout-overlay.service clears
+// this flag on every start and arms the zink fallback only when it's still
+// absent at exit. Registering a global shortcut needs a live event loop, so
+// reaching this line proves GL came up: the radeonsi segfault the fallback
+// exists for lands inside startEventLoop(), long before any of this runs.
+// Best-effort — a machine that can't write here just keeps the old
+// arm-on-any-failure behaviour rather than breaking startup.
+const readyFlagDir = process.env.XDG_RUNTIME_DIR;
+if (readyFlagDir) {
+  try {
+    writeFileSync(`${readyFlagDir}/loadout-overlay-ready`, "");
+  } catch (err) {
+    console.warn("[overlay] could not write readiness flag:", err);
+  }
 }
 
 // ---- X11 / Gamescope loop + shutdown ---------------------------------------

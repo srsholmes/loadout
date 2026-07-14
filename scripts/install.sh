@@ -951,6 +951,11 @@ ExecStartPre=-/bin/sh -c 'rm -f %h/.cache/com.loadout.overlay/dev/CEF/SingletonL
 # doesn't race its initial fetch.
 ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do curl -sf "http://localhost:${LOADOUT_PORT:-33820}/up" >/dev/null 2>&1 && exit 0; sleep 1; done; exit 0'
 
+# Clear the readiness flag on every start. The app re-creates it once CEF's
+# event loop is actually up, which is the only proof GL init survived. Its
+# absence at exit is what arms the GL fallback below.
+ExecStartPre=-/bin/sh -c 'rm -f "%t/loadout-overlay-ready"'
+
 # HOME must match the canonical path on Fedora/Bazzite, otherwise CEF's
 # root_cache_path/cache_path consistency check fails (see the comment in
 # src/bun/native/display-detect.ts).
@@ -1042,16 +1047,25 @@ RestartSec=5
 # running.
 ExecStopPost=-/bin/sh -c 'pkill -CONT -x steam || true'
 
-# Arm the GL fallback (see the ExecStart comment). If the overlay exited
-# for any reason other than a clean stop, leave a marker so the next start
-# retries with zink instead of radeonsi. $SERVICE_RESULT is "success" on a
-# deliberate `systemctl stop` and "exit-code" / "signal" / "core-dump" etc.
-# on a real failure, so a normal stop never arms the fallback.
+# Arm the GL fallback (see the ExecStart comment), but ONLY when the
+# overlay died before it ever became ready.
+#
+# Two conditions have to hold:
+#   $SERVICE_RESULT != success -- "success" on a deliberate `systemctl
+#     stop`, "exit-code" / "signal" / "core-dump" etc. on a real failure,
+#     so a normal stop never arms the fallback.
+#   no readiness flag -- the radeonsi crash lands ~118ms in, inside
+#     startEventLoop(), before any of our code runs, so it can never have
+#     written the flag. A crash *after* a healthy start is some other bug
+#     (OOM, a later CEF fault, SIGKILL); swapping the GL driver under it
+#     would silently change the driver on a machine where the normal one
+#     works fine and would hide the real cause. Readiness is what
+#     separates "GL init killed us" from "something else did".
 #
 # Marker lives under %t (/run/user/<uid>) so the boot clears it and the
 # normal driver is tried again next boot. If zink fails too the marker
 # just stays put and we keep retrying zink -- no worse than before.
-ExecStopPost=-/bin/sh -c '[ "$SERVICE_RESULT" = "success" ] || touch "%t/loadout-overlay-gl-fallback"'
+ExecStopPost=-/bin/sh -c '[ "$SERVICE_RESULT" = "success" ] || [ -e "%t/loadout-overlay-ready" ] || touch "%t/loadout-overlay-gl-fallback"'
 
 [Install]
 WantedBy=graphical-session.target
