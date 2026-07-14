@@ -20,6 +20,13 @@
 # and short-circuits when InputPlumber is already on disk.
 #
 # Usage: bash scripts/install-inputplumber.sh
+#        IP_ENABLE=0 bash scripts/install-inputplumber.sh   # install only
+#
+# IP_ENABLE=0 installs InputPlumber but leaves the unit disabled and
+# stopped. SteamOS needs this: IP ships with the image but deliberately
+# disabled, and enabling it claims the Deck's built-in controller — a
+# choice that belongs to the user in-app when they pick a wake button,
+# not to the installer. Defaults to 1 (install + enable) everywhere else.
 #
 # The loadout backend runs as root, so no sudo / id-check is needed —
 # the script is invoked directly by the plugin backend.
@@ -29,6 +36,25 @@
 # Under pipefail those become exit 141 and trip set -e on correct
 # behaviour. Real failure paths use explicit `exit 1`.
 set -eu
+
+# Install-only mode (see the header). Every path that would start the
+# daemon goes through ip_enable() so there is one place to honour this.
+IP_ENABLE="${IP_ENABLE:-1}"
+
+# Enable + start inputplumber.service, unless we were asked to install
+# only. Called at the end of each install path.
+ip_enable() {
+    systemctl daemon-reload
+    if [ "$IP_ENABLE" = "0" ]; then
+        log "IP_ENABLE=0 — installed but leaving inputplumber.service disabled"
+        log "enable it later with: systemctl enable --now inputplumber.service"
+        return 0
+    fi
+    log "enabling and starting inputplumber.service"
+    systemctl enable inputplumber.service
+    systemctl restart inputplumber.service
+    log "done — inputplumber.service is running"
+}
 
 REPO="ShadowBlip/InputPlumber"
 TARBALL="inputplumber-x86_64.tar.gz"
@@ -98,9 +124,7 @@ if [ "$IS_RPM_OSTREE" -eq 0 ] && command -v pacman >/dev/null 2>&1 && [[ "$HAYST
     else
         pacman -S --noconfirm --needed inputplumber || die "pacman install failed"
     fi
-    systemctl daemon-reload
-    systemctl enable --now inputplumber.service
-    log "done — inputplumber.service is running"
+    ip_enable
     exit 0
 fi
 
@@ -108,9 +132,7 @@ if [ "$IS_RPM_OSTREE" -eq 0 ] && command -v dnf >/dev/null 2>&1 && [[ "$HAYSTACK
     log "── dnf install inputplumber ──"
     # `dnf install` is non-interactive with -y and no-op if installed.
     if dnf install -y inputplumber 2>&1; then
-        systemctl daemon-reload
-        systemctl enable --now inputplumber.service
-        log "done — inputplumber.service is running"
+        ip_enable
         exit 0
     fi
     warn "dnf could not install inputplumber from configured repos — falling through to tarball"
@@ -282,11 +304,6 @@ EOF
 # Reload dbus so the new policy is in effect before the daemon starts.
 systemctl reload dbus.service 2>/dev/null || systemctl reload dbus-broker.service 2>/dev/null || true
 
-log "systemctl daemon-reload"
-systemctl daemon-reload
-log "enabling and starting inputplumber.service"
-systemctl enable inputplumber.service
-systemctl restart inputplumber.service
+ip_enable
 
-log "done — inputplumber.service is running"
 log "verify with: systemctl status inputplumber.service"

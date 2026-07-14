@@ -1189,8 +1189,12 @@ phase2_input_group() {
 # Delegates to the input-plumber plugin's own installer
 # (./plugins/input-plumber/scripts/install-inputplumber.sh), which:
 #   - Detects + installs IP via pacman / dnf / upstream tarball
-#   - Enables + starts inputplumber.service
-#   - Stops + masks any conflicting hhd*.service units
+#   - Enables + starts inputplumber.service, unless IP_ENABLE=0 (SteamOS,
+#     where IP ships disabled and enabling it is an in-app choice)
+#
+# It does NOT touch HHD. An earlier version of this comment claimed it
+# stopped and masked conflicting hhd*.service units; nothing ever did.
+# We refuse to install alongside an active HHD instead — see below.
 # Idempotent — re-running is safe.
 phase2_inputplumber() {
     echo ""
@@ -1212,21 +1216,45 @@ phase2_inputplumber() {
         return
     fi
 
+    # Refuse rather than fight. IP and HHD both want ownership of the
+    # controller HID, so enabling IP under a live HHD breaks input on the
+    # very devices this is meant to help. Bazzite ships HHD as a base
+    # package, so this is its normal state, not an edge case. Masking HHD
+    # would take the user's TDP / RGB / controller stack down with it —
+    # not something to do because someone pressed <enter>. Their call.
+    if systemctl list-units --plain --no-legend --type=service --state=active 'hhd*' 2>/dev/null | grep -q hhd; then
+        warn "Handheld Daemon (HHD) is active. It contests controller HID ownership"
+        warn "with InputPlumber, so Loadout won't install IP alongside it."
+        warn "If you want IP, disable HHD yourself first:"
+        warn "  sudo systemctl mask --now hhd@\$USER.service"
+        warn "Then re-run this step from the welcome wizard."
+        return
+    fi
+
+    # SteamOS ships IP with the image but deliberately disabled, and
+    # enabling it claims the Deck's built-in controller. That's the user's
+    # choice in-app when they pick a wake button, not ours at install time.
+    # Everywhere else, install + enable is the useful default.
+    case "$(. /etc/os-release 2>/dev/null && printf '%s' "${ID:-}")" in
+        steamos) IP_ENABLE=0 ;;
+        *)       IP_ENABLE=1 ;;
+    esac
+
     info "Loadout uses InputPlumber to route a controller button to the"
     info "overlay when you're in a game (Steam Input owns the controller in"
     info "big-picture / gamescope, so a daemon below it is the only way to"
     info "produce an event the overlay can see). Required on handhelds;"
     info "optional on a plain desktop."
     info ""
-    info "On Bazzite IP is already installed — this is a no-op."
-    info "On SteamOS Deck IP is already installed but ships disabled — this"
-    info "step leaves it untouched. Enabling it (and claiming the Deck's"
-    info "built-in controller) happens in-app when you choose an overlay wake"
-    info "button, so it stays opt-in."
-    info "On CachyOS/Arch this installs the pacman package."
-    info ""
-    info "If Handheld Daemon (HHD) is running it'll be stopped and masked —"
-    info "it conflicts with IP over controller HID ownership."
+    if [ "$IP_ENABLE" = "0" ]; then
+        info "On SteamOS Deck IP is already installed but ships disabled — this"
+        info "step leaves it disabled. Enabling it (and claiming the Deck's"
+        info "built-in controller) happens in-app when you choose an overlay"
+        info "wake button, so it stays opt-in."
+    else
+        info "On CachyOS/Arch this installs the pacman package, then enables"
+        info "and starts inputplumber.service."
+    fi
     echo ""
 
     # Default-yes on <enter> to match the Phase 2 gate: controller wake
@@ -1239,7 +1267,11 @@ phase2_inputplumber() {
     fi
 
     info "Running $(basename "$IP_SCRIPT") (requires sudo)..."
-    if sudo bash "$IP_SCRIPT"; then
+    # `sudo env VAR=…` rather than `sudo VAR=… `: the latter is subject to
+    # sudoers' env_reset and can be silently dropped, which would leave the
+    # script defaulting to IP_ENABLE=1 and enabling IP on a Deck anyway.
+    # Running env(1) as the command sets it unconditionally.
+    if sudo env IP_ENABLE="$IP_ENABLE" bash "$IP_SCRIPT"; then
         success "InputPlumber setup complete."
     else
         warn "InputPlumber setup script returned non-zero — check the log above."
