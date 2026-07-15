@@ -990,11 +990,26 @@ ExecStart=/bin/sh -c '\
   if [ -n "$PID" ] && [ -r "/proc/$PID/environ" ]; then \
     GS_DISPLAY=$(tr "\\0" "\\n" < "/proc/$PID/environ" | sed -n "s/^GAMESCOPE_DISPLAY=//p" | head -n1); \
     GS_WAYLAND=$(tr "\\0" "\\n" < "/proc/$PID/environ" | sed -n "s/^GAMESCOPE_WAYLAND_DISPLAY=//p" | head -n1); \
+    # SteamOS exports GAMESCOPE_WAYLAND_DISPLAY into steam's environment but
+    # not GAMESCOPE_DISPLAY, so the sed above comes back empty in Gaming Mode
+    # and the pgrep branch below is what actually resolves the display there.
+    # Steam already knows the inner X display, so read it rather than letting
+    # the fallback assume ":0".
+    if [ -z "$GS_DISPLAY" ] && [ -n "$GS_WAYLAND" ]; then \
+      GS_DISPLAY=$(tr "\\0" "\\n" < "/proc/$PID/environ" | sed -n "s/^DISPLAY=//p" | head -n1); \
+    fi; \
   fi; \
-  # gamescope's kernel comm name on Linux is "gamescope-wl" so `pgrep -x`
-  # on it fails. Match via -f against a pattern. steamcompmgr is a
-  # reliable secondary signal.
-  if [ -z "$GS_DISPLAY" ] && pgrep -f "gamescope[- ]" > /dev/null 2>&1; then \
+  # gamescope's kernel comm name on Linux is "gamescope-wl", so a bare
+  # `pgrep -x gamescope` misses it — match the real comm instead.
+  #
+  # Do NOT go back to `pgrep -f`: -f matches against full command lines,
+  # and this entire script is the argv of the `sh -c` that runs it. The
+  # GS_WAYLAND="gamescope-0" assignment below is therefore part of our own
+  # command line, so `pgrep -f "gamescope[- ]"` matched this very shell
+  # (pgrep excludes itself, but not its parent) and reported gamescope on
+  # every desktop session. `pgrep -x` matches comm, which is "sh" here, so
+  # it cannot self-match.
+  if [ -z "$GS_DISPLAY" ] && { pgrep -x gamescope-wl > /dev/null 2>&1 || pgrep -x gamescope > /dev/null 2>&1; }; then \
     GS_DISPLAY=":0"; \
     [ -z "$GS_WAYLAND" ] && GS_WAYLAND="gamescope-0"; \
   fi; \
