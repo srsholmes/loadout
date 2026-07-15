@@ -9,8 +9,9 @@
 #   sh scripts/install-pr.sh <branch-name>   # e.g. sh scripts/install-pr.sh fix/my-branch
 #
 # Environment:
-#   LOADOUT_REPO   git URL to fetch from (default: git@github.com:srsholmes/loadout.git;
-#                  use an https URL + your token if you don't have SSH access)
+#   LOADOUT_REPO   git URL to fetch from (default: the public https URL, which
+#                  needs no SSH keys; set to git@github.com:srsholmes/loadout.git
+#                  or an https URL with a token if you need authenticated access)
 #
 # The build happens in a fresh shallow clone under ~/.cache/loadout-pr-test/,
 # so an existing checkout (and any local changes in it) is never touched.
@@ -24,7 +25,7 @@
 # same as the regular installer.
 set -eu
 
-REPO="${LOADOUT_REPO:-git@github.com:srsholmes/loadout.git}"
+REPO="${LOADOUT_REPO:-https://github.com/srsholmes/loadout.git}"
 CACHE_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/loadout-pr-test"
 
 if [ -t 1 ]; then
@@ -68,6 +69,10 @@ cd "$WORKDIR"
 if [ ! -d .git ]; then
     git init -q
     git remote add origin "$REPO"
+else
+    # A cached workdir may carry an origin from an earlier run with a
+    # different LOADOUT_REPO — keep it in sync with this run's choice.
+    git remote set-url origin "$REPO"
 fi
 # --depth 1 keeps the clone small; re-running the script re-fetches the
 # PR's current head, so an updated PR just needs the same command again.

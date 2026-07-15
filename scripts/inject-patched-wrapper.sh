@@ -48,8 +48,11 @@ fi
 # (Zig emits eager GLOB_DAT relocs for address-taken webkit symbols).
 # This step runs before the wrapper guard below so it applies even when the
 # vendored wrapper is absent.
+# The CEF tree contains space-laden names ("bun Helper (Renderer)", …), so
+# iterate the find output line-by-line rather than word-splitting it.
 shimmed=0
-for bun in $(find "$ELECTROBUN_DIR/build" -type f -name bun -path '*/bin/*' 2>/dev/null); do
+while IFS= read -r bun; do
+    [ -n "$bun" ] || continue
     # Idempotent: skip if this bun is already our shim script.
     if head -c2 "$bun" 2>/dev/null | grep -q '#!'; then
         continue
@@ -67,7 +70,9 @@ exec "$(dirname "$0")/bun.real" "$@"
 SHIM
     chmod +x "$bun"
     shimmed=$((shimmed + 1))
-done
+done <<EOF
+$(find "$ELECTROBUN_DIR/build" -type f -name bun -path '*/bin/*' 2>/dev/null)
+EOF
 
 if [ "$shimmed" -gt 0 ]; then
     echo "[inject-wrapper] installed libstdc++ preload shim over $shimmed bun binary(ies) (webkit2gtk JSC __once_proxy interposition fix)."
@@ -82,12 +87,15 @@ fi
 # The build emits the wrapper under build/<variant>/loadout-overlay-*/bin/.
 # Replace every libNativeWrapper*.so the build produced (the runtime dlopen's
 # libNativeWrapper.so; the _cef.so variant, if present, is harmless to match).
-# Build paths contain no spaces, so an unquoted find expansion is safe here.
+# Line-by-line for the same space-safety reason as the shim loop above.
 injected=0
-for so in $(find "$ELECTROBUN_DIR/build" -type f -name 'libNativeWrapper*.so' 2>/dev/null); do
+while IFS= read -r so; do
+    [ -n "$so" ] || continue
     cp -f "$PATCHED" "$so"
     injected=$((injected + 1))
-done
+done <<EOF
+$(find "$ELECTROBUN_DIR/build" -type f -name 'libNativeWrapper*.so' 2>/dev/null)
+EOF
 
 if [ "$injected" -gt 0 ]; then
     echo "[inject-wrapper] injected patched libNativeWrapper.so into $injected build artifact(s) (CEF CPU-spin fix)."
