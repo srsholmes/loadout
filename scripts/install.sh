@@ -1188,9 +1188,19 @@ phase2_input_group() {
 #
 # Delegates to the input-plumber plugin's own installer
 # (./plugins/input-plumber/scripts/install-inputplumber.sh), which:
-#   - Detects + installs IP via pacman / dnf / upstream tarball
-#   - Enables + starts inputplumber.service
-#   - Stops + masks any conflicting hhd*.service units
+#   - Exits early ("nothing to do") when IP is already on PATH
+#   - Otherwise installs IP via pacman / dnf / upstream tarball, then
+#     enables + starts inputplumber.service
+#
+# It does NOT touch HHD. This comment used to claim it "stops + masks any
+# conflicting hhd*.service units"; nothing here has ever done that.
+#
+# That early exit is load-bearing, not an optimisation: SteamOS ships IP
+# with the image (disabled), and Bazzite ships it too, so on both the
+# installer short-circuits before it can enable anything. That is what
+# makes the "leaves it untouched" promise below true and what keeps IP
+# from being enabled alongside a live HHD. Don't remove detect_installed
+# without replacing the guarantee.
 # Idempotent — re-running is safe.
 phase2_inputplumber() {
     echo ""
@@ -1224,9 +1234,6 @@ phase2_inputplumber() {
     info "built-in controller) happens in-app when you choose an overlay wake"
     info "button, so it stays opt-in."
     info "On CachyOS/Arch this installs the pacman package."
-    info ""
-    info "If Handheld Daemon (HHD) is running it'll be stopped and masked —"
-    info "it conflicts with IP over controller HID ownership."
     echo ""
 
     # Default-yes on <enter> to match the Phase 2 gate: controller wake
