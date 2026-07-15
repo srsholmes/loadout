@@ -237,19 +237,44 @@ verify_sha256() {
     return 0
 }
 
-# Prompt user for yes/no (defaults to $2 if provided, otherwise no)
+# Where prompts read from. Under the documented `curl … | sh` install,
+# stdin is the script text itself, so `[ -t 0 ]` is false and a bare
+# `read` would eat the script rather than the user's answer — every
+# prompt silently took its default (Phase 2 could never run). Read the
+# controlling terminal instead, which exists in both the piped and the
+# `sh install.sh` cases. Empty only when there's genuinely no terminal
+# (CI, systemd, `docker run -d`), where prompts fall back to defaults.
+PROMPT_TTY=""
+if { true < /dev/tty; } 2>/dev/null; then
+    PROMPT_TTY=/dev/tty
+fi
+
+# Prompt user for yes/no. y/Y accepts, anything else declines.
+#   $1 — prompt text
+#   $2 — default taken on a bare <enter> (default: n)
+#   $3 — default taken when there is no terminal to ask on, e.g. CI or
+#        systemd (default: $2). Kept separate from $2 so a prompt can
+#        treat <enter> as consent while still refusing to take a
+#        sudo/system-modifying action unattended.
 prompt_yn() {
-    if [ ! -t 0 ]; then
-        # Non-interactive: use default
-        case "${2:-n}" in
+    if [ -z "$PROMPT_TTY" ]; then
+        # No terminal to ask on: use the non-interactive default
+        case "${3:-${2:-n}}" in
             [Yy]*) return 0 ;;
             *) return 1 ;;
         esac
     fi
-    printf "%s " "$1"
-    read -r answer
+    printf "%s " "$1" > "$PROMPT_TTY"
+    # EOF on the terminal is treated as the default rather than hanging.
+    read -r answer < "$PROMPT_TTY" || answer=""
     case "$answer" in
         [Yy]*) return 0 ;;
+        "")
+            case "${2:-n}" in
+                [Yy]*) return 0 ;;
+                *) return 1 ;;
+            esac
+            ;;
         *) return 1 ;;
     esac
 }
@@ -362,7 +387,11 @@ phase1() {
     # user to delete the binary first.
     INSTALL_BINARY=1
     if [ -f "$BINARY_PATH" ]; then
-        if prompt_yn "Loadout binary already exists. Overwrite? (y/N)"; then
+        # Default-yes everywhere: re-running the documented install one-liner
+        # IS the upgrade path, so both a bare <enter> and a headless re-run
+        # should refresh the binary. It lives in ~/.local/bin (no sudo), same
+        # as the fresh-install path just below, which never asked.
+        if prompt_yn "Loadout binary already exists. Overwrite? (Y/n)" "y"; then
             info "Overwriting existing binary..."
         else
             info "Keeping existing binary (overlay + plugins will still be refreshed)."
@@ -1145,25 +1174,14 @@ phase2_input_group() {
     info "controller buttons. That requires membership in the 'input' group."
     echo ""
 
-    # Default-yes: empty answer (just <enter>) accepts. Honors the (Y/n)
-    # hint without needing to restructure the shared prompt_yn helper.
-    INPUT_GROUP_ANSWER=""
-    if [ -t 0 ]; then
-        printf "Add %s to the 'input' group? (needed for the overlay to capture controller buttons) (Y/n) " "$USER"
-        read -r INPUT_GROUP_ANSWER
-    else
-        # Non-interactive (curl|sh): default to yes since the overlay is
-        # useless without it.
-        INPUT_GROUP_ANSWER="y"
+    # Default-yes: a bare <enter> accepts, since the overlay can't capture
+    # controllers without it.
+    if ! prompt_yn "Add $USER to the 'input' group? (needed for the overlay to capture controller buttons) (Y/n)" "y"; then
+        warn "Skipped. You'll need to add yourself to 'input' manually before the overlay can grab controllers:"
+        warn "  sudo usermod -aG input \"\$USER\""
+        warn "  # then log out and back in"
+        return
     fi
-    case "$INPUT_GROUP_ANSWER" in
-        [Nn]*)
-            warn "Skipped. You'll need to add yourself to 'input' manually before the overlay can grab controllers:"
-            warn "  sudo usermod -aG input \"\$USER\""
-            warn "  # then log out and back in"
-            return
-            ;;
-    esac
 
     info "Adding $USER to the input group (requires sudo)..."
     if sudo usermod -aG input "$USER"; then
@@ -1189,9 +1207,19 @@ phase2_input_group() {
 #
 # Delegates to the input-plumber plugin's own installer
 # (./plugins/input-plumber/scripts/install-inputplumber.sh), which:
-#   - Detects + installs IP via pacman / dnf / upstream tarball
-#   - Enables + starts inputplumber.service
-#   - Stops + masks any conflicting hhd*.service units
+#   - Exits early ("nothing to do") when IP is already on PATH
+#   - Otherwise installs IP via pacman / dnf / upstream tarball, then
+#     enables + starts inputplumber.service
+#
+# It does NOT touch HHD. This comment used to claim it "stops + masks any
+# conflicting hhd*.service units"; nothing here has ever done that.
+#
+# That early exit is load-bearing, not an optimisation: SteamOS ships IP
+# with the image (disabled), and Bazzite ships it too, so on both the
+# installer short-circuits before it can enable anything. That is what
+# makes the "leaves it untouched" promise below true and what keeps IP
+# from being enabled alongside a live HHD. Don't remove detect_installed
+# without replacing the guarantee.
 # Idempotent — re-running is safe.
 phase2_inputplumber() {
     echo ""
@@ -1225,12 +1253,13 @@ phase2_inputplumber() {
     info "built-in controller) happens in-app when you choose an overlay wake"
     info "button, so it stays opt-in."
     info "On CachyOS/Arch this installs the pacman package."
-    info ""
-    info "If Handheld Daemon (HHD) is running it'll be stopped and masked —"
-    info "it conflicts with IP over controller HID ownership."
     echo ""
 
-    if ! prompt_yn "Install / enable InputPlumber now? (y/N)"; then
+    # Default-yes on <enter> to match the Phase 2 gate: controller wake
+    # in-game doesn't work without IP, and the guard above already made
+    # this a no-op when IP is installed and uncontested. The gate is what
+    # refuses to run any of this unattended, so no separate default here.
+    if ! prompt_yn "Install / enable InputPlumber now? (Y/n)" "y"; then
         info "Skipping. You can do this later from the welcome wizard."
         return
     fi
@@ -1258,7 +1287,11 @@ main() {
     phase1
 
     echo ""
-    if prompt_yn "Run Phase 2 (input group + InputPlumber)? May require sudo. (y/N)"; then
+    # Default-yes on <enter>: without Phase 2 the overlay can't capture
+    # controllers, so the common single-command install should get it.
+    # Still declined with no terminal — this shells out to sudo, installs a
+    # package and masks HHD, none of which should happen unattended.
+    if prompt_yn "Run Phase 2 (input group + InputPlumber)? May require sudo. (Y/n)" "y" "n"; then
         phase2
     else
         info "Skipping Phase 2."
