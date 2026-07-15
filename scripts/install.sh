@@ -387,7 +387,11 @@ phase1() {
     # user to delete the binary first.
     INSTALL_BINARY=1
     if [ -f "$BINARY_PATH" ]; then
-        if prompt_yn "Loadout binary already exists. Overwrite? (y/N)"; then
+        # Default-yes everywhere: re-running the documented install one-liner
+        # IS the upgrade path, so both a bare <enter> and a headless re-run
+        # should refresh the binary. It lives in ~/.local/bin (no sudo), same
+        # as the fresh-install path just below, which never asked.
+        if prompt_yn "Loadout binary already exists. Overwrite? (Y/n)" "y"; then
             info "Overwriting existing binary..."
         else
             info "Keeping existing binary (overlay + plugins will still be refreshed)."
