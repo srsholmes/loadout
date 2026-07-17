@@ -36,6 +36,49 @@ mock.module("@loadout/plugin-storage", () => ({
   writePluginStorage: async (_id: string, next: Record<string, unknown>) => {
     storage = { ...next };
   },
+  mutatePluginStorage: async (
+    _id: string,
+    mutate: (current: Record<string, unknown>) => Record<string, unknown>,
+  ) => {
+    storage = { ...mutate({ ...storage }) };
+  },
+}));
+
+// Mock the recovery orchestration (tested separately in lib/recovery.test.ts)
+// so backend tests assert the wiring: single-flight, persistence, events.
+const recoverImpl = mock(
+  async (_opts: unknown): Promise<Record<string, unknown>> => ({
+    ok: true,
+    stage: "done",
+    tier: "modprobe",
+    driver: "iwlwifi",
+    iface: "wlan1",
+    detail: "Driver reloaded — radio back as wlan1.",
+    durationMs: 5,
+  }),
+);
+const getWifiDeviceImpl = mock(async () => ({ device: "wlan0", state: "connected" }));
+const detectDriverInfoImpl = mock(async () => ({
+  driver: "iwlwifi",
+  pciAddress: "0000:62:00.0",
+  iface: "wlan0",
+  updatedAt: 1,
+}));
+mock.module("./lib/recovery", () => ({
+  recover: recoverImpl,
+  getWifiDevice: getWifiDeviceImpl,
+  detectDriverInfo: detectDriverInfoImpl,
+  readRfkill: async () => ({ soft: false, hard: false, blocked: false }),
+  nmRadioEnabled: async () => true,
+  initialWatchdogState: () => ({
+    consecutiveBad: 0,
+    consecutiveFailures: 0,
+    lastAttemptAt: null,
+    suspended: false,
+  }),
+  evaluateWatchdog: (opts: { state: unknown }) => ({ next: opts.state, fire: false, reason: "healthy" }),
+  recordRecoveryOutcome: (opts: { state: unknown }) => opts.state,
+  DEFAULT_WATCHDOG: { debounceCount: 2, cooldownMs: 60_000, maxFailures: 3 },
 }));
 
 // Capture the resume callback + hand back a stop spy so we can assert the
@@ -76,6 +119,9 @@ describe("WiFi backend", () => {
     capturedOnResume = null;
     stopSpy.mockClear();
     startWakeListenerImpl.mockClear();
+    recoverImpl.mockClear();
+    getWifiDeviceImpl.mockClear();
+    detectDriverInfoImpl.mockClear();
   });
 
   it("returns status merged with the persisted setting", async () => {
@@ -194,5 +240,133 @@ describe("WiFi backend", () => {
     await backend.onLoad();
     await backend.onUnload();
     expect(stopSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("captures the wifi driver into storage on load", async () => {
+    const { backend } = makeBackend();
+    await backend.onLoad();
+    // refreshLastKnownDriver is fire-and-forget — let it settle.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(storage.lastKnownDriver).toEqual({
+      driver: "iwlwifi",
+      pciAddress: "0000:62:00.0",
+      iface: "wlan0",
+      updatedAt: 1,
+    });
+    await backend.onUnload();
+  });
+
+  it("recoverRadio runs a recovery, records it, and emits events", async () => {
+    const { backend, events } = makeBackend();
+    await backend.onLoad();
+
+    const res = await backend.recoverRadio();
+    expect(res.ok).toBe(true);
+    expect(res.iface).toBe("wlan1");
+    expect(recoverImpl).toHaveBeenCalledTimes(1);
+
+    const phases = events
+      .filter((e) => e.event === "recoveryState")
+      .map((e) => (e.data as { phase: string }).phase);
+    expect(phases).toEqual(["recovering", "recovered"]);
+    expect(events.some((e) => e.event === "statusChanged")).toBe(true);
+
+    const status = await backend.getStatus();
+    expect(status.lastRecovery?.ok).toBe(true);
+    expect(status.lastRecovery?.source).toBe("manual");
+    expect(status.recovering).toBe(false);
+    await backend.onUnload();
+  });
+
+  it("concurrent recoverRadio calls share a single run", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    recoverImpl.mockImplementationOnce(async () => {
+      await gate;
+      return {
+        ok: true,
+        stage: "done",
+        tier: "modprobe",
+        driver: "iwlwifi",
+        iface: "wlan1",
+        detail: "ok",
+        durationMs: 5,
+      };
+    });
+    const { backend } = makeBackend();
+    await backend.onLoad();
+
+    const first = backend.recoverRadio();
+    const second = backend.recoverRadio();
+    const status = await backend.getStatus();
+    expect(status.recovering).toBe(true);
+
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    expect(a).toBe(b);
+    expect(recoverImpl).toHaveBeenCalledTimes(1);
+    await backend.onUnload();
+  });
+
+  it("a failed recovery surfaces in lastRecovery and emits 'failed'", async () => {
+    recoverImpl.mockImplementationOnce(async () => ({
+      ok: false,
+      stage: "pci-rescan",
+      tier: "pci-rescan",
+      driver: "iwlwifi",
+      iface: null,
+      detail: "Recovery exhausted",
+      durationMs: 60_000,
+    }));
+    const { backend, events } = makeBackend();
+    await backend.onLoad();
+
+    const res = await backend.recoverRadio();
+    expect(res.ok).toBe(false);
+    const phases = events
+      .filter((e) => e.event === "recoveryState")
+      .map((e) => (e.data as { phase: string }).phase);
+    expect(phases).toEqual(["recovering", "failed"]);
+
+    const status = await backend.getStatus();
+    expect(status.lastRecovery?.ok).toBe(false);
+    expect(status.lastRecovery?.stage).toBe("pci-rescan");
+    await backend.onUnload();
+  });
+
+  it("setAutoRecover persists the toggle and reflects it in status", async () => {
+    const { backend, events } = makeBackend();
+    await backend.onLoad();
+
+    const on = await backend.setAutoRecover(true);
+    expect(on.success).toBe(true);
+    expect(storage.autoRecover).toBe(true);
+    expect(events).toContainEqual({ event: "statusChanged", data: undefined });
+    expect((await backend.getStatus()).autoRecover).toBe(true);
+
+    const off = await backend.setAutoRecover(false);
+    expect(off.success).toBe(true);
+    expect(storage.autoRecover).toBe(false);
+    expect((await backend.getStatus()).autoRecover).toBe(false);
+    await backend.onUnload();
+  });
+
+  it("getStatus keeps the legacy keys intact alongside the recovery keys", async () => {
+    const { backend } = makeBackend();
+    await backend.onLoad();
+
+    const status = await backend.getStatus();
+    // Legacy power-save surface (existing UI contract).
+    expect(status.iface).toBe("wlan0");
+    expect(status.powerSaveDisabled).toBe(false);
+    expect(status.listenerRunning).toBe(false);
+    // New recovery surface.
+    expect(status.autoRecover).toBe(false);
+    expect(status.recovering).toBe(false);
+    expect(status.lastRecovery).toBeNull();
+    expect(status.watchdogSuspended).toBe(false);
+    await backend.onUnload();
   });
 });

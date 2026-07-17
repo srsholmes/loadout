@@ -33,6 +33,14 @@ mock.module("@loadout/ui", () => ({
   }),
 }));
 
+const recoveryDefaults = {
+  autoRecover: false,
+  recovering: false,
+  lastRecovery: null,
+  watchdogSuspended: false,
+  lastKnownDriver: { driver: "iwlwifi", iface: "wlan0" },
+};
+
 const offStatus = {
   iface: "wlan0",
   nmConfigured: false,
@@ -42,6 +50,7 @@ const offStatus = {
   configured: false,
   powerSaveDisabled: false,
   listenerRunning: false,
+  ...recoveryDefaults,
 };
 
 const onStatus = {
@@ -53,6 +62,7 @@ const onStatus = {
   configured: true,
   powerSaveDisabled: true,
   listenerRunning: true,
+  ...recoveryDefaults,
 };
 
 describe("wifi plugin", () => {
@@ -62,6 +72,18 @@ describe("wifi plugin", () => {
     eventHandlers.clear();
     callMock.mockImplementation((method: string) => {
       if (method === "getStatus") return Promise.resolve(offStatus);
+      if (method === "recoverRadio") {
+        return Promise.resolve({
+          ok: true,
+          stage: "done",
+          tier: "modprobe",
+          driver: "iwlwifi",
+          iface: "wlan1",
+          detail: "Driver reloaded — radio back as wlan1.",
+          at: 1,
+          source: "manual",
+        });
+      }
       return Promise.resolve({ success: true });
     });
   });
@@ -126,6 +148,86 @@ describe("wifi plugin", () => {
       expect(container.textContent).toContain("Power saving disabled");
       const toggle = container.querySelector('input[type="checkbox"]') as HTMLInputElement;
       expect(toggle?.checked).toBe(true);
+    });
+  });
+
+  it("renders the radio recovery card", async () => {
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Radio recovery");
+      expect(container.textContent).toContain("Recover WiFi radio");
+      expect(container.textContent).toContain("Auto-recover radio");
+    });
+  });
+
+  it("the recover button dispatches recoverRadio and shows the busy label", async () => {
+    // Hold the recovery unresolved so the busy label is observable.
+    let release!: (value: unknown) => void;
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") return Promise.resolve(offStatus);
+      if (method === "recoverRadio") return new Promise((resolve) => (release = resolve));
+      return Promise.resolve({ success: true });
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    let button: HTMLButtonElement | undefined;
+    await waitFor(() => {
+      const b = container.querySelector("button") as HTMLButtonElement;
+      expect(b?.textContent).toContain("Recover WiFi radio");
+      button = b;
+    });
+
+    fireEvent.click(button!);
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("recoverRadio");
+      expect(container.querySelector("button")?.textContent).toContain("Recovering…");
+    });
+
+    release({ ok: true, iface: "wlan1", detail: "ok" });
+    await waitFor(() => {
+      expect(container.querySelector("button")?.textContent).toContain("Recover WiFi radio");
+    });
+  });
+
+  it("the auto-recover toggle dispatches setAutoRecover", async () => {
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    let toggles: HTMLInputElement[] = [];
+    await waitFor(() => {
+      toggles = Array.from(
+        container.querySelectorAll('input[type="checkbox"]'),
+      ) as HTMLInputElement[];
+      // Power-save toggle + auto-recover toggle.
+      expect(toggles.length).toBe(2);
+    });
+    expect(toggles[1]!.checked).toBe(false);
+
+    fireEvent.click(toggles[1]!);
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("setAutoRecover", true);
+    });
+  });
+
+  it("shows the paused warning when the watchdog is suspended", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") {
+        return Promise.resolve({ ...offStatus, watchdogSuspended: true });
+      }
+      return Promise.resolve({ success: true });
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Auto-recovery paused");
     });
   });
 });
