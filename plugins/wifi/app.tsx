@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { FaWifi, FaTriangleExclamation, FaCircleCheck, FaRotate } from "react-icons/fa6";
 import { Alert, Button, Spinner, Toggle, mountComponent, notify, useBackend } from "@loadout/ui";
 
@@ -38,8 +38,15 @@ function Wifi() {
   const [recoverBusy, setRecoverBusy] = useState(false);
   const [autoBusy, setAutoBusy] = useState(false);
 
+  // Several refreshes race around a recovery (event handlers + button
+  // finally); a slow getStatus snapshot taken mid-recovery must not land
+  // after a newer one and stick the UI on "Recovering…" — drop stale
+  // responses via a monotonic sequence.
+  const refreshSeq = useRef(0);
   const refresh = useCallback(async () => {
-    setData((await call("getStatus")) as StatusResult);
+    const seq = ++refreshSeq.current;
+    const status = (await call("getStatus")) as StatusResult;
+    if (seq === refreshSeq.current) setData(status);
   }, [call]);
 
   useEvent({ event: "statusChanged", handler: () => refresh() });
@@ -77,7 +84,11 @@ function Wifi() {
   const handleRecover = useCallback(async () => {
     setRecoverBusy(true);
     try {
-      const res = (await call("recoverRadio")) as LastRecovery;
+      const res = (await call("recoverRadio")) as {
+        ok: boolean;
+        iface: string | null;
+        detail: string;
+      };
       if (res.ok) {
         notify(
           res.iface ? `WiFi radio recovered — back as ${res.iface}.` : "WiFi radio recovered.",
@@ -223,14 +234,18 @@ function Wifi() {
               this mid-download.
             </div>
 
-            {data.lastRecovery && (
-              <div className="text-[11px] text-base-content/45 mono">
-                last recovery: {data.lastRecovery.ok ? "ok" : `failed at ${data.lastRecovery.stage}`}
-                {data.lastRecovery.iface ? ` · ${data.lastRecovery.iface}` : ""} ·{" "}
-                {data.lastRecovery.source}
-                {data.lastRecovery.tier ? ` · ${data.lastRecovery.tier}` : ""}
-              </div>
-            )}
+            <div className="text-[11px] text-base-content/45 mono">
+              {data.lastKnownDriver
+                ? `driver ${data.lastKnownDriver.driver}`
+                : "driver not captured yet — visiting this page while WiFi works captures it"}
+              {data.lastRecovery
+                ? ` · last recovery: ${
+                    data.lastRecovery.ok ? "ok" : `failed at ${data.lastRecovery.stage}`
+                  }${data.lastRecovery.iface ? ` · ${data.lastRecovery.iface}` : ""} · ${
+                    data.lastRecovery.source
+                  }${data.lastRecovery.tier ? ` · ${data.lastRecovery.tier}` : ""}`
+                : ""}
+            </div>
 
             <div className="flex justify-between items-start gap-4 pt-4 mt-1 border-t border-base-300">
               <div className="flex flex-col gap-1 min-w-0">

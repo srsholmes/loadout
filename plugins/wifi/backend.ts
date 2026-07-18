@@ -159,6 +159,10 @@ export default class WifiBackend implements PluginBackend {
       lastKnownDriver: { driver: string; iface: string } | null;
     }
   > {
+    // Opening the plugin is the documented way to (re)capture the driver
+    // ("open this plugin once while WiFi works") — keep that promise true.
+    // Fire-and-forget: quiet, cheap, and skip-if-unchanged.
+    void this.refreshLastKnownDriver().catch(() => {});
     const [status, settings] = await Promise.all([
       computeStatus(this.deps),
       readPluginStorage<WifiSettings>(PLUGIN_ID),
@@ -331,7 +335,21 @@ export default class WifiBackend implements PluginBackend {
           config: DEFAULT_WATCHDOG,
         });
       }
-      if (result.ok) await this.refreshLastKnownDriver().catch(() => {});
+      if (result.ok) {
+        await this.refreshLastKnownDriver().catch(() => {});
+        // A reload creates a fresh netdev with power-save back at the
+        // kernel default. If the user has power-save-off enabled, re-assert
+        // it now — the wake listener only covers resume, and on iwd-backed
+        // systems the runtime `iw` layer is the only one that's live, so
+        // skipping this would hand the user back the exact dropout bug
+        // this plugin exists to fix.
+        const settings = await readPluginStorage<WifiSettings>(PLUGIN_ID);
+        if (settings.powerSaveDisabled) {
+          await reassertRuntime(this.deps).catch((e) =>
+            this.log?.warn(`[wifi] post-recovery power-save re-assert failed: ${e}`),
+          );
+        }
+      }
       this.log?.info(
         `[wifi] recovery ${result.ok ? "succeeded" : "failed"} ` +
           `(${source}, ${result.stage}${result.tier ? `, ${result.tier}` : ""}): ${result.detail}`,

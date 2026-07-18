@@ -73,6 +73,9 @@ describe("wifi plugin", () => {
     callMock.mockImplementation((method: string) => {
       if (method === "getStatus") return Promise.resolve(offStatus);
       if (method === "recoverRadio") {
+        // Mirrors the backend's actual RecoveryResult shape — recoverRadio
+        // does NOT include at/source (those exist only on getStatus's
+        // lastRecovery), and the mock must not mask that.
         return Promise.resolve({
           ok: true,
           stage: "done",
@@ -80,8 +83,7 @@ describe("wifi plugin", () => {
           driver: "iwlwifi",
           iface: "wlan1",
           detail: "Driver reloaded — radio back as wlan1.",
-          at: 1,
-          source: "manual",
+          durationMs: 1200,
         });
       }
       return Promise.resolve({ success: true });
@@ -160,6 +162,7 @@ describe("wifi plugin", () => {
       expect(container.textContent).toContain("Radio recovery");
       expect(container.textContent).toContain("Recover WiFi radio");
       expect(container.textContent).toContain("Auto-recover radio");
+      expect(container.textContent).toContain("driver iwlwifi");
     });
   });
 

@@ -219,7 +219,7 @@ async function unloadModules(opts: {
   const { deps, unload } = opts;
   const describe = (r: RunResult) => r.stderr.trim() || `modprobe -r exited ${r.exitCode}`;
 
-  const first = await deps.run(["modprobe", "-r", ...unload], { timeoutMs: 15_000 });
+  const first = await boundedRun({ deps, cmd: ["modprobe", "-r", ...unload], timeoutMs: 15_000 });
   if (first.exitCode === 0) return { ok: true, detail: "" };
 
   if (/in use/i.test(first.stderr)) {
@@ -229,7 +229,9 @@ async function unloadModules(opts: {
       .filter((holder) => !unload.includes(holder));
     if (holders.length > 0) {
       deps.log?.(`modprobe -r blocked by holders [${holders.join(", ")}] — retrying with them.`);
-      const retry = await deps.run(["modprobe", "-r", ...holders, ...unload], {
+      const retry = await boundedRun({
+        deps,
+        cmd: ["modprobe", "-r", ...holders, ...unload],
         timeoutMs: 15_000,
       });
       if (retry.exitCode === 0) return { ok: true, detail: "" };
@@ -259,6 +261,39 @@ function boundedSysfsWrite(opts: { deps: RecoveryDeps; path: string }): Promise<
   return Promise.race([deps.writeFile(path, "1"), timeout]).finally(() => {
     if (timer) clearTimeout(timer);
   }) as Promise<void>;
+}
+
+/**
+ * deps.run with a hard outer deadline. The exec layer's own timeout kills
+ * the subprocess — but a modprobe stuck in uninterruptible D-state on
+ * wedged firmware (the exact scenario this feature targets) survives
+ * SIGKILL, its exit never resolves, and awaiting it would wedge recover()
+ * and the backend's single-flight guard forever. Abandon it instead and
+ * report a timeout result.
+ */
+function boundedRun(opts: {
+  deps: RecoveryDeps;
+  cmd: string[];
+  timeoutMs: number;
+}): Promise<RunResult> {
+  const { deps, cmd, timeoutMs } = opts;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // Outer deadline sits above the exec timeout so the normal kill path
+  // wins whenever the process is actually killable.
+  const timeout = new Promise<RunResult>((resolve) => {
+    timer = setTimeout(
+      () =>
+        resolve({
+          stdout: "",
+          stderr: `timed out after ${timeoutMs}ms (process unkillable — abandoned)`,
+          exitCode: -1,
+        }),
+      timeoutMs + 5_000,
+    );
+  });
+  return Promise.race([deps.run(cmd, { timeoutMs }), timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 /**
@@ -410,7 +445,7 @@ async function runLadder(opts: {
 
   const modules = modulesForDriver({ driver: info.driver });
   const wait = () => waitForWifiDevice({ deps, timeoutMs: waitTimeoutMs, pollIntervalMs });
-  const load = () => deps.run(["modprobe", modules.load], { timeoutMs: 15_000 });
+  const load = () => boundedRun({ deps, cmd: ["modprobe", modules.load], timeoutMs: 15_000 });
   deps.log?.(`recovering ${info.driver} (unload: ${modules.unload.join(" ")})`);
 
   // Tier 1 — module reload (the fix validated live on the Apex).

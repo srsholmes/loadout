@@ -422,6 +422,38 @@ describe("WiFi backend", () => {
     await backend.onUnload();
   });
 
+  it("re-asserts power-save-off after a successful recovery when enabled", async () => {
+    // A reload resets the fresh netdev to power-save ON — recovery must
+    // not hand back the dropout bug the plugin exists to fix.
+    storage = { powerSaveDisabled: true };
+    const { backend } = makeBackend();
+    await backend.onLoad();
+    reassertImpl.mockClear(); // isolate from any resume-path calls
+
+    await backend.recoverRadio();
+    expect(reassertImpl).toHaveBeenCalledTimes(1);
+    await backend.onUnload();
+  });
+
+  it("does not touch power-save after recovery when the toggle is off", async () => {
+    const { backend } = makeBackend();
+    await backend.onLoad();
+    reassertImpl.mockClear();
+
+    await backend.recoverRadio();
+    expect(reassertImpl).not.toHaveBeenCalled();
+    await backend.onUnload();
+  });
+
+  it("getStatus captures the driver (the 'open this plugin once' promise)", async () => {
+    const { backend } = makeBackend();
+    // No onLoad — simulates the UI polling a backend whose boot-time
+    // capture never ran (e.g. wifi was dead when the daemon started).
+    await backend.getStatus();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(storage.lastKnownDriver).toBeTruthy();
+  });
+
   it("a watchdog-fired precheck failure still counts toward suspension", async () => {
     // Unlike a manual button press, a watchdog-fired refusal (dead radio,
     // unresolvable driver) must feed the failure counter — otherwise the
