@@ -8,6 +8,19 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com).
 
 ---
 
+## [v0.4.0] — 2026-07-18
+
+### Added
+- **Fix a crashed WiFi radio without rebooting** (#215) — When the WiFi firmware crashes, the radio shows *unavailable* and the connection is gone until a reboot (seen in the field on an Intel AX210: `HW problem` + an endless firmware reload loop in dmesg). A new **Recover WiFi radio** button in the WiFi plugin reloads the driver in place — escalating to a PCI reset of the card if the reload isn't enough — and NetworkManager then reconnects your saved network on its own. An **Auto-recover radio** toggle (off by default) watches for the crashed state and runs the same recovery automatically; it never fights a radio you switched off on purpose (rfkill / airplane mode) and suspends itself after repeated failures rather than crash-looping. Driver-agnostic: the driver is detected live (Intel, MediaTek, Qualcomm, …) and captured while the radio is healthy, so recovery still works when the interface has vanished entirely — and if you have WiFi power saving disabled, recovery re-asserts that too, so the fix never quietly reintroduces the dropout bug this plugin exists to prevent.
+
+### Fixed
+- **Overlay crash at startup on AMD after the 2026-07-14 Arch/CachyOS update** (#214) — Arch's webkit2gtk 2.52.5 regressed to exporting libstdc++'s private `std::call_once` machinery, which hijacked Mesa's radeonsi/LLVM initialization inside the overlay process and segfaulted it at GL init. The overlay now preloads the real libstdc++ so it wins interposition (the zink fallback from #211 remains as a safety net).
+- **Desktop sessions no longer misdetected as Gaming Mode** (#212) — the overlay's own service environment exported `GAMESCOPE_DISPLAY`, so the gamescope detection matched itself and reported Gaming Mode on plain desktop sessions. Detection now checks for a real running gamescope process.
+- **`curl | sh` install prompts are answerable again** (#213) — piped through `sh`, the installer's prompts consumed the script itself as input, so every question silently took its default (controller-setup "Phase 2" was always skipped, uninstall questions self-answered). Prompts now read from the terminal (`/dev/tty`), matching the exact command the README tells people to run.
+
+### Changed
+- **Workspace typechecking restored** (#209) — all seventeen `@loadout/*` workspace packages are now resolvable by the typechecker (22 stale errors → 0), keeping `bun run typecheck` a trustworthy release gate.
+
 ## [v0.3.2] — 2026-07-09
 
 ### Fixed
