@@ -1,5 +1,5 @@
-import type { PluginBackend, EmitPayload } from "@loadout/types";
-import { readdir } from "node:fs/promises";
+import type { PluginBackend, EmitPayload, CallPlugin } from "@loadout/types";
+import { readdir, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { runFull, commandExists } from "@loadout/exec";
@@ -9,6 +9,17 @@ import {
   type TdpProfile,
   type TdpProfileEngineState,
 } from "./lib/tdp-profiles";
+import {
+  createFpsController,
+  type FpsController,
+  type ControllerReason,
+} from "./lib/fps-controller";
+import { createFpsReader, type FpsReader } from "./lib/fps-reader";
+import {
+  mangoHudLogDir,
+  mangoHudTokens,
+  MANGOHUD_TOKEN_KEYS,
+} from "./lib/mangohud";
 import {
   matchDevice,
   matchProfileName,
@@ -338,6 +349,28 @@ export default class TdpControlBackend implements PluginBackend {
   // Per-game TDP profile engine
   private profileEngine?: TdpProfileEngine;
 
+  // Cross-plugin call handle injected by the loader (used to drive the
+  // launch-options plugin for MangoHud enablement). Undefined in unit tests.
+  callPlugin?: CallPlugin;
+
+  // -----------------------------------------------------------------------
+  // Target-FPS closed-loop controller state
+  // -----------------------------------------------------------------------
+  private controllerInterval?: Timer;
+  private fpsController?: FpsController;
+  private fpsReader?: FpsReader;
+  private controllerAppId: number | null = null;
+  private controllerProfile?: TdpProfile;
+  private controllerLastFps: number | null = null;
+  private controllerReason: ControllerReason = "warming-up";
+  private controllerSettled = false;
+  private controllerHadSample = false;
+  private controllerStartedAt = 0;
+  /** How often the controller re-measures FPS and nudges TDP. */
+  private static readonly CONTROLLER_TICK_MS = 2000;
+  /** If no FPS sample arrives within this window of starting, give up. */
+  private static readonly CONTROLLER_GRACE_MS = 8000;
+
   // -----------------------------------------------------------------------
   // Lifecycle
   // -----------------------------------------------------------------------
@@ -457,6 +490,7 @@ export default class TdpControlBackend implements PluginBackend {
 
   async onUnload(): Promise<void> {
     if (this.pollInterval) clearInterval(this.pollInterval);
+    this._stopController(false);
     console.log("[tdp-control] Unloaded");
   }
 
@@ -529,6 +563,11 @@ export default class TdpControlBackend implements PluginBackend {
   async setTdp(
     watts: number,
   ): Promise<{ success: boolean; error?: string }> {
+    // A manual TDP change is an explicit "take control back" — pause any
+    // running FPS controller so the loop doesn't immediately fight the slider.
+    if (this.controllerInterval != null) {
+      this._stopController(true);
+    }
     const result = await this.applyTdp(watts);
     // Persist the user's choice as the manual "no game" TDP so it survives a
     // shutdown. Only this RPC path (the slider + power presets via
@@ -847,6 +886,9 @@ export default class TdpControlBackend implements PluginBackend {
     }
     try {
       await this.profileEngine.setPerGameEnabled(enabled);
+      // Toggling per-game off must stop a running controller; toggling on while
+      // a target-mode game is already running should start it.
+      await this._syncControllerForActiveGame();
       this.emit?.({
         event: "perGameEnabledChanged",
         data: {
@@ -876,6 +918,8 @@ export default class TdpControlBackend implements PluginBackend {
     }
     try {
       await this.profileEngine.handleGameLaunch(appId, gameName);
+      // Start/stop the FPS controller depending on the launched game's mode.
+      await this._syncControllerForActiveGame();
       console.log(
         `[tdp-control] Game launched: appId=${appId}, name=${gameName}`,
       );
@@ -900,12 +944,389 @@ export default class TdpControlBackend implements PluginBackend {
     }
     try {
       await this.profileEngine.handleGameExit(appId);
+      // No game running ⇒ this stops the controller (and reverts to no-game TDP
+      // via the engine's exit handling).
+      await this._syncControllerForActiveGame();
       console.log(`[tdp-control] Game exited: appId=${appId}`);
       return { success: true };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return { success: false, error: msg };
     }
+  }
+
+  // -----------------------------------------------------------------------
+  // RPC: Target-FPS control (closed-loop TDP)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Put a game into target-FPS mode: the controller adjusts wattage to hold
+   * `targetFps`. Optional min/max watts bound the loop (default to the device
+   * range). If this game is currently running, the controller starts now.
+   */
+  async setGameTargetFps(
+    appId: number,
+    gameName: string,
+    targetFps: number,
+    minWatts?: number,
+    maxWatts?: number,
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!this.profileEngine) {
+      return { success: false, error: "Profile engine not initialized" };
+    }
+    try {
+      await this.profileEngine.setTargetFpsProfile(appId, gameName, targetFps, {
+        minWatts,
+        maxWatts,
+        seedWatts: this.trackedTdp ?? this.currentTdp ?? undefined,
+      });
+      await this._syncControllerForActiveGame();
+      return { success: true };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { success: false, error: msg };
+    }
+  }
+
+  /**
+   * Revert a game from target-FPS mode back to a fixed-wattage profile (kept
+   * at the controller's last-good seed wattage). Stops the controller if this
+   * game is the one being governed.
+   */
+  async clearGameTargetFps(
+    appId: number,
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!this.profileEngine) {
+      return { success: false, error: "Profile engine not initialized" };
+    }
+    try {
+      const profile = this.profileEngine.getProfile(appId);
+      if (profile && profile.mode === "targetFps") {
+        // Persist as a plain fixed profile at the seed watts.
+        await this.profileEngine.setProfile(
+          appId,
+          profile.gameName,
+          profile.tdpWatts,
+        );
+      }
+      await this._syncControllerForActiveGame();
+      return { success: true };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { success: false, error: msg };
+    }
+  }
+
+  /** Snapshot of the closed-loop controller for the UI. */
+  async getControllerState(): Promise<{
+    running: boolean;
+    appId: number | null;
+    currentFps: number | null;
+    targetFps: number | null;
+    currentWatts: number | null;
+    minWatts: number | null;
+    maxWatts: number | null;
+    settled: boolean;
+    reason: ControllerReason;
+    mangoHudActive: boolean;
+  }> {
+    const profile = this.controllerProfile;
+    const bounds = profile ? this._controllerBounds(profile) : null;
+    return {
+      running: this.controllerInterval != null,
+      appId: this.controllerAppId,
+      currentFps: this.controllerLastFps,
+      targetFps: profile?.targetFps ?? null,
+      currentWatts: this.trackedTdp ?? this.currentTdp,
+      minWatts: bounds?.effMin ?? null,
+      maxWatts: bounds?.effMax ?? null,
+      settled: this.controllerSettled,
+      reason: this.controllerReason,
+      mangoHudActive: this.controllerHadSample,
+    };
+  }
+
+  // -----------------------------------------------------------------------
+  // RPC: MangoHud enablement (FPS source for the controller)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Enable per-game MangoHud logging by injecting the MangoHud launch-option
+   * tokens (via the launch-options plugin) and creating the log directory.
+   * The controller tails that log for live FPS.
+   */
+  async enableMangoHudForGame(
+    appId: number,
+  ): Promise<{ success: boolean; error?: string; installed?: boolean }> {
+    if (!this.callPlugin) {
+      return {
+        success: false,
+        error: "launch-options plugin unavailable (no loader)",
+      };
+    }
+    try {
+      // MangoHud requires output_folder to exist to log into it.
+      await mkdir(mangoHudLogDir(appId), { recursive: true }).catch(() => {});
+      for (const { token, key } of mangoHudTokens(appId)) {
+        await this.callPlugin(
+          "launch-options",
+          "appendLaunchToken",
+          String(appId),
+          token,
+          { key, position: "before" },
+        );
+      }
+      const installed = await commandExists("mangohud");
+      console.log(`[tdp-control] MangoHud enabled for appId=${appId}`);
+      return { success: true, installed };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { success: false, error: msg };
+    }
+  }
+
+  /** Remove the injected MangoHud launch-option tokens for a game. */
+  async disableMangoHudForGame(
+    appId: number,
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!this.callPlugin) {
+      return {
+        success: false,
+        error: "launch-options plugin unavailable (no loader)",
+      };
+    }
+    try {
+      for (const key of MANGOHUD_TOKEN_KEYS) {
+        await this.callPlugin(
+          "launch-options",
+          "removeLaunchToken",
+          String(appId),
+          key,
+        );
+      }
+      console.log(`[tdp-control] MangoHud disabled for appId=${appId}`);
+      return { success: true };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { success: false, error: msg };
+    }
+  }
+
+  /**
+   * Report whether MangoHud is set up and actually producing logs for a game.
+   *   - installed: `mangohud` is on PATH.
+   *   - configured: the MangoHud launch token is present.
+   *   - logging: a fresh log with a readable FPS value exists right now.
+   */
+  async getMangoHudStatus(appId: number): Promise<{
+    installed: boolean;
+    configured: boolean;
+    logging: boolean;
+  }> {
+    const installed = await commandExists("mangohud");
+    let configured = false;
+    if (this.callPlugin) {
+      try {
+        configured = Boolean(
+          await this.callPlugin(
+            "launch-options",
+            "hasLaunchToken",
+            String(appId),
+            "MANGOHUD_CONFIG",
+          ),
+        );
+      } catch {
+        configured = false;
+      }
+    }
+    let logging = false;
+    try {
+      const reader = createFpsReader({ outputFolder: mangoHudLogDir(appId) });
+      logging = (await reader.readSmoothedFps()) !== null;
+    } catch {
+      logging = false;
+    }
+    return { installed, configured, logging };
+  }
+
+  // -----------------------------------------------------------------------
+  // Target-FPS controller internals (underscore-prefixed ⇒ not RPC-exposed)
+  // -----------------------------------------------------------------------
+
+  /** Effective watt bounds for a target-mode profile, power-state clamped. */
+  private _controllerBounds(profile: TdpProfile): {
+    effMin: number;
+    effMax: number;
+  } {
+    const effMin = Math.max(profile.minWatts ?? this.minWatts, this.minWatts);
+    const effMax = Math.min(
+      profile.maxWatts ?? this.maxWatts,
+      this.effectiveMaxWatts(),
+    );
+    return { effMin, effMax: Math.max(effMin, effMax) };
+  }
+
+  private _configureController(profile: TdpProfile): void {
+    if (!this.fpsController) return;
+    const { effMin, effMax } = this._controllerBounds(profile);
+    this.fpsController.configure({
+      targetFps: profile.targetFps ?? 60,
+      minWatts: effMin,
+      maxWatts: effMax,
+    });
+  }
+
+  /**
+   * Decide whether the FPS controller should be running for the currently
+   * active game, and (re)start or stop it accordingly. Idempotent — safe to
+   * call from game launch/exit, the per-game toggle, and target-profile edits.
+   */
+  private async _syncControllerForActiveGame(): Promise<void> {
+    const engine = this.profileEngine;
+    if (!engine) return;
+    const state = engine.getCurrentState();
+    const appId = engine.getActiveAppId();
+    const profile = appId != null ? engine.getProfile(appId) : undefined;
+    const shouldRun =
+      state.perGameEnabled &&
+      state.isGameRunning &&
+      this.method !== "none" &&
+      appId != null &&
+      profile?.mode === "targetFps" &&
+      typeof profile.targetFps === "number";
+
+    if (shouldRun) {
+      if (this.controllerAppId !== appId) {
+        await this._startController(appId, profile!);
+      } else {
+        // Same game, updated bounds/target — reconfigure in place.
+        this.controllerProfile = profile;
+        this._configureController(profile!);
+      }
+    } else {
+      this._stopController(true);
+    }
+  }
+
+  private async _startController(
+    appId: number,
+    profile: TdpProfile,
+  ): Promise<void> {
+    this._stopController(false); // clear any prior run silently
+    this.controllerAppId = appId;
+    this.controllerProfile = profile;
+    this.fpsController = createFpsController();
+    this._configureController(profile);
+    this.fpsReader = createFpsReader({ outputFolder: mangoHudLogDir(appId) });
+    this.controllerHadSample = false;
+    this.controllerStartedAt = Date.now();
+    this.controllerLastFps = null;
+    this.controllerReason = "warming-up";
+    this.controllerSettled = false;
+
+    // Seed hardware once at a sensible starting point (the profile's last-good
+    // wattage, clamped into the effective band), then let the loop take over.
+    const { effMin, effMax } = this._controllerBounds(profile);
+    const seed = Math.max(effMin, Math.min(effMax, profile.tdpWatts));
+    await this.profileEngine?.applyManagedTdp(seed);
+
+    this.controllerInterval = setInterval(() => {
+      this._controllerTick().catch((e) => {
+        console.error(`[tdp-control] controller tick failed: ${e}`);
+      });
+    }, TdpControlBackend.CONTROLLER_TICK_MS);
+
+    this.emit?.({
+      event: "controllerStateChanged",
+      data: { running: true, appId, reason: "warming-up" },
+    });
+    console.log(
+      `[tdp-control] FPS controller started for appId=${appId} (target ${profile.targetFps}fps, ${effMin}-${effMax}W)`,
+    );
+  }
+
+  private _stopController(emitEvent: boolean): void {
+    const wasRunning = this.controllerInterval != null;
+    const appId = this.controllerAppId;
+    if (this.controllerInterval) {
+      clearInterval(this.controllerInterval);
+      this.controllerInterval = undefined;
+    }
+    this.fpsReader?.reset();
+    this.fpsController?.reset();
+    this.fpsReader = undefined;
+    this.fpsController = undefined;
+    this.controllerAppId = null;
+    this.controllerProfile = undefined;
+    this.controllerLastFps = null;
+    this.controllerReason = "warming-up";
+    this.controllerSettled = false;
+    this.controllerHadSample = false;
+
+    if (emitEvent && wasRunning && appId != null) {
+      this.emit?.({
+        event: "controllerStateChanged",
+        data: { running: false, appId, reason: "stopped" },
+      });
+    }
+  }
+
+  private async _controllerTick(): Promise<void> {
+    const engine = this.profileEngine;
+    const controller = this.fpsController;
+    const reader = this.fpsReader;
+    const profile = this.controllerProfile;
+    if (!engine || !controller || !reader || !profile || this.controllerAppId == null) {
+      return;
+    }
+
+    // Refresh bounds each tick so AC transitions (which lower effectiveMaxWatts)
+    // are respected immediately.
+    this._configureController(profile);
+
+    const fps = await reader.readSmoothedFps();
+    if (fps !== null) this.controllerHadSample = true;
+
+    // Grace period: if MangoHud never produced a log, stop and tell the UI.
+    if (
+      fps === null &&
+      !this.controllerHadSample &&
+      Date.now() - this.controllerStartedAt >
+        TdpControlBackend.CONTROLLER_GRACE_MS
+    ) {
+      const appId = this.controllerAppId;
+      this._stopController(false);
+      this.emit?.({
+        event: "controllerStateChanged",
+        data: { running: false, appId, reason: "no-fps-source" },
+      });
+      console.warn(
+        `[tdp-control] No FPS source for appId=${appId}; controller stopped`,
+      );
+      return;
+    }
+
+    const currentWatts = this.trackedTdp ?? this.currentTdp ?? profile.tdpWatts;
+    const decision = controller.update(fps, currentWatts);
+    this.controllerLastFps = fps;
+    this.controllerReason = decision.reason;
+    this.controllerSettled = decision.settled;
+
+    if (decision.changed) {
+      await engine.applyManagedTdp(decision.targetWatts);
+    }
+
+    this.emit?.({
+      event: "fpsUpdate",
+      data: {
+        appId: this.controllerAppId,
+        fps,
+        targetFps: profile.targetFps ?? null,
+        watts: decision.targetWatts,
+        settled: decision.settled,
+        reason: decision.reason,
+      },
+    });
   }
 
   // -----------------------------------------------------------------------

@@ -804,6 +804,147 @@ describe("TDP Profile Engine", () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // Target-FPS mode (closed-loop controller profiles)
+  // -------------------------------------------------------------------------
+
+  describe("target-FPS profiles", () => {
+    test("setTargetFpsProfile persists mode/targetFps/bounds without applying TDP", async () => {
+      const engine = createEngine();
+      await engine.loadProfiles();
+      await engine.setPerGameEnabled(true);
+      appliedTdpValues = [];
+
+      await engine.setTargetFpsProfile(730, "CS2", 60, {
+        minWatts: 8,
+        maxWatts: 25,
+      });
+
+      // No fixed wattage is committed — the controller owns hardware.
+      expect(appliedTdpValues).toEqual([]);
+      const p = engine.getProfile(730);
+      expect(p?.mode).toBe("targetFps");
+      expect(p?.targetFps).toBe(60);
+      expect(p?.minWatts).toBe(8);
+      expect(p?.maxWatts).toBe(25);
+      // Seed defaults to the midpoint of the bounds when nothing else is known.
+      expect(p?.tdpWatts).toBe(Math.round((8 + 25) / 2));
+    });
+
+    test("setTargetFpsProfile clamps target and swaps inverted bounds", async () => {
+      const engine = createEngine();
+      await engine.loadProfiles();
+
+      await engine.setTargetFpsProfile(1, "Game", 9999, {
+        minWatts: 30,
+        maxWatts: 6,
+      });
+      const p = engine.getProfile(1);
+      expect(p?.targetFps).toBe(240); // clamped to MAX_TARGET_FPS
+      expect(p?.minWatts).toBe(6);
+      expect(p?.maxWatts).toBe(30);
+    });
+
+    test("launching a target-mode game does not commit a fixed hold", async () => {
+      await writeConfig({
+        defaultTdp: 15,
+        profiles: [
+          {
+            appId: 730,
+            gameName: "CS2",
+            tdpWatts: 18,
+            mode: "targetFps",
+            targetFps: 90,
+          },
+        ],
+        perGameEnabled: true,
+      });
+      const engine = createEngine();
+      await engine.loadProfiles();
+
+      await engine.handleGameLaunch(730, "CS2");
+
+      // Controller governs — no automatic fixed apply from the engine.
+      expect(appliedTdpValues).toEqual([]);
+      const state = engine.getCurrentState();
+      expect(state.activeProfile?.mode).toBe("targetFps");
+      expect(state.activeProfile?.targetFps).toBe(90);
+    });
+
+    test("applyManagedTdp routes through the serialized/debounced queue", async () => {
+      const engine = createEngine();
+      await engine.loadProfiles();
+
+      // A rapid burst collapses to a single hardware write of the latest value.
+      const p1 = engine.applyManagedTdp(10);
+      const p2 = engine.applyManagedTdp(20);
+      const p3 = engine.applyManagedTdp(30);
+      await Promise.all([p1, p2, p3]);
+
+      expect(appliedTdpValues).toEqual([30]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // v1 -> v2 migration
+  // -------------------------------------------------------------------------
+
+  describe("store migration", () => {
+    test("legacy v1 profiles load as fixed; a target profile keeps its fields", async () => {
+      await Bun.write(
+        configPath,
+        JSON.stringify({
+          version: 1,
+          defaultTdp: 15,
+          perGameEnabled: true,
+          profiles: [
+            { appId: 730, gameName: "CS2", tdpWatts: 25 }, // legacy fixed
+            {
+              appId: 570,
+              gameName: "Dota",
+              tdpWatts: 12,
+              mode: "targetFps",
+              targetFps: 60,
+              minWatts: 5,
+              maxWatts: 20,
+            },
+          ],
+        }),
+      );
+      const engine = createEngine();
+      await engine.loadProfiles();
+
+      const fixed = engine.getProfile(730);
+      expect(fixed).toEqual({ appId: 730, gameName: "CS2", tdpWatts: 25 });
+      expect(fixed?.mode).toBeUndefined();
+
+      const target = engine.getProfile(570);
+      expect(target?.mode).toBe("targetFps");
+      expect(target?.targetFps).toBe(60);
+
+      // Saving rewrites the store at the current schema version.
+      await engine.saveProfiles();
+      expect((await readConfig()).version).toBe(2);
+    });
+
+    test("a target profile with no numeric targetFps coerces to fixed", async () => {
+      await Bun.write(
+        configPath,
+        JSON.stringify({
+          version: 2,
+          defaultTdp: 15,
+          perGameEnabled: true,
+          profiles: [{ appId: 1, gameName: "Bad", tdpWatts: 10, mode: "targetFps" }],
+        }),
+      );
+      const engine = createEngine();
+      await engine.loadProfiles();
+      const p = engine.getProfile(1);
+      expect(p?.mode).toBeUndefined();
+      expect(p).toEqual({ appId: 1, gameName: "Bad", tdpWatts: 10 });
+    });
+  });
+
   describe("getProfile / getAllProfiles", () => {
     test("getProfile returns undefined for non-existent appId", async () => {
       const engine = createEngine();

@@ -5,15 +5,30 @@ import { readPluginStorage, mutatePluginStorage } from "@loadout/plugin-storage"
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * How a per-game profile drives TDP:
+ *   - "fixed": apply a constant wattage (the original behavior).
+ *   - "targetFps": let the closed-loop FPS controller adjust wattage to hold
+ *     `targetFps`. `tdpWatts` becomes the controller's seed / last-good value.
+ * Undefined ⇒ "fixed" (back-compat with v1 stores).
+ */
+export type TdpProfileMode = "fixed" | "targetFps";
+
 export interface TdpProfile {
   appId: number;
   gameName: string;
-  tdpWatts: number; // 3-80
+  tdpWatts: number; // 3-80; in target mode this is the controller seed
+  mode?: TdpProfileMode;
+  /** Required when mode === "targetFps". */
+  targetFps?: number;
+  /** Optional controller lower/upper watt bounds; default to the device range. */
+  minWatts?: number;
+  maxWatts?: number;
 }
 
 export interface TdpProfileStore {
   /** Schema version. Bumped when the shape changes. */
-  version: 1;
+  version: 1 | 2;
   /** TDP applied when no game is running, or when a game has no profile. */
   defaultTdp: number;
   /** Per-game saved TDP. */
@@ -61,6 +76,14 @@ const MIN_TDP_WATTS = 3;
 const MAX_TDP_WATTS = 80;
 const DEFAULT_TDP_WATTS = 15;
 
+export const MIN_TARGET_FPS = 20;
+export const MAX_TARGET_FPS = 240;
+export const DEFAULT_TARGET_FPS = 60;
+
+// Current on-disk schema version. v2 adds the optional target-FPS fields to
+// each profile; all additive/optional, so a v1 store loads unchanged.
+const STORE_VERSION = 2;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -69,9 +92,13 @@ function clampTdp(watts: number): number {
   return Math.max(MIN_TDP_WATTS, Math.min(MAX_TDP_WATTS, Math.round(watts)));
 }
 
+function clampTargetFps(fps: number): number {
+  return Math.max(MIN_TARGET_FPS, Math.min(MAX_TARGET_FPS, Math.round(fps)));
+}
+
 function createDefaultStore(): TdpProfileStore {
   return {
-    version: 1,
+    version: STORE_VERSION,
     defaultTdp: DEFAULT_TDP_WATTS,
     profiles: [],
     perGameEnabled: false,
@@ -95,13 +122,40 @@ function normalizeStore(parsed: unknown): TdpProfileStore | null {
         typeof (p as TdpProfile).gameName === "string" &&
         typeof (p as TdpProfile).tdpWatts === "number",
     )
-    .map((p) => ({
-      appId: p.appId,
-      gameName: p.gameName,
-      tdpWatts: clampTdp(p.tdpWatts),
-    }));
+    .map((p) => {
+      // Every legacy (v1) profile normalizes to a plain fixed profile, so the
+      // v1→v2 migration is a no-op in shape and old data loads unchanged.
+      const base: TdpProfile = {
+        appId: p.appId,
+        gameName: p.gameName,
+        tdpWatts: clampTdp(p.tdpWatts),
+      };
+      // Target-FPS mode is only honored when it's the exact literal AND a
+      // sane numeric target is present; anything else coerces back to fixed.
+      const isTarget =
+        p.mode === "targetFps" &&
+        typeof p.targetFps === "number" &&
+        Number.isFinite(p.targetFps);
+      if (!isTarget) return base;
+
+      const out: TdpProfile = {
+        ...base,
+        mode: "targetFps",
+        targetFps: clampTargetFps(p.targetFps as number),
+      };
+      if (typeof p.minWatts === "number") out.minWatts = clampTdp(p.minWatts);
+      if (typeof p.maxWatts === "number") out.maxWatts = clampTdp(p.maxWatts);
+      if (
+        out.minWatts !== undefined &&
+        out.maxWatts !== undefined &&
+        out.minWatts > out.maxWatts
+      ) {
+        [out.minWatts, out.maxWatts] = [out.maxWatts, out.minWatts];
+      }
+      return out;
+    });
   return {
-    version: 1,
+    version: STORE_VERSION,
     defaultTdp: clampTdp(obj.defaultTdp),
     profiles,
     perGameEnabled: typeof obj.perGameEnabled === "boolean" ? obj.perGameEnabled : false,
@@ -278,8 +332,15 @@ export function createTdpProfileEngine(options: TdpProfileEngineOptions) {
 
     if (profile) {
       currentTdp = profile.tdpWatts;
-      await commitTdp(profile.tdpWatts);
-      onProfileChanged(profile, gameName);
+      if (profile.mode === "targetFps") {
+        // The FPS controller governs wattage for this game — do NOT commit a
+        // fixed hold here (that would fight the loop). The backend seeds the
+        // starting wattage once and drives the controller from there.
+        onProfileChanged(profile, gameName);
+      } else {
+        await commitTdp(profile.tdpWatts);
+        onProfileChanged(profile, gameName);
+      }
     } else {
       const watts = noGameTdp();
       currentTdp = watts;
@@ -332,6 +393,61 @@ export function createTdpProfileEngine(options: TdpProfileEngineOptions) {
         currentTdp = clamped;
         await commitTdp(clamped);
       }
+      onProfileChanged(activeProfile, gameName);
+    }
+  }
+
+  /**
+   * Create or update a per-game profile in **target-FPS** mode. The profile's
+   * `tdpWatts` becomes the controller seed (existing value, explicit seed, or
+   * the midpoint of the bounds). Unlike setProfile this never commits a fixed
+   * wattage — the backend's FPS controller owns hardware for target-mode games.
+   */
+  async function setTargetFpsProfile(
+    appId: number,
+    gameName: string,
+    targetFps: number,
+    opts?: { minWatts?: number; maxWatts?: number; seedWatts?: number },
+  ): Promise<void> {
+    const clampedTarget = clampTargetFps(targetFps);
+    const existing = store.profiles.find((p) => p.appId === appId);
+
+    let minWatts = opts?.minWatts !== undefined ? clampTdp(opts.minWatts) : existing?.minWatts;
+    let maxWatts = opts?.maxWatts !== undefined ? clampTdp(opts.maxWatts) : existing?.maxWatts;
+    if (minWatts !== undefined && maxWatts !== undefined && minWatts > maxWatts) {
+      [minWatts, maxWatts] = [maxWatts, minWatts];
+    }
+
+    const midpoint =
+      minWatts !== undefined && maxWatts !== undefined
+        ? Math.round((minWatts + maxWatts) / 2)
+        : undefined;
+    const seed = clampTdp(
+      existing?.tdpWatts ?? opts?.seedWatts ?? midpoint ?? DEFAULT_TDP_WATTS,
+    );
+
+    const next: TdpProfile = {
+      appId,
+      gameName,
+      tdpWatts: seed,
+      mode: "targetFps",
+      targetFps: clampedTarget,
+    };
+    if (minWatts !== undefined) next.minWatts = minWatts;
+    if (maxWatts !== undefined) next.maxWatts = maxWatts;
+
+    if (existing) {
+      const idx = store.profiles.indexOf(existing);
+      store.profiles[idx] = next;
+    } else {
+      store.profiles.push(next);
+    }
+    await saveProfiles();
+
+    // Reflect it if this game is running. Never commit a fixed wattage — the
+    // backend (re)starts the controller in response to onProfileChanged.
+    if (isGameRunning && activeAppId === appId) {
+      activeProfile = { ...next };
       onProfileChanged(activeProfile, gameName);
     }
   }
@@ -422,12 +538,25 @@ export function createTdpProfileEngine(options: TdpProfileEngineOptions) {
     return activeAppId;
   }
 
+  /**
+   * Apply a wattage through the same 250ms-debounced, strictly-serialized
+   * commit queue the engine uses internally. The FPS controller writes ONLY
+   * through this, so controller writes, game-launch applies, and slider writes
+   * can never issue concurrent SMU-mailbox writes (the documented APU-hang
+   * hazard — see commitTdp above).
+   */
+  function applyManagedTdp(watts: number): Promise<void> {
+    return commitTdp(watts);
+  }
+
   return {
     loadProfiles,
     saveProfiles,
     handleGameLaunch,
     handleGameExit,
     setProfile,
+    setTargetFpsProfile,
+    applyManagedTdp,
     removeProfile,
     getProfile,
     getAllProfiles,

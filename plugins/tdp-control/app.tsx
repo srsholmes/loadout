@@ -76,7 +76,49 @@ interface SavedGameProfile {
   appId: number;
   gameName: string;
   tdpWatts: number;
+  mode?: "fixed" | "targetFps";
+  targetFps?: number;
+  minWatts?: number;
+  maxWatts?: number;
 }
+
+/** Live snapshot of the closed-loop FPS controller (getControllerState). */
+interface ControllerState {
+  running: boolean;
+  appId: number | null;
+  currentFps: number | null;
+  targetFps: number | null;
+  currentWatts: number | null;
+  minWatts: number | null;
+  maxWatts: number | null;
+  settled: boolean;
+  reason: string;
+  mangoHudActive: boolean;
+}
+
+interface MangoHudStatus {
+  installed: boolean;
+  configured: boolean;
+  logging: boolean;
+}
+
+const TARGET_FPS_MIN = 30;
+const TARGET_FPS_MAX = 120;
+const TARGET_FPS_STEP = 5;
+const DEFAULT_TARGET_FPS = 60;
+
+/** Human labels for controller reasons (badge text). */
+const CONTROLLER_REASON_LABELS: Record<string, string> = {
+  "warming-up": "Starting…",
+  settling: "Adjusting…",
+  holding: "Holding",
+  climbing: "Adding power",
+  reducing: "Saving power",
+  floor: "At min watts",
+  unreachable: "Target unreachable",
+  stopped: "Stopped",
+  "no-fps-source": "No FPS source",
+};
 
 function TdpControl() {
   const { call, useEvent } = useBackend("tdp-control");
@@ -88,6 +130,8 @@ function TdpControl() {
   const [applying, setApplying] = useState(false);
   const [perGameEnabled, setPerGameEnabled] = useState<boolean>(false);
   const [gameProfiles, setGameProfiles] = useState<SavedGameProfile[]>([]);
+  const [controller, setController] = useState<ControllerState | null>(null);
+  const [mangoHud, setMangoHud] = useState<MangoHudStatus | null>(null);
   // Landing (TDP controls) vs the settings sub-view (custom-device form),
   // reached via the header gear — mirrors the convention other plugins use.
   const [view, setView] = useState<"main" | "settings">("main");
@@ -213,6 +257,72 @@ function TdpControl() {
     },
   });
 
+  // Live FPS controller telemetry (target-FPS mode).
+  useEvent({
+    event: "fpsUpdate",
+    handler: (data) => {
+      const d = data as {
+        appId: number;
+        fps: number | null;
+        targetFps: number | null;
+        watts: number;
+        settled: boolean;
+        reason: string;
+      };
+      setController((prev) => ({
+        running: true,
+        appId: d.appId,
+        currentFps: d.fps,
+        targetFps: d.targetFps,
+        currentWatts: d.watts,
+        minWatts: prev?.minWatts ?? null,
+        maxWatts: prev?.maxWatts ?? null,
+        settled: d.settled,
+        reason: d.reason,
+        mangoHudActive: d.fps !== null || (prev?.mangoHudActive ?? false),
+      }));
+    },
+  });
+
+  useEvent({
+    event: "controllerStateChanged",
+    handler: (data) => {
+      const d = data as { running: boolean; appId: number; reason: string };
+      // Re-sync the authoritative snapshot; running=false clears the readout.
+      call("getControllerState")
+        .then((s) => setController(s as ControllerState))
+        .catch(() => {});
+      if (!d.running) {
+        setController((prev) =>
+          prev ? { ...prev, running: false, reason: d.reason } : prev,
+        );
+      }
+    },
+  });
+
+  // Refresh MangoHud + controller status when the active game changes.
+  const currentAppId = currentGame?.appId ?? null;
+  useEffect(() => {
+    let alive = true;
+    if (currentAppId == null) {
+      setMangoHud(null);
+      return;
+    }
+    Promise.all([
+      call("getMangoHudStatus", currentAppId),
+      call("getControllerState"),
+    ])
+      .then(([mh, ctrl]) => {
+        if (!alive) return;
+        setMangoHud(mh as MangoHudStatus);
+        setController(ctrl as ControllerState);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [call, currentAppId]);
+
   const handleSetTdp = useCallback(
     async (watts: number) => {
       setApplying(true);
@@ -289,6 +399,88 @@ function TdpControl() {
       }
     },
     [call],
+  );
+
+  // Switch the running game between fixed-TDP and target-FPS mode.
+  const handleSetMode = useCallback(
+    async (mode: "fixed" | "targetFps") => {
+      if (!currentGame) return;
+      setError(null);
+      try {
+        if (mode === "targetFps") {
+          const existing = gameProfiles.find(
+            (p) => p.appId === currentGame.appId,
+          );
+          const target = existing?.targetFps ?? DEFAULT_TARGET_FPS;
+          // Enabling target mode needs a live FPS source — turn MangoHud on.
+          if (!mangoHud?.configured) {
+            await call("enableMangoHudForGame", currentGame.appId).catch(
+              () => {},
+            );
+            await call("getMangoHudStatus", currentGame.appId)
+              .then((s) => setMangoHud(s as MangoHudStatus))
+              .catch(() => {});
+          }
+          await call(
+            "setGameTargetFps",
+            currentGame.appId,
+            currentGame.gameName,
+            target,
+          );
+        } else {
+          await call("clearGameTargetFps", currentGame.appId);
+        }
+        const profiles = (await call("getGameProfiles").catch(
+          () => [],
+        )) as SavedGameProfile[];
+        setGameProfiles(profiles);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to switch mode");
+      }
+    },
+    [call, currentGame, gameProfiles, mangoHud],
+  );
+
+  const handleSetTargetFps = useCallback(
+    async (fps: number) => {
+      if (!currentGame) return;
+      // Optimistic local update so the stepper feels responsive.
+      setGameProfiles((prev) =>
+        prev.map((p) =>
+          p.appId === currentGame.appId ? { ...p, targetFps: fps } : p,
+        ),
+      );
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      debounceTimer.current = setTimeout(() => {
+        call(
+          "setGameTargetFps",
+          currentGame.appId,
+          currentGame.gameName,
+          fps,
+        ).catch(() => {});
+      }, 400);
+    },
+    [call, currentGame],
+  );
+
+  const handleToggleMangoHud = useCallback(
+    async (next: boolean) => {
+      if (!currentGame) return;
+      try {
+        await call(
+          next ? "enableMangoHudForGame" : "disableMangoHudForGame",
+          currentGame.appId,
+        );
+        const s = (await call(
+          "getMangoHudStatus",
+          currentGame.appId,
+        )) as MangoHudStatus;
+        setMangoHud(s);
+      } catch {
+        /* best-effort */
+      }
+    },
+    [call, currentGame],
   );
 
   const handleApplyProfile = useCallback(
@@ -525,6 +717,134 @@ function TdpControl() {
                 moving the slider while a game is running saves that game's profile.
               </div>
 
+              {/* AUTO-FPS — per-game Fixed TDP vs Target FPS, shown for the
+                  running game. In Target mode the controller adjusts wattage to
+                  hold the chosen frame rate (MangoHud supplies live FPS). */}
+              {perGameEnabled && currentGame && (
+                <div style={{ marginTop: 10 }}>
+                  {(() => {
+                    const profile = gameProfiles.find(
+                      (p) => p.appId === currentGame.appId,
+                    );
+                    const isTarget = profile?.mode === "targetFps";
+                    const targetFps = profile?.targetFps ?? DEFAULT_TARGET_FPS;
+                    const live =
+                      controller &&
+                      controller.appId === currentGame.appId &&
+                      controller.running
+                        ? controller
+                        : null;
+                    return (
+                      <>
+                        <div
+                          className="segmented w-full"
+                          style={{ marginBottom: 8 }}
+                        >
+                          <SegmentedItem
+                            active={!isTarget}
+                            onSelect={() => handleSetMode("fixed")}
+                            disabled={applying}
+                            style={{ flex: 1 }}
+                          >
+                            <span className="text-[13px] font-semibold">
+                              Fixed TDP
+                            </span>
+                          </SegmentedItem>
+                          <SegmentedItem
+                            active={isTarget}
+                            onSelect={() => handleSetMode("targetFps")}
+                            disabled={applying}
+                            style={{ flex: 1 }}
+                          >
+                            <span className="text-[13px] font-semibold">
+                              Target FPS
+                            </span>
+                          </SegmentedItem>
+                        </div>
+
+                        {isTarget && (
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-baseline gap-1.5">
+                                <span
+                                  className="metric-value mono"
+                                  style={{ fontSize: 30 }}
+                                >
+                                  {live?.currentFps != null
+                                    ? Math.round(live.currentFps)
+                                    : "--"}
+                                </span>
+                                <span className="metric-unit">
+                                  / {targetFps} fps
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {live?.currentWatts != null && (
+                                  <span className="chip mono">
+                                    {live.currentWatts}W
+                                  </span>
+                                )}
+                                <span
+                                  className={`chip ${live?.settled ? "chip-accent" : ""}`}
+                                >
+                                  {CONTROLLER_REASON_LABELS[
+                                    live?.reason ?? "warming-up"
+                                  ] ?? "…"}
+                                </span>
+                              </div>
+                            </div>
+
+                            <Slider
+                              value={targetFps}
+                              onChange={handleSetTargetFps}
+                              min={TARGET_FPS_MIN}
+                              max={TARGET_FPS_MAX}
+                              step={TARGET_FPS_STEP}
+                              disabled={applying}
+                            />
+                            <div className="flex justify-between mono text-[11px] text-base-content/50 mt-1.5">
+                              <span>{TARGET_FPS_MIN}</span>
+                              <span>{targetFps} fps target</span>
+                              <span>{TARGET_FPS_MAX}</span>
+                            </div>
+
+                            <div
+                              className="flex items-center justify-between"
+                              style={{ marginTop: 10 }}
+                            >
+                              <div className="flex flex-col pr-3">
+                                <span className="text-[12px] font-semibold">
+                                  MangoHud logging
+                                </span>
+                                <span
+                                  className="subsection-desc"
+                                  style={{ marginTop: 0 }}
+                                >
+                                  {mangoHud?.installed === false
+                                    ? "MangoHud not installed — install it to enable auto-FPS."
+                                    : mangoHud?.logging
+                                      ? "Logging FPS for this game."
+                                      : mangoHud?.configured
+                                        ? "Enabled — launch the game to start logging."
+                                        : "Required as the live FPS source."}
+                                </span>
+                              </div>
+                              <Toggle
+                                checked={Boolean(mangoHud?.configured)}
+                                onChange={handleToggleMangoHud}
+                                disabled={
+                                  applying || mangoHud?.installed === false
+                                }
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
+
               {perGameEnabled && gameProfiles.length > 0 && (
                 <div style={{ marginTop: 8 }}>
                   <div className="subsection-desc" style={{ marginBottom: 4 }}>
@@ -570,7 +890,11 @@ function TdpControl() {
                               size="xs"
                               className="font-semibold"
                             >
-                              <span className="mono">{p.tdpWatts}W</span>
+                              <span className="mono">
+                                {p.mode === "targetFps" && p.targetFps
+                                  ? `${p.targetFps} FPS`
+                                  : `${p.tdpWatts}W`}
+                              </span>
                             </Badge>
                           }
                           action={
