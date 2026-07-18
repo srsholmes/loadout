@@ -33,6 +33,14 @@ mock.module("@loadout/ui", () => ({
   }),
 }));
 
+const recoveryDefaults = {
+  autoRecover: false,
+  recovering: false,
+  lastRecovery: null,
+  watchdogSuspended: false,
+  lastKnownDriver: { driver: "iwlwifi", iface: "wlan0" },
+};
+
 const offStatus = {
   iface: "wlan0",
   nmConfigured: false,
@@ -42,6 +50,7 @@ const offStatus = {
   configured: false,
   powerSaveDisabled: false,
   listenerRunning: false,
+  ...recoveryDefaults,
 };
 
 const onStatus = {
@@ -53,6 +62,7 @@ const onStatus = {
   configured: true,
   powerSaveDisabled: true,
   listenerRunning: true,
+  ...recoveryDefaults,
 };
 
 describe("wifi plugin", () => {
@@ -62,6 +72,20 @@ describe("wifi plugin", () => {
     eventHandlers.clear();
     callMock.mockImplementation((method: string) => {
       if (method === "getStatus") return Promise.resolve(offStatus);
+      if (method === "recoverRadio") {
+        // Mirrors the backend's actual RecoveryResult shape — recoverRadio
+        // does NOT include at/source (those exist only on getStatus's
+        // lastRecovery), and the mock must not mask that.
+        return Promise.resolve({
+          ok: true,
+          stage: "done",
+          tier: "modprobe",
+          driver: "iwlwifi",
+          iface: "wlan1",
+          detail: "Driver reloaded — radio back as wlan1.",
+          durationMs: 1200,
+        });
+      }
       return Promise.resolve({ success: true });
     });
   });
@@ -126,6 +150,138 @@ describe("wifi plugin", () => {
       expect(container.textContent).toContain("Power saving disabled");
       const toggle = container.querySelector('input[type="checkbox"]') as HTMLInputElement;
       expect(toggle?.checked).toBe(true);
+    });
+  });
+
+  it("renders the radio recovery card", async () => {
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Radio recovery");
+      expect(container.textContent).toContain("Recover WiFi radio");
+      expect(container.textContent).toContain("Auto-recover radio");
+      expect(container.textContent).toContain("driver iwlwifi");
+    });
+  });
+
+  it("the recover button dispatches recoverRadio and shows the busy label", async () => {
+    // Hold the recovery unresolved so the busy label is observable.
+    let release!: (value: unknown) => void;
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") return Promise.resolve(offStatus);
+      if (method === "recoverRadio") return new Promise((resolve) => (release = resolve));
+      return Promise.resolve({ success: true });
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    let button: HTMLButtonElement | undefined;
+    await waitFor(() => {
+      const b = container.querySelector("button") as HTMLButtonElement;
+      expect(b?.textContent).toContain("Recover WiFi radio");
+      button = b;
+    });
+
+    fireEvent.click(button!);
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("recoverRadio");
+      expect(container.querySelector("button")?.textContent).toContain("Recovering…");
+    });
+
+    release({ ok: true, iface: "wlan1", detail: "ok" });
+    await waitFor(() => {
+      expect(container.querySelector("button")?.textContent).toContain("Recover WiFi radio");
+    });
+  });
+
+  it("the auto-recover toggle dispatches setAutoRecover", async () => {
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    let toggles: HTMLInputElement[] = [];
+    await waitFor(() => {
+      toggles = Array.from(
+        container.querySelectorAll('input[type="checkbox"]'),
+      ) as HTMLInputElement[];
+      // Power-save toggle + auto-recover toggle.
+      expect(toggles.length).toBe(2);
+    });
+    expect(toggles[1]!.checked).toBe(false);
+
+    fireEvent.click(toggles[1]!);
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("setAutoRecover", true);
+    });
+  });
+
+  it("shows the paused warning only while auto-recover is enabled", async () => {
+    // Suspended but toggled OFF → no banner (a paused watchdog that isn't
+    // running is not worth warning about).
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") {
+        return Promise.resolve({ ...offStatus, watchdogSuspended: true });
+      }
+      return Promise.resolve({ success: true });
+    });
+    const off = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(off);
+    await waitFor(() => {
+      expect(off.textContent).toContain("Radio recovery");
+    });
+    expect(off.textContent).not.toContain("Auto-recovery paused");
+
+    // Suspended and toggled ON → banner shows.
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") {
+        return Promise.resolve({ ...offStatus, autoRecover: true, watchdogSuspended: true });
+      }
+      return Promise.resolve({ success: true });
+    });
+    const on = document.createElement("div");
+    mount(on);
+    await waitFor(() => {
+      expect(on.textContent).toContain("Auto-recovery paused");
+    });
+  });
+
+  it("a failed recovery surfaces its detail as an error notification", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") return Promise.resolve(offStatus);
+      if (method === "recoverRadio") {
+        return Promise.resolve({
+          ok: false,
+          stage: "precheck",
+          tier: null,
+          driver: null,
+          iface: null,
+          detail: "WiFi is switched off (rfkill) — recovery skipped. Turn WiFi on first.",
+          durationMs: 1,
+        });
+      }
+      return Promise.resolve({ success: true });
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    let button: HTMLButtonElement | undefined;
+    await waitFor(() => {
+      const b = container.querySelector("button") as HTMLButtonElement;
+      expect(b?.textContent).toContain("Recover WiFi radio");
+      button = b;
+    });
+
+    fireEvent.click(button!);
+    await waitFor(() => {
+      expect(notifyMock).toHaveBeenCalledWith(
+        "WiFi is switched off (rfkill) — recovery skipped. Turn WiFi on first.",
+        { kind: "error" },
+      );
     });
   });
 });

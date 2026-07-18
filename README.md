@@ -180,7 +180,7 @@ Enable or disable each one from **Settings → Plugins**.
 - **[Store Bridge](plugins/store-bridge/README.md)** — Surface your Epic Games library as Steam shortcuts (GOG, Amazon, Ubisoft, xCloud planned)
 - **[TDP Control](plugins/tdp-control/README.md)** — Adjust CPU/APU TDP wattage with presets and a slider
 - **[Theme Loader](plugins/theme-loader/README.md)** — Browse, install, and toggle community CSS themes for Steam's Big Picture UI
-- **[WiFi](plugins/wifi/README.md)** — Stop WiFi dropping out by disabling the radio's power saving. Writes a NetworkManager drop-in (and an iwd quirk where iwd is installed), applies it instantly, and re-asserts it on every wake. Cross-distro: SteamOS, Bazzite, CachyOS.
+- **[WiFi](plugins/wifi/README.md)** — Stop WiFi dropping out by disabling the radio's power saving. Writes a NetworkManager drop-in (and an iwd quirk where iwd is installed), applies it instantly, and re-asserts it on every wake. Also recovers a crashed WiFi radio without a reboot — reloads the driver (escalating to a PCI reset) manually or automatically when the radio goes unavailable. Cross-distro: SteamOS, Bazzite, CachyOS.
 
 <!-- PLUGINS_GALLERY_END -->
 
