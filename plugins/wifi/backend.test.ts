@@ -29,19 +29,23 @@ mock.module("./lib/powersave", () => ({
   reassertRuntime: reassertImpl,
 }));
 
-// In-memory plugin storage so settings persist within a test.
+// In-memory plugin storage so settings persist within a test. The mutate
+// path is a spy so tests can assert write counts (skip-unchanged branch).
 let storage: Record<string, unknown> = {};
-mock.module("@loadout/plugin-storage", () => ({
-  readPluginStorage: async () => ({ ...storage }),
-  writePluginStorage: async (_id: string, next: Record<string, unknown>) => {
-    storage = { ...next };
-  },
-  mutatePluginStorage: async (
+const mutateSpy = mock(
+  async (
     _id: string,
     mutate: (current: Record<string, unknown>) => Record<string, unknown>,
   ) => {
     storage = { ...mutate({ ...storage }) };
   },
+);
+mock.module("@loadout/plugin-storage", () => ({
+  readPluginStorage: async () => ({ ...storage }),
+  writePluginStorage: async (_id: string, next: Record<string, unknown>) => {
+    storage = { ...next };
+  },
+  mutatePluginStorage: mutateSpy,
 }));
 
 // Mock the recovery orchestration (tested separately in lib/recovery.test.ts)
@@ -64,6 +68,12 @@ const detectDriverInfoImpl = mock(async () => ({
   iface: "wlan0",
   updatedAt: 1,
 }));
+const evaluateWatchdogImpl = mock((opts: { state: unknown }) => ({
+  next: opts.state,
+  fire: false,
+  reason: "healthy",
+}));
+const recordRecoveryOutcomeImpl = mock((opts: { state: unknown }) => opts.state);
 mock.module("./lib/recovery", () => ({
   recover: recoverImpl,
   getWifiDevice: getWifiDeviceImpl,
@@ -76,8 +86,8 @@ mock.module("./lib/recovery", () => ({
     lastAttemptAt: null,
     suspended: false,
   }),
-  evaluateWatchdog: (opts: { state: unknown }) => ({ next: opts.state, fire: false, reason: "healthy" }),
-  recordRecoveryOutcome: (opts: { state: unknown }) => opts.state,
+  evaluateWatchdog: evaluateWatchdogImpl,
+  recordRecoveryOutcome: recordRecoveryOutcomeImpl,
   DEFAULT_WATCHDOG: { debounceCount: 2, cooldownMs: 60_000, maxFailures: 3 },
 }));
 
@@ -109,6 +119,15 @@ function makeBackend() {
   return { backend, events };
 }
 
+// Typed access to private members the wiring tests exercise directly:
+// watchdogTick is only reachable through a real 12s interval otherwise.
+interface BackendInternals {
+  watchdogTick(): Promise<void>;
+  refreshLastKnownDriver(): Promise<void>;
+  recoveryTimer?: ReturnType<typeof setInterval>;
+}
+const internals = (backend: WifiBackend) => backend as unknown as BackendInternals;
+
 describe("WiFi backend", () => {
   beforeEach(() => {
     enableImpl.mockClear();
@@ -122,6 +141,9 @@ describe("WiFi backend", () => {
     recoverImpl.mockClear();
     getWifiDeviceImpl.mockClear();
     detectDriverInfoImpl.mockClear();
+    mutateSpy.mockClear();
+    evaluateWatchdogImpl.mockClear();
+    recordRecoveryOutcomeImpl.mockClear();
   });
 
   it("returns status merged with the persisted setting", async () => {
@@ -351,6 +373,105 @@ describe("WiFi backend", () => {
     expect(storage.autoRecover).toBe(false);
     expect((await backend.getStatus()).autoRecover).toBe(false);
     await backend.onUnload();
+  });
+
+  it("a firing watchdog tick runs a recovery with source 'watchdog'", async () => {
+    evaluateWatchdogImpl.mockImplementationOnce((opts) => ({
+      next: opts.state,
+      fire: true,
+      reason: "device-unavailable",
+    }));
+    const { backend } = makeBackend();
+    await backend.onLoad();
+
+    await internals(backend).watchdogTick();
+    expect(recoverImpl).toHaveBeenCalledTimes(1);
+    const status = await backend.getStatus();
+    expect(status.lastRecovery?.source).toBe("watchdog");
+    await backend.onUnload();
+  });
+
+  it("a tick during an in-flight manual recovery early-returns (no second run)", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    recoverImpl.mockImplementationOnce(async () => {
+      await gate;
+      return {
+        ok: true,
+        stage: "done",
+        tier: "modprobe",
+        driver: "iwlwifi",
+        iface: "wlan1",
+        detail: "ok",
+        durationMs: 5,
+      };
+    });
+    const { backend } = makeBackend();
+    await backend.onLoad();
+
+    const manual = backend.recoverRadio();
+    await internals(backend).watchdogTick();
+    // Early return happens before sampling, so the reducer never ran.
+    expect(evaluateWatchdogImpl).not.toHaveBeenCalled();
+
+    release();
+    await manual;
+    expect(recoverImpl).toHaveBeenCalledTimes(1);
+    await backend.onUnload();
+  });
+
+  it("precheck refusals don't feed the watchdog's failure counter; real failures do", async () => {
+    recoverImpl.mockImplementationOnce(async () => ({
+      ok: false,
+      stage: "precheck",
+      tier: null,
+      driver: null,
+      iface: null,
+      detail: "WiFi is switched off (rfkill) — recovery skipped.",
+      durationMs: 1,
+    }));
+    const { backend } = makeBackend();
+    await backend.onLoad();
+
+    await backend.recoverRadio();
+    expect(recordRecoveryOutcomeImpl).not.toHaveBeenCalled();
+
+    recoverImpl.mockImplementationOnce(async () => ({
+      ok: false,
+      stage: "unload",
+      tier: "modprobe",
+      driver: "iwlwifi",
+      iface: null,
+      detail: "Couldn't unload the driver: in use",
+      durationMs: 100,
+    }));
+    await backend.recoverRadio();
+    expect(recordRecoveryOutcomeImpl).toHaveBeenCalledTimes(1);
+    await backend.onUnload();
+  });
+
+  it("refreshLastKnownDriver skips the storage write when nothing changed", async () => {
+    const { backend } = makeBackend();
+    await backend.onLoad();
+    await new Promise((resolve) => setTimeout(resolve, 0)); // onLoad capture settles
+    const writesAfterCapture = mutateSpy.mock.calls.length;
+    expect(storage.lastKnownDriver).toBeTruthy();
+
+    await internals(backend).refreshLastKnownDriver();
+    expect(mutateSpy.mock.calls.length).toBe(writesAfterCapture);
+    await backend.onUnload();
+  });
+
+  it("onLoad starts the watchdog when autoRecover was persisted", async () => {
+    storage = { autoRecover: true };
+    const { backend } = makeBackend();
+    await backend.onLoad();
+    expect(internals(backend).recoveryTimer).toBeTruthy();
+
+    await backend.onUnload();
+    expect(internals(backend).recoveryTimer).toBeUndefined();
   });
 
   it("getStatus keeps the legacy keys intact alongside the recovery keys", async () => {

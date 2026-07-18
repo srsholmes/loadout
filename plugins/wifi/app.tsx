@@ -198,7 +198,7 @@ function Wifi() {
               rebooting. Your saved network reconnects automatically afterwards.
             </div>
 
-            {data.watchdogSuspended && (
+            {data.autoRecover && data.watchdogSuspended && (
               <Alert
                 variant="warning"
                 icon={<FaTriangleExclamation size={14} />}

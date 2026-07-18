@@ -181,6 +181,10 @@ export interface DriverInfo {
 
 const PCI_ADDRESS = /^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]$/;
 
+/** Kernel module name shape — no leading dash (modprobe option smuggling),
+ *  no path separators. */
+const MODULE_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+
 const basename = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
 
 /** Driver + PCI address for a live interface (via /sys symlinks), or null. */
@@ -236,6 +240,28 @@ async function unloadModules(opts: {
 }
 
 /**
+ * Write "1" to a sysfs knob with a hard timeout. A PCI function reset or
+ * bus-remove can block inside the kernel; without the bound, a hung write
+ * would wedge recover() — and the backend's single-flight guard — forever.
+ * The stuck write is abandoned (nothing can cancel it), recovery just
+ * stops waiting on it.
+ */
+const SYSFS_WRITE_TIMEOUT_MS = 15_000;
+function boundedSysfsWrite(opts: { deps: RecoveryDeps; path: string }): Promise<void> {
+  const { deps, path } = opts;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`sysfs write timed out after ${SYSFS_WRITE_TIMEOUT_MS}ms: ${path}`)),
+      SYSFS_WRITE_TIMEOUT_MS,
+    );
+  });
+  return Promise.race([deps.writeFile(path, "1"), timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  }) as Promise<void>;
+}
+
+/**
  * Poll until a wifi device exists in a usable NM state ("disconnected",
  * "connecting", "connected", …) — i.e. anything except missing,
  * "unavailable" (driver dead) or "unmanaged". Returns null on timeout.
@@ -282,7 +308,9 @@ export interface RecoveryResult {
 
 /**
  * Run the full recovery ladder: module reload → PCI function reset →
- * PCI remove + rescan. Resolves (never rejects) with a structured result.
+ * PCI remove + rescan. Resolves (never rejects) with a structured result —
+ * an unexpectedly-throwing dep becomes a failed result at the stage it
+ * died in, so the backend's single-flight guard always clears.
  */
 export async function recover(opts: {
   deps: RecoveryDeps;
@@ -293,15 +321,46 @@ export async function recover(opts: {
   waitTimeoutMs?: number;
   pollIntervalMs?: number;
 }): Promise<RecoveryResult> {
-  const { deps, lastKnown, onStage } = opts;
-  const waitTimeoutMs = opts.waitTimeoutMs ?? 20_000;
-  const pollIntervalMs = opts.pollIntervalMs ?? 1_000;
+  const { deps, onStage } = opts;
   const start = deps.now();
   const finish = (
     partial: Omit<RecoveryResult, "durationMs">,
   ): RecoveryResult => ({ ...partial, durationMs: deps.now() - start });
 
-  onStage?.("precheck");
+  let stage: RecoveryStage = "precheck";
+  let driver: string | null = null;
+  const enterStage = (next: RecoveryStage) => {
+    stage = next;
+    onStage?.(next);
+  };
+  try {
+    return await runLadder({ ...opts, enterStage, finish, setDriver: (d) => (driver = d) });
+  } catch (e) {
+    return finish({
+      ok: false,
+      stage,
+      tier: null,
+      driver,
+      iface: null,
+      detail: `Recovery failed unexpectedly at ${stage}: ${e}`,
+    });
+  }
+}
+
+async function runLadder(opts: {
+  deps: RecoveryDeps;
+  lastKnown: DriverInfo | null;
+  enterStage: (stage: RecoveryStage) => void;
+  finish: (partial: Omit<RecoveryResult, "durationMs">) => RecoveryResult;
+  setDriver: (driver: string) => void;
+  waitTimeoutMs?: number;
+  pollIntervalMs?: number;
+}): Promise<RecoveryResult> {
+  const { deps, lastKnown, enterStage, finish, setDriver } = opts;
+  const waitTimeoutMs = opts.waitTimeoutMs ?? 20_000;
+  const pollIntervalMs = opts.pollIntervalMs ?? 1_000;
+
+  enterStage("precheck");
   const rfkill = await readRfkill({ deps });
   if (rfkill.blocked) {
     return finish({
@@ -331,13 +390,31 @@ export async function recover(opts: {
     });
   }
 
+  // Re-validate on readback: `lastKnown` comes from user-editable JSON
+  // storage, and this code runs as root. Capture-time validation isn't
+  // enough — a corrupted/tampered file must not steer modprobe argv or
+  // the sysfs write paths (defense-in-depth; same shapes as capture).
+  if (!MODULE_NAME.test(info.driver)) {
+    return finish({
+      ok: false,
+      stage: "precheck",
+      tier: null,
+      driver: null,
+      iface: null,
+      detail: "Stored WiFi driver name looks invalid — open this plugin once while WiFi works, then retry.",
+    });
+  }
+  const pciAddress =
+    info.pciAddress && PCI_ADDRESS.test(info.pciAddress) ? info.pciAddress : null;
+  setDriver(info.driver);
+
   const modules = modulesForDriver({ driver: info.driver });
   const wait = () => waitForWifiDevice({ deps, timeoutMs: waitTimeoutMs, pollIntervalMs });
   const load = () => deps.run(["modprobe", modules.load], { timeoutMs: 15_000 });
   deps.log?.(`recovering ${info.driver} (unload: ${modules.unload.join(" ")})`);
 
   // Tier 1 — module reload (the fix validated live on the Apex).
-  onStage?.("unload");
+  enterStage("unload");
   const unloaded = await unloadModules({ deps, unload: modules.unload });
   if (!unloaded.ok) {
     return finish({
@@ -349,7 +426,7 @@ export async function recover(opts: {
       detail: `Couldn't unload the driver: ${unloaded.detail}`,
     });
   }
-  onStage?.("load");
+  enterStage("load");
   const loaded = await load();
   if (loaded.exitCode !== 0) {
     return finish({
@@ -361,7 +438,7 @@ export async function recover(opts: {
       detail: `Couldn't reload ${modules.load}: ${loaded.stderr.trim() || `exit ${loaded.exitCode}`}`,
     });
   }
-  onStage?.("wait");
+  enterStage("wait");
   let dev = await wait();
   if (dev) {
     return finish({
@@ -374,7 +451,7 @@ export async function recover(opts: {
     });
   }
 
-  if (!info.pciAddress) {
+  if (!pciAddress) {
     return finish({
       ok: false,
       stage: "wait",
@@ -388,12 +465,12 @@ export async function recover(opts: {
 
   // Tier 2 — PCI function reset: re-initialises just the card. Worst case
   // is temporary (cleared by a cold boot), and the radio is already dead.
-  onStage?.("pci-reset");
-  deps.log?.(`module reload wasn't enough — PCI function reset of ${info.pciAddress}`);
+  enterStage("pci-reset");
+  deps.log?.(`module reload wasn't enough — PCI function reset of ${pciAddress}`);
   await unloadModules({ deps, unload: modules.unload }); // best-effort
-  await deps
-    .writeFile(`/sys/bus/pci/devices/${info.pciAddress}/reset`, "1")
-    .catch((e) => deps.log?.(`pci reset write failed: ${e}`));
+  await boundedSysfsWrite({ deps, path: `/sys/bus/pci/devices/${pciAddress}/reset` }).catch(
+    (e) => deps.log?.(`pci reset write failed: ${e}`),
+  );
   await load();
   dev = await wait();
   if (dev) {
@@ -409,16 +486,16 @@ export async function recover(opts: {
 
   // Tier 3 — remove the device from the bus and rescan: a full
   // re-enumeration, the closest software gets to a cold boot of the card.
-  onStage?.("pci-rescan");
-  deps.log?.(`PCI reset wasn't enough — removing ${info.pciAddress} and rescanning the bus`);
+  enterStage("pci-rescan");
+  deps.log?.(`PCI reset wasn't enough — removing ${pciAddress} and rescanning the bus`);
   await unloadModules({ deps, unload: modules.unload }); // best-effort
-  await deps
-    .writeFile(`/sys/bus/pci/devices/${info.pciAddress}/remove`, "1")
-    .catch((e) => deps.log?.(`pci remove write failed: ${e}`));
+  await boundedSysfsWrite({ deps, path: `/sys/bus/pci/devices/${pciAddress}/remove` }).catch(
+    (e) => deps.log?.(`pci remove write failed: ${e}`),
+  );
   await deps.sleep(2_000);
-  await deps
-    .writeFile("/sys/bus/pci/rescan", "1")
-    .catch((e) => deps.log?.(`pci rescan write failed: ${e}`));
+  await boundedSysfsWrite({ deps, path: "/sys/bus/pci/rescan" }).catch((e) =>
+    deps.log?.(`pci rescan write failed: ${e}`),
+  );
   await load();
   dev = await wait();
   if (dev) {
@@ -494,7 +571,9 @@ export function evaluateWatchdog(opts: {
   const { state, sample, now, config } = opts;
 
   if (sample.wifiPresent && sample.state !== "unavailable") {
-    // Healthy — full reset, including clearing a suspension.
+    // Healthy — full reset, including clearing a suspension. "unmanaged"
+    // lands here on purpose: it's NM configuration, not a crash, and a
+    // driver reload wouldn't change it.
     return { next: initialWatchdogState(), fire: false, reason: "healthy" };
   }
   if (sample.rfkillBlocked || !sample.radioEnabled) {

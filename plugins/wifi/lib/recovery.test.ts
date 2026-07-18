@@ -6,6 +6,8 @@ import {
   findModuleHolders,
   readRfkill,
   detectDriverInfo,
+  getWifiDevice,
+  nmRadioEnabled,
   recover,
   initialWatchdogState,
   evaluateWatchdog,
@@ -34,6 +36,10 @@ function makeHarness(init?: { rfkillAbsent?: boolean }) {
     onModprobe: undefined as
       | ((cmd: string[]) => { stdout: string; stderr: string; exitCode: number })
       | undefined,
+    /** Override nmcli results (default: exit 0 with h.nmState). */
+    onNmcli: undefined as
+      | ((cmd: string[]) => { stdout: string; stderr: string; exitCode: number })
+      | undefined,
     onWrite: undefined as ((path: string) => void) | undefined,
     time: 0,
     deps: undefined as unknown as RecoveryDeps,
@@ -41,7 +47,8 @@ function makeHarness(init?: { rfkillAbsent?: boolean }) {
   h.deps = {
     run: async (cmd) => {
       h.calls.push(cmd);
-      if (cmd[0] === "nmcli") return { stdout: h.nmState, stderr: "", exitCode: 0 };
+      if (cmd[0] === "nmcli")
+        return h.onNmcli?.(cmd) ?? { stdout: h.nmState, stderr: "", exitCode: 0 };
       if (cmd[0] === "modprobe") return h.onModprobe?.(cmd) ?? ok;
       return ok;
     },
@@ -228,6 +235,25 @@ describe("detectDriverInfo", () => {
   });
 });
 
+describe("getWifiDevice / nmRadioEnabled — nmcli failure paths", () => {
+  it("getWifiDevice returns null when nmcli exits non-zero", async () => {
+    const h = makeHarness();
+    h.nmState = "wlan0:wifi:connected";
+    h.onNmcli = () => ({ stdout: "", stderr: "NM not running", exitCode: 1 });
+    expect(await getWifiDevice({ deps: h.deps })).toBeNull();
+  });
+
+  it("nmRadioEnabled reads the switch and treats a failing nmcli as disabled", async () => {
+    const h = makeHarness();
+    h.onNmcli = () => ({ stdout: "enabled\n", stderr: "", exitCode: 0 });
+    expect(await nmRadioEnabled({ deps: h.deps })).toBe(true);
+    h.onNmcli = () => ({ stdout: "disabled\n", stderr: "", exitCode: 0 });
+    expect(await nmRadioEnabled({ deps: h.deps })).toBe(false);
+    h.onNmcli = () => ({ stdout: "", stderr: "boom", exitCode: 1 });
+    expect(await nmRadioEnabled({ deps: h.deps })).toBe(false);
+  });
+});
+
 // --- recover() ---------------------------------------------------------------
 
 describe("recover", () => {
@@ -395,6 +421,50 @@ describe("recover", () => {
     expect(res.detail).toContain("power-off");
   });
 
+  it("resolves (never rejects) when a dep throws, reporting the dying stage", async () => {
+    const h = makeHarness();
+    h.deps.run = async () => {
+      throw new Error("spawn failed: nmcli ENOENT");
+    };
+    const res = await recover({ deps: h.deps, lastKnown: INTEL_KNOWN });
+    expect(res.ok).toBe(false);
+    expect(res.stage).toBe("precheck");
+    expect(res.detail).toContain("spawn failed");
+  });
+
+  it("rejects an invalid stored driver name at precheck (root argv hygiene)", async () => {
+    const h = makeHarness();
+    h.nmState = ""; // vanished interface → the storage fallback is used
+    const res = await recover({
+      deps: h.deps,
+      lastKnown: { driver: "-C /evil.conf", pciAddress: null, iface: "wlan0", updatedAt: 0 },
+    });
+    expect(res.ok).toBe(false);
+    expect(res.stage).toBe("precheck");
+    expect(res.detail).toContain("invalid");
+    expect(modprobeCalls(h)).toEqual([]);
+  });
+
+  it("ignores an invalid stored PCI address instead of writing sysfs with it", async () => {
+    const h = makeHarness();
+    h.nmState = "";
+    const res = await recover({
+      deps: h.deps,
+      lastKnown: {
+        driver: "iwlwifi",
+        pciAddress: "../../../etc/somewhere",
+        iface: "wlan0",
+        updatedAt: 0,
+      },
+      waitTimeoutMs: 3_000,
+      pollIntervalMs: 1_000,
+    });
+    // Treated exactly like "no PCI address known": tier 1 only, no writes.
+    expect(res.ok).toBe(false);
+    expect(res.stage).toBe("wait");
+    expect(h.writes).toEqual([]);
+  });
+
   it("skips the PCI tiers when no PCI address is known", async () => {
     const h = makeHarness();
     h.nmState = "";
@@ -439,6 +509,18 @@ describe("watchdog reducer", () => {
     expect(second.fire).toBe(true);
     expect(second.next.lastAttemptAt).toBe(12_000);
     expect(second.next.consecutiveBad).toBe(0);
+  });
+
+  it("treats 'unmanaged' as healthy — NM config, not a crash", () => {
+    const r = evaluateWatchdog({
+      state: { consecutiveBad: 1, consecutiveFailures: 2, lastAttemptAt: 5, suspended: true },
+      sample: { ...HEALTHY, state: "unmanaged" },
+      now: 100_000,
+      config: DEFAULT_WATCHDOG,
+    });
+    expect(r.fire).toBe(false);
+    expect(r.reason).toBe("healthy");
+    expect(r.next).toEqual(initialWatchdogState());
   });
 
   it("a vanished device with a known driver counts as bad", () => {

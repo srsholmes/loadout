@@ -1,7 +1,7 @@
 import { readFile, writeFile, rm, mkdir, access, readdir, readlink } from "node:fs/promises";
 import type { PluginBackend, EmitPayload, PluginLogger } from "@loadout/types";
 import { runFull, runStreaming } from "@loadout/exec";
-import { readPluginStorage, writePluginStorage, mutatePluginStorage } from "@loadout/plugin-storage";
+import { readPluginStorage, mutatePluginStorage } from "@loadout/plugin-storage";
 import { startWakeListener, type StopHandle } from "@loadout/wake";
 import {
   enable as enablePowerSave,
@@ -225,11 +225,13 @@ export default class WifiBackend implements PluginBackend {
         return { success: false, iface: result.iface, error: result.error };
       }
 
-      const existing = await readPluginStorage<WifiSettings>(PLUGIN_ID);
-      await writePluginStorage<WifiSettings>(PLUGIN_ID, {
-        ...existing,
+      // Serialized: the recovery feature added more writers to this file
+      // (lastKnownDriver, autoRecover) — a bare read+write here could lose
+      // their updates (see mutatePluginStorage's lost-update rationale).
+      await mutatePluginStorage<WifiSettings>(PLUGIN_ID, (current) => ({
+        ...current,
         powerSaveDisabled: enabled,
-      });
+      }));
 
       if (enabled) this.startWake();
       else this.stopWake();
@@ -316,11 +318,17 @@ export default class WifiBackend implements PluginBackend {
         };
       }
       this.lastRecovery = { ...result, at: Date.now(), source };
-      this.watchdogState = recordRecoveryOutcome({
-        state: this.watchdogState,
-        ok: result.ok,
-        config: DEFAULT_WATCHDOG,
-      });
+      // Precheck refusals (rfkill on, no known driver) never attempted a
+      // reload — they must not count toward the watchdog's crash-loop
+      // suspension, or three instant button presses while WiFi is switched
+      // off would poison it before it ever fired.
+      if (result.ok || result.stage !== "precheck") {
+        this.watchdogState = recordRecoveryOutcome({
+          state: this.watchdogState,
+          ok: result.ok,
+          config: DEFAULT_WATCHDOG,
+        });
+      }
       if (result.ok) await this.refreshLastKnownDriver().catch(() => {});
       this.log?.info(
         `[wifi] recovery ${result.ok ? "succeeded" : "failed"} ` +
@@ -387,8 +395,13 @@ export default class WifiBackend implements PluginBackend {
    * pure reducer, and fire a recovery when it says so. The reducer owns
    * all the policy (debounce, cooldown, suspension after repeat failures).
    */
+  /** Prevents overlapping ticks when nmcli is slower than the interval. */
+  private tickRunning = false;
+
   private async watchdogTick(): Promise<void> {
     if (this.recoveryInFlight) return; // sample again after it settles
+    if (this.tickRunning) return;
+    this.tickRunning = true;
     try {
       const deps = this.recoveryDeps;
       const settings = await readPluginStorage<WifiSettings>(PLUGIN_ID);
@@ -421,6 +434,8 @@ export default class WifiBackend implements PluginBackend {
       }
     } catch (e) {
       this.log?.warn(`[wifi] watchdog tick failed: ${e}`);
+    } finally {
+      this.tickRunning = false;
     }
   }
 }

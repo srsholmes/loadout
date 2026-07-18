@@ -215,10 +215,50 @@ describe("wifi plugin", () => {
     });
   });
 
-  it("shows the paused warning when the watchdog is suspended", async () => {
+  it("shows the paused warning only while auto-recover is enabled", async () => {
+    // Suspended but toggled OFF → no banner (a paused watchdog that isn't
+    // running is not worth warning about).
     callMock.mockImplementation((method: string) => {
       if (method === "getStatus") {
         return Promise.resolve({ ...offStatus, watchdogSuspended: true });
+      }
+      return Promise.resolve({ success: true });
+    });
+    const off = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(off);
+    await waitFor(() => {
+      expect(off.textContent).toContain("Radio recovery");
+    });
+    expect(off.textContent).not.toContain("Auto-recovery paused");
+
+    // Suspended and toggled ON → banner shows.
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") {
+        return Promise.resolve({ ...offStatus, autoRecover: true, watchdogSuspended: true });
+      }
+      return Promise.resolve({ success: true });
+    });
+    const on = document.createElement("div");
+    mount(on);
+    await waitFor(() => {
+      expect(on.textContent).toContain("Auto-recovery paused");
+    });
+  });
+
+  it("a failed recovery surfaces its detail as an error notification", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") return Promise.resolve(offStatus);
+      if (method === "recoverRadio") {
+        return Promise.resolve({
+          ok: false,
+          stage: "precheck",
+          tier: null,
+          driver: null,
+          iface: null,
+          detail: "WiFi is switched off (rfkill) — recovery skipped. Turn WiFi on first.",
+          durationMs: 1,
+        });
       }
       return Promise.resolve({ success: true });
     });
@@ -226,8 +266,19 @@ describe("wifi plugin", () => {
     const { mount } = await import("./app");
     mount(container);
 
+    let button: HTMLButtonElement | undefined;
     await waitFor(() => {
-      expect(container.textContent).toContain("Auto-recovery paused");
+      const b = container.querySelector("button") as HTMLButtonElement;
+      expect(b?.textContent).toContain("Recover WiFi radio");
+      button = b;
+    });
+
+    fireEvent.click(button!);
+    await waitFor(() => {
+      expect(notifyMock).toHaveBeenCalledWith(
+        "WiFi is switched off (rfkill) — recovery skipped. Turn WiFi on first.",
+        { kind: "error" },
+      );
     });
   });
 });
