@@ -297,9 +297,9 @@ export default class WifiBackend implements PluginBackend {
     if (this.recoveryInFlight) return this.recoveryInFlight;
 
     const attempt = async (): Promise<RecoveryResult> => {
-      this.emit?.({ event: "recoveryState", data: { phase: "recovering", source } });
       let result: RecoveryResult;
       try {
+        this.emit?.({ event: "recoveryState", data: { phase: "recovering", source } });
         const settings = await readPluginStorage<WifiSettings>(PLUGIN_ID);
         result = await recover({
           deps: this.recoveryDeps,
@@ -318,11 +318,13 @@ export default class WifiBackend implements PluginBackend {
         };
       }
       this.lastRecovery = { ...result, at: Date.now(), source };
-      // Precheck refusals (rfkill on, no known driver) never attempted a
-      // reload — they must not count toward the watchdog's crash-loop
-      // suspension, or three instant button presses while WiFi is switched
-      // off would poison it before it ever fired.
-      if (result.ok || result.stage !== "precheck") {
+      // MANUAL precheck refusals (rfkill on, no known driver) never
+      // attempted a reload — three button presses while WiFi is switched
+      // off must not poison the watchdog's suspension. Watchdog-fired runs
+      // DO count even at precheck: a dead radio whose driver can't be
+      // resolved would otherwise fire→refuse every cooldown forever
+      // instead of suspending after maxFailures.
+      if (result.ok || result.stage !== "precheck" || source === "watchdog") {
         this.watchdogState = recordRecoveryOutcome({
           state: this.watchdogState,
           ok: result.ok,

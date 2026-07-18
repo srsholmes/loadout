@@ -422,6 +422,33 @@ describe("WiFi backend", () => {
     await backend.onUnload();
   });
 
+  it("a watchdog-fired precheck failure still counts toward suspension", async () => {
+    // Unlike a manual button press, a watchdog-fired refusal (dead radio,
+    // unresolvable driver) must feed the failure counter — otherwise the
+    // watchdog would fire→refuse every cooldown forever.
+    evaluateWatchdogImpl.mockImplementationOnce((opts) => ({
+      next: opts.state,
+      fire: true,
+      reason: "device-missing",
+    }));
+    recoverImpl.mockImplementationOnce(async () => ({
+      ok: false,
+      stage: "precheck",
+      tier: null,
+      driver: null,
+      iface: null,
+      detail: "No WiFi driver known — open this plugin once while WiFi works, then retry.",
+      durationMs: 1,
+    }));
+    const { backend } = makeBackend();
+    await backend.onLoad();
+
+    await internals(backend).watchdogTick();
+    expect(recoverImpl).toHaveBeenCalledTimes(1);
+    expect(recordRecoveryOutcomeImpl).toHaveBeenCalledTimes(1);
+    await backend.onUnload();
+  });
+
   it("precheck refusals don't feed the watchdog's failure counter; real failures do", async () => {
     recoverImpl.mockImplementationOnce(async () => ({
       ok: false,
