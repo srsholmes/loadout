@@ -50,6 +50,8 @@ const mockTdpInfo = {
   currentGovernor: "powersave",
   supportsSmt: true,
   supportsCpuBoost: true,
+  cpuBoostEnabled: false,
+  cpuBoostSetting: false,
 };
 
 describe("tdp-control plugin", () => {
