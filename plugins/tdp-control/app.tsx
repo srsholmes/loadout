@@ -48,6 +48,10 @@ interface TdpInfo {
   currentGovernor: string | null;
   supportsSmt: boolean;
   supportsCpuBoost: boolean;
+  /** Live hardware boost state (null when unsupported/unreadable). */
+  cpuBoostEnabled: boolean | null;
+  /** The boost state the backend enforces alongside every TDP apply. */
+  cpuBoostSetting: boolean;
   usingCustomDevice: boolean;
 }
 
@@ -367,6 +371,30 @@ function TdpControl() {
     [call],
   );
 
+  const handleSetCpuBoost = useCallback(
+    async (enable: boolean) => {
+      setError(null);
+      try {
+        const result = (await call("setCpuBoost", enable)) as {
+          success: boolean;
+          error?: string;
+        };
+        if (!result.success) {
+          setError(result.error ?? "Failed to set CPU boost");
+        } else {
+          setInfo((prev) =>
+            prev
+              ? { ...prev, cpuBoostSetting: enable, cpuBoostEnabled: enable }
+              : prev,
+          );
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to set CPU boost");
+      }
+    },
+    [call],
+  );
+
   const handleSetPlatformProfile = useCallback(
     async (profile: string) => {
       setError(null);
@@ -647,6 +675,23 @@ function TdpControl() {
                     {gov}
                   </SegmentedItem>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {info.supportsCpuBoost && (
+            <div className="subsection">
+              <div className="subsection-label flex justify-between items-center">
+                <span>CPU Boost</span>
+                <Toggle
+                  checked={info.cpuBoostSetting}
+                  onChange={handleSetCpuBoost}
+                />
+              </div>
+              <div className="subsection-desc">
+                Allow clocks above base frequency. Off (recommended with a TDP
+                limit) keeps power draw tracking the workload instead of racing
+                to the limit. Re-applied with every TDP change and on startup.
               </div>
             </div>
           )}

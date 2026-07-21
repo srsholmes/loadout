@@ -23,6 +23,7 @@ import {
   type CustomDevice,
 } from "./lib/custom-device";
 import { readSavedTdp, writeSavedTdp } from "./lib/saved-tdp";
+import { readCpuBoostPref, writeCpuBoostPref } from "./lib/cpu-boost-pref";
 
 // ---------------------------------------------------------------------------
 // Constants: sysfs paths
@@ -223,6 +224,12 @@ interface TdpInfo {
   gpuInfo: GpuInfo | null;
   smtEnabled: boolean | null;
   cpuBoostEnabled: boolean | null;
+  /**
+   * The boost state the plugin enforces alongside every TDP apply (the
+   * user's persisted preference, defaulting to off). `cpuBoostEnabled` above
+   * is the live hardware reading; this is the setting the toggle reflects.
+   */
+  cpuBoostSetting: boolean;
   acPowerOnline: boolean | null;
   chargeLimitPercent: number | null;
 }
@@ -296,6 +303,16 @@ export default class TdpControlBackend implements PluginBackend {
    * applies (per-game profiles, AC transitions, resume) do not.
    */
   private savedTdp: number | null = null;
+  /**
+   * The user's persisted CPU boost preference; `null` (never set) means the
+   * policy default applies: boost OFF. Whatever this resolves to is
+   * re-asserted alongside every TDP apply (manual, per-game, AC transition,
+   * resume) and at startup. Two reasons: the sysfs knob resets to boost-on
+   * at every boot, and with boost on the CPU races to max clocks under any
+   * sustained load — regardless of governor/EPP — so package draw pins at
+   * the TDP limit instead of tracking the workload. See lib/cpu-boost-pref.ts.
+   */
+  private savedCpuBoost: boolean | null = null;
   private tdpReadSource: TdpReadSource = "estimated";
   private activeProfile: string | null = null;
   private trackedTdp: number | null = null;
@@ -354,8 +371,12 @@ export default class TdpControlBackend implements PluginBackend {
     // takes precedence over DMI auto-detection.
     this.customDevice = await readCustomDevice("tdp-control");
 
-    // Load the user's persisted manual TDP (restored to hardware below).
-    this.savedTdp = await readSavedTdp("tdp-control");
+    // Load the user's persisted manual TDP (restored to hardware below) and
+    // CPU boost preference (asserted below and with every TDP apply).
+    [this.savedTdp, this.savedCpuBoost] = await Promise.all([
+      readSavedTdp("tdp-control"),
+      readCpuBoostPref("tdp-control"),
+    ]);
 
     // Apply device-specific ranges (custom device wins when present)
     this.applyDeviceDefaults();
@@ -450,6 +471,13 @@ export default class TdpControlBackend implements PluginBackend {
       }
     }
 
+    // Assert the CPU boost policy at startup even when no TDP restore ran
+    // above — the sysfs knob resets to boost-on at every boot, and with
+    // boost on, draw pins at the TDP limit instead of tracking the workload.
+    if (this.boostPolicyApplies()) {
+      await this.applyCpuBoostPolicy();
+    }
+
     console.log(
       `[tdp-control] Loaded: device=${this.deviceName}, cpu=${this.cpuVendor} ${this.cpuModel}, method=${this.method}, range=${this.minWatts}-${this.maxWatts}W, driver=${this.scalingDriver}`,
     );
@@ -517,6 +545,7 @@ export default class TdpControlBackend implements PluginBackend {
       gpuInfo,
       smtEnabled,
       cpuBoostEnabled,
+      cpuBoostSetting: this.desiredCpuBoost(),
       acPowerOnline: this.acPowerOnline,
       chargeLimitPercent,
     };
@@ -600,6 +629,12 @@ export default class TdpControlBackend implements PluginBackend {
         await writeSysfs(PLATFORM_PROFILE_PATH, profileName);
         await this.detectPlatformProfile();
       }
+
+      // Re-assert the CPU boost policy with every TDP write, the way
+      // SimpleDeckyTDP applies its CPU profile with every TDP profile. The
+      // limit alone doesn't govern draw: with boost on, the CPU races to max
+      // clocks under any sustained load and consumes the whole envelope.
+      await this.applyCpuBoostPolicy();
 
       // Track the value we actually applied (clamped), not the raw request.
       this.trackedTdp = applied;
@@ -1001,6 +1036,12 @@ export default class TdpControlBackend implements PluginBackend {
     }
     try {
       await writeSysfs(SMT_PATH, enable ? "on" : "off");
+      // SMT siblings re-onlined by an enable come back with fresh cpufreq
+      // policies at the kernel's default boost state (on) — re-assert the
+      // policy so half the cores don't run boosted until the next TDP apply.
+      if (this.boostPolicyApplies()) {
+        await this.applyCpuBoostPolicy();
+      }
       console.log(`[tdp-control] SMT set to ${enable ? "on" : "off"}`);
       return { success: true };
     } catch (e) {
@@ -1023,25 +1064,77 @@ export default class TdpControlBackend implements PluginBackend {
       };
     }
     try {
-      // Intel no_turbo is inverted: 0 = turbo ON, 1 = turbo OFF
-      if (this.cpuBoostPath === INTEL_CPU_BOOST_PATH) {
-        await writeSysfs(this.cpuBoostPath, enable ? "0" : "1");
-      } else if (this.cpuBoostPath.includes("/policy")) {
-        // AMD per-CPU boost: write to each online CPU's policy
-        const cpus = await getOnlineCpus();
-        for (const cpu of cpus) {
-          const path = `/sys/devices/system/cpu/cpufreq/policy${cpu}/boost`;
-          await writeSysfs(path, enable ? "1" : "0");
-        }
-      } else {
-        // AMD legacy path
-        await writeSysfs(this.cpuBoostPath, enable ? "1" : "0");
+      await this.writeCpuBoost(enable);
+      // This RPC is the user's choice (the plugin's CPU Boost toggle), so it
+      // becomes the standing preference that every TDP apply re-asserts.
+      this.savedCpuBoost = enable;
+      try {
+        await writeCpuBoostPref({ pluginId: "tdp-control", enabled: enable });
+      } catch (e) {
+        // Persistence is best-effort — the state is already on hardware.
+        console.error(
+          `[tdp-control] Failed to persist CPU boost preference: ${e}`,
+        );
       }
       console.log(`[tdp-control] CPU boost set to ${enable ? "enabled" : "disabled"}`);
       return { success: true };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return { success: false, error: msg };
+    }
+  }
+
+  /** Write a boost state to hardware (path shape varies by driver). */
+  private async writeCpuBoost(enable: boolean): Promise<void> {
+    if (!this.cpuBoostPath) {
+      throw new Error("CPU boost path not available");
+    }
+    // Intel no_turbo is inverted: 0 = turbo ON, 1 = turbo OFF
+    if (this.cpuBoostPath === INTEL_CPU_BOOST_PATH) {
+      await writeSysfs(this.cpuBoostPath, enable ? "0" : "1");
+    } else if (this.cpuBoostPath.includes("/policy")) {
+      // AMD per-CPU boost: write to each online CPU's policy
+      const cpus = await getOnlineCpus();
+      for (const cpu of cpus) {
+        const path = `/sys/devices/system/cpu/cpufreq/policy${cpu}/boost`;
+        await writeSysfs(path, enable ? "1" : "0");
+      }
+    } else {
+      // AMD legacy path
+      await writeSysfs(this.cpuBoostPath, enable ? "1" : "0");
+    }
+  }
+
+  /**
+   * The boost state the plugin enforces: the user's persisted choice,
+   * defaulting to OFF (see savedCpuBoost / lib/cpu-boost-pref.ts).
+   */
+  private desiredCpuBoost(): boolean {
+    return this.savedCpuBoost ?? false;
+  }
+
+  /**
+   * Whether to assert the boost policy outside an explicit setCpuBoost
+   * call: always when this plugin actually controls TDP; on devices with
+   * no TDP control only when the user explicitly chose a boost state. The
+   * default boost-off exists to keep draw tracking the workload under a
+   * TDP limit — silently capping a device we can't otherwise manage would
+   * be all cost, no benefit.
+   */
+  private boostPolicyApplies(): boolean {
+    return this.method !== "none" || this.savedCpuBoost !== null;
+  }
+
+  /**
+   * Re-assert the desired boost state on hardware. Best-effort: a failed
+   * boost write must never fail the TDP apply it rides along with.
+   */
+  private async applyCpuBoostPolicy(): Promise<void> {
+    if (!this.supportsCpuBoost || !this.cpuBoostPath) return;
+    try {
+      await this.writeCpuBoost(this.desiredCpuBoost());
+    } catch (e) {
+      console.error(`[tdp-control] Failed to apply CPU boost policy: ${e}`);
     }
   }
 
@@ -1186,6 +1279,10 @@ export default class TdpControlBackend implements PluginBackend {
       if (this.trackedTdp !== null) {
         await this.applyTdp(this.trackedTdp);
         console.log(`[tdp-control] Resume: re-applied TDP ${this.trackedTdp}W`);
+      } else if (this.boostPolicyApplies()) {
+        // No TDP to restore, but firmware may still reset the boost knob
+        // across suspend — re-assert the policy on its own.
+        await this.applyCpuBoostPolicy();
       }
       return { success: true };
     } catch (e) {

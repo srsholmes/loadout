@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { EmitPayload } from "@loadout/types";
 import TdpControlBackend from "./backend";
 import { readSavedTdp } from "./lib/saved-tdp";
+import { readCpuBoostPref, writeCpuBoostPref } from "./lib/cpu-boost-pref";
 
 /**
  * TdpControlBackend tests.
@@ -422,6 +423,161 @@ describe("TdpControlBackend", () => {
       };
       await backend.setTdp(22);
       expect(await readSavedTdp("tdp-control")).toBe(22);
+    });
+  });
+
+  // ── CPU boost policy ──────────────────────────────────────────────
+  //
+  // With boost on, the CPU races to max clocks under any sustained load and
+  // consumes the whole TDP envelope — draw pins at the limit instead of
+  // tracking the workload, regardless of governor/EPP. The backend therefore
+  // re-asserts a boost policy (the user's persisted preference, default OFF)
+  // alongside every TDP apply, the way SimpleDeckyTDP applies its CPU
+  // profile with every TDP profile.
+
+  describe("CPU boost policy", () => {
+    let dir: string;
+    let prevXdg: string | undefined;
+
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "tdp-boost-test-"));
+      prevXdg = process.env.XDG_CONFIG_HOME;
+      process.env.XDG_CONFIG_HOME = dir;
+    });
+
+    afterEach(() => {
+      if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevXdg;
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    function configure() {
+      const boostWrites: boolean[] = [];
+      const b = backend as unknown as {
+        method: string;
+        minWatts: number;
+        maxWatts: number;
+        batteryMaxWatts: number;
+        acPowerOnline: boolean | null;
+        supportsCpuBoost: boolean;
+        cpuBoostPath: string | null;
+        setTdpViaRyzenadj: (w: number) => Promise<void>;
+        writeCpuBoost: (enable: boolean) => Promise<void>;
+      };
+      b.method = "ryzenadj";
+      b.minWatts = 5;
+      b.maxWatts = 80;
+      b.batteryMaxWatts = 55;
+      b.acPowerOnline = true;
+      b.supportsCpuBoost = true;
+      b.cpuBoostPath = "/sys/devices/system/cpu/cpufreq/boost";
+      b.setTdpViaRyzenadj = async () => {}; // stub the SMU write
+      b.writeCpuBoost = async (enable: boolean) => {
+        boostWrites.push(enable);
+      };
+      return { b, boostWrites };
+    }
+
+    it("disables boost alongside a TDP apply by default", async () => {
+      const { boostWrites } = configure();
+      const result = await backend.setTdp(30);
+      expect(result.success).toBe(true);
+      expect(boostWrites).toEqual([false]);
+    });
+
+    it("setCpuBoost persists the opt-out and TDP applies re-assert it", async () => {
+      const { boostWrites } = configure();
+      const result = await backend.setCpuBoost(true);
+      expect(result.success).toBe(true);
+      expect(await readCpuBoostPref("tdp-control")).toBe(true);
+      await backend.setTdp(30);
+      expect(boostWrites).toEqual([true, true]);
+    });
+
+    it("getTdpInfo reports the enforced setting", async () => {
+      configure();
+      expect((await backend.getTdpInfo()).cpuBoostSetting).toBe(false);
+      await backend.setCpuBoost(true);
+      expect((await backend.getTdpInfo()).cpuBoostSetting).toBe(true);
+    });
+
+    it("a failed boost write does not fail the TDP apply", async () => {
+      const { b } = configure();
+      b.writeCpuBoost = async () => {
+        throw new Error("EIO");
+      };
+      const result = await backend.setTdp(30);
+      expect(result.success).toBe(true);
+    });
+
+    it("skips the boost write when boost is unsupported", async () => {
+      const { b, boostWrites } = configure();
+      b.supportsCpuBoost = false;
+      b.cpuBoostPath = null;
+      const result = await backend.setTdp(30);
+      expect(result.success).toBe(true);
+      expect(boostWrites).toEqual([]);
+    });
+
+    /**
+     * Stub onLoad's hardware probes so it runs hermetically — detection
+     * would otherwise hit real sysfs (or nothing at all in CI) and
+     * overwrite the state `configure()` set up.
+     */
+    function stubDetection() {
+      const t = backend as unknown as Record<string, unknown>;
+      for (const m of [
+        "detectDevice",
+        "detectCpuInfo",
+        "detectTdpMethod",
+        "detectScalingDriver",
+        "detectPlatformProfile",
+        "detectSmtSupport",
+        "detectCpuBoostSupport",
+        "detectGpu",
+        "detectAcPower",
+        "detectEppOptions",
+        "detectGovernorOptions",
+      ]) {
+        t[m] = async () => {};
+      }
+      t.readCurrentTdp = async () => null;
+    }
+
+    it("onLoad asserts the policy at startup, without any saved TDP", async () => {
+      const { boostWrites } = configure();
+      stubDetection();
+      await backend.onLoad();
+      await backend.onUnload();
+      expect(boostWrites).toEqual([false]);
+    });
+
+    it("onLoad leaves boost alone when there's no TDP control and no explicit preference", async () => {
+      const { b, boostWrites } = configure();
+      b.method = "none";
+      stubDetection();
+      await backend.onLoad();
+      await backend.onUnload();
+      expect(boostWrites).toEqual([]);
+    });
+
+    it("onLoad honors an explicit preference even without TDP control", async () => {
+      const { b, boostWrites } = configure();
+      b.method = "none";
+      await writeCpuBoostPref({ pluginId: "tdp-control", enabled: true });
+      stubDetection();
+      await backend.onLoad();
+      await backend.onUnload();
+      expect(boostWrites).toEqual([true]);
+    });
+
+    it("onResume re-asserts the policy even when no TDP was ever applied", async () => {
+      const { boostWrites } = configure();
+      // trackedTdp is null (nothing applied this session) — resume must
+      // still heal a firmware-reset boost knob.
+      const result = await backend.onResume();
+      expect(result.success).toBe(true);
+      expect(boostWrites).toEqual([false]);
     });
   });
 
