@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EmitPayload } from "@loadout/types";
@@ -272,6 +272,47 @@ describe("TdpControlBackend", () => {
       expect(info.maxWatts).toBe(55); // effective (on battery)
       expect(info.pluggedMaxWatts).toBe(80);
       expect(info.batteryMaxWatts).toBe(55);
+    });
+  });
+
+  // ── TDP read-back via bundled ryzenadj ────────────────────────────
+  //
+  // readTdpViaRyzenadj() must exec the resolved ryzenadjPath (the bundled
+  // binary on stock SteamOS), not a bare "ryzenadj" that only works when a
+  // system install happens to be on $PATH. Regression: the read-back
+  // silently failed on every poll and the UI stayed on the "tracked" value.
+
+  describe("TDP read-back via ryzenadjPath", () => {
+    let dir: string;
+
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "tdp-ryzenadj-read-"));
+    });
+
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("reads STAPM LIMIT through the resolved binary path", async () => {
+      const fake = join(dir, "ryzenadj");
+      await Bun.write(
+        fake,
+        '#!/bin/sh\necho "STAPM LIMIT : 25.000 | some other columns"\n',
+      );
+      chmodSync(fake, 0o755);
+
+      const b = backend as unknown as {
+        method: string;
+        ryzenadjCanRead: boolean;
+        ryzenadjPath: string;
+      };
+      b.method = "ryzenadj";
+      b.ryzenadjCanRead = true;
+      b.ryzenadjPath = fake;
+
+      const info = await backend.getTdpInfo();
+      expect(info.currentTdp).toBe(25);
+      expect(info.tdpReadSource).toBe("read");
     });
   });
 

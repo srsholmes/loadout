@@ -1642,7 +1642,7 @@ export default class TdpControlBackend implements PluginBackend {
   private async readTdpViaRyzenadj(): Promise<number | null> {
     try {
       const { exitCode, stdout } = await runCommand([
-        "ryzenadj",
+        this.ryzenadjPath || "ryzenadj",
         "--info",
       ]);
       if (exitCode !== 0) return null;
