@@ -46,7 +46,35 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     batteryMaxTdp: 15,
     profiles: { Silent: 5, Balanced: 10, Performance: 15 },
   },
-  // ASUS ROG Ally
+  // ASUS ROG (Xbox) Ally + Flow
+  {
+    match: "RC73X",
+    name: "ROG Xbox Ally X",
+    minTdp: 4,
+    maxTdp: 35,
+    batteryMaxTdp: 35,
+    profiles: { Silent: 13, Balanced: 17, Performance: 35 },
+  },
+  {
+    // Z2 A silicon — a 20 W-class part. The generic-AMD fallback's 35 W
+    // ceiling would badly overshoot it.
+    match: "RC73Y",
+    name: "ROG Xbox Ally",
+    minTdp: 4,
+    maxTdp: 20,
+    batteryMaxTdp: 20,
+    profiles: { Silent: 6, Balanced: 15, Performance: 20 },
+  },
+  {
+    // Strix Halo tablet. 65 W sustained on AC (54 W on battery); the
+    // firmware allows an OC mode beyond this that we don't expose.
+    match: "GZ302",
+    name: "ROG Flow Z13",
+    minTdp: 5,
+    maxTdp: 65,
+    batteryMaxTdp: 54,
+    profiles: { Silent: 40, Balanced: 45, Performance: 65 },
+  },
   {
     match: "ROG Ally X RC72",
     name: "ROG Ally X",
@@ -117,6 +145,16 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     profiles: { Silent: 8, Balanced: 15, Performance: 30 },
   },
   {
+    // OneXFly F1 Pro / F1 EVA-02 (Ryzen AI 9 HX 370) — a 30 W-class
+    // part; the generic OneXPlayer 35 W ceiling overshoots it.
+    match: "ONEXPLAYER F1",
+    name: "OneXPlayer OneXFly F1",
+    minTdp: 5,
+    maxTdp: 30,
+    batteryMaxTdp: 25,
+    profiles: { Silent: 8, Balanced: 15, Performance: 30 },
+  },
+  {
     match: "ONEXPLAYER",
     name: "OneXPlayer",
     minTdp: 5,
@@ -126,7 +164,37 @@ const KNOWN_DEVICES: DeviceInfo[] = [
   },
   // GPD
   {
-    match: "G1619-04",
+    // Ryzen AI Max+ 395 (Strix Halo) — a 4–85 W STAPM envelope, nothing
+    // like the 28 W-class GPDs the vendor fallback below assumes. The
+    // 55 W battery cap is a judgment call (small internal battery),
+    // mirroring the same-silicon APEX above.
+    match: "G1618-05",
+    name: "GPD Win 5",
+    minTdp: 4,
+    maxTdp: 85,
+    batteryMaxTdp: 55,
+    profiles: { Silent: 15, Balanced: 25, Performance: 60 },
+  },
+  {
+    // Win Mini 2025 — 30 W-class silicon, a notch above the older Mini.
+    match: "G1617-02",
+    name: "GPD Win Mini (2025)",
+    minTdp: 5,
+    maxTdp: 30,
+    batteryMaxTdp: 25,
+    profiles: { Silent: 8, Balanced: 15, Performance: 30 },
+  },
+  {
+    match: "G1617",
+    name: "GPD Win Mini",
+    minTdp: 5,
+    maxTdp: 28,
+    batteryMaxTdp: 24,
+    profiles: { Silent: 8, Balanced: 15, Performance: 28 },
+  },
+  {
+    // Covers G1619-04 (2023) and G1619-05 (2024) — same 28 W envelope.
+    match: "G1619",
     name: "GPD Win Max 2",
     minTdp: 5,
     maxTdp: 28,
@@ -144,6 +212,15 @@ const KNOWN_DEVICES: DeviceInfo[] = [
   {
     match: "GPD",
     name: "GPD Device",
+    minTdp: 5,
+    maxTdp: 28,
+    batteryMaxTdp: 24,
+    profiles: { Silent: 8, Balanced: 15, Performance: 28 },
+  },
+  // OrangePi
+  {
+    match: "NEO-01",
+    name: "OrangePi Neo",
     minTdp: 5,
     maxTdp: 28,
     batteryMaxTdp: 24,

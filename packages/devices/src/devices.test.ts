@@ -43,6 +43,52 @@ describe("matchDevice", () => {
     expect(matchDevice("Jupiter", "AMD").name).toBe("Steam Deck LCD");
   });
 
+  it("matches the GPD Win 5 ahead of the GPD fallback with its Strix Halo range", () => {
+    const d = matchDevice("G1618-05", "AMD");
+    expect(d.name).toBe("GPD Win 5");
+    expect(d.minTdp).toBe(4);
+    expect(d.maxTdp).toBe(85);
+    expect(d.batteryMaxTdp).toBe(55);
+    expect(d.profiles).toEqual({ Silent: 15, Balanced: 25, Performance: 60 });
+    // The Win 4 and the vendor fallback keep their 28 W envelope.
+    expect(matchDevice("G1618-04", "AMD").maxTdp).toBe(28);
+    expect(matchDevice("GPD SomethingNew", "AMD").name).toBe("GPD Device");
+  });
+
+  it("matches both GPD Win Mini and Win Max 2 revisions", () => {
+    expect(matchDevice("G1617-01", "AMD").name).toBe("GPD Win Mini");
+    expect(matchDevice("G1617-01", "AMD").maxTdp).toBe(28);
+    // The 2025 Mini runs 30 W-class silicon — its entry must win over
+    // the broader G1617 match.
+    expect(matchDevice("G1617-02", "AMD").name).toBe("GPD Win Mini (2025)");
+    expect(matchDevice("G1617-02", "AMD").maxTdp).toBe(30);
+    expect(matchDevice("G1619-04", "AMD").name).toBe("GPD Win Max 2");
+    expect(matchDevice("G1619-05", "AMD").name).toBe("GPD Win Max 2");
+  });
+
+  it("matches the ROG Xbox Ally pair and Flow Z13 by board code", () => {
+    const xbox = matchDevice("ROG Xbox Ally RC73YA", "AMD");
+    expect(xbox.name).toBe("ROG Xbox Ally");
+    expect(xbox.maxTdp).toBe(20); // Z2 A — generic 35 W would overshoot
+    const xboxX = matchDevice("ROG Xbox Ally X RC73XA", "AMD");
+    expect(xboxX.name).toBe("ROG Xbox Ally X");
+    expect(xboxX.maxTdp).toBe(35);
+    expect(matchDevice("ROG Flow Z13 GZ302EA", "AMD").maxTdp).toBe(65);
+  });
+
+  it("matches the OneXFly F1 ahead of the OneXPlayer generic", () => {
+    expect(matchDevice("ONEXPLAYER F1Pro", "AMD").maxTdp).toBe(30);
+    expect(matchDevice("ONEXPLAYER F1 EVA-02", "AMD").name).toBe(
+      "OneXPlayer OneXFly F1",
+    );
+    expect(matchDevice("ONEXPLAYER 2 PRO", "AMD").name).toBe("OneXPlayer");
+  });
+
+  it("matches the OrangePi Neo", () => {
+    expect(matchDevice("NEO-01", "AMD").name).toBe("OrangePi Neo");
+    expect(matchDevice("NEO-01", "AMD").maxTdp).toBe(28);
+  });
+
   it("returns a fresh profiles copy (callers mutate it)", () => {
     const a = matchDevice("Galileo", "AMD");
     const b = matchDevice("Galileo", "AMD");
