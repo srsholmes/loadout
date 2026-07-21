@@ -8,6 +8,14 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com).
 
 ---
 
+## [v0.5.0] — 2026-07-21
+
+### Added
+- **Power draw now tracks your game, not your TDP slider** (#218) — Field bug: with a TDP limit set, total draw always sat *at the limit* even with a frame cap — set 45 W with a 30 fps cap and the chip burned 45 W where ~30 W would do. Root cause: CPU boost stays on and races the cores to max clocks under any sustained load — regardless of governor or EPP — filling whatever envelope the limit allows. TDP Control now keeps CPU boost **off by default** and re-asserts that choice with every TDP write, at service startup (the kernel resets the knob on every boot), after SMT changes, and on resume — so the fix survives reboots without any manual sysfs poking. A new **CPU Boost** toggle in the plugin is the persistent opt-out for when you do want boost clocks (plugged in, CPU-bound emulation). Devices with no TDP control method are left untouched unless you explicitly pick a state. Verified live on Strix Halo: 45 W limit + 30 fps cap now draws ~30 W, rising to the limit only when uncapped.
+
+### Fixed
+- **TDP readout updates again on stock SteamOS** (#217) — The plugin's TDP number could sit frozen on "last set value": reading the current TDP back exec'd a bare `ryzenadj` instead of the bundled binary the plugin ships, so the read silently failed on any system without ryzenadj installed globally. Reads now go through the same resolved binary as writes.
+
 ## [v0.4.0] — 2026-07-18
 
 ### Added
