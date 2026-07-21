@@ -8465,6 +8465,245 @@
         "pc"
       ],
       "website": "https://www.timesplittersrewind.com/"
+    },
+    {
+      "id": "harvest-moon-64-recomp",
+      "name": "Harvest Moon 64",
+      "project": "Harvest Moon 64: Recompiled",
+      "platform": "n64",
+      "repo": "HarvestMoon64Recomp/HarvestMoon64Recomp",
+      "description": "Native PC port of Harvest Moon 64 via static recompilation (N64Recomp + RT64 renderer). Widescreen, high framerate and Thunderstore mod support. On first launch, provide your own North American (US) ROM in the main menu - assets load straight from it, no extraction step. Requires Vulkan 1.2.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "HarvestMoon64Recompiled-*-Windows.zip",
+        "linux": "HarvestMoon64Recompiled-*-Linux-X64.zip"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/HarvestMoon64Recompiled.exe",
+        "linux": "{installDir}/HarvestMoon64Recompiled"
+      },
+      "tags": [
+        "harvest-moon",
+        "n64",
+        "farming-sim",
+        "3d"
+      ],
+      "website": "https://github.com/HarvestMoon64Recomp/HarvestMoon64Recomp",
+      "latestVersion": "v1.2.1",
+      "steamGridDbId": 35297
+    },
+    {
+      "id": "sotn-xbla-recomp",
+      "name": "Castlevania: Symphony of the Night",
+      "project": "NocturneRecomp",
+      "platform": "xbox360",
+      "repo": "birabittoh/NocturneRecomp",
+      "description": "Native PC port of the Xbox 360 (XBLA) version of Castlevania: Symphony of the Night via ReXGlue static recompilation. Ships no game data: place your legally dumped XBLA package (the LIVE/STFS file) into game/ inside the install folder and run the bundled extraction script - or manage assets, mods and updates with the optional Goopie launcher.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "nocturnerecomp-v*-windows-x64.zip",
+        "linux": "nocturnerecomp-v*-linux-x64.tar.gz"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/nocturnerecomp.exe",
+        "linux": "{installDir}/nocturnerecomp"
+      },
+      "tags": [
+        "castlevania",
+        "xbox360",
+        "metroidvania",
+        "2d"
+      ],
+      "website": "https://github.com/birabittoh/NocturneRecomp",
+      "latestVersion": "v1.3.2",
+      "steamGridDbId": 37654
+    },
+    {
+      "id": "minish-cap-picori",
+      "name": "The Legend of Zelda: The Minish Cap",
+      "project": "Project Picori",
+      "platform": "gba",
+      "repo": "999sian/tmc",
+      "description": "Native PC port of The Minish Cap built on the zeldaret decompilation. SDL3 with widescreen support and native gamepad input. Provide your own GBA ROM during install - it is placed next to the binary as baserom.gba and the game reads assets from it directly.",
+      "installType": "rom_extract",
+      "releaseAssets": {
+        "windows": "tmc-multi-windows-x86_64-v*.tar.gz",
+        "linux": "tmc-multi-linux-x86_64-v*.tar.gz"
+      },
+      "romInfo": {
+        "description": "Provide your legally owned The Legend of Zelda: The Minish Cap GBA ROM, USA region (SHA-1 b4bd50e4131b027c334547b4524e2dbbd4227130). EU and JP dumps are supported by the port under different filenames, but this install uses the US filename.",
+        "validChecksums": [
+          "b4bd50e4131b027c334547b4524e2dbbd4227130"
+        ],
+        "extractionCommand": "",
+        "extensions": [
+          "gba"
+        ],
+        "placeRomAs": "baserom.gba"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/tmc_pc.exe",
+        "linux": "{installDir}/tmc_pc"
+      },
+      "tags": [
+        "zelda",
+        "gba",
+        "action-adventure",
+        "2d"
+      ],
+      "website": "https://github.com/999sian/tmc",
+      "latestVersion": "v0.8.3",
+      "steamGridDbId": 34539
+    },
+    {
+      "id": "psydoom",
+      "name": "Doom (PSX)",
+      "project": "PsyDoom",
+      "platform": "ps1",
+      "repo": "BodbDearg/PsyDoom",
+      "description": "Native PC port of PlayStation Doom and Final Doom built on the PSXDOOM-RE decompilation. Vulkan renderer with high-resolution and widescreen support, uncapped framerate and quality-of-life options. Requires a disc image (.cue) of PSX Doom or Final Doom - the built-in launcher lets you point at it on first run.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "PsyDoom_*_Windows_x86_64.zip",
+        "linux": "PsyDoom_*_Linux_x86_64.AppImage"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/PsyDoom.exe",
+        "linux": "{installDir}/PsyDoom.AppImage"
+      },
+      "tags": [
+        "doom",
+        "ps1",
+        "fps",
+        "3d"
+      ],
+      "website": "https://github.com/BodbDearg/PsyDoom",
+      "latestVersion": "1.1.1",
+      "steamGridDbId": 2460
+    },
+    {
+      "id": "ssb64-battleship",
+      "name": "Super Smash Bros.",
+      "project": "BattleShip",
+      "platform": "n64",
+      "repo": "JRickey/BattleShip",
+      "description": "Native PC port of Super Smash Bros. (N64) built on the ssb-decomp-re decompilation via libultraship. A first-run wizard extracts assets from your legally owned NTSC-U 1.0 ROM (SHA-1 e2929e10fccc0aa84e5776227e798abc07cedabf). This entry installs the US build; a separate JP build exists upstream.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "BattleShip-windows.zip",
+        "linux": "BattleShip-x86_64.AppImage"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/BattleShip.exe",
+        "linux": "{installDir}/BattleShip.AppImage"
+      },
+      "tags": [
+        "smash-bros",
+        "n64",
+        "fighting",
+        "3d"
+      ],
+      "website": "https://github.com/JRickey/BattleShip",
+      "latestVersion": "v1.5.1",
+      "steamGridDbId": 33624
+    },
+    {
+      "id": "aitd-rehaunted",
+      "name": "Alone in the Dark",
+      "project": "Alone in the Dark: ReHaunted",
+      "platform": "pc",
+      "repo": "spacefarergames/AloneInTheDarkReHaunted",
+      "description": "Modernized GPL engine for the original Alone in the Dark (1992) with HD backgrounds, upscaled masks and controller support. Ships no game data: copy the original .PAK/.ITD data files from your Steam or GOG install of the game into the install folder, then launch.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "AITD_REHAUNTED_*_Win64.zip",
+        "linux": "AITD_REHAUNTED_*_Linux.tar.gz"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/Tatou.exe",
+        "linux": "{installDir}/launch_tatou.sh"
+      },
+      "tags": [
+        "alone-in-the-dark",
+        "pc",
+        "survival-horror",
+        "3d"
+      ],
+      "website": "https://github.com/spacefarergames/AloneInTheDarkReHaunted",
+      "latestVersion": "2.2.0.2704",
+      "steamGridDbId": 3276
+    },
+    {
+      "id": "downpour-recomp",
+      "name": "Silent Hill: Downpour",
+      "project": "DownpourRecomp",
+      "platform": "xbox360",
+      "repo": "LittleBitUA/DownpourRecomp",
+      "description": "Native PC port of the Xbox 360 version of Silent Hill: Downpour via ReXGlue static recompilation, with unlocked 60 FPS. Ships no game data: copy your dumped Xbox 360 copy (default.xex plus the game data folders) into assets/ inside the install folder; the launcher opens a wizard to stage Title Update 1 (default.xexp) on first run. Windows build, launched via Proton.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "DownpourRecomp-v*.zip"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/PlayDownpour.exe"
+      },
+      "tags": [
+        "silent-hill",
+        "xbox360",
+        "survival-horror",
+        "3d"
+      ],
+      "website": "https://github.com/LittleBitUA/DownpourRecomp",
+      "latestVersion": "v1.1.6",
+      "steamGridDbId": 34912
+    },
+    {
+      "id": "viva-pinata-tip-recomp",
+      "name": "Viva Pinata: Trouble in Paradise",
+      "project": "TiP-Recomp",
+      "platform": "xbox360",
+      "repo": "SolarCookies/TiP-Recomp",
+      "description": "Native PC port of the Xbox 360 version of Viva Pinata: Trouble in Paradise via ReXGlue static recompilation, with mod support. Ships no game data: extract your legally owned World-region ISO into the install folder - the optional Goopie launcher automates this via Select Iso. Windows build, launched via Proton.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "retip_*-windows-x64-*.zip"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/retip.exe"
+      },
+      "tags": [
+        "viva-pinata",
+        "xbox360",
+        "simulation",
+        "3d"
+      ],
+      "website": "https://github.com/SolarCookies/TiP-Recomp",
+      "latestVersion": "1.11.2",
+      "steamGridDbId": 5262214
+    },
+    {
+      "id": "svr07-recomp",
+      "name": "WWE SmackDown vs. Raw 2007",
+      "project": "SVR07 Recomp",
+      "platform": "xbox360",
+      "repo": "HollywoodAkeem/SVR07-Recomp",
+      "description": "Native PC port of the Xbox 360 version of WWE SmackDown vs. Raw 2007 via ReXGlue static recompilation. Ships no game data: rip your legally owned retail Xbox 360 copy and extract its files into assets/ next to the executable. Windows build, launched via Proton.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "svr07.zip"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/svr07.exe"
+      },
+      "tags": [
+        "wwe",
+        "xbox360",
+        "wrestling",
+        "3d"
+      ],
+      "website": "https://github.com/HollywoodAkeem/SVR07-Recomp",
+      "latestVersion": "v1.0",
+      "steamGridDbId": 5264777
     }
   ]
 }
