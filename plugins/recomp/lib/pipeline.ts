@@ -20,6 +20,7 @@ import { updateInstalledGame, removeInstalledGame } from "./state";
 import { addToSteam, removeFromSteam } from "./steam-shortcut";
 import { applyArtwork } from "./artwork";
 import { extractArchive } from "./pipeline-archive";
+import { stageRomSource } from "./rom-source";
 import { downloadFile, githubToken, githubFetch } from "./github";
 import { runSetupScript } from "./installer-host";
 import { chownInstallDirToUser } from "./fs-owner";
@@ -605,6 +606,36 @@ export async function installGame(
 
     // Post-extract commands for ROM-based install types
     if (entry.installType === "rom_extract" || entry.installType === "toolchain" || entry.installType === "custom") {
+      // Structured dumps (Xbox 360 disc images / XBLA packages) get
+      // unpacked into the engine's data dir. Runs INSTEAD of the
+      // placeRomAs / extractionCommand paths below — a sourceFormat
+      // entry declares neither. The scratch dir lives under
+      // tmpGameDir, so the finally-block teardown reclaims the
+      // unwrapped archive bytes even on failure.
+      const sourceFormat = entry.romInfo?.sourceFormat;
+      if (romPath && entry.romInfo && sourceFormat && sourceFormat !== "raw") {
+        const { files, warnings } = await stageRomSource({
+          romInfo: entry.romInfo,
+          romPath,
+          stageDir: partialDir,
+          scratchDir: tmpGameDir,
+          onProgress: (message, percent) =>
+            onEvent({
+              type: "progress", gameId, stage: "extraction",
+              ...(percent != null ? { percent } : {}), message,
+            }),
+        });
+        onEvent({
+          type: "progress", gameId, stage: "extraction",
+          percent: 100, message: `Game data ready (${files} files)`,
+        });
+        for (const warning of warnings) {
+          onEvent({
+            type: "progress", gameId, stage: "extraction",
+            percent: 100, message: `Warning: ${warning}`,
+          });
+        }
+      }
       // `placeRomAs` is the simple case — engine ingests the ROM
       // on first launch from a known filename next to the binary
       // (Ship of Harkinian, 2 Ship 2 Harkinian, etc). Prefer over

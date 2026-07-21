@@ -61,6 +61,40 @@ export interface RomInfo {
    *  no CLI extraction mode despite `extractionCommand` historically
    *  trying to invoke a `--generate-otr` flag that doesn't exist. */
   placeRomAs?: string;
+  /**
+   * How the user's dump is structured, when it isn't a single flat
+   * ROM file. Drives `lib/rom-source.ts`'s staging step:
+   *
+   *   - `"raw"` (or absent): existing behavior — the picked file IS
+   *     the ROM; `placeRomAs` / `extractionCommand` handle it.
+   *   - `"xgd-iso"`: an Xbox / Xbox 360 disc image. The GDF
+   *     filesystem is unpacked into `extractTo`.
+   *   - `"stfs"`: an Xbox 360 STFS (LIVE/PIRS/CON) package — XBLA
+   *     titles. Unpacked into `extractTo`.
+   *
+   * For the non-raw formats the picked file may also be a zip/7z/rar
+   * wrapping the dump — the staging step unwraps it and locates the
+   * dump by magic bytes, so `extensions` should include the archive
+   * extensions users actually have.
+   */
+  sourceFormat?: "raw" | "xgd-iso" | "stfs";
+  /** Directory (relative to the install dir) that receives the
+   *  unpacked dump for non-raw `sourceFormat`s. Defaults to
+   *  `"assets"` — the ReXGlue family's `--game_data_root` default. */
+  extractTo?: string;
+  /**
+   * File (relative to `extractTo`) whose presence proves the dump was
+   * the right game — `default.xex` for Xbox 360 titles. Missing ⇒ the
+   * install fails with a clear message instead of shipping a data dir
+   * the engine can't boot. Also the launch-time guard's probe target:
+   * the backend refuses to launch when it's absent (the engine would
+   * just exit with a cryptic "game_data_root does not exist").
+   */
+  anchorFile?: string;
+  /** Known-good SHA-1s of `anchorFile`. Mismatch is a WARNING, not an
+   *  error — other-region dumps frequently work and upstreams mostly
+   *  document them as "untested" rather than broken. */
+  anchorChecksums?: string[];
 }
 
 export interface ToolchainInfo {

@@ -8498,8 +8498,19 @@
       "project": "NocturneRecomp",
       "platform": "xbox360",
       "repo": "birabittoh/NocturneRecomp",
-      "description": "Native PC port of the Xbox 360 (XBLA) version of Castlevania: Symphony of the Night via ReXGlue static recompilation. Ships no game data: place your legally dumped XBLA package (the LIVE/STFS file) into game/ inside the install folder and run the bundled extraction script - or manage assets, mods and updates with the optional Goopie launcher.",
-      "installType": "prebuilt",
+      "description": "Native PC port of the Xbox 360 (XBLA) version of Castlevania: Symphony of the Night via ReXGlue static recompilation. Ships no game data: provide your legally dumped XBLA package (the LIVE/STFS content file, or an archive containing it) and the installer unpacks it into assets/ automatically.",
+      "installType": "rom_extract",
+      "requiresRom": true,
+      "romInfo": {
+        "description": "Provide your legally dumped Castlevania: SotN XBLA package (the LIVE/STFS content file, title ID 58410847), or a zip/7z/rar containing it. XBLA content files have no file extension — if the picker can't see yours, type the path manually.",
+        "validChecksums": [],
+        "extractionCommand": "",
+        "extensions": ["zip", "7z", "rar", "bin"],
+        "sourceFormat": "stfs",
+        "extractTo": "assets",
+        "anchorFile": "default.xex",
+        "anchorChecksums": ["88055ecfb131042522a28c9211b760f4d3ec4547"]
+      },
       "releaseAssets": {
         "windows": "nocturnerecomp-v*-windows-x64.zip",
         "linux": "nocturnerecomp-v*-linux-x64.tar.gz"
@@ -8663,8 +8674,19 @@
       "project": "TiP-Recomp",
       "platform": "xbox360",
       "repo": "SolarCookies/TiP-Recomp",
-      "description": "Native PC port of the Xbox 360 version of Viva Pinata: Trouble in Paradise via ReXGlue static recompilation, with mod support. Ships no game data: extract your legally owned World-region ISO into the install folder - the optional Goopie launcher automates this via Select Iso. Windows build, launched via Proton.",
-      "installType": "prebuilt",
+      "description": "Native PC port of the Xbox 360 version of Viva Pinata: Trouble in Paradise via ReXGlue static recompilation, with mod support. Ships no game data: provide a disc image ripped from your legally owned Xbox 360 copy (or an archive containing one) and the installer unpacks it into assets/ automatically. Windows build, launched via Proton.",
+      "installType": "rom_extract",
+      "requiresRom": true,
+      "romInfo": {
+        "description": "Provide a disc image (.iso) ripped from your legally owned Viva Pinata: Trouble in Paradise Xbox 360 disc, or a zip/7z/rar containing one. Upstream recommends a World-region disc.",
+        "validChecksums": [],
+        "extractionCommand": "",
+        "extensions": ["iso", "zip", "7z", "rar"],
+        "sourceFormat": "xgd-iso",
+        "extractTo": "assets",
+        "anchorFile": "default.xex",
+        "anchorChecksums": ["c5970941fcb201dda99de0d35b623827241d6b8b"]
+      },
       "releaseAssets": {
         "windows": "retip_*-windows-x64-*.zip"
       },
@@ -8687,8 +8709,19 @@
       "project": "SVR07 Recomp",
       "platform": "xbox360",
       "repo": "HollywoodAkeem/SVR07-Recomp",
-      "description": "Native PC port of the Xbox 360 version of WWE SmackDown vs. Raw 2007 via ReXGlue static recompilation. Ships no game data: rip your legally owned retail Xbox 360 copy and extract its files into assets/ next to the executable. Windows build, launched via Proton.",
-      "installType": "prebuilt",
+      "description": "Native PC port of the Xbox 360 version of WWE SmackDown vs. Raw 2007 via ReXGlue static recompilation. Ships no game data: provide a disc image ripped from your legally owned retail Xbox 360 copy (or an archive containing one) and the installer unpacks it into assets/ automatically. Windows build, launched via Proton.",
+      "installType": "rom_extract",
+      "requiresRom": true,
+      "romInfo": {
+        "description": "Provide a disc image (.iso) ripped from your legally owned WWE SmackDown vs. Raw 2007 Xbox 360 disc, or a zip/7z/rar containing one. USA/Canada discs are recommended by upstream; other regions are untested.",
+        "validChecksums": [],
+        "extractionCommand": "",
+        "extensions": ["iso", "zip", "7z", "rar"],
+        "sourceFormat": "xgd-iso",
+        "extractTo": "assets",
+        "anchorFile": "default.xex",
+        "anchorChecksums": ["5745805d807f672c7b1cb89767d7c884ecf76f53"]
+      },
       "releaseAssets": {
         "windows": "svr07.zip"
       },
