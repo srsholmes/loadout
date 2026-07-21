@@ -474,7 +474,9 @@ export default class TdpControlBackend implements PluginBackend {
     // Assert the CPU boost policy at startup even when no TDP restore ran
     // above — the sysfs knob resets to boost-on at every boot, and with
     // boost on, draw pins at the TDP limit instead of tracking the workload.
-    await this.applyCpuBoostPolicy();
+    if (this.boostPolicyApplies()) {
+      await this.applyCpuBoostPolicy();
+    }
 
     console.log(
       `[tdp-control] Loaded: device=${this.deviceName}, cpu=${this.cpuVendor} ${this.cpuModel}, method=${this.method}, range=${this.minWatts}-${this.maxWatts}W, driver=${this.scalingDriver}`,
@@ -1034,6 +1036,12 @@ export default class TdpControlBackend implements PluginBackend {
     }
     try {
       await writeSysfs(SMT_PATH, enable ? "on" : "off");
+      // SMT siblings re-onlined by an enable come back with fresh cpufreq
+      // policies at the kernel's default boost state (on) — re-assert the
+      // policy so half the cores don't run boosted until the next TDP apply.
+      if (this.boostPolicyApplies()) {
+        await this.applyCpuBoostPolicy();
+      }
       console.log(`[tdp-control] SMT set to ${enable ? "on" : "off"}`);
       return { success: true };
     } catch (e) {
@@ -1103,6 +1111,18 @@ export default class TdpControlBackend implements PluginBackend {
    */
   private desiredCpuBoost(): boolean {
     return this.savedCpuBoost ?? false;
+  }
+
+  /**
+   * Whether to assert the boost policy outside an explicit setCpuBoost
+   * call: always when this plugin actually controls TDP; on devices with
+   * no TDP control only when the user explicitly chose a boost state. The
+   * default boost-off exists to keep draw tracking the workload under a
+   * TDP limit — silently capping a device we can't otherwise manage would
+   * be all cost, no benefit.
+   */
+  private boostPolicyApplies(): boolean {
+    return this.method !== "none" || this.savedCpuBoost !== null;
   }
 
   /**
@@ -1259,6 +1279,10 @@ export default class TdpControlBackend implements PluginBackend {
       if (this.trackedTdp !== null) {
         await this.applyTdp(this.trackedTdp);
         console.log(`[tdp-control] Resume: re-applied TDP ${this.trackedTdp}W`);
+      } else if (this.boostPolicyApplies()) {
+        // No TDP to restore, but firmware may still reset the boost knob
+        // across suspend — re-assert the policy on its own.
+        await this.applyCpuBoostPolicy();
       }
       return { success: true };
     } catch (e) {

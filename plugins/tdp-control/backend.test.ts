@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { EmitPayload } from "@loadout/types";
 import TdpControlBackend from "./backend";
 import { readSavedTdp } from "./lib/saved-tdp";
-import { readCpuBoostPref } from "./lib/cpu-boost-pref";
+import { readCpuBoostPref, writeCpuBoostPref } from "./lib/cpu-boost-pref";
 
 /**
  * TdpControlBackend tests.
@@ -476,6 +476,67 @@ describe("TdpControlBackend", () => {
       const result = await backend.setTdp(30);
       expect(result.success).toBe(true);
       expect(boostWrites).toEqual([]);
+    });
+
+    /**
+     * Stub onLoad's hardware probes so it runs hermetically — detection
+     * would otherwise hit real sysfs (or nothing at all in CI) and
+     * overwrite the state `configure()` set up.
+     */
+    function stubDetection() {
+      const t = backend as unknown as Record<string, unknown>;
+      for (const m of [
+        "detectDevice",
+        "detectCpuInfo",
+        "detectTdpMethod",
+        "detectScalingDriver",
+        "detectPlatformProfile",
+        "detectSmtSupport",
+        "detectCpuBoostSupport",
+        "detectGpu",
+        "detectAcPower",
+        "detectEppOptions",
+        "detectGovernorOptions",
+      ]) {
+        t[m] = async () => {};
+      }
+      t.readCurrentTdp = async () => null;
+    }
+
+    it("onLoad asserts the policy at startup, without any saved TDP", async () => {
+      const { boostWrites } = configure();
+      stubDetection();
+      await backend.onLoad();
+      await backend.onUnload();
+      expect(boostWrites).toEqual([false]);
+    });
+
+    it("onLoad leaves boost alone when there's no TDP control and no explicit preference", async () => {
+      const { b, boostWrites } = configure();
+      b.method = "none";
+      stubDetection();
+      await backend.onLoad();
+      await backend.onUnload();
+      expect(boostWrites).toEqual([]);
+    });
+
+    it("onLoad honors an explicit preference even without TDP control", async () => {
+      const { b, boostWrites } = configure();
+      b.method = "none";
+      await writeCpuBoostPref({ pluginId: "tdp-control", enabled: true });
+      stubDetection();
+      await backend.onLoad();
+      await backend.onUnload();
+      expect(boostWrites).toEqual([true]);
+    });
+
+    it("onResume re-asserts the policy even when no TDP was ever applied", async () => {
+      const { boostWrites } = configure();
+      // trackedTdp is null (nothing applied this session) — resume must
+      // still heal a firmware-reset boost knob.
+      const result = await backend.onResume();
+      expect(result.success).toBe(true);
+      expect(boostWrites).toEqual([false]);
     });
   });
 

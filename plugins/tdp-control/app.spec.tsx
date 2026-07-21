@@ -76,6 +76,35 @@ describe("tdp-control plugin", () => {
     });
   });
 
+  it("CPU Boost toggle reflects the enforced setting and calls setCpuBoost flipped", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getTdpInfo") return Promise.resolve(mockTdpInfo);
+      if (method === "setCpuBoost") return Promise.resolve({ success: true });
+      return Promise.resolve(null);
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => {
+      expect(container.textContent).toContain("CPU Boost");
+    });
+    const section = Array.from(container.querySelectorAll(".subsection")).find(
+      (s) =>
+        s.querySelector(".subsection-label")?.textContent?.includes("CPU Boost"),
+    );
+    expect(section).toBeDefined();
+    const toggle = section!.querySelector(
+      'input[type="checkbox"]',
+    ) as HTMLInputElement;
+    expect(toggle).toBeDefined();
+    // mock cpuBoostSetting is false (the enforced default)
+    expect(toggle.checked).toBe(false);
+    toggle.click();
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("setCpuBoost", true);
+    });
+  });
+
   it("opens the custom-device form from the header gear and returns via Back", async () => {
     const container = document.createElement("div");
     const { mount } = await import("./app");
