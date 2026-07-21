@@ -8,6 +8,11 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com).
 
 ---
 
+## [v0.6.0] — 2026-07-21
+
+### Added
+- **Eight more handhelds get correct TDP ranges out of the box** (#219) — Headlined by the **GPD Win 5** (Strix Halo), which previously fell through to the generic GPD fallback and was capped at 28 W against its real 4–85 W envelope — Win 5 owners had to hand-enter a custom device to use the hardware they paid for. Also newly recognized: GPD Win Mini and Win Mini 2025 (the 2025 model gets its proper 30 W ceiling), GPD Win Max 2 2024, ROG Xbox Ally (a 20 W-class part the generic fallback would have *over*shot by 75%), ROG Xbox Ally X, ROG Flow Z13, OneXPlayer OneXFly F1 Pro/EVA-02, and OrangePi Neo.
+
 ## [v0.5.0] — 2026-07-21
 
 ### Added
