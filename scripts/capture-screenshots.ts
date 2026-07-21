@@ -68,6 +68,7 @@ type Step =
   | { kind: "tile" }
   | { kind: "aria"; label: string }
   | { kind: "text"; label: string }
+  | { kind: "scrollTo"; label: string }
   | { kind: "wait"; ms: number };
 
 interface PageShot {
@@ -96,6 +97,12 @@ const PAGE_RECIPES: Record<string, PageShot[]> = {
   // a real feature page (define TDP limits for an unlisted handheld), not a
   // generic settings screen, so it's worth capturing.
   "tdp-control": [
+    // The CPU tuning subsections (power presets, EPP, governor, CPU boost)
+    // sit below the fold on the landing view — scroll them into frame.
+    {
+      name: "cpu-controls",
+      steps: [{ kind: "scrollTo", label: "CPU Boost" }],
+    },
     { name: "settings", steps: [{ kind: "aria", label: "Custom device settings" }] },
   ],
   // Custom fan-curve editor only renders in Manual mode after the Custom
@@ -275,6 +282,10 @@ const NO_SCROLL = new Set(["recomp", "tdp-control", "playtime"]);
  * stay at the top. Then re-wait for newly-revealed artwork to load.
  */
 async function varyGridView(cdp: CDP, pluginId: string): Promise<void> {
+  // NO_SCROLL plugins keep whatever scroll state the flow set up: the top
+  // for landing shots (the home-bounce remount guarantees scrollTop 0),
+  // or wherever a recipe's `scrollTo` step deliberately positioned the
+  // page. Don't touch it — an explicit reset here would undo `scrollTo`.
   if (NO_SCROLL.has(pluginId)) return;
   const tiles = (await cdp.eval(
     `document.querySelectorAll('[data-game-card]').length`,
@@ -314,6 +325,23 @@ async function clickSelector(cdp: CDP, selector: string): Promise<boolean> {
     const el = document.querySelector(${JSON.stringify(selector)});
     if (!el) return false;
     el.click();
+    return true;
+  })()`;
+  return (await cdp.eval(expr)) === true;
+}
+
+/**
+ * Scroll the element whose text starts with `label` to the viewport
+ * center (subsection headings aren't buttons, so match any element with
+ * its own text). Instant (no smooth behavior) so the follow-up settle
+ * wait isn't racing an animation.
+ */
+async function scrollToText(cdp: CDP, label: string): Promise<boolean> {
+  const expr = `(() => {
+    const els = [...document.querySelectorAll('.subsection-label, .subsection-label span, .card-title, h2, h3')];
+    const el = els.find((e) => (e.textContent || "").trim().startsWith(${JSON.stringify(label)}));
+    if (!el) return false;
+    el.scrollIntoView({ block: "center", behavior: "instant" });
     return true;
   })()`;
   return (await cdp.eval(expr)) === true;
@@ -366,6 +394,8 @@ async function runSteps(cdp: CDP, steps: Step[]): Promise<boolean> {
       );
     else if (step.kind === "text")
       ok = await clickWithRetry(cdp, () => clickText(cdp, step.label));
+    else if (step.kind === "scrollTo")
+      ok = await clickWithRetry(cdp, () => scrollToText(cdp, step.label));
     if (!ok) return false;
     await sleep(SETTLE_MS);
     await waitForIdle(cdp); // sub-page may fetch on open (detail pages)
@@ -515,6 +545,11 @@ async function main(): Promise<void> {
     const pid = PLUGINS[idx]!;
     if (only && !only.has(pid)) continue;
     const nn = String(idx + 3).padStart(2, "0");
+    // Bounce through home first: if the overlay is already sitting on this
+    // plugin (a user browsing it, or a previous run that ended on one of
+    // its sub-views), re-setting the same hash is a no-op and the stale
+    // view — wrong sub-page, leftover scroll — becomes the landing shot.
+    await navigate(cdp, "#/");
     await navigate(cdp, `#/plugin/${pid}`);
     if (LANDING_SETUP[pid]) await runSteps(cdp, LANDING_SETUP[pid]);
     await varyGridView(cdp, pid);
