@@ -1,6 +1,6 @@
 {
   "name": "loadout",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "An open, hackable plugin overlay for Steam Deck and Linux gaming handhelds — TDP, RGB, frame-gen, recompiled games, and more, in-game over Steam Big Picture.",
   "license": "BSD-3-Clause",
