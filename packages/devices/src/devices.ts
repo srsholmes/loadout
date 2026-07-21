@@ -176,7 +176,15 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     profiles: { Silent: 15, Balanced: 25, Performance: 60 },
   },
   {
-    // Covers G1617-01 (Win Mini) and G1617-02 (Win Mini 2025).
+    // Win Mini 2025 — 30 W-class silicon, a notch above the older Mini.
+    match: "G1617-02",
+    name: "GPD Win Mini (2025)",
+    minTdp: 5,
+    maxTdp: 30,
+    batteryMaxTdp: 25,
+    profiles: { Silent: 8, Balanced: 15, Performance: 30 },
+  },
+  {
     match: "G1617",
     name: "GPD Win Mini",
     minTdp: 5,

@@ -57,7 +57,11 @@ describe("matchDevice", () => {
 
   it("matches both GPD Win Mini and Win Max 2 revisions", () => {
     expect(matchDevice("G1617-01", "AMD").name).toBe("GPD Win Mini");
-    expect(matchDevice("G1617-02", "AMD").name).toBe("GPD Win Mini");
+    expect(matchDevice("G1617-01", "AMD").maxTdp).toBe(28);
+    // The 2025 Mini runs 30 W-class silicon — its entry must win over
+    // the broader G1617 match.
+    expect(matchDevice("G1617-02", "AMD").name).toBe("GPD Win Mini (2025)");
+    expect(matchDevice("G1617-02", "AMD").maxTdp).toBe(30);
     expect(matchDevice("G1619-04", "AMD").name).toBe("GPD Win Max 2");
     expect(matchDevice("G1619-05", "AMD").name).toBe("GPD Win Max 2");
   });
