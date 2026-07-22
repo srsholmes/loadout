@@ -1542,42 +1542,6 @@
       "steamGridDbId": 5256824
     },
     {
-      "id": "shortline",
-      "name": "ShortLine",
-      "project": "The reversed source code for ShortLine v1.1 game",
-      "platform": "unknown",
-      "repo": "konovalov-aleks/reSL",
-      "description": "Reverse-engineered recreation of the 1993 Russian railway game ShortLine. Fully self-contained.",
-      "installType": "prebuilt",
-      "releaseAssets": {
-        "windows": "resl-*-windows.zip",
-        "linux": null
-      },
-      "launchCommand": {
-        "windows": "{installDir}/resl.exe",
-        "linux": null
-      },
-      "tags": [
-        "coroutine",
-        "coroutines",
-        "cpp",
-        "decompilation",
-        "dos",
-        "emscripten",
-        "game",
-        "game-2d",
-        "ghidra",
-        "old-game",
-        "reimplementation",
-        "reverse-engineering",
-        "reversed",
-        "webassembly"
-      ],
-      "website": "https://konovalov-aleks.github.io/shortline-railroads.html",
-      "latestVersion": "release-1.1.2",
-      "steamGridDbId": 5310062
-    },
-    {
       "id": "samurai-vs-zombies",
       "name": "Samurai Vs Zombies",
       "project": "Decompilation of Samurai Vs Zombies by Glu",
