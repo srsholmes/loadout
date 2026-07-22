@@ -105,6 +105,74 @@ export async function restartSteam(): Promise<{ success: boolean; error?: string
   return rpcResultOrError("restartSteam");
 }
 
+// -- Self-update (issue #173) --------------------------------------------------
+
+export interface UpdateCheckResult {
+  available: boolean;
+  /** Release tag, e.g. "v0.7.0". */
+  tag?: string;
+  /** Bare version of the tag, e.g. "0.7.0". */
+  latestVersion?: string;
+  error?: string;
+}
+
+export interface UpdateStatus {
+  phase:
+    | "idle"
+    | "downloading"
+    | "verifying"
+    | "backend"
+    | "swapping"
+    | "restarting"
+    | "error";
+  pct?: number;
+  message?: string;
+  tag?: string;
+}
+
+/**
+ * Ask the Bun host whether a newer release is published on GitHub.
+ * `installedVersion` should be the backend's `/api/status` version
+ * when reachable, else `OVERLAY_VERSION`. Outside Electrobun this
+ * reports "not available" so standalone dev keeps rendering.
+ */
+export async function checkForUpdate(
+  installedVersion: string,
+): Promise<UpdateCheckResult> {
+  const result = await rpcInvoke("checkForUpdate", { installedVersion });
+  if (!result || typeof result !== "object") {
+    return { available: false, error: "Host did not respond" };
+  }
+  return result as UpdateCheckResult;
+}
+
+/**
+ * Start the full self-update to `tag` (download + verify + backend
+ * swap + overlay swap + restart). Resolves as soon as the update is
+ * ACCEPTED; poll {@link getUpdateStatus} for progress. Terminal
+ * phases: "restarting" (success — the overlay is about to bounce)
+ * and "error".
+ */
+export async function applyUpdate(
+  tag: string,
+): Promise<{ success: boolean; error?: string }> {
+  const result = await rpcInvoke("applyUpdate", { tag });
+  if (!result || typeof result !== "object") {
+    return { success: false, error: "Host did not respond" };
+  }
+  return result as { success: boolean; error?: string };
+}
+
+/** Poll the in-flight update's status. `{ phase: "idle" }` outside
+ *  Electrobun or when no update is running. */
+export async function getUpdateStatus(): Promise<UpdateStatus> {
+  const result = await rpcInvoke("getUpdateStatus");
+  if (!result || typeof result !== "object") {
+    return { phase: "idle" };
+  }
+  return result as UpdateStatus;
+}
+
 /** `systemctl poweroff`. Polkit-gated on the host side. */
 export async function systemShutdown(): Promise<{ success: boolean; error?: string }> {
   return rpcResultOrError("systemShutdown");

@@ -60,8 +60,14 @@ export async function systemReboot(): Promise<{
  * Restart the backend loadout.service so plugins rescan their
  * hardware from scratch. Useful when a plugin (e.g. fan-control)
  * ended up in a degraded state — stuck on a fallback backend, missed
- * a kernel module that loaded late, etc. Runs `systemctl --user
- * restart loadout` and reports whether the command exited 0.
+ * a kernel module that loaded late, etc.
+ *
+ * The backend has been a root SYSTEM unit since the installer moved
+ * it out of the user session, so the old `systemctl --user restart
+ * loadout` here silently stopped working on real installs. We now ask
+ * the (root) backend to restart itself via `POST /api/restart`; the
+ * legacy systemctl call remains as a fallback for pre-migration
+ * user-unit installs where the backend predates that route.
  * The overlay itself isn't restarted; the webview will show the
  * WebSocket disconnecting and reconnecting on its own.
  */
@@ -69,6 +75,28 @@ export async function restartServer(): Promise<{
   success: boolean;
   error?: string;
 }> {
+  const base = `http://127.0.0.1:${process.env.LOADOUT_PORT || 33820}`;
+  try {
+    // /api/token is the unauthenticated loopback bootstrap — same
+    // dance the webview does at boot.
+    const tokenRes = await fetch(`${base}/api/token`);
+    const { token } = (await tokenRes.json()) as { token?: string };
+    if (!token) throw new Error("no session token");
+    const res = await fetch(`${base}/api/restart`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      console.log("[overlay] loadout.service restart requested via /api/restart");
+      return { success: true };
+    }
+    throw new Error(`HTTP ${res.status}`);
+  } catch (err) {
+    console.warn(
+      "[overlay] /api/restart unavailable, falling back to systemctl --user:",
+      err,
+    );
+  }
   try {
     const { stderr, exitCode } = await runFull([
       "systemctl",

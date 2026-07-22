@@ -27,6 +27,7 @@ import { pluginsRoutes } from "./plugins";
 import { rpcRoute } from "./rpc";
 import { injectRoutes } from "./inject";
 import { overlayButtonRoute } from "./overlay-button";
+import { selfUpdateRoute, restartRoute } from "./self-update";
 
 /**
  * Ordered route list. Populated incrementally as A-001 progresses;
@@ -40,6 +41,8 @@ const routes: RouteHandler[] = [
   ...pluginsRoutes,
   rpcRoute,
   overlayButtonRoute,
+  selfUpdateRoute,
+  restartRoute,
   ...injectRoutes,
 ];
 

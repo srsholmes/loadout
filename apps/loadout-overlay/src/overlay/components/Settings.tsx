@@ -27,6 +27,7 @@ import {
   type ShortcutAction,
 } from "../lib/host";
 import { useFocusable } from "@loadout/ui";
+import { UpdateSection } from "./UpdateSection";
 
 interface PluginOption {
   id: string;
@@ -734,13 +735,14 @@ function SettingsInner({
               <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">
                 About
               </h3>
-              <div className="bg-base-200 rounded-2xl border border-base-300 p-5">
+              <div className="bg-base-200 rounded-2xl border border-base-300 p-5 space-y-4 divide-y divide-base-300 [&>*]:pt-4 [&>*:first-child]:pt-0">
                 <div className="flex justify-between items-center min-h-[44px]">
                   <span className="text-sm text-base-content">Version</span>
                   <code className="text-sm text-primary bg-primary/10 px-3 py-1 rounded-lg font-mono">
                     {VERSION}
                   </code>
                 </div>
+                <UpdateSection />
               </div>
             </section>
           </>

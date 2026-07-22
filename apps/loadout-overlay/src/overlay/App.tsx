@@ -1,6 +1,9 @@
 import { useRef, useState, useEffect, useCallback, useMemo, type CSSProperties } from "react";
 import { Toaster, toast } from "react-hot-toast";
-import { LoadoutProvider, TOAST_EVENT, type ToastEventDetail } from "@loadout/ui";
+import { LoadoutProvider, TOAST_EVENT, notify, type ToastEventDetail } from "@loadout/ui";
+import { versionsEqual } from "@loadout/types";
+import { OVERLAY_VERSION } from "./version";
+import { checkForUpdate } from "./lib/host";
 import { Sidebar } from "./components/Sidebar";
 import { PluginHost } from "./components/PluginHost";
 import {
@@ -147,6 +150,48 @@ export function App() {
     };
     window.addEventListener(TOAST_EVENT, onToast);
     return () => window.removeEventListener(TOAST_EVENT, onToast);
+  }, []);
+
+  // Release-update surface (issue #173). Two boot-time jobs, both
+  // gated on the persisted config being loaded (the skip marker and
+  // the pending-update marker live there):
+  //   1. If the last session kicked off an update, confirm or clear
+  //      it: `updatePendingTag` matching the now-running version means
+  //      the update landed — say so once, then drop the marker.
+  //   2. ~10s after boot, ask the Bun host whether a newer release is
+  //      published. Toast unless the user skipped that exact version
+  //      from Settings (a manual check there ignores the skip).
+  // Dev builds short-circuit inside checkForUpdate (unparsable
+  // version), so this never nags during development.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await whenUserConfigLoaded();
+      if (cancelled) return;
+      const pending = getConfigValue<string | null>("updatePendingTag", null);
+      if (pending) {
+        if (versionsEqual(OVERLAY_VERSION, pending)) {
+          notify(`Loadout updated to ${pending}.`, {
+            kind: "success",
+            id: "loadout-update",
+            duration: 6000,
+          });
+        }
+        setConfigValue("updatePendingTag", null);
+      }
+      await new Promise((r) => setTimeout(r, 10_000));
+      if (cancelled) return;
+      const res = await checkForUpdate(OVERLAY_VERSION);
+      if (cancelled || !res.available || !res.tag) return;
+      if (getConfigValue<string | null>("updateSkippedVersion", null) === res.tag) return;
+      notify(`Loadout ${res.tag} is available — update from Settings.`, {
+        id: "loadout-update",
+        duration: 8000,
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Toasts render here in the parent, OUTSIDE AppInner's zoomed wrapper, so the

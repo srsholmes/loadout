@@ -32,6 +32,7 @@ import {
 } from "./inject-builder";
 import { SteamInjector } from "../injector";
 import { dispatchRoute, type RouteContext } from "./routes";
+import { cleanupStaleSelfUpdateArtifacts } from "./self-update";
 
 // Global error handlers — prevent plugin crashes from killing the server.
 // The real fix is process isolation (P1 TODO), but this keeps the server alive
@@ -222,6 +223,11 @@ export async function startServer(options: ServerOptions = {}) {
       try { ws.send(data); } catch { /* disconnected */ }
     }
   }
+
+  // Reap leftovers from a self-update that died mid-flight (staged
+  // plugins tree, downloaded archives, .old generations). Fire and
+  // forget — every target is best-effort and none block boot.
+  void cleanupStaleSelfUpdateArtifacts(pluginsDir);
 
   // --- Load plugins ---
   log.info("Loading plugins...");

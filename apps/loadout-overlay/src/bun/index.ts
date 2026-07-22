@@ -116,6 +116,7 @@ function detectGamescopeMode(): boolean {
 // instance without an exported setter dance.
 import { buildRpcHandlers } from "./rpc-handlers";
 import { overlayManagementLoop, shutdown } from "./lifecycle";
+import { cleanupUpdateArtifacts } from "./lib/updater";
 
 // ---- Singleton refs ---------------------------------------------------------
 // Mutable state index.ts owns, wrapped as `{ current: T }` refs so
@@ -782,6 +783,12 @@ if (!shortcutRegistered) {
 // refs so the lifecycle helpers and the in-file toggleOverlay see the
 // same value without a setter dance.
 const managementLoopRunning: { current: boolean } = { current: true };
+
+// Reap self-update leftovers (previous overlay generation `.old`,
+// abandoned `.staging`, downloaded tarball). Reaching this point after
+// an update is the "next successful boot" that closes the one-
+// generation rollback window. Fire-and-forget; never blocks boot.
+void cleanupUpdateArtifacts();
 
 overlayManagementLoop({
   state,
