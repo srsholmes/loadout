@@ -197,6 +197,20 @@ describe("waitForBackendDone", () => {
     expect(true).toBe(true);
   });
 
+  test("treats a 404 on the route as done (updated onto a pre-feature backend)", async () => {
+    // The backend restarted into a build without /api/self-update (e.g.
+    // an older release). It must NOT hang waiting for a "done" that
+    // route can never report.
+    const deps = scriptedDeps({
+      phases: [
+        { status: 200, body: { phase: "applying" } },
+        { status: 404, body: { error: "not found" } },
+      ],
+    });
+    await waitForBackendDone({ tag: "v0.6.0", token: "t", preVersion: "0.5.9", deps });
+    expect(true).toBe(true); // resolved, did not hang to the deadline
+  });
+
   test("same-version repair rejects an uncorroborated version match (finding 4)", async () => {
     // preVersion === tag. A flaky poll must NOT be read as done just
     // because /api/status already reports the target version — the

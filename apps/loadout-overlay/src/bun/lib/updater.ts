@@ -561,20 +561,29 @@ export async function waitForBackendDone(args: {
     await deps.sleep(1000);
     let phase: string | null = null;
     let message: string | undefined;
+    let httpStatus = 0;
     try {
-      const { status: httpStatus, json } = await backendJson<{
-        phase?: string;
-        message?: string;
-      }>(deps, "/api/self-update", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (httpStatus === 200 && json?.phase) {
-        phase = json.phase;
-        message = json.message;
+      const res = await backendJson<{ phase?: string; message?: string }>(
+        deps,
+        "/api/self-update",
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      httpStatus = res.status;
+      if (res.status === 200 && res.json?.phase) {
+        phase = res.json.phase;
+        message = res.json.message;
       }
     } catch {
       phase = null; // backend unreachable — possibly mid-restart
     }
+    // The backend restarted into a build WITHOUT the self-update route
+    // (404) — e.g. updating onto a release that predates this feature.
+    // Our POST was already accepted (202) and the swap ran, so a
+    // reachable backend that 404s the route means the update landed;
+    // waiting for a "done" it can never report would hang until the
+    // deadline. (An old backend that still has the route would answer
+    // 200, not 404, so this can't mask a genuinely in-flight update.)
+    if (httpStatus === 404) return;
     if (phase === "done") return;
     if (phase === "error") {
       throw new Error(`backend update failed: ${message ?? "unknown error"}`);
