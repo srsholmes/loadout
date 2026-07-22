@@ -824,28 +824,6 @@
       "status": "in_progress"
     },
     {
-      "id": "space-cadet-pinball",
-      "name": "Space Cadet Pinball",
-      "project": "SpaceCadetPinball",
-      "platform": "ps1",
-      "repo": "k4zmu2a/SpaceCadetPinball",
-      "description": "Decompilation of 3D Pinball: Space Cadet from Windows XP. Standalone, no data files needed.",
-      "installType": "prebuilt",
-      "releaseAssets": {
-        "windows": "SpaceCadetPinballx64Win.zip"
-      },
-      "launchCommand": {
-        "windows": "{installDir}/SpaceCadetPinball.exe"
-      },
-      "tags": [
-        "pinball",
-        "windows",
-        "classic"
-      ],
-      "latestVersion": "Release_2.1.0",
-      "steamGridDbId": 17822
-    },
-    {
       "id": "redriver2",
       "name": "Driver 2",
       "project": "REDRIVER2",
@@ -2621,21 +2599,6 @@
       "steamGridDbId": 5265246
     },
     {
-      "id": "doom-64",
-      "name": "Doom 64",
-      "project": "Doom 64 Reverse Engineering By [GEC]",
-      "platform": "n64",
-      "repo": "Erick194/DOOM64-RE",
-      "description": "Doom 64 Reverse Engineering By [GEC]",
-      "installType": "prebuilt",
-      "releaseAssets": {},
-      "launchCommand": {},
-      "status": "in_progress",
-      "tags": [],
-      "website": null,
-      "steamGridDbId": 25626
-    },
-    {
       "id": "battle-city",
       "name": "Battle City",
       "project": "Source code of some NES games",
@@ -2951,21 +2914,6 @@
       "tags": [],
       "website": "https://bfbbdecomp.github.io/bfbb/",
       "steamGridDbId": 38661
-    },
-    {
-      "id": "doom-psx",
-      "name": "Doom PSX",
-      "project": "Psx Doom Reverse Engineering By [GEC]",
-      "platform": "ps1",
-      "repo": "Erick194/PSXDOOM-RE",
-      "description": "Psx Doom Reverse Engineering By [GEC]",
-      "installType": "prebuilt",
-      "releaseAssets": {},
-      "launchCommand": {},
-      "status": "in_progress",
-      "tags": [],
-      "website": null,
-      "steamGridDbId": 5461568
     },
     {
       "id": "resident-evil-code-veronica-x",
@@ -8565,32 +8513,6 @@
       "website": "https://github.com/999sian/tmc",
       "latestVersion": "v0.8.3",
       "steamGridDbId": 34539
-    },
-    {
-      "id": "psydoom",
-      "name": "Doom (PSX)",
-      "project": "PsyDoom",
-      "platform": "ps1",
-      "repo": "BodbDearg/PsyDoom",
-      "description": "Native PC port of PlayStation Doom and Final Doom built on the PSXDOOM-RE decompilation. Vulkan renderer with high-resolution and widescreen support, uncapped framerate and quality-of-life options. Requires a disc image (.cue) of PSX Doom or Final Doom - the built-in launcher lets you point at it on first run.",
-      "installType": "prebuilt",
-      "releaseAssets": {
-        "windows": "PsyDoom_*_Windows_x86_64.zip",
-        "linux": "PsyDoom_*_Linux_x86_64.AppImage"
-      },
-      "launchCommand": {
-        "windows": "{installDir}/PsyDoom.exe",
-        "linux": "{installDir}/PsyDoom.AppImage"
-      },
-      "tags": [
-        "doom",
-        "ps1",
-        "fps",
-        "3d"
-      ],
-      "website": "https://github.com/BodbDearg/PsyDoom",
-      "latestVersion": "1.1.1",
-      "steamGridDbId": 2460
     },
     {
       "id": "ssb64-battleship",
