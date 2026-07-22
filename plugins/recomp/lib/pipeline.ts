@@ -371,6 +371,20 @@ export async function installGame(
     return state;
   }
 
+  // A saved/reused romPath (update, or an install retry off
+  // `state.romPaths`) may point at a dump the user has since moved or
+  // deleted. Catch it here — before downloading the release — so the
+  // user gets an actionable "re-pick your dump" prompt instead of a raw
+  // ENOENT surfaced from deep inside the staging step after a multi-GB
+  // download completes.
+  if (requiresRom(entry) && romPath && !existsSync(romPath)) {
+    const description =
+      `Your saved game file for ${entry.name} (${romPath}) no longer exists — ` +
+      `pick it again.`;
+    onEvent({ type: "rom_required", gameId, message: description });
+    return state;
+  }
+
   const installDir = join(state.installPath || gamesDir(), gameId);
   const partialDir = `${installDir}.partial`;
   const tmpGameDir = join(tempDir(), gameId);

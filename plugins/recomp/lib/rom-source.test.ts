@@ -126,11 +126,15 @@ function stfsEntry(opts: {
  * File table at 0xC000 (logical block 0). Payload blocks: logical 1
  * (physical 0x0D → offset 0xD000) and logical 2 (0xE000). Single-block
  * files never consult the hash chain.
+ *
+ * Sets the header-size field at 0x340 to 0xAD0E (matching a real LIVE
+ * package) so `stfsTableSizeShift` derives shift 0.
  */
-function buildStfsPackage(opts?: { evilName?: string }): Buffer {
+function buildStfsPackage(opts?: { evilName?: string; headerSize?: number }): Buffer {
   // Padded past locateDumpFile's 1 MiB size floor (see buildXgdImage).
   const img = Buffer.alloc(Math.max(0x10000, 1024 * 1024 + 0x1000));
   Buffer.from("LIVE", "ascii").copy(img, 0);
+  img.writeUInt32BE(opts?.headerSize ?? 0xad0e, 0x340); // ⇒ table_size_shift 0
   const table = 0xc000;
   stfsEntry({ name: "sub", dir: true, parent: 0xffff }).copy(img, table);
   stfsEntry({
@@ -331,6 +335,12 @@ describe("stageRomSource", () => {
 
   it("stages a zip-wrapped dump by locating it inside the archive", async () => {
     // Build a real zip via the system tools the extractor itself uses.
+    // Bun.spawn THROWS synchronously when the executable is missing, so
+    // a bare try/exit-code guard would error rather than skip on a host
+    // without `zip`; gate on Bun.which so the skip is explicit and a
+    // non-zero exit for any OTHER reason fails loudly instead of passing
+    // vacuously.
+    if (!Bun.which("zip")) return;
     const payloadDir = join(sandbox, "zip-payload");
     await mkdir(payloadDir, { recursive: true });
     await writeFile(join(payloadDir, "game.stfs"), buildStfsPackage());
@@ -338,11 +348,7 @@ describe("stageRomSource", () => {
     const proc = Bun.spawn(["zip", "-j", zipPath, join(payloadDir, "game.stfs")], {
       stdout: "ignore", stderr: "ignore",
     });
-    if ((await proc.exited) !== 0) {
-      // No `zip` binary on this host — the unwrap path is covered by
-      // pipeline-archive tests; skip the integration variant.
-      return;
-    }
+    expect(await proc.exited).toBe(0);
 
     const stageDir = join(sandbox, "stage-zip-install");
     await mkdir(stageDir, { recursive: true });
@@ -441,5 +447,186 @@ describe("stageRomSource", () => {
         onProgress: () => {},
       }),
     ).rejects.toThrow(/escapes the install directory/);
+  });
+});
+
+// ── Regression: the format-parser hardening (review findings) ────────
+
+describe("GDF walk hardening", () => {
+  // Full mini-image whose root table's second entry ("bbb") has a left
+  // pointer of 0x01FF — low byte 0xFF. The OLD `data[pos] === 0xff`
+  // padding check read that low byte and silently dropped "bbb" and its
+  // subtree (finding C1). Build it directly so the regression is exact.
+  function imageWith0xFFLeftByte(): Buffer {
+    const img = Buffer.alloc(1024 * 1024 + SECTOR);
+    Buffer.from("MICROSOFT*XBOX*MEDIA", "ascii").copy(img, 32 * SECTOR);
+    img.writeUInt32LE(33, 32 * SECTOR + 20);
+    img.writeUInt32LE(SECTOR, 32 * SECTOR + 24);
+    const rootBase = 33 * SECTOR;
+    img.fill(0xff, rootBase, rootBase + SECTOR);
+    // offset 0: "aaa", left → dword offset 8 (byte 32, "bbb"), no right.
+    gdfEntry({ left: 8, right: 0xffff, startSector: 40, size: 5, attrs: 0, name: "aaa" })
+      .copy(img, rootBase);
+    // byte 32: "bbb", left = 0x01FF (low byte 0xFF) → dword offset 511
+    // (byte 2044), past the table end → skipped. The old code instead
+    // read that 0xFF low byte and dropped "bbb" itself.
+    gdfEntry({ left: 0x01ff, right: 0xffff, startSector: 41, size: 3, attrs: 0, name: "bbb" })
+      .copy(img, rootBase + 32);
+    Buffer.from("hello").copy(img, 40 * SECTOR);
+    Buffer.from("abc").copy(img, 41 * SECTOR);
+    return img;
+  }
+
+  it("does NOT drop an entry whose left-pointer low byte is 0xFF (C1)", async () => {
+    const iso = join(sandbox, "gdf-0xff.iso");
+    await writeFile(iso, imageWith0xFFLeftByte());
+    const dest = join(sandbox, "gdf-0xff-out");
+    const r = await extractXgdIso(iso, dest);
+    expect(r.files).toBe(2);
+    expect(await readFile(join(dest, "aaa"), "utf-8")).toBe("hello");
+    expect(await readFile(join(dest, "bbb"), "utf-8")).toBe("abc"); // was dropped
+  });
+
+  it("terminates on a directory-tree cycle instead of blowing the stack (S1)", async () => {
+    // Root entry whose left points back at itself (offset 0) — a naive
+    // recursive walk would loop forever; the visited-set must stop it.
+    const img = Buffer.alloc(1024 * 1024 + SECTOR);
+    Buffer.from("MICROSOFT*XBOX*MEDIA", "ascii").copy(img, 32 * SECTOR);
+    img.writeUInt32LE(33, 32 * SECTOR + 20);
+    img.writeUInt32LE(SECTOR, 32 * SECTOR + 24);
+    const rootBase = 33 * SECTOR;
+    img.fill(0xff, rootBase, rootBase + SECTOR);
+    // "self" points left → dword offset 8 (byte 32), which points left
+    // back to offset 0 → cycle.
+    gdfEntry({ left: 8, right: 0xffff, startSector: 40, size: 5, attrs: 0, name: "self" })
+      .copy(img, rootBase);
+    gdfEntry({ left: 0, right: 0xffff, startSector: 40, size: 5, attrs: 0, name: "back" })
+      .copy(img, rootBase + 32);
+    Buffer.from("hello").copy(img, 40 * SECTOR);
+    const iso = join(sandbox, "gdf-cycle.iso");
+    await writeFile(iso, img);
+    // Must return promptly with both distinct entries, not hang/overflow.
+    const r = await extractXgdIso(iso, join(sandbox, "gdf-cycle-out"));
+    expect(r.files).toBe(2);
+  });
+
+  it("reads an entry that lives beyond the first sector of a 2-sector table", async () => {
+    const img = Buffer.alloc(1024 * 1024 + 3 * SECTOR);
+    Buffer.from("MICROSOFT*XBOX*MEDIA", "ascii").copy(img, 32 * SECTOR);
+    img.writeUInt32LE(33, 32 * SECTOR + 20);
+    img.writeUInt32LE(2 * SECTOR, 32 * SECTOR + 24); // 2-sector root table
+    const rootBase = 33 * SECTOR;
+    img.fill(0xff, rootBase, rootBase + 2 * SECTOR);
+    // root "first" with left → dword offset 512 (byte 2048 = sector 2).
+    gdfEntry({ left: 512, right: 0xffff, startSector: 40, size: 5, attrs: 0, name: "first" })
+      .copy(img, rootBase);
+    gdfEntry({ left: 0xffff, right: 0xffff, startSector: 41, size: 3, attrs: 0, name: "second" })
+      .copy(img, rootBase + 2048);
+    Buffer.from("hello").copy(img, 40 * SECTOR);
+    Buffer.from("abc").copy(img, 41 * SECTOR);
+    const iso = join(sandbox, "gdf-2sector.iso");
+    await writeFile(iso, img);
+    const dest = join(sandbox, "gdf-2sector-out");
+    const r = await extractXgdIso(iso, dest);
+    expect(r.files).toBe(2);
+    expect(await readFile(join(dest, "second"), "utf-8")).toBe("abc");
+  });
+});
+
+describe("STFS multi-block + hardening", () => {
+  const HELLO2 = "hello".repeat(1000); // 5000 bytes = 2 blocks
+
+  /** LIVE package with one 2-block file whose block chain steps through
+   *  the group-0 hash table (exercises stfsNextBlock / hash math that no
+   *  single-block fixture reached — finding C9). File logical blocks 1→2;
+   *  the next-block pointer for logical 1 lives at hash offset 0xB018+0x15. */
+  function buildMultiBlockStfs(): Buffer {
+    const img = Buffer.alloc(0x11000);
+    Buffer.from("LIVE", "ascii").copy(img, 0);
+    img.writeUInt32BE(0xad0e, 0x340); // shift 0
+    const table = 0xc000;
+    stfsEntry({
+      name: "big.bin", blocks: 2, startBlock: 1, parent: 0xffff, size: HELLO2.length,
+    }).copy(img, table);
+    // Group-0 hash entry for logical block 1: next block = 2 (u24 BE @ +0x15).
+    const hashEntry1 = 0x0b * 0x1000 + 1 * 0x18;
+    img.writeUIntBE(2, hashEntry1 + 0x15, 3);
+    // Payload: logical 1 → physical 0x0D (0xD000), logical 2 → 0x0E (0xE000).
+    Buffer.from(HELLO2.slice(0, 0x1000)).copy(img, 0xd000);
+    Buffer.from(HELLO2.slice(0x1000)).copy(img, 0xe000);
+    return img;
+  }
+
+  it("extracts a multi-block file by following the hash-table chain", async () => {
+    const pkg = join(sandbox, "stfs-multiblock.stfs");
+    await writeFile(pkg, buildMultiBlockStfs());
+    const dest = join(sandbox, "stfs-multiblock-out");
+    const r = await extractStfs(pkg, dest);
+    expect(r.files).toBe(1);
+    expect(await readFile(join(dest, "big.bin"), "utf-8")).toBe(HELLO2);
+  });
+
+  it("rejects a resigned (shift-1) package instead of extracting corrupt data (C2)", async () => {
+    // headerSize 0x9000 ⇒ ((0x9000+0xFFF)&0xF000)>>12 = 0x9 ≠ 0xB ⇒ shift 1.
+    const pkg = join(sandbox, "stfs-con.stfs");
+    await writeFile(pkg, buildStfsPackage({ headerSize: 0x9000 }));
+    await expect(extractStfs(pkg, join(sandbox, "stfs-con-out"))).rejects.toThrow(
+      /resigned\/read-write STFS package/,
+    );
+  });
+
+  it("throws on a cyclic block chain rather than amplifying writes (S3)", async () => {
+    // A 2-block file whose logical block 1 chains back to itself, with a
+    // size that would otherwise drive many iterations.
+    const img = Buffer.alloc(0x11000);
+    Buffer.from("LIVE", "ascii").copy(img, 0);
+    img.writeUInt32BE(0xad0e, 0x340);
+    stfsEntry({
+      name: "loop.bin", blocks: 5, startBlock: 1, parent: 0xffff, size: 5 * 0x1000,
+    }).copy(img, 0xc000);
+    img.writeUIntBE(1, 0x0b * 0x1000 + 1 * 0x18 + 0x15, 3); // logical 1 → 1 (self)
+    Buffer.alloc(0x1000, 0x41).copy(img, 0xd000);
+    const pkg = join(sandbox, "stfs-cycle.stfs");
+    await writeFile(pkg, img);
+    await expect(extractStfs(pkg, join(sandbox, "stfs-cycle-out"))).rejects.toThrow(
+      /[Cc]yclic block chain/,
+    );
+  });
+});
+
+describe("archive dispatch by magic (C5)", () => {
+  it("unwraps a magic-detected archive whose name lacks an extension", async () => {
+    if (!Bun.which("zip")) return;
+    // A real zip wrapping an STFS package, but named with no recognized
+    // archive extension — sniffs as archive, must still extract.
+    const payloadDir = join(sandbox, "noext-payload");
+    await mkdir(payloadDir, { recursive: true });
+    await writeFile(join(payloadDir, "content"), buildStfsPackage());
+    const zipReal = join(sandbox, "mkzip.zip");
+    expect(
+      await Bun.spawn(["zip", "-j", zipReal, join(payloadDir, "content")], {
+        stdout: "ignore", stderr: "ignore",
+      }).exited,
+    ).toBe(0);
+    // Rename to an extensionless path — the SOTN "type the path manually"
+    // case: the extractor dispatches by extension, so without the
+    // magic-derived symlink this would be "unsupported format".
+    const noExt = join(sandbox, "downloaded_file");
+    await writeFile(noExt, await readFile(zipReal));
+
+    const stageDir = join(sandbox, "noext-install");
+    await mkdir(stageDir, { recursive: true });
+    const { files } = await stageRomSource({
+      romInfo: {
+        description: "t", validChecksums: [], extractionCommand: "",
+        sourceFormat: "stfs", anchorFile: "default.xex",
+      },
+      romPath: noExt,
+      stageDir,
+      scratchDir: join(sandbox, "noext-scratch"),
+      onProgress: () => {},
+    });
+    expect(files).toBe(2);
+    expect(existsSync(join(stageDir, "assets/default.xex"))).toBe(true);
   });
 });

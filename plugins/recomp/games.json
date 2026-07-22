@@ -8414,7 +8414,7 @@
       "installType": "rom_extract",
       "requiresRom": true,
       "romInfo": {
-        "description": "Provide your legally dumped Castlevania: SotN XBLA package (the LIVE/STFS content file, title ID 58410847), or a zip/7z/rar containing it. XBLA content files have no file extension — if the picker can't see yours, type the path manually.",
+        "description": "Provide your legally dumped Castlevania: SotN XBLA package (the LIVE/STFS content file, found on your own console under Content/0000000000000000/58410847/000D0000/), or a zip/7z/rar containing it. XBLA content files have no file extension — if the picker can't see yours, type the path manually.",
         "validChecksums": [],
         "extractionCommand": "",
         "extensions": ["zip", "7z", "rar", "bin"],
