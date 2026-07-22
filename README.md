@@ -2,7 +2,7 @@
 
 > **One toolkit for everything your Linux handheld was missing.** A plugin
 > platform for Linux gaming handhelds — an in-game overlay in Steam's Gaming
-> Mode, a standalone app on the desktop. TypeScript end to end.
+> Mode, a standalone app on the desktop. 
 
 ![Loadout home screen](docs/assets/home.png)
 
