@@ -95,6 +95,10 @@ export interface UpdaterDeps {
    *  so the multi-minute backend-restart poll is exercisable. */
   sleep: (ms: number) => Promise<void>;
   now: () => number;
+  /** rename(2) seam — real `node:fs/promises` in production; injected
+   *  in tests so the overlay-tree swap + its rollback can be exercised
+   *  (make `staging→live` fail and assert `.old` is restored). */
+  rename: (from: string, to: string) => Promise<void>;
 }
 
 async function defaultSha256File(path: string): Promise<string> {
@@ -128,6 +132,7 @@ export const DEFAULT_DEPS: UpdaterDeps = {
   sha256File: defaultSha256File,
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   now: () => Date.now(),
+  rename,
 };
 
 // -- Release check ------------------------------------------------------------
@@ -161,12 +166,14 @@ export async function resolveLatestReleaseTag(fetchFn: typeof fetch): Promise<st
   if (token) headers["Authorization"] = `Bearer ${token}`;
   // Bounded so the checkForUpdate RPC always answers well inside the
   // webview's request window — a dead network should surface as a
-  // clean "check failed" result, not an RPC timeout.
-  const signal = AbortSignal.timeout(8000);
+  // clean "check failed" result, not an RPC timeout. Each request gets
+  // its OWN signal: a shared one would arrive at the list fallback
+  // already aborted precisely when `releases/latest` was what timed
+  // out — the one case the fallback exists for.
   try {
     const res = await fetchFn(`https://api.github.com/repos/${REPO}/releases/latest`, {
       headers,
-      signal,
+      signal: AbortSignal.timeout(8000),
     });
     if (res.ok) {
       const json = (await res.json()) as { tag_name?: string };
@@ -177,7 +184,7 @@ export async function resolveLatestReleaseTag(fetchFn: typeof fetch): Promise<st
   }
   const listRes = await fetchFn(`https://api.github.com/repos/${REPO}/releases?per_page=20`, {
     headers,
-    signal,
+    signal: AbortSignal.timeout(8000),
   });
   if (!listRes.ok) return null;
   const list = (await listRes.json()) as Array<{
@@ -334,14 +341,30 @@ async function backendToken(deps: UpdaterDeps): Promise<string> {
  *  (the pre-restart token dies with the old process). Null when the
  *  backend is unreachable. */
 async function backendVersion(deps: UpdaterDeps): Promise<string | null> {
+  return (await backendStatusProbe(deps)).version;
+}
+
+/**
+ * Probe `/api/status` with a freshly bootstrapped token. Distinguishes
+ * "backend unreachable" from "backend reachable but reporting no
+ * version field" — the latter identifies a PRE-FEATURE backend (the
+ * `version` field ships with this feature), which the post-restart
+ * fallback in {@link waitForBackendDone} treats as its done signal.
+ */
+async function backendStatusProbe(
+  deps: UpdaterDeps,
+): Promise<{ reachable: boolean; version: string | null }> {
   try {
     const token = await backendToken(deps);
-    const { json } = await backendJson<{ version?: string }>(deps, "/api/status", {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    return json?.version ?? null;
+    const { status: httpStatus, json } = await backendJson<{ ok?: boolean; version?: string }>(
+      deps,
+      "/api/status",
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (httpStatus !== 200 || !json) return { reachable: false, version: null };
+    return { reachable: true, version: typeof json.version === "string" ? json.version : null };
   } catch {
-    return null;
+    return { reachable: false, version: null };
   }
 }
 
@@ -386,7 +409,10 @@ export function startUpdate(
               "the overlay did not restart automatically — restart it manually to finish updating",
           };
         }
-      }, 20_000);
+        // 30s, not 20s: a legitimate CEF stop→start ladder can run
+        // ~15s, and false-firing this moments before systemd finishes
+        // would surface an error the successful restart then contradicts.
+      }, 30_000);
       (watchdog as { unref?: () => void }).unref?.();
     },
     (err) => {
@@ -520,12 +546,12 @@ async function runUpdate(tag: string, deps: UpdaterDeps): Promise<void> {
   // --- Swap the overlay tree -------------------------------------------------
   status = { phase: "swapping", pct: 92, tag, message: "Installing overlay…" };
   await rm(oldDir, { recursive: true, force: true });
-  await rename(overlayDir, oldDir);
+  await deps.rename(overlayDir, oldDir);
   try {
-    await rename(stagingDir, overlayDir);
+    await deps.rename(stagingDir, overlayDir);
   } catch (err) {
     // Put the old tree back so the unit can still start.
-    await rename(oldDir, overlayDir).catch(() => {});
+    await deps.rename(oldDir, overlayDir).catch(() => {});
     throw err;
   }
   await rm(tarPath, { force: true }).catch(() => {});
@@ -536,16 +562,36 @@ async function runUpdate(tag: string, deps: UpdaterDeps): Promise<void> {
 /**
  * Poll the backend's self-update status until it lands. The backend
  * marks `done` ~500 ms before restarting itself, so the poll usually
- * sees it — but if the restart wins the race (connection refused, 401
- * from a fresh token generation, or a fresh process reporting `idle`),
- * fall back to reading the NEW process's /api/status version.
+ * sees it — but if the restart wins the race, fall back to the new
+ * process's identity.
  *
- * The fallback only accepts a version match when it's *corroborated*:
- * either we observed the backend actively working this run (`sawActive`)
- * or the reported version differs from the pre-update snapshot. Without
- * that, a same-version repair (backend already at `tag`) would read as
- * done from the first flaky poll and the overlay would swap + restart
- * while the backend was still applying (finding 4).
+ * Session tokens are per-process (minted at boot), so after the
+ * backend restarts our pre-update token is stale and the auth gate
+ * answers 401 *before* route dispatch. We re-bootstrap a fresh token
+ * via the public `/api/token` and retry — this is what makes both
+ * fallbacks reachable across a restart:
+ *   - a fresh-token GET that 404s means the new backend has no
+ *     self-update route (updated onto a build predating this feature)
+ *     but is up and serving → the update landed (POST was already
+ *     accepted 202); don't hang waiting for a "done" it can't report.
+ *   - otherwise the version fallback confirms the new process reports
+ *     the target version.
+ *
+ * The version fallback only accepts a match when *corroborated* —
+ * `sawActive` (we watched the backend work), `sawRestart` (our token
+ * went stale, which only a restart causes, and the backend restarts
+ * only after marking `done`), or the version changed from the
+ * pre-update snapshot — so a same-version repair can't read as done
+ * from the first flaky poll (finding 4). An UNKNOWN snapshot counts as
+ * "might already be at the target" and therefore also demands
+ * corroboration.
+ *
+ * The deadline is activity-based: 10 minutes with no sign of life,
+ * extended while the backend reports an active phase — it downloads
+ * ~150 MB inside this window, and a fixed deadline would cut off slow
+ * links mid-download (the backend would then finish and restart anyway,
+ * leaving overlay/backend skew after we'd already reported failure). A
+ * 60-minute absolute cap still bounds the whole wait.
  */
 export async function waitForBackendDone(args: {
   tag: string;
@@ -554,20 +600,40 @@ export async function waitForBackendDone(args: {
   deps: UpdaterDeps;
 }): Promise<void> {
   const { tag, token, preVersion, deps } = args;
-  const preIsTag = preVersion !== null && versionsEqual(preVersion, tag);
-  const deadline = deps.now() + 10 * 60_000;
+  const preIsTag = preVersion === null || versionsEqual(preVersion, tag);
+  const IDLE_LIMIT_MS = 10 * 60_000;
+  const ABSOLUTE_LIMIT_MS = 60 * 60_000;
+  const startedAt = deps.now();
+  let lastActivity = startedAt;
   let sawActive = false;
-  while (deps.now() < deadline) {
+  let sawRestart = false;
+  let currentToken = token;
+  while (
+    deps.now() - lastActivity < IDLE_LIMIT_MS &&
+    deps.now() - startedAt < ABSOLUTE_LIMIT_MS
+  ) {
     await deps.sleep(1000);
     let phase: string | null = null;
     let message: string | undefined;
     let httpStatus = 0;
     try {
-      const res = await backendJson<{ phase?: string; message?: string }>(
-        deps,
-        "/api/self-update",
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
+      let res = await backendJson<{ phase?: string; message?: string }>(deps, "/api/self-update", {
+        headers: { Authorization: `Bearer ${currentToken}` },
+      });
+      // 401 → the backend restarted and minted a new token. Re-bootstrap
+      // and retry so we observe the NEW process (and so a route-absent
+      // pre-feature backend reaches dispatch and 404s instead of being
+      // masked by the auth gate).
+      if (res.status === 401) {
+        sawRestart = true;
+        const fresh = await backendToken(deps).catch(() => null);
+        if (fresh) {
+          currentToken = fresh;
+          res = await backendJson<{ phase?: string; message?: string }>(deps, "/api/self-update", {
+            headers: { Authorization: `Bearer ${currentToken}` },
+          });
+        }
+      }
       httpStatus = res.status;
       if (res.status === 200 && res.json?.phase) {
         phase = res.json.phase;
@@ -576,13 +642,10 @@ export async function waitForBackendDone(args: {
     } catch {
       phase = null; // backend unreachable — possibly mid-restart
     }
-    // The backend restarted into a build WITHOUT the self-update route
-    // (404) — e.g. updating onto a release that predates this feature.
-    // Our POST was already accepted (202) and the swap ran, so a
-    // reachable backend that 404s the route means the update landed;
-    // waiting for a "done" it can never report would hang until the
-    // deadline. (An old backend that still has the route would answer
-    // 200, not 404, so this can't mask a genuinely in-flight update.)
+    // Fresh-token 404: the restarted backend is up but has no
+    // self-update route (predates this feature). The POST already ran,
+    // so the update landed. A backend that still has the route answers
+    // 200, so this can't mask a genuinely in-flight update.
     if (httpStatus === 404) return;
     if (phase === "done") return;
     if (phase === "error") {
@@ -590,16 +653,28 @@ export async function waitForBackendDone(args: {
     }
     if (phase === "downloading" || phase === "verifying" || phase === "applying") {
       sawActive = true;
+      lastActivity = deps.now();
       status = { phase: "backend", pct: 80, tag, message: "Updating backend…" };
       continue;
     }
     // Unreachable, unauthorized, or a fresh process reporting idle.
-    if (phase === null || sawActive) {
-      const version = await backendVersion(deps);
-      if (!version || !versionsEqual(version, tag)) continue;
+    if (phase === null || sawRestart || sawActive) {
+      const probe = await backendStatusProbe(deps);
+      if (!probe.reachable) continue;
+      if (probe.version === null) {
+        // Reachable /api/status WITHOUT a version field ⇒ a backend
+        // predating this feature (the field ships with it). It can only
+        // be answering here after a restart — a pre-feature process
+        // could never have accepted our POST — so the apply completed.
+        // Belt-and-braces beside the fresh-token 404 above, for when
+        // that re-poll races the restart and misses.
+        return;
+      }
+      if (!versionsEqual(probe.version, tag)) continue;
       // Corroborate before trusting a bare version match: the version
-      // changed to the target, or we watched the backend do the work.
-      if (sawActive || !preIsTag) return;
+      // changed to the target, we watched the backend do the work, or
+      // we observed the restart that only follows a completed apply.
+      if (sawActive || sawRestart || !preIsTag) return;
     }
   }
   throw new Error("timed out waiting for the backend update");

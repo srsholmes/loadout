@@ -88,6 +88,15 @@ export function UpdateSection() {
         if (++consecutiveNulls > 15) {
           stopPoll();
           inFlightRef.current = false;
+          // Drive the UI to a terminal ERROR, not just stop polling —
+          // otherwise `updating` stays true, the progress row keeps
+          // rendering (frozen at its last %, e.g. 80%) with NO button,
+          // and the user can neither retry nor check. Surfacing an
+          // error restores the Check/Update button so they can retry.
+          setUpdateStatus({
+            phase: "error",
+            message: "Lost contact with the updater — reopen Settings and try again.",
+          });
         }
         return;
       }
@@ -110,9 +119,15 @@ export function UpdateSection() {
     // Resume an update that was already running when Settings was
     // (re)opened — the component may have been unmounted (user pressed
     // B) mid-update, and the Bun host holds the authoritative status.
+    // Also surface a terminal error that occurred while unmounted (e.g.
+    // the restart watchdog fired), so a failed update isn't silently
+    // hidden behind a fresh "Check for updates" row on reopen.
     getUpdateStatus()
       .then((s) => {
-        if (s && s.phase !== "idle" && isActivePhase(s.phase) && s.phase !== "error") {
+        if (!s) return;
+        if (s.phase === "error") {
+          setUpdateStatus(s);
+        } else if (s.phase !== "idle" && isActivePhase(s.phase)) {
           inFlightRef.current = true;
           setUpdateStatus(s);
           startStatusPoll();

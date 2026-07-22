@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   isTrustedGithubHost,
   parseSha256Sums,
   startSelfUpdate,
   getSelfUpdateStatus,
+  resetSelfUpdateStatusForTest,
   cleanupStaleSelfUpdateArtifacts,
   downloadToFile,
   type SelfUpdateDeps,
@@ -37,6 +38,10 @@ function tmp(): string {
 afterEach(() => {
   for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
+
+// Reset the module status singleton so a terminal apply-path state
+// can't leak a spurious 409 into the next startSelfUpdate.
+beforeEach(() => resetSelfUpdateStatusForTest());
 
 /** Poll the module status until it leaves the active phases. */
 async function awaitSettled(): Promise<string> {
@@ -84,7 +89,7 @@ describe("parseSha256Sums", () => {
 });
 
 describe("startSelfUpdate validation", () => {
-  const pluginsDir = join(mkdtempSync(join(tmpdir(), "selfupdate-")), "plugins");
+  const pluginsDir = join(tmp(), "plugins"); // tracked → swept by afterEach
 
   test("rejects malformed tags", () => {
     for (const tag of ["rolling", "0.7.0", "v0.7", "v0.7.0-rc1", "../etc", ""]) {
@@ -228,15 +233,19 @@ async function setupApply(opts: { correctSums?: boolean } = {}) {
 }
 
 describe("runSelfUpdate apply path", () => {
-  test("happy path swaps the binary and plugins, ends 'done'", async () => {
-    const { exePath, pluginsDir, deps } = await setupApply();
+  test("happy path swaps the binary, plugins, AND node_modules, ends 'done'", async () => {
+    const { exePath, pluginsDir, modulesDir, deps } = await setupApply();
     const res = startSelfUpdate({ tag: "v0.7.0", pluginsDir }, deps);
     expect(res.ok).toBe(true);
     expect(await awaitSettled()).toBe("done");
     expect(await readFile(exePath, "utf8")).toBe("NEW-BINARY-CONTENT");
     expect(await readFile(join(pluginsDir, "marker"), "utf8")).toBe("new-plugins");
+    // The whole skew bug lives in the plugins-vs-modules rename pairing —
+    // assert BOTH halves landed, not just plugins.
+    expect(await readFile(join(modulesDir, "marker"), "utf8")).toBe("new-modules");
     // staging + old generations cleaned up
     expect(existsSync(`${pluginsDir}.old`)).toBe(false);
+    expect(existsSync(`${modulesDir}.old`)).toBe(false);
   });
 
   test("checksum mismatch aborts before any swap — live binary untouched", async () => {

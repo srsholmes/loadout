@@ -78,6 +78,12 @@ export function getSelfUpdateStatus(): SelfUpdateStatus {
   return status;
 }
 
+/** Test seam — reset the module-level status singleton to idle so
+ *  tests don't leak in-flight/terminal state into one another. */
+export function resetSelfUpdateStatusForTest(): void {
+  status = { phase: "idle" };
+}
+
 function inFlight(): boolean {
   return (
     status.phase === "downloading" || status.phase === "verifying" || status.phase === "applying"
@@ -145,15 +151,25 @@ export const DEFAULT_DEPS: SelfUpdateDeps = {
  * the hostname on every hop. Streams to disk — the plugins archive is
  * tens of MB and buffering it in RAM buys nothing.
  */
+/** Per-hop request headers. The `Authorization` token is attached ONLY
+ *  on the initial `github.com` hop: release assets 302 to a pre-signed
+ *  S3 URL carrying its own `X-Amz-*` query auth, and S3 rejects a
+ *  request bearing both with HTTP 400 "Only one auth mechanism allowed"
+ *  — so with GITHUB_TOKEN in the service env every download would 400 on
+ *  the redirect. Mirrors the overlay updater's `assetHopHeaders`. The
+ *  repo is public, so the token buys nothing on the asset anyway. */
+function assetHopHeaders(host: string): Record<string, string> {
+  const headers: Record<string, string> = { "User-Agent": "Loadout-Updater" };
+  const token = process.env.GITHUB_TOKEN;
+  if (token && host === "github.com") headers["Authorization"] = `Bearer ${token}`;
+  return headers;
+}
+
 export async function downloadToFile(
   url: string,
   dest: string,
   fetchFn: typeof fetch,
 ): Promise<void> {
-  const headers: Record<string, string> = { "User-Agent": "Loadout-Updater" };
-  const token = process.env.GITHUB_TOKEN;
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-
   const MAX_HOPS = 10;
   let currentUrl = url;
   let res: Response | null = null;
@@ -169,7 +185,7 @@ export async function downloadToFile(
         `download refused: hop ${hop} pointed at untrusted host ${host || currentUrl}`,
       );
     }
-    res = await fetchFn(currentUrl, { headers, redirect: "manual" });
+    res = await fetchFn(currentUrl, { headers: assetHopHeaders(host), redirect: "manual" });
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get("location");
       if (!location) throw new Error(`HTTP ${res.status} without a Location header`);
