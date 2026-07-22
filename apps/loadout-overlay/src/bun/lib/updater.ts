@@ -162,9 +162,14 @@ export async function resolveLatestReleaseTag(
     "User-Agent": "Loadout-Updater",
     Accept: "application/vnd.github+json",
   };
+  // Bounded so the checkForUpdate RPC always answers well inside the
+  // webview's request window — a dead network should surface as a
+  // clean "check failed" result, not an RPC timeout.
+  const signal = AbortSignal.timeout(8000);
   try {
     const res = await fetchFn(`https://api.github.com/repos/${REPO}/releases/latest`, {
       headers,
+      signal,
     });
     if (res.ok) {
       const json = (await res.json()) as { tag_name?: string };
@@ -175,7 +180,7 @@ export async function resolveLatestReleaseTag(
   }
   const listRes = await fetchFn(
     `https://api.github.com/repos/${REPO}/releases?per_page=20`,
-    { headers },
+    { headers, signal },
   );
   if (!listRes.ok) return null;
   const list = (await listRes.json()) as Array<{
@@ -301,7 +306,13 @@ async function backendJson<T>(
   path: string,
   init?: RequestInit,
 ): Promise<{ status: number; json: T | null }> {
-  const res = await deps.fetchFn(`${deps.backendBase}${path}`, init);
+  // Loopback calls answer in ms when the backend is up; a hung socket
+  // (backend mid-restart) should fail fast so the poll loop's own
+  // retry/fallback logic runs instead of blocking on one request.
+  const res = await deps.fetchFn(`${deps.backendBase}${path}`, {
+    signal: AbortSignal.timeout(5000),
+    ...init,
+  });
   const json = (await res.json().catch(() => null)) as T | null;
   return { status: res.status, json };
 }

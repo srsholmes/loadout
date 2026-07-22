@@ -18,7 +18,17 @@ async function rpcInvoke(
   if (!requester) return;
   const fn = requester[cmd];
   if (typeof fn !== "function") return;
-  return await fn(args);
+  try {
+    return await fn(args);
+  } catch (err) {
+    // Electrobun rejects in-flight requests ("RPC request timed out.")
+    // rather than resolving. Every caller already handles an undefined
+    // result with a safe default, so map rejection onto that path —
+    // otherwise one slow RPC leaves UI state machines (e.g. the update
+    // check's "Checking…" button) wedged forever.
+    console.warn(`[host] rpc ${cmd} failed:`, err);
+    return undefined;
+  }
 }
 
 /** Liveness ping for the bun-side freeze watchdog. Fire-and-forget — if the
