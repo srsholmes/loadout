@@ -225,9 +225,14 @@ export async function startServer(options: ServerOptions = {}) {
   }
 
   // Reap leftovers from a self-update that died mid-flight (staged
-  // plugins tree, downloaded archives, .old generations). Fire and
-  // forget — every target is best-effort and none block boot.
-  void cleanupStaleSelfUpdateArtifacts(pluginsDir);
+  // plugins tree, downloaded archives, .old generations). AWAITED, not
+  // fire-and-forget: after a mid-swap crash this is what renames
+  // `plugins.old` back into place, and `loadPlugins` below readdirs
+  // the plugins dir immediately — losing that race means booting a
+  // pluginless server, the exact outcome the restore exists to
+  // prevent. Every target is individually best-effort, so this never
+  // throws; it just must FINISH first.
+  await cleanupStaleSelfUpdateArtifacts(pluginsDir);
 
   // --- Load plugins ---
   log.info("Loading plugins...");

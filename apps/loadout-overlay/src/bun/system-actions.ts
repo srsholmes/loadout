@@ -90,6 +90,15 @@ export async function restartServer(): Promise<{
       console.log("[overlay] loadout.service restart requested via /api/restart");
       return { success: true };
     }
+    // 409 is the route REFUSING (self-update in flight — restarting
+    // mid-swap could strand the install), not the route being absent.
+    // Surface it instead of falling through to the legacy systemctl
+    // path, which on a box with a leftover pre-migration user unit
+    // would perform exactly the restart the refusal exists to prevent.
+    if (res.status === 409) {
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      return { success: false, error: body?.error ?? "an update is in progress — try again when it finishes" };
+    }
     throw new Error(`HTTP ${res.status}`);
   } catch (err) {
     console.warn(

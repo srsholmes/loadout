@@ -6,6 +6,8 @@ import {
   getUpdateStatus,
   resetUpdateStatusForTest,
   waitForBackendDone,
+  cleanupUpdateArtifacts,
+  reapOldGeneration,
   isTrustedGithubHost,
   parseSha256Sums,
   type UpdaterDeps,
@@ -141,7 +143,7 @@ describe("startUpdate guards", () => {
     expect(getUpdateStatus().message).toContain("no installed overlay tree");
   });
 
-  test("rejects a second update while one is in flight", () => {
+  test("rejects a second update while one is in flight", async () => {
     // startUpdate flips status to "downloading" synchronously before it
     // returns, so the second call sees the in-flight guard regardless of
     // where the async flow is. (beforeEach reset guarantees a clean
@@ -152,6 +154,13 @@ describe("startUpdate guards", () => {
     const second = startUpdate("v9.9.8", fakeDeps(fetchFn));
     expect(second.success).toBe(false);
     expect(second.error).toContain("in progress");
+    // Drain the first flow's pending rejection (missing overlay tree)
+    // INSIDE this test — otherwise it lands mid-next-test and mutates
+    // the module status singleton under someone else's assertions.
+    for (let i = 0; i < 50 && getUpdateStatus().phase !== "error"; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(getUpdateStatus().phase).toBe("error");
   });
 });
 
@@ -163,6 +172,9 @@ describe("waitForBackendDone", () => {
   function scriptedDeps(opts: {
     phases: Array<{ status: number; body: unknown } | "throw">;
     statusVersion?: string;
+    /** Full /api/status body override — lets a test model a PRE-FEATURE
+     *  backend whose status has NO `version` field at all. */
+    statusBody?: unknown;
     extra?: Partial<UpdaterDeps>;
   }): UpdaterDeps {
     let poll = 0;
@@ -170,7 +182,11 @@ describe("waitForBackendDone", () => {
       const u = String(url);
       if (u.endsWith("/api/token")) return jsonResponse({ token: "fresh" });
       if (u.endsWith("/api/status")) {
-        return jsonResponse({ version: opts.statusVersion ?? "0.6.0" });
+        return jsonResponse(
+          opts.statusBody !== undefined
+            ? opts.statusBody
+            : { version: opts.statusVersion ?? "0.6.0" },
+        );
       }
       // /api/self-update
       const step = opts.phases[Math.min(poll, opts.phases.length - 1)];
@@ -247,6 +263,66 @@ describe("waitForBackendDone", () => {
     expect(mintedFreshToken).toBe(true); // proves the 401→re-bootstrap path ran
   });
 
+  test("a slow but ACTIVE backend extends the idle deadline past 10 minutes", async () => {
+    // The backend downloads ~150 MB inside this wait — 30 "applying"
+    // polls at one simulated minute apart put 31 minutes on the wall
+    // clock, far beyond the old fixed 10-minute deadline. Activity must
+    // keep extending the idle limit until `done` lands.
+    let nowMs = 0;
+    const phases: Array<{ status: number; body: unknown }> = Array.from({ length: 30 }, () => ({
+      status: 200,
+      body: { phase: "applying" },
+    }));
+    phases.push({ status: 200, body: { phase: "done" } });
+    const deps = scriptedDeps({
+      phases,
+      extra: {
+        sleep: async () => {
+          nowMs += 60_000;
+        },
+        now: () => nowMs,
+      },
+    });
+    await expect(
+      waitForBackendDone({ tag: "v0.7.0", token: "t", preVersion: "0.6.0", deps }),
+    ).resolves.toBeUndefined();
+  });
+
+  test("restart into a pre-feature backend resolves via the version-less /api/status probe", async () => {
+    // The fresh-token 404 probe can miss when it races the restart; the
+    // belt-and-braces signal is a REACHABLE /api/status with no
+    // `version` field (that field ships with this feature) after the
+    // route went unreachable.
+    const deps = scriptedDeps({
+      phases: [{ status: 200, body: { phase: "applying" } }, "throw"],
+      statusBody: { ok: true }, // pre-feature: no version field
+    });
+    await expect(
+      waitForBackendDone({ tag: "v0.6.0", token: "t", preVersion: "0.5.9", deps }),
+    ).resolves.toBeUndefined();
+  });
+
+  test("an unknown pre-update snapshot demands corroboration (no instant version match)", async () => {
+    // preVersion === null means "the backend might already have been at
+    // the target" — a bare version match with no observed activity or
+    // restart must NOT read as done, or a same-version repair whose
+    // snapshot fetch flaked would return mid-apply.
+    let nowMs = 0;
+    const deps = scriptedDeps({
+      phases: ["throw"],
+      statusVersion: "0.7.0",
+      extra: {
+        sleep: async () => {
+          nowMs += 30_000;
+        },
+        now: () => nowMs,
+      },
+    });
+    await expect(
+      waitForBackendDone({ tag: "v0.7.0", token: "t", preVersion: null, deps }),
+    ).rejects.toThrow(/timed out/);
+  });
+
   test("same-version repair rejects an uncorroborated version match (finding 4)", async () => {
     // preVersion === tag. A flaky poll must NOT be read as done just
     // because /api/status already reports the target version — the
@@ -266,6 +342,48 @@ describe("waitForBackendDone", () => {
     await expect(
       waitForBackendDone({ tag: "v0.7.0", token: "t", preVersion: "0.7.0", deps }),
     ).rejects.toThrow(/timed out/);
+  });
+});
+
+describe("cleanupUpdateArtifacts / reapOldGeneration", () => {
+  test("restores .old when the live tree is missing (mid-swap crash)", async () => {
+    const home = tmp();
+    const overlayDir = join(home, ".local", "share", "loadout-overlay");
+    mkdirSync(join(`${overlayDir}.old`, "bin"), { recursive: true });
+    writeFileSync(join(`${overlayDir}.old`, "bin", "launcher"), "survivor");
+    await cleanupUpdateArtifacts({ home });
+    expect(readFileSync(join(overlayDir, "bin", "launcher"), "utf8")).toBe("survivor");
+    expect(existsSync(`${overlayDir}.old`)).toBe(false);
+  });
+
+  test("keepOldGeneration preserves the rollback copy; reapOldGeneration ends the window", async () => {
+    const home = tmp();
+    const overlayDir = join(home, ".local", "share", "loadout-overlay");
+    mkdirSync(overlayDir, { recursive: true });
+    mkdirSync(`${overlayDir}.old`, { recursive: true });
+    mkdirSync(`${overlayDir}.staging`, { recursive: true });
+    writeFileSync(`${overlayDir}.update.tar.xz`, "x");
+
+    // Boot path: staging + tarball reaped, `.old` kept — the new overlay
+    // hasn't proven itself yet (CEF can still crash after bun starts).
+    await cleanupUpdateArtifacts({ home, keepOldGeneration: true });
+    expect(existsSync(`${overlayDir}.old`)).toBe(true);
+    expect(existsSync(`${overlayDir}.staging`)).toBe(false);
+    expect(existsSync(`${overlayDir}.update.tar.xz`)).toBe(false);
+
+    // First webview heartbeat: NOW the rollback window closes.
+    await reapOldGeneration({ home });
+    expect(existsSync(`${overlayDir}.old`)).toBe(false);
+  });
+
+  test("default sweep also reaps .old when the live tree is present", async () => {
+    const home = tmp();
+    const overlayDir = join(home, ".local", "share", "loadout-overlay");
+    mkdirSync(overlayDir, { recursive: true });
+    mkdirSync(`${overlayDir}.old`, { recursive: true });
+    await cleanupUpdateArtifacts({ home });
+    expect(existsSync(overlayDir)).toBe(true);
+    expect(existsSync(`${overlayDir}.old`)).toBe(false);
   });
 });
 

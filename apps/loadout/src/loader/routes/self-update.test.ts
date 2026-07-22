@@ -42,9 +42,11 @@ describe("selfUpdateRoute", () => {
     expect(res!.status).toBe(400);
   });
 
-  test("POST with a downgrade tag is rejected 400", async () => {
-    // currentVersion is "dev" under bun test, so any real tag is refused
-    // as a dev-build guard — still a 400, still never starts.
+  test("POST on a dev build is rejected 400 (any valid tag)", async () => {
+    // currentVersion is "dev" under bun test, so this exercises the
+    // dev-build guard, NOT the downgrade guard — that one is covered
+    // with an injected currentVersion in ../self-update.test.ts
+    // ("rejects downgrades…"). Either way: 400, never starts.
     const req = post("/api/self-update", { tag: "v0.0.1" });
     const res = await selfUpdateRoute.handle(
       req,

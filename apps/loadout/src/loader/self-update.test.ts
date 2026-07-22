@@ -234,7 +234,7 @@ async function setupApply(opts: { correctSums?: boolean } = {}) {
 
 describe("runSelfUpdate apply path", () => {
   test("happy path swaps the binary, plugins, AND node_modules, ends 'done'", async () => {
-    const { exePath, pluginsDir, modulesDir, deps } = await setupApply();
+    const { installDir, exePath, pluginsDir, modulesDir, deps } = await setupApply();
     const res = startSelfUpdate({ tag: "v0.7.0", pluginsDir }, deps);
     expect(res.ok).toBe(true);
     expect(await awaitSettled()).toBe("done");
@@ -246,11 +246,18 @@ describe("runSelfUpdate apply path", () => {
     // staging + old generations cleaned up
     expect(existsSync(`${pluginsDir}.old`)).toBe(false);
     expect(existsSync(`${modulesDir}.old`)).toBe(false);
+    // The previous binary is KEPT as `.loadout.old` — checksum proves
+    // the download's identity, not that it runs; this is the manual
+    // rollback copy if the new binary crash-loops. Only the next
+    // successful boot (cleanupStaleSelfUpdateArtifacts, which only a
+    // working binary executes) may reap it.
+    expect(await readFile(join(installDir, ".loadout.old"), "utf8")).toBe("OLD-BINARY");
   });
 
   test("checksum mismatch aborts before any swap — live binary untouched", async () => {
     const { exePath, pluginsDir, deps } = await setupApply({ correctSums: false });
-    startSelfUpdate({ tag: "v0.7.0", pluginsDir }, deps);
+    const res = startSelfUpdate({ tag: "v0.7.0", pluginsDir }, deps);
+    expect(res.ok).toBe(true); // accepted — the failure must land in status, not the return
     expect(await awaitSettled()).toBe("error");
     expect(getSelfUpdateStatus().message).toContain("checksum mismatch");
     expect(await readFile(exePath, "utf8")).toBe("OLD-BINARY"); // never replaced
@@ -286,5 +293,46 @@ describe("cleanupStaleSelfUpdateArtifacts", () => {
 
     expect(await readFile(join(pluginsDir, "marker"), "utf8")).toBe("current");
     expect(existsSync(`${pluginsDir}.old`)).toBe(false);
+  });
+
+  test("mid-swap crash restores BOTH dirs coherently, not a mixed generation", async () => {
+    // Crash between the plugins and modules renames: new plugins are
+    // already live (their .old holds the previous tree), node_modules
+    // is renamed away (live missing, .old present). Restoring only the
+    // missing pair would boot new-plugins/old-modules — a mix nothing
+    // detects. Both must come back from .old.
+    const installDir = tmp();
+    const pluginsDir = join(installDir, "plugins");
+    const modulesDir = join(installDir, "node_modules");
+    mkdirSync(pluginsDir);
+    writeFileSync(join(pluginsDir, "marker"), "new-plugins-half-applied");
+    mkdirSync(`${pluginsDir}.old`);
+    writeFileSync(join(`${pluginsDir}.old`, "marker"), "old-plugins");
+    mkdirSync(`${modulesDir}.old`);
+    writeFileSync(join(`${modulesDir}.old`, "marker"), "old-modules");
+    expect(existsSync(modulesDir)).toBe(false);
+
+    await cleanupStaleSelfUpdateArtifacts(pluginsDir, fakeDeps());
+
+    expect(await readFile(join(pluginsDir, "marker"), "utf8")).toBe("old-plugins");
+    expect(await readFile(join(modulesDir, "marker"), "utf8")).toBe("old-modules");
+    expect(existsSync(`${pluginsDir}.old`)).toBe(false);
+    expect(existsSync(`${modulesDir}.old`)).toBe(false);
+  });
+
+  test("reaps the .loadout.old binary rollback copy (a working binary is running)", async () => {
+    const installDir = tmp();
+    const pluginsDir = join(installDir, "plugins");
+    mkdirSync(pluginsDir);
+    const exePath = join(installDir, "loadout");
+    writeFileSync(exePath, "CURRENT");
+    writeFileSync(join(installDir, ".loadout.old"), "PREVIOUS");
+    writeFileSync(join(installDir, ".loadout.new"), "STALE-STAGING");
+
+    await cleanupStaleSelfUpdateArtifacts(pluginsDir, fakeDeps({ resolveExePath: () => exePath }));
+
+    expect(existsSync(join(installDir, ".loadout.old"))).toBe(false);
+    expect(existsSync(join(installDir, ".loadout.new"))).toBe(false);
+    expect(await readFile(exePath, "utf8")).toBe("CURRENT");
   });
 });

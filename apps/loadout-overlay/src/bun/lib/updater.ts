@@ -246,7 +246,11 @@ function assetHopHeaders(host: string): Record<string, string> {
 
 /** Walk redirects manually, re-pinning the host on every hop, and
  *  return the terminal OK response. */
-async function fetchPinned(url: string, fetchFn: typeof fetch): Promise<Response> {
+async function fetchPinned(
+  url: string,
+  fetchFn: typeof fetch,
+  signal?: AbortSignal,
+): Promise<Response> {
   const MAX_HOPS = 10;
   let currentUrl = url;
   let res: Response | null = null;
@@ -262,7 +266,11 @@ async function fetchPinned(url: string, fetchFn: typeof fetch): Promise<Response
         `download refused: hop ${hop} pointed at untrusted host ${host || currentUrl}`,
       );
     }
-    res = await fetchFn(currentUrl, { headers: assetHopHeaders(host), redirect: "manual" });
+    res = await fetchFn(currentUrl, {
+      headers: assetHopHeaders(host),
+      redirect: "manual",
+      signal,
+    });
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get("location");
       if (!location) throw new Error(`HTTP ${res.status} without a Location header`);
@@ -276,28 +284,71 @@ async function fetchPinned(url: string, fetchFn: typeof fetch): Promise<Response
   return res;
 }
 
+/** How long a download may go without receiving a single byte before
+ *  it's aborted. A half-open TCP connection would otherwise hang
+ *  `fetch` forever, pinning the updater in a non-terminal phase where
+ *  every retry is refused as "update already in progress" until the
+ *  overlay restarts. */
+const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
+
+/** AbortController that fires after `ms` of silence; call reset() on
+ *  every received chunk. Timers are unref'd so a pending watchdog
+ *  never keeps the process (or a test) alive on its own. */
+function makeIdleAbort(ms: number): {
+  signal: AbortSignal;
+  reset: () => void;
+  clear: () => void;
+} {
+  const controller = new AbortController();
+  const arm = () => {
+    const t = setTimeout(
+      () => controller.abort(new Error(`download stalled (no data for ${ms / 1000}s)`)),
+      ms,
+    );
+    (t as unknown as { unref?: () => void }).unref?.();
+    return t;
+  };
+  let timer = arm();
+  return {
+    signal: controller.signal,
+    reset() {
+      clearTimeout(timer);
+      timer = arm();
+    },
+    clear() {
+      clearTimeout(timer);
+    },
+  };
+}
+
 async function downloadToFileWithProgress(
   url: string,
   dest: string,
   fetchFn: typeof fetch,
   onProgress?: (downloaded: number, total: number) => void,
 ): Promise<void> {
-  const res = await fetchPinned(url, fetchFn);
-  const total = Number(res.headers.get("content-length") ?? 0);
-  const body = res.body;
-  if (!body) throw new Error("no response body");
-  const writer = Bun.file(dest).writer();
-  let downloaded = 0;
+  const idle = makeIdleAbort(DOWNLOAD_IDLE_TIMEOUT_MS);
   try {
-    for await (const chunk of body) {
-      // Await the sink so a fast network + slow disk applies
-      // backpressure instead of buffering the whole ~300 MB in RAM.
-      await writer.write(chunk);
-      downloaded += chunk.byteLength;
-      onProgress?.(downloaded, total);
+    const res = await fetchPinned(url, fetchFn, idle.signal);
+    const total = Number(res.headers.get("content-length") ?? 0);
+    const body = res.body;
+    if (!body) throw new Error("no response body");
+    const writer = Bun.file(dest).writer();
+    let downloaded = 0;
+    try {
+      for await (const chunk of body) {
+        idle.reset();
+        // Await the sink so a fast network + slow disk applies
+        // backpressure instead of buffering the whole ~300 MB in RAM.
+        await writer.write(chunk);
+        downloaded += chunk.byteLength;
+        onProgress?.(downloaded, total);
+      }
+    } finally {
+      await writer.end();
     }
   } finally {
-    await writer.end();
+    idle.clear();
   }
 }
 
@@ -458,7 +509,11 @@ async function runUpdate(tag: string, deps: UpdaterDeps): Promise<void> {
 
   // --- Download + verify the overlay tree (live install untouched) ---------
   status = { phase: "downloading", pct: 1, tag, message: "Downloading overlay…" };
-  const sumsRes = await fetchPinned(assetUrl(tag, "SHA256SUMS"), deps.fetchFn);
+  const sumsRes = await fetchPinned(
+    assetUrl(tag, "SHA256SUMS"),
+    deps.fetchFn,
+    AbortSignal.timeout(30_000),
+  );
   const sums = parseSha256Sums(await sumsRes.text());
   const wantSum = sums.get(asset);
   if (!wantSum) throw new Error(`SHA256SUMS for ${tag} has no entry for ${asset}`);
@@ -681,18 +736,31 @@ export async function waitForBackendDone(args: {
 }
 
 /**
- * Boot-time cleanup: drop the previous generation (`.old`), any
- * abandoned staging tree, and a leftover tarball. Reaching this after
- * an update IS the "next successful boot", which ends the `.old`
- * rollback window.
+ * Boot-time cleanup: reap an abandoned staging tree and leftover
+ * tarball, and — unless `keepOldGeneration` — the previous generation
+ * `.old` dir too.
  *
  * Restorative first: if a crash between the two swap renames left the
  * live overlay dir MISSING while `.old` still holds the previous tree,
  * put `.old` back rather than deleting it — otherwise we'd erase the
  * only surviving copy and leave the overlay permanently unlaunchable
- * (finding 2, overlay twin).
+ * (finding 2, overlay twin). The unit's ExecStartPre carries a mirror
+ * of this restore for the case where the bun host itself can't start
+ * because the live tree is gone.
+ *
+ * `keepOldGeneration` exists because "the bun process started" is NOT
+ * proof the new overlay works — CEF can still crash after this runs.
+ * The boot path passes it and defers the `.old` reap to
+ * {@link reapOldGeneration}, which the orchestrator calls only once
+ * the webview's first heartbeat arrives (a rendering webview = a
+ * genuinely working overlay). That heartbeat is the real end of the
+ * one-generation rollback window; if the new overlay never becomes
+ * healthy, `.old` survives as the recovery copy.
  */
-export async function cleanupUpdateArtifacts(home: string = DEFAULT_DEPS.home): Promise<void> {
+export async function cleanupUpdateArtifacts(
+  opts: { home?: string; keepOldGeneration?: boolean } = {},
+): Promise<void> {
+  const home = opts.home ?? DEFAULT_DEPS.home;
   const overlayDir = join(home, ".local", "share", "loadout-overlay");
   const oldDir = `${overlayDir}.old`;
   const liveMissing = !(await stat(overlayDir).catch(() => null));
@@ -700,9 +768,19 @@ export async function cleanupUpdateArtifacts(home: string = DEFAULT_DEPS.home): 
   if (liveMissing && oldExists) {
     await rename(oldDir, overlayDir).catch(() => {});
   }
-  for (const t of [oldDir, `${overlayDir}.staging`, `${overlayDir}.update.tar.xz`]) {
+  const targets = [`${overlayDir}.staging`, `${overlayDir}.update.tar.xz`];
+  if (!opts.keepOldGeneration) targets.push(oldDir);
+  for (const t of targets) {
     await rm(t, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+/** Drop the `.old` rollback generation — called once the new overlay
+ *  has PROVEN itself (first webview heartbeat), not merely started. */
+export async function reapOldGeneration(opts: { home?: string } = {}): Promise<void> {
+  const home = opts.home ?? DEFAULT_DEPS.home;
+  const oldDir = `${join(home, ".local", "share", "loadout-overlay")}.old`;
+  await rm(oldDir, { recursive: true, force: true }).catch(() => {});
 }
 
 /** Test seam — reset the module-level status singleton to idle so

@@ -25,7 +25,7 @@
  *     the bun interpreter and clobbering it.
  */
 
-import { chmod, mkdir, rename, rm, stat } from "node:fs/promises";
+import { chmod, copyFile, mkdir, rename, rm, stat, statfs } from "node:fs/promises";
 import { readlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { runFull, commandExists, spawn } from "@loadout/exec";
@@ -165,39 +165,96 @@ function assetHopHeaders(host: string): Record<string, string> {
   return headers;
 }
 
+/** How long a download may go without a single received byte before
+ *  it's aborted — a half-open TCP connection would otherwise hang
+ *  `fetch` forever, pinning the status at `downloading` where every
+ *  new POST is refused with 409 until the service restarts. */
+const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
+
+/** AbortController that fires after `ms` of silence; reset() on every
+ *  received chunk. Timers are unref'd so a pending watchdog never
+ *  keeps the process alive on its own. */
+function makeIdleAbort(ms: number): {
+  signal: AbortSignal;
+  reset: () => void;
+  clear: () => void;
+} {
+  const controller = new AbortController();
+  const arm = () => {
+    const t = setTimeout(
+      () => controller.abort(new Error(`download stalled (no data for ${ms / 1000}s)`)),
+      ms,
+    );
+    (t as unknown as { unref?: () => void }).unref?.();
+    return t;
+  };
+  let timer = arm();
+  return {
+    signal: controller.signal,
+    reset() {
+      clearTimeout(timer);
+      timer = arm();
+    },
+    clear() {
+      clearTimeout(timer);
+    },
+  };
+}
+
 export async function downloadToFile(
   url: string,
   dest: string,
   fetchFn: typeof fetch,
 ): Promise<void> {
-  const MAX_HOPS = 10;
-  let currentUrl = url;
-  let res: Response | null = null;
-  for (let hop = 0; hop < MAX_HOPS; hop++) {
-    let host = "";
+  const idle = makeIdleAbort(DOWNLOAD_IDLE_TIMEOUT_MS);
+  try {
+    const MAX_HOPS = 10;
+    let currentUrl = url;
+    let res: Response | null = null;
+    for (let hop = 0; hop < MAX_HOPS; hop++) {
+      let host = "";
+      try {
+        host = new URL(currentUrl).hostname;
+      } catch {
+        // fall through to the refusal below
+      }
+      if (!host || !isTrustedGithubHost(host)) {
+        throw new Error(
+          `download refused: hop ${hop} pointed at untrusted host ${host || currentUrl}`,
+        );
+      }
+      res = await fetchFn(currentUrl, {
+        headers: assetHopHeaders(host),
+        redirect: "manual",
+        signal: idle.signal,
+      });
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        if (!location) throw new Error(`HTTP ${res.status} without a Location header`);
+        currentUrl = new URL(location, currentUrl).toString();
+        continue;
+      }
+      break;
+    }
+    if (!res) throw new Error(`no response after ${MAX_HOPS} redirect hops`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+    await mkdir(dirname(dest), { recursive: true });
+    // Stream chunk-by-chunk (not Bun.write(dest, res)) so the idle
+    // watchdog can observe per-chunk progress and cut a stalled body.
+    const body = res.body;
+    if (!body) throw new Error("no response body");
+    const writer = Bun.file(dest).writer();
     try {
-      host = new URL(currentUrl).hostname;
-    } catch {
-      // fall through to the refusal below
+      for await (const chunk of body) {
+        idle.reset();
+        await writer.write(chunk);
+      }
+    } finally {
+      await writer.end();
     }
-    if (!host || !isTrustedGithubHost(host)) {
-      throw new Error(
-        `download refused: hop ${hop} pointed at untrusted host ${host || currentUrl}`,
-      );
-    }
-    res = await fetchFn(currentUrl, { headers: assetHopHeaders(host), redirect: "manual" });
-    if (res.status >= 300 && res.status < 400) {
-      const location = res.headers.get("location");
-      if (!location) throw new Error(`HTTP ${res.status} without a Location header`);
-      currentUrl = new URL(location, currentUrl).toString();
-      continue;
-    }
-    break;
+  } finally {
+    idle.clear();
   }
-  if (!res) throw new Error(`no response after ${MAX_HOPS} redirect hops`);
-  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-  await mkdir(dirname(dest), { recursive: true });
-  await Bun.write(dest, res);
 }
 
 function assetUrl(tag: string, asset: string): string {
@@ -279,8 +336,16 @@ async function runSelfUpdate(
 
   const installDir = dirname(pluginsDir); // ~/.local/share/loadout
   const newBin = join(dirname(exePath), ".loadout.new");
+  const oldBin = join(dirname(exePath), ".loadout.old");
   const pluginsTar = join(installDir, ".loadout-plugins.tar.xz");
   const pluginsStaging = join(installDir, ".plugins-staging");
+
+  // Disk preflight. The overlay's own check covers $HOME, but on
+  // Bazzite/ostree the binary staging lands in /usr/local/bin
+  // (/var/usrlocal) — a DIFFERENT filesystem. `statfs` unavailable ⇒
+  // skip the check rather than block updates.
+  await ensureFreeSpace(dirname(exePath), 400e6, "the binary install directory");
+  await ensureFreeSpace(installDir, 1e9, "the plugins install directory");
 
   // --- Download ------------------------------------------------------------
   const sumsRes = await (async () => {
@@ -340,22 +405,16 @@ async function runSelfUpdate(
     await deps.run(["chown", "-R", `${target.uid}:${target.gid}`, pluginsStaging]);
   }
 
-  // Swap the binary first: rename(2) over the running executable is
-  // atomic on the same filesystem and dodges ETXTBSY (the old inode
-  // lives on until the process exits). restorecon keeps the bin_t
-  // label on SELinux-enforcing distros (Bazzite/Fedora).
-  await chmod(newBin, 0o755);
-  await rename(newBin, exePath);
-  if (await deps.commandExists("restorecon")) {
-    const rc = await deps.run(["restorecon", "-F", exePath]);
-    if (rc.exitCode !== 0) {
-      log.warn(`[self-update] restorecon failed (non-fatal): ${rc.stderr.trim()}`);
-    }
-  }
-
-  // Swap plugins + hoisted node_modules. The hot-reload watcher may
-  // fire against the half-swapped tree for a moment; that's tolerable
-  // because the service restarts within ~1s of `done`.
+  // Swap plugins + hoisted node_modules FIRST, binary LAST. The
+  // plugins swap is the failure-prone half (multiple renames across a
+  // user-writable tree); the binary rename is a single atomic op. If
+  // the binary were swapped first and the plugins swap then failed,
+  // the error path would leave a NEW binary silently armed for the
+  // next unrelated restart against OLD plugins — a skew nothing
+  // surfaces. This order confines a plugins failure to "nothing
+  // changed". The hot-reload watcher may fire against the half-swapped
+  // tree for a moment; that's tolerable because the service restarts
+  // within ~1s of `done`.
   const modulesDir = join(installDir, "node_modules");
   const pluginsOld = `${pluginsDir}.old`;
   const modulesOld = `${modulesDir}.old`;
@@ -378,11 +437,62 @@ async function runSelfUpdate(
     throw err;
   }
 
+  // Swap the binary: rename(2) over the running executable is atomic
+  // on the same filesystem and dodges ETXTBSY (the old inode lives on
+  // until the process exits). A `.loadout.old` copy of the current
+  // binary is kept first — the checksum proves the download is the
+  // intended asset, not that it RUNS on this device; if the new binary
+  // crash-loops, the copy is the SSH-recoverable escape hatch. It is
+  // reaped by cleanupStaleSelfUpdateArtifacts, which only a WORKING
+  // binary ever executes, so it survives exactly as long as it's
+  // needed. restorecon keeps the bin_t label on SELinux-enforcing
+  // distros (Bazzite/Fedora).
+  try {
+    await copyFile(exePath, oldBin).catch(() => {}); // best-effort rollback copy
+    await chmod(newBin, 0o755);
+    await rename(newBin, exePath);
+  } catch (err) {
+    // Binary swap failed after the plugins landed — put the old
+    // plugins back too, so the still-running old binary doesn't face
+    // new plugins on its next restart.
+    await rename(pluginsDir, stagedPlugins).catch(() => {});
+    await rename(modulesDir, stagedModules).catch(() => {});
+    await rename(pluginsOld, pluginsDir).catch(() => {});
+    await rename(modulesOld, modulesDir).catch(() => {});
+    await rm(oldBin, { force: true }).catch(() => {});
+    throw err;
+  }
+  if (await deps.commandExists("restorecon")) {
+    const rc = await deps.run(["restorecon", "-F", exePath]);
+    if (rc.exitCode !== 0) {
+      log.warn(`[self-update] restorecon failed (non-fatal): ${rc.stderr.trim()}`);
+    }
+  }
+
   // Cleanup (best-effort — boot-time cleanup covers a crash here).
+  // `.loadout.old` is deliberately NOT removed; see above.
   await rm(pluginsOld, { recursive: true, force: true }).catch(() => {});
   await rm(modulesOld, { recursive: true, force: true }).catch(() => {});
   await rm(pluginsStaging, { recursive: true, force: true }).catch(() => {});
   await rm(pluginsTar, { force: true }).catch(() => {});
+}
+
+/** Refuse to start when the target filesystem lacks headroom; skip
+ *  silently when statfs is unavailable. */
+async function ensureFreeSpace(path: string, needBytes: number, label: string): Promise<void> {
+  try {
+    const s = await statfs(path);
+    const free = Number(s.bavail) * Number(s.bsize);
+    if (free < needBytes) {
+      throw new Error(
+        `not enough free space at ${label}: need ~${Math.round(needBytes / 1e6)} MB, ` +
+          `have ${(free / 1e9).toFixed(1)} GB`,
+      );
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith("not enough free space")) throw err;
+    // statfs missing/unsupported — don't block the update on it.
+  }
 }
 
 /**
@@ -403,8 +513,15 @@ export function scheduleServiceRestart(deps: SelfUpdateDeps = DEFAULT_DEPS): voi
  * swap renames, the live dir is missing while its `.old` sibling still
  * holds the previous tree. Blindly deleting `.old` (as this used to)
  * would erase the last surviving copy and boot the server permanently
- * pluginless. So for each of plugins/node_modules, if the live dir is
- * gone but `.old` exists, rename it back before the sweep (finding 2).
+ * pluginless (finding 2).
+ *
+ * The restore is COHERENT across the two dirs: a crash between the
+ * `plugins` and `node_modules` renames can leave the pairs from
+ * different generations (new plugins already live, modules still
+ * renamed away). Restoring only the missing pair would boot a mixed
+ * new-plugins/old-modules tree that nothing detects — so when ANY pair
+ * needs restoring, every pair that still has an `.old` is rolled back
+ * to it, discarding its half-applied new dir.
  */
 export async function cleanupStaleSelfUpdateArtifacts(
   pluginsDir: string,
@@ -416,11 +533,24 @@ export async function cleanupStaleSelfUpdateArtifacts(
     [pluginsDir, `${pluginsDir}.old`],
     [modulesDir, `${modulesDir}.old`],
   ];
-  for (const [live, old] of swapPairs) {
-    const liveMissing = !(await stat(live).catch(() => null));
-    const oldExists = !!(await stat(old).catch(() => null));
-    if (liveMissing && oldExists) {
-      await rename(old, live).catch(() => {});
+  const states = await Promise.all(
+    swapPairs.map(async ([live, old]) => ({
+      live,
+      old,
+      liveExists: !!(await stat(live).catch(() => null)),
+      oldExists: !!(await stat(old).catch(() => null)),
+    })),
+  );
+  const anyMidSwap = states.some((p) => !p.liveExists && p.oldExists);
+  if (anyMidSwap) {
+    for (const p of states) {
+      if (!p.oldExists) continue;
+      if (p.liveExists) {
+        // Half-applied new dir from the interrupted swap — discard it
+        // so both dirs come from the same (old) generation.
+        await rm(p.live, { recursive: true, force: true }).catch(() => {});
+      }
+      await rename(p.old, p.live).catch(() => {});
     }
   }
 
@@ -432,7 +562,11 @@ export async function cleanupStaleSelfUpdateArtifacts(
     `${modulesDir}.old`,
   ];
   try {
-    targets.push(join(dirname(deps.resolveExePath()), ".loadout.new"));
+    // Reap the binary staging leftover AND the `.loadout.old` rollback
+    // copy — reaching this code means the running binary works, which
+    // is the condition that ends the binary rollback window.
+    const exeDir = dirname(deps.resolveExePath());
+    targets.push(join(exeDir, ".loadout.new"), join(exeDir, ".loadout.old"));
   } catch {
     // /proc/self/exe unreadable — nothing to clean there.
   }

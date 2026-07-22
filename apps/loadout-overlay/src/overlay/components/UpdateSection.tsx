@@ -66,6 +66,12 @@ export function UpdateSection() {
   // the "already in progress" error) clears `updatePendingTag`, killing
   // the post-restart toast. This ref flips before any await.
   const inFlightRef = useRef(false);
+  // Both poll entry points sit behind an await (the mount effect's
+  // status resume, handleUpdate's applyUpdate) — if the user backs out
+  // of Settings during that await, starting the poll afterwards would
+  // leak an interval the unmount cleanup already ran too early to
+  // clear. Checked before every startStatusPoll().
+  const unmountedRef = useRef(false);
 
   function stopPoll() {
     if (pollRef.current) {
@@ -75,36 +81,50 @@ export function UpdateSection() {
   }
 
   function startStatusPoll() {
+    if (unmountedRef.current) return;
     stopPoll();
     // A single transient RPC failure (getUpdateStatus → null) must NOT
     // be read as "done" — during the heavy backend/swap phases the host
     // can miss a poll. Tolerate a run of nulls; only an explicit
     // idle/error from the host is terminal. If the host truly vanishes
-    // (dev, host crash) give up after ~11s of silence.
+    // (dev, host crash) give up after 15 consecutive nulls — ~11s when
+    // the RPC fails fast, up to ~40s when each call has to ride out
+    // the webview's 30s RPC window.
     let consecutiveNulls = 0;
+    // setInterval doesn't serialize async callbacks: with the 30s RPC
+    // window, a wedged host would otherwise stack ~43 overlapping
+    // in-flight calls whose out-of-order resolutions can flash a stale
+    // phase/pct. Skip ticks while one call is still pending.
+    let busy = false;
     pollRef.current = setInterval(async () => {
-      const s = await getUpdateStatus();
-      if (s === null) {
-        if (++consecutiveNulls > 15) {
+      if (busy) return;
+      busy = true;
+      try {
+        const s = await getUpdateStatus();
+        if (s === null) {
+          if (++consecutiveNulls > 15) {
+            stopPoll();
+            inFlightRef.current = false;
+            // Drive the UI to a terminal ERROR, not just stop polling —
+            // otherwise `updating` stays true, the progress row keeps
+            // rendering (frozen at its last %, e.g. 80%) with NO button,
+            // and the user can neither retry nor check. Surfacing an
+            // error restores the Check/Update button so they can retry.
+            setUpdateStatus({
+              phase: "error",
+              message: "Lost contact with the updater — reopen Settings and try again.",
+            });
+          }
+          return;
+        }
+        consecutiveNulls = 0;
+        setUpdateStatus(s);
+        if (s.phase === "error" || s.phase === "idle") {
           stopPoll();
           inFlightRef.current = false;
-          // Drive the UI to a terminal ERROR, not just stop polling —
-          // otherwise `updating` stays true, the progress row keeps
-          // rendering (frozen at its last %, e.g. 80%) with NO button,
-          // and the user can neither retry nor check. Surfacing an
-          // error restores the Check/Update button so they can retry.
-          setUpdateStatus({
-            phase: "error",
-            message: "Lost contact with the updater — reopen Settings and try again.",
-          });
         }
-        return;
-      }
-      consecutiveNulls = 0;
-      setUpdateStatus(s);
-      if (s.phase === "error" || s.phase === "idle") {
-        stopPoll();
-        inFlightRef.current = false;
+      } finally {
+        busy = false;
       }
     }, 700);
   }
@@ -134,7 +154,11 @@ export function UpdateSection() {
         }
       })
       .catch(() => {});
-    return () => stopPoll();
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+      stopPoll();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -189,9 +213,18 @@ export function UpdateSection() {
     startStatusPoll();
   }
 
+  // Toggles rather than one-way: the button stays MOUNTED and focusable
+  // after a skip. Unmounting it on press (the old behaviour) yanked the
+  // element out from under controller focus, dropping spatial-nav to
+  // nowhere — and a toggle gives an undo for a mis-press for free.
   function handleSkip(tag: string) {
-    setSkippedVersion(tag);
-    notify(`You won't be notified about ${tag} again.`, { id: "loadout-update" });
+    if (skippedVersion === tag) {
+      setSkippedVersion(null);
+      notify(`You'll be notified about ${tag} again.`, { id: "loadout-update" });
+    } else {
+      setSkippedVersion(tag);
+      notify(`You won't be notified about ${tag} again.`, { id: "loadout-update" });
+    }
   }
 
   const rows: React.ReactNode[] = [];
@@ -301,8 +334,10 @@ export function UpdateSection() {
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {available && skippedVersion !== available.tag && (
-            <Button onClick={() => handleSkip(available.tag!)}>Skip this version</Button>
+          {available && (
+            <Button onClick={() => handleSkip(available.tag!)}>
+              {skippedVersion === available.tag ? "Skipped — undo" : "Skip this version"}
+            </Button>
           )}
           <Button variant={primaryVariant} onClick={onPrimary} disabled={checking}>
             {primaryLabel}

@@ -116,7 +116,7 @@ function detectGamescopeMode(): boolean {
 // instance without an exported setter dance.
 import { buildRpcHandlers } from "./rpc-handlers";
 import { overlayManagementLoop, shutdown } from "./lifecycle";
-import { cleanupUpdateArtifacts } from "./lib/updater";
+import { cleanupUpdateArtifacts, reapOldGeneration } from "./lib/updater";
 
 // ---- Singleton refs ---------------------------------------------------------
 // Mutable state index.ts owns, wrapped as `{ current: T }` refs so
@@ -784,11 +784,23 @@ if (!shortcutRegistered) {
 // same value without a setter dance.
 const managementLoopRunning: { current: boolean } = { current: true };
 
-// Reap self-update leftovers (previous overlay generation `.old`,
-// abandoned `.staging`, downloaded tarball). Reaching this point after
-// an update is the "next successful boot" that closes the one-
-// generation rollback window. Fire-and-forget; never blocks boot.
-void cleanupUpdateArtifacts();
+// Reap self-update leftovers (abandoned `.staging`, downloaded
+// tarball) and restore from `.old` if a mid-swap crash left the live
+// tree missing. The `.old` rollback generation itself is deliberately
+// KEPT at this point: "the bun process started" doesn't prove the new
+// overlay works — CEF can still crash after this line. It's reaped
+// below only once the webview's first heartbeat arrives (a rendering
+// webview = a genuinely working overlay), which is the real end of
+// the one-generation rollback window. If the new overlay never gets
+// healthy, `.old` survives as the manual recovery copy.
+void cleanupUpdateArtifacts({ keepOldGeneration: true });
+const oldGenReaper = setInterval(() => {
+  if (lastHeartbeat.current > 0) {
+    clearInterval(oldGenReaper);
+    void reapOldGeneration();
+  }
+}, 5000);
+(oldGenReaper as unknown as { unref?: () => void }).unref?.();
 
 overlayManagementLoop({
   state,
