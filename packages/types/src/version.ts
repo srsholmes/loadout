@@ -19,9 +19,14 @@ export const RELEASE_TAG_RE = /^v\d+\.\d+\.\d+$/;
 export type ParsedVersion = [major: number, minor: number, patch: number];
 
 /** Parse `"1.2.3"` or `"v1.2.3"` into numeric parts. Returns null for
- *  anything that isn't exactly three numeric dot-separated fields. */
+ *  anything that isn't exactly three numeric dot-separated fields.
+ *  Tolerates wrapping double quotes: binaries built before the
+ *  scripts/build.sh --define quoting fix baked literal quote chars
+ *  into their version string (`loadout "0.6.0"`), and those builds
+ *  are already in the field reporting that via /api/status. */
 export function parseVersion(input: string): ParsedVersion | null {
-  const m = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(input.trim());
+  const cleaned = input.trim().replace(/^"(.*)"$/, "$1");
+  const m = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(cleaned);
   if (!m) return null;
   return [Number(m[1]), Number(m[2]), Number(m[3])];
 }

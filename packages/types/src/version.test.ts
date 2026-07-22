@@ -31,6 +31,14 @@ describe("parseVersion", () => {
     expect(parseVersion(" v1.2.3 ")).toEqual([1, 2, 3]); // tolerates whitespace
   });
 
+  test("tolerates quote-wrapped versions from pre-fix binaries", () => {
+    // Binaries built before the build.sh --define quoting fix report
+    // e.g. `"0.6.0"` (literal quotes) via /api/status.
+    expect(parseVersion('"0.6.0"')).toEqual([0, 6, 0]);
+    expect(parseVersion('"dev"')).toBeNull();
+    expect(parseVersion('"0.6.0')).toBeNull(); // unbalanced — not our quirk
+  });
+
   test("returns null for dev builds and junk", () => {
     expect(parseVersion("dev")).toBeNull();
     expect(parseVersion("dev-abc1234")).toBeNull();
