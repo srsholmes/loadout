@@ -6,10 +6,7 @@
 
 const isElectrobun = typeof window.__electrobun !== "undefined";
 
-async function rpcInvoke(
-  cmd: string,
-  args?: Record<string, unknown>,
-): Promise<unknown> {
+async function rpcInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
   if (!isElectrobun) return undefined;
   // overlay-electrobun/src/webview/main.tsx constructs an Electroview
   // and stashes it on window. Without it there's no WebSocket
@@ -55,7 +52,6 @@ export async function isGamescopeMode(): Promise<boolean> {
   return result === true;
 }
 
-
 /**
  * Restart the backend `loadout.service` via the Bun host's
  * `systemctl --user restart`. Resolves with whether the restart
@@ -91,9 +87,7 @@ export async function exportLogs(): Promise<{
   return result as { success: boolean; error?: string; path?: string };
 }
 
-async function rpcResultOrError(
-  cmd: string,
-): Promise<{ success: boolean; error?: string }> {
+async function rpcResultOrError(cmd: string): Promise<{ success: boolean; error?: string }> {
   const result = await rpcInvoke(cmd);
   if (!result || typeof result !== "object") {
     return { success: false, error: "Host did not respond" };
@@ -127,14 +121,7 @@ export interface UpdateCheckResult {
 }
 
 export interface UpdateStatus {
-  phase:
-    | "idle"
-    | "downloading"
-    | "verifying"
-    | "backend"
-    | "swapping"
-    | "restarting"
-    | "error";
+  phase: "idle" | "downloading" | "verifying" | "backend" | "swapping" | "restarting" | "error";
   pct?: number;
   message?: string;
   tag?: string;
@@ -146,9 +133,7 @@ export interface UpdateStatus {
  * when reachable, else `OVERLAY_VERSION`. Outside Electrobun this
  * reports "not available" so standalone dev keeps rendering.
  */
-export async function checkForUpdate(
-  installedVersion: string,
-): Promise<UpdateCheckResult> {
+export async function checkForUpdate(installedVersion: string): Promise<UpdateCheckResult> {
   const result = await rpcInvoke("checkForUpdate", { installedVersion });
   if (!result || typeof result !== "object") {
     return { available: false, error: "Host did not respond" };
@@ -163,9 +148,7 @@ export async function checkForUpdate(
  * phases: "restarting" (success — the overlay is about to bounce)
  * and "error".
  */
-export async function applyUpdate(
-  tag: string,
-): Promise<{ success: boolean; error?: string }> {
+export async function applyUpdate(tag: string): Promise<{ success: boolean; error?: string }> {
   const result = await rpcInvoke("applyUpdate", { tag });
   if (!result || typeof result !== "object") {
     return { success: false, error: "Host did not respond" };
@@ -173,12 +156,17 @@ export async function applyUpdate(
   return result as { success: boolean; error?: string };
 }
 
-/** Poll the in-flight update's status. `{ phase: "idle" }` outside
- *  Electrobun or when no update is running. */
-export async function getUpdateStatus(): Promise<UpdateStatus> {
+/**
+ * Poll the in-flight update's status. Returns `null` when the host
+ * didn't respond (RPC timed out / not in Electrobun) — callers MUST
+ * distinguish that from a real `{ phase: "idle" }`: during the heavy
+ * backend/swapping phases a single transient timeout would otherwise
+ * read as "idle" and tear down the progress UI mid-update.
+ */
+export async function getUpdateStatus(): Promise<UpdateStatus | null> {
   const result = await rpcInvoke("getUpdateStatus");
   if (!result || typeof result !== "object") {
-    return { phase: "idle" };
+    return null;
   }
   return result as UpdateStatus;
 }
@@ -229,9 +217,7 @@ export async function getControllerShortcuts(): Promise<ControllerShortcuts> {
   return (result as ControllerShortcuts) ?? loadShortcutsFromStorage();
 }
 
-export async function setControllerShortcuts(
-  shortcuts: ControllerShortcuts,
-): Promise<void> {
+export async function setControllerShortcuts(shortcuts: ControllerShortcuts): Promise<void> {
   // Cache in the user config file so the UI has a value immediately on
   // next open even before the Bun side responds. The Bun side is still
   // the source of truth when running under Electrobun.
@@ -241,10 +227,7 @@ export async function setControllerShortcuts(
 }
 
 function loadShortcutsFromStorage(): ControllerShortcuts {
-  const fromConfig = getConfigValue<ControllerShortcuts | undefined>(
-    CONFIG_KEY,
-    undefined,
-  );
+  const fromConfig = getConfigValue<ControllerShortcuts | undefined>(CONFIG_KEY, undefined);
   if (fromConfig) return fromConfig;
   return {
     // Guide+A and Guide+Y are reserved by Steam / InputPlumber on Bazzite

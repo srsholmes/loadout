@@ -18,6 +18,7 @@ import { jsonResponse } from "../index";
 import type { RouteHandler } from "./types";
 import {
   getSelfUpdateStatus,
+  isSelfUpdateInFlight,
   scheduleServiceRestart,
   startSelfUpdate,
 } from "../self-update";
@@ -54,6 +55,11 @@ export const restartRoute: RouteHandler = {
   name: "self-update.restart",
   match: (req, url) => url.pathname === "/api/restart" && req.method === "POST",
   async handle() {
+    // Never restart in the middle of a binary/plugins swap — a SIGTERM
+    // between the swap renames can strand the install pluginless.
+    if (isSelfUpdateInFlight()) {
+      return jsonResponse({ error: "an update is in progress" }, 409);
+    }
     scheduleServiceRestart();
     return jsonResponse({ ok: true });
   },

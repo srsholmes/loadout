@@ -19,23 +19,37 @@ import { usePlugins } from "./hooks/usePlugins";
 import { useSidebarAutoCollapseSetting } from "./hooks/useSidebarCollapse";
 import { useStatusMetrics } from "./hooks/useStatusMetrics";
 import { useEnabledPlugins } from "./hooks/useEnabledPlugins";
-import { useConfigValue, getConfigValue, setConfigValue, whenUserConfigLoaded } from "./lib/userConfig";
-import { GamepadNavProvider, useFocusable, Focusable, FocusContext, setFocus, getCurrentFocusKey } from "./components/GamepadNav";
+import {
+  useConfigValue,
+  getConfigValue,
+  setConfigValue,
+  whenUserConfigLoaded,
+} from "./lib/userConfig";
+import {
+  GamepadNavProvider,
+  useFocusable,
+  Focusable,
+  FocusContext,
+  setFocus,
+  getCurrentFocusKey,
+} from "./components/GamepadNav";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { hideOverlay, isGamescopeMode, getControllerShortcuts, setControllerShortcuts, sendOverlayHeartbeat } from "./lib/host";
+import {
+  hideOverlay,
+  isGamescopeMode,
+  getControllerShortcuts,
+  setControllerShortcuts,
+  sendOverlayHeartbeat,
+} from "./lib/host";
 import { OverlayKeyboard } from "./components/OverlayKeyboard";
 import { useOverlayKeyboard } from "@loadout/ui";
 import { isTextLike, rememberLastInput } from "./lib/keystrokeDispatcher";
-
 
 // ---------------------------------------------------------------------------
 // Hash routing — #/plugin/<id> | #/settings | #/
 // ---------------------------------------------------------------------------
 
-export type Route =
-  | { view: "plugin"; pluginId: string }
-  | { view: "settings" }
-  | { view: "home" };
+export type Route = { view: "plugin"; pluginId: string } | { view: "settings" } | { view: "home" };
 
 export function parseHash(hash: string): Route {
   const h = hash.replace(/^#\/?/, "");
@@ -49,9 +63,12 @@ export function parseHash(hash: string): Route {
 
 export function routeToHash(route: Route): string {
   switch (route.view) {
-    case "settings": return "#/settings";
-    case "plugin":   return `#/plugin/${route.pluginId}`;
-    default:         return "#/";
+    case "settings":
+      return "#/settings";
+    case "plugin":
+      return `#/plugin/${route.pluginId}`;
+    default:
+      return "#/";
   }
 }
 
@@ -98,7 +115,9 @@ function loadScale(gamescope: boolean): number {
 export function App() {
   const handleBack = useCallback(() => {
     let current = "";
-    try { current = getCurrentFocusKey(); } catch {}
+    try {
+      current = getCurrentFocusKey();
+    } catch {}
     // Check if focus is inside the "content" zone (plugin area)
     // by walking up the parent chain
     const nav = window.__SPATIAL_NAV__;
@@ -107,7 +126,10 @@ export function App() {
       let key = current;
       for (let i = 0; i < 20; i++) {
         if (!key || key === "SN:ROOT") break;
-        if (key === "content") { isInContent = true; break; }
+        if (key === "content") {
+          isInContent = true;
+          break;
+        }
         const comp = nav.focusableComponents?.[key];
         if (!comp) break;
         key = comp.parentFocusKey;
@@ -161,16 +183,37 @@ export function App() {
   //   2. ~10s after boot, ask the Bun host whether a newer release is
   //      published. Toast unless the user skipped that exact version
   //      from Settings (a manual check there ignores the skip).
+  // Both toasts wait for the overlay to actually be VISIBLE before
+  // firing: the window boots hidden (minimize-on-close model) and the
+  // overlay unit starts at login, so a toast shown at boot lands in a
+  // window the user isn't looking at and is gone before they open it.
   // Dev builds short-circuit inside checkForUpdate (unparsable
   // version), so this never nags during development.
   useEffect(() => {
     let cancelled = false;
+    let visResolve: (() => void) | null = null;
+    const visReady = new Promise<void>((resolve) => {
+      visResolve = resolve;
+    });
+    const onVisible = (e: Event) => {
+      if ((e as CustomEvent<{ isOpen: boolean }>).detail?.isOpen) {
+        visResolve?.();
+        visResolve = null;
+      }
+    };
+    window.addEventListener("loadout:overlay-visibility", onVisible as EventListener);
+
     (async () => {
       await whenUserConfigLoaded();
       if (cancelled) return;
       const pending = getConfigValue<string | null>("updatePendingTag", null);
       if (pending) {
         if (versionsEqual(OVERLAY_VERSION, pending)) {
+          // Wait until the user is actually looking at the overlay, then
+          // toast and only THEN clear the marker — otherwise the
+          // confirmation is consumed while the window is hidden.
+          await visReady;
+          if (cancelled) return;
           notify(`Loadout updated to ${pending}.`, {
             kind: "success",
             id: "loadout-update",
@@ -184,6 +227,11 @@ export function App() {
       const res = await checkForUpdate(OVERLAY_VERSION);
       if (cancelled || !res.available || !res.tag) return;
       if (getConfigValue<string | null>("updateSkippedVersion", null) === res.tag) return;
+      await visReady;
+      if (cancelled) return;
+      // Re-check the skip marker: the user may have skipped it from
+      // Settings during the wait.
+      if (getConfigValue<string | null>("updateSkippedVersion", null) === res.tag) return;
       notify(`Loadout ${res.tag} is available — update from Settings.`, {
         id: "loadout-update",
         duration: 8000,
@@ -191,6 +239,7 @@ export function App() {
     })();
     return () => {
       cancelled = true;
+      window.removeEventListener("loadout:overlay-visibility", onVisible as EventListener);
     };
   }, []);
 
@@ -259,9 +308,7 @@ function AppInner() {
   // own React trees mounted under PluginHost; this attribute is the
   // simplest cross-tree channel that survives unmount/remount.
   useEffect(() => {
-    document.documentElement.dataset.sidebar = sidebarCollapsed
-      ? "collapsed"
-      : "open";
+    document.documentElement.dataset.sidebar = sidebarCollapsed ? "collapsed" : "open";
   }, [sidebarCollapsed]);
   // Set of keepAlive plugin IDs that have been opened at least once in
   // this session — we keep their React tree + DOM mounted (hidden with
@@ -298,16 +345,20 @@ function AppInner() {
   // default (most visible right after a reinstall, when the localStorage
   // mirror is gone). See whenUserConfigLoaded() in lib/userConfig.
   useEffect(() => {
-    Promise.all([isGamescopeMode(), whenUserConfigLoaded()]).then(([gs]) => {
-      setGamescope(gs);
-      if (gs && getConfigValue<number | undefined>("uiScale", undefined) === undefined) {
-        setScale(GAMESCOPE_SCALE);
-      }
-    }).catch(() => {});
+    Promise.all([isGamescopeMode(), whenUserConfigLoaded()])
+      .then(([gs]) => {
+        setGamescope(gs);
+        if (gs && getConfigValue<number | undefined>("uiScale", undefined) === undefined) {
+          setScale(GAMESCOPE_SCALE);
+        }
+      })
+      .catch(() => {});
     // Sync persisted controller shortcuts to the Rust backend on startup
-    getControllerShortcuts().then((shortcuts) => {
-      setControllerShortcuts(shortcuts).catch(() => {});
-    }).catch(() => {});
+    getControllerShortcuts()
+      .then((shortcuts) => {
+        setControllerShortcuts(shortcuts).catch(() => {});
+      })
+      .catch(() => {});
   }, [setScale]);
   const { ref: mainRef, focusKey: contentFocusKey } = useFocusable({
     focusKey: "content",
@@ -359,7 +410,6 @@ function AppInner() {
     return () => document.removeEventListener("focusin", onFocusIn, true);
   }, []);
 
-
   // Sync state from hash changes (back/forward, navigateOverlay() calls)
   useEffect(() => {
     function onHashChange() {
@@ -402,7 +452,8 @@ function AppInner() {
 
   // Startup preference: restore last route if configured
   useEffect(() => {
-    if (window.location.hash && window.location.hash !== "#/" && window.location.hash !== "#") return;
+    if (window.location.hash && window.location.hash !== "#/" && window.location.hash !== "#")
+      return;
     const startupView = getConfigValue<string>("startupView", "home");
     if (startupView === "last-tab") {
       const lastRoute = getConfigValue<string | undefined>("lastRoute", undefined);
@@ -435,9 +486,12 @@ function AppInner() {
     navigateOverlay({ view: "settings" });
   }, []);
 
-  const handleScaleChange = useCallback((v: number) => {
-    setScale(v);
-  }, [setScale]);
+  const handleScaleChange = useCallback(
+    (v: number) => {
+      setScale(v);
+    },
+    [setScale],
+  );
 
   // Scale the UI using CSS `zoom`. Under Chromium (CEF), `zoom` is a
   // first-class layout property — hit-testing, overflow and offset* all
@@ -462,7 +516,10 @@ function AppInner() {
 
   if (showWelcome) {
     return (
-      <div style={wrapperStyle} className="bg-transparent text-base-content font-sans overflow-clip flex items-center justify-center p-3">
+      <div
+        style={wrapperStyle}
+        className="bg-transparent text-base-content font-sans overflow-clip flex items-center justify-center p-3"
+      >
         <div className="flex flex-col flex-1 max-h-full h-full rounded-xl overflow-clip bg-base-100 border border-base-300 shadow-2xl">
           <WelcomeScreen
             plugins={plugins}
@@ -482,7 +539,10 @@ function AppInner() {
 
   return (
     <>
-      <div style={wrapperStyle} className="bg-transparent text-base-content font-sans overflow-clip flex items-center justify-center p-3">
+      <div
+        style={wrapperStyle}
+        className="bg-transparent text-base-content font-sans overflow-clip flex items-center justify-center p-3"
+      >
         <div className="flex flex-col flex-1 max-h-full h-full rounded-xl overflow-clip bg-base-100 border border-base-300 shadow-2xl">
           {/* DaisyUI drawer — always in grid layout (drawer-open). The
               checkbox state drives `is-drawer-open` / `is-drawer-close`
@@ -564,15 +624,33 @@ function AppInner() {
                     >
                       {homeEditing ? (
                         <>
-                          <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            className="w-3.5 h-3.5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
                             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                           </svg>
                           Done
                         </>
                       ) : (
                         <>
-                          <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            className="w-3.5 h-3.5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
+                            />
                           </svg>
                           Edit Layout
                         </>
@@ -583,7 +661,14 @@ function AppInner() {
                       className="btn btn-sm btn-primary"
                       onClick={() => setHomePickerOpen(true)}
                     >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="w-3.5 h-3.5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
                         <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
                       </svg>
                       Add Widget
@@ -630,7 +715,9 @@ function AppInner() {
                         <ErrorBoundary pluginId={p.id} pluginName={p.name}>
                           <PluginHost
                             plugin={p}
-                            headerSlotRef={p.id === activePluginId ? activeHeaderSlotRef : undefined}
+                            headerSlotRef={
+                              p.id === activePluginId ? activeHeaderSlotRef : undefined
+                            }
                           />
                         </ErrorBoundary>
                       </div>
@@ -646,7 +733,7 @@ function AppInner() {
                     if (!renderNormal) return null;
                     return (
                       <div
-                        key={showSettings ? "__settings" : activePluginId ?? "__home"}
+                        key={showSettings ? "__settings" : (activePluginId ?? "__home")}
                         className="absolute inset-0 animate-[viewEnter_180ms_ease-out]"
                       >
                         {showSettings ? (
@@ -662,10 +749,7 @@ function AppInner() {
                             pluginId={activePlugin.id}
                             pluginName={activePlugin.name}
                           >
-                            <PluginHost
-                              plugin={activePlugin}
-                              headerSlotRef={activeHeaderSlotRef}
-                            />
+                            <PluginHost plugin={activePlugin} headerSlotRef={activeHeaderSlotRef} />
                           </ErrorBoundary>
                         ) : showHome ? (
                           <Homepage
@@ -722,9 +806,7 @@ function AppInner() {
             <span className="w-[7px] h-[7px] rounded-full bg-success shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-success)_25%,transparent)]" />
             <span className="font-medium text-base-content">Connected to Steam</span>
             <span className="w-px h-3.5 bg-base-300" />
-            <span className="mono text-base-content/60">
-              {plugins.length} plugins loaded
-            </span>
+            <span className="mono text-base-content/60">{plugins.length} plugins loaded</span>
             <div className="flex-1" />
             {metrics.cpuTemp != null && (
               <span className="mono">
@@ -738,7 +820,8 @@ function AppInner() {
             )}
             {metrics.batteryPct != null && (
               <span className="mono">
-                {metrics.charging ? "⚡ " : ""}{Math.round(metrics.batteryPct)}%
+                {metrics.charging ? "⚡ " : ""}
+                {Math.round(metrics.batteryPct)}%
               </span>
             )}
             <KeyboardToggleButton />
@@ -755,16 +838,30 @@ function AppInner() {
                 }`}
                 tabIndex={-1}
               >
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="w-4 h-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+                  />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                  />
                 </svg>
               </button>
             </Focusable>
           </div>
         </div>
       </div>
-
     </>
   );
 }

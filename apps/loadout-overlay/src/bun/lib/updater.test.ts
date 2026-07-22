@@ -1,9 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import {
   checkForUpdate,
   resolveLatestReleaseTag,
   startUpdate,
   getUpdateStatus,
+  resetUpdateStatusForTest,
+  waitForBackendDone,
   isTrustedGithubHost,
   parseSha256Sums,
   type UpdaterDeps,
@@ -21,9 +23,15 @@ function fakeDeps(fetchFn: typeof fetch, overrides: Partial<UpdaterDeps> = {}): 
     backendBase: "http://127.0.0.1:33820",
     scheduleOverlayRestart: () => {},
     sha256File: async () => "0".repeat(64),
+    sleep: async () => {}, // no real delay in tests
+    now: () => 0,
     ...overrides,
   };
 }
+
+// The updater keeps a module-level status singleton; reset it between
+// tests so an in-flight/terminal state from one can't leak into another.
+beforeEach(() => resetUpdateStatusForTest());
 
 describe("resolveLatestReleaseTag", () => {
   test("uses releases/latest when it returns a proper tag", async () => {
@@ -107,8 +115,7 @@ describe("startUpdate guards", () => {
   });
 
   test("a valid tag with no installed overlay tree fails cleanly", async () => {
-    const fetchFn = (async () =>
-      jsonResponse({ token: "t" })) as unknown as typeof fetch;
+    const fetchFn = (async () => jsonResponse({ token: "t" })) as unknown as typeof fetch;
     const res = startUpdate("v9.9.9", fakeDeps(fetchFn, { home: "/nonexistent-home" }));
     expect(res.success).toBe(true); // accepted — failure lands in status
     // Wait for the async flow to reject on the missing overlay dir.
@@ -120,15 +127,95 @@ describe("startUpdate guards", () => {
   });
 
   test("rejects a second update while one is in flight", () => {
-    // status is still "error" from the previous test's flow — reset by
-    // startUpdate only through a fresh run, so use a fresh accepted run.
-    const fetchFn = (async () =>
-      new Promise<Response>(() => {})) as unknown as typeof fetch; // hangs forever
+    // startUpdate flips status to "downloading" synchronously before it
+    // returns, so the second call sees the in-flight guard regardless of
+    // where the async flow is. (beforeEach reset guarantees a clean
+    // starting status — no dependence on test order.)
+    const fetchFn = (async () => jsonResponse({ token: "t" })) as unknown as typeof fetch;
     const first = startUpdate("v9.9.8", fakeDeps(fetchFn));
     expect(first.success).toBe(true);
     const second = startUpdate("v9.9.8", fakeDeps(fetchFn));
     expect(second.success).toBe(false);
     expect(second.error).toContain("in progress");
+  });
+});
+
+describe("waitForBackendDone", () => {
+  // A scripted backend: each poll of /api/self-update returns the next
+  // phase in `phases`; /api/token and /api/status (version) answer the
+  // fallback path. sleep/now are faked so the 1s poll + 10min deadline
+  // cost nothing.
+  function scriptedDeps(opts: {
+    phases: Array<{ status: number; body: unknown } | "throw">;
+    statusVersion?: string;
+    extra?: Partial<UpdaterDeps>;
+  }): UpdaterDeps {
+    let poll = 0;
+    const fetchFn = (async (url: string | URL) => {
+      const u = String(url);
+      if (u.endsWith("/api/token")) return jsonResponse({ token: "fresh" });
+      if (u.endsWith("/api/status")) {
+        return jsonResponse({ version: opts.statusVersion ?? "0.6.0" });
+      }
+      // /api/self-update
+      const step = opts.phases[Math.min(poll, opts.phases.length - 1)];
+      poll++;
+      if (step === "throw") throw new Error("ECONNREFUSED");
+      return jsonResponse(step!.body, step!.status);
+    }) as unknown as typeof fetch;
+    return fakeDeps(fetchFn, opts.extra);
+  }
+
+  test("returns as soon as the backend reports done", async () => {
+    const deps = scriptedDeps({
+      phases: [
+        { status: 200, body: { phase: "applying" } },
+        { status: 200, body: { phase: "done" } },
+      ],
+    });
+    await waitForBackendDone({ tag: "v0.7.0", token: "t", preVersion: "0.6.0", deps });
+    expect(true).toBe(true); // resolved without throwing
+  });
+
+  test("throws when the backend reports error", async () => {
+    const deps = scriptedDeps({
+      phases: [{ status: 200, body: { phase: "error", message: "checksum mismatch" } }],
+    });
+    await expect(
+      waitForBackendDone({ tag: "v0.7.0", token: "t", preVersion: "0.6.0", deps }),
+    ).rejects.toThrow(/checksum mismatch/);
+  });
+
+  test("falls back to version match when the restart wins the race (upgrade)", async () => {
+    // active → connection dropped (mid-restart) → the version fallback
+    // reads the NEW target version and accepts (version changed).
+    const deps = scriptedDeps({
+      phases: [{ status: 200, body: { phase: "applying" } }, "throw"],
+      statusVersion: "0.7.0",
+    });
+    await waitForBackendDone({ tag: "v0.7.0", token: "t", preVersion: "0.6.0", deps });
+    expect(true).toBe(true);
+  });
+
+  test("same-version repair rejects an uncorroborated version match (finding 4)", async () => {
+    // preVersion === tag. A flaky poll must NOT be read as done just
+    // because /api/status already reports the target version — the
+    // backend never reports done or active here, so it must time out
+    // rather than declare premature success.
+    let nowMs = 0;
+    const deps = scriptedDeps({
+      phases: ["throw"],
+      statusVersion: "0.7.0",
+      extra: {
+        sleep: async () => {
+          nowMs += 30_000; // burn the 10-min deadline fast
+        },
+        now: () => nowMs,
+      },
+    });
+    await expect(
+      waitForBackendDone({ tag: "v0.7.0", token: "t", preVersion: "0.7.0", deps }),
+    ).rejects.toThrow(/timed out/);
   });
 });
 
@@ -141,9 +228,7 @@ describe("helpers", () => {
   });
 
   test("parseSha256Sums extracts asset hashes", () => {
-    const sums = parseSha256Sums(
-      "e".repeat(64) + "  loadout-overlay-x86_64.tar.xz\n",
-    );
+    const sums = parseSha256Sums("e".repeat(64) + "  loadout-overlay-x86_64.tar.xz\n");
     expect(sums.get("loadout-overlay-x86_64.tar.xz")).toBe("e".repeat(64));
   });
 });

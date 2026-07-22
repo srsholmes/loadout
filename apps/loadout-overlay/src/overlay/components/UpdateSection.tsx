@@ -10,14 +10,16 @@
  *
  * Version sources: the backend's /api/status `version` is canonical
  * (it's what the root service actually runs); OVERLAY_VERSION is the
- * fallback when the backend is unreachable or predates the field.
- * When neither parses as x.y.z this is a dev build and the whole
- * feature disables itself.
+ * overlay bundle's own version. The check compares against the OLDER
+ * of the two so a half-applied update (backend advanced, overlay not,
+ * or vice-versa) still offers the repair — the backend allows a
+ * same-version reinstall for exactly this case. When neither parses as
+ * x.y.z this is a dev build and the whole feature disables itself.
  */
 
 import { useEffect, useRef, useState } from "react";
 import { Button, notify } from "@loadout/ui";
-import { parseVersion, versionsEqual } from "@loadout/types";
+import { parseVersion, compareVersions, versionsEqual } from "@loadout/types";
 import { apiUrl, authHeaders } from "../lib/backend";
 import { OVERLAY_VERSION } from "../version";
 import { useConfigValue, setConfigValue } from "../lib/userConfig";
@@ -34,6 +36,21 @@ type CheckState =
   | { state: "checking" }
   | { state: "checked"; result: UpdateCheckResult };
 
+/** The older of two version strings (for the update check), skipping
+ *  any that don't parse. Returns null when neither parses (dev build). */
+function olderParseableVersion(a: string, b: string): string | null {
+  const pa = parseVersion(a);
+  const pb = parseVersion(b);
+  if (pa && pb) return compareVersions(pa, pb) <= 0 ? a : b;
+  if (pa) return a;
+  if (pb) return b;
+  return null;
+}
+
+function isActivePhase(phase: UpdateStatus["phase"]): boolean {
+  return phase !== "error"; // "idle" never appears mid-run; every other phase is live
+}
+
 export function UpdateSection() {
   const [backendVersion, setBackendVersion] = useState<string | null>(null);
   const [check, setCheck] = useState<CheckState>({ state: "idle" });
@@ -44,6 +61,44 @@ export function UpdateSection() {
     null,
   );
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Synchronous in-flight guard — render state (`updating`) lags a
+  // double A-press, and a second applyUpdate both re-sets and then (on
+  // the "already in progress" error) clears `updatePendingTag`, killing
+  // the post-restart toast. This ref flips before any await.
+  const inFlightRef = useRef(false);
+
+  function stopPoll() {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }
+
+  function startStatusPoll() {
+    stopPoll();
+    // A single transient RPC failure (getUpdateStatus → null) must NOT
+    // be read as "done" — during the heavy backend/swap phases the host
+    // can miss a poll. Tolerate a run of nulls; only an explicit
+    // idle/error from the host is terminal. If the host truly vanishes
+    // (dev, host crash) give up after ~11s of silence.
+    let consecutiveNulls = 0;
+    pollRef.current = setInterval(async () => {
+      const s = await getUpdateStatus();
+      if (s === null) {
+        if (++consecutiveNulls > 15) {
+          stopPoll();
+          inFlightRef.current = false;
+        }
+        return;
+      }
+      consecutiveNulls = 0;
+      setUpdateStatus(s);
+      if (s.phase === "error" || s.phase === "idle") {
+        stopPoll();
+        inFlightRef.current = false;
+      }
+    }, 700);
+  }
 
   useEffect(() => {
     fetch(apiUrl("/api/status"), { headers: authHeaders() })
@@ -52,9 +107,20 @@ export function UpdateSection() {
         if (typeof j.version === "string") setBackendVersion(j.version);
       })
       .catch(() => {});
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
+    // Resume an update that was already running when Settings was
+    // (re)opened — the component may have been unmounted (user pressed
+    // B) mid-update, and the Bun host holds the authoritative status.
+    getUpdateStatus()
+      .then((s) => {
+        if (s && s.phase !== "idle" && isActivePhase(s.phase) && s.phase !== "error") {
+          inFlightRef.current = true;
+          setUpdateStatus(s);
+          startStatusPoll();
+        }
+      })
+      .catch(() => {});
+    return () => stopPoll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Arming auto-expires, same as MaintenanceActionRow — a stray d-pad
@@ -66,15 +132,15 @@ export function UpdateSection() {
   }, [armed]);
 
   const installedVersion =
-    backendVersion && parseVersion(backendVersion) ? backendVersion : OVERLAY_VERSION;
-  const devBuild = parseVersion(installedVersion) === null;
+    olderParseableVersion(backendVersion ?? OVERLAY_VERSION, OVERLAY_VERSION) ?? OVERLAY_VERSION;
+  const devBuild =
+    parseVersion(backendVersion ?? OVERLAY_VERSION) === null &&
+    parseVersion(OVERLAY_VERSION) === null;
   const versionsDiverge =
     backendVersion !== null && !versionsEqual(backendVersion, OVERLAY_VERSION);
 
   const available =
-    check.state === "checked" && check.result.available && check.result.tag
-      ? check.result
-      : null;
+    check.state === "checked" && check.result.available && check.result.tag ? check.result : null;
   const updating =
     updateStatus !== null && updateStatus.phase !== "idle" && updateStatus.phase !== "error";
 
@@ -85,33 +151,21 @@ export function UpdateSection() {
     setCheck({ state: "checked", result });
   }
 
-  function startStatusPoll() {
-    if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = setInterval(async () => {
-      const s = await getUpdateStatus();
-      setUpdateStatus(s);
-      // "restarting" keeps polling — the overlay process dies out from
-      // under us anyway. Stop on error so the buttons come back.
-      if (s.phase === "error" || s.phase === "idle") {
-        if (pollRef.current) clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    }, 700);
-  }
-
   async function handleUpdate(tag: string) {
-    if (updating) return;
+    if (updating || inFlightRef.current) return;
     if (!armed) {
       setArmed(true);
       return;
     }
     setArmed(false);
+    inFlightRef.current = true;
     // Marker for the post-restart "Updated to vX.Y.Z" toast: App.tsx
     // compares it against the running version on next boot. Written
     // BEFORE the update so it persists across the backend restart.
     setConfigValue("updatePendingTag", tag);
     const res = await applyUpdate(tag);
     if (!res.success) {
+      inFlightRef.current = false;
       setConfigValue("updatePendingTag", null);
       notify(res.error ?? "Update failed to start.", { kind: "error", id: "loadout-update" });
       return;
@@ -128,15 +182,17 @@ export function UpdateSection() {
   const rows: React.ReactNode[] = [];
 
   // Backend/overlay divergence — normally invisible; surfaces after a
-  // partial update so the fix ("Update now" again) is obvious.
+  // partial update so the fix ("Check for updates" then update) is
+  // obvious. The check compares against the older version, so the
+  // update button will appear.
   if (versionsDiverge) {
     rows.push(
       <div key="server-version" className="flex justify-between items-center min-h-[44px]">
         <div className="pr-4">
           <div className="text-sm text-base-content">Server version</div>
           <div className="text-xs text-base-content/50 mt-0.5">
-            The plugin server and overlay versions differ — running an update
-            will bring both to the latest release.
+            The plugin server and overlay versions differ — running an update will bring both to the
+            latest release.
           </div>
         </div>
         <code className="text-sm text-warning bg-warning/10 px-3 py-1 rounded-lg font-mono">
@@ -171,20 +227,45 @@ export function UpdateSection() {
             {updateStatus.pct != null ? `${updateStatus.pct}%` : ""}
           </span>
         </div>
-        <div className="h-1.5 rounded-full bg-base-300 overflow-hidden">
+        <div
+          className="h-1.5 rounded-full bg-base-300 overflow-hidden"
+          role="progressbar"
+          aria-valuenow={updateStatus.pct ?? 0}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label="Update progress"
+        >
           <div
             className="h-full bg-primary rounded-full transition-all"
             style={{ width: `${updateStatus.pct ?? 0}%` }}
           />
         </div>
         <div className="text-xs text-base-content/50 mt-2">
-          {updateStatus.message ?? "Working…"} The overlay will close and reopen
-          when the update finishes; your game keeps running.
+          {updateStatus.message ?? "Working…"} The overlay will close and reopen when the update
+          finishes; your game keeps running.
         </div>
       </div>,
     );
   } else {
+    // One PRIMARY button that morphs (Check → Update → confirm) and is
+    // never unmounted across those transitions, so controller focus
+    // stays put (matches MaintenanceActionRow's in-place morph rather
+    // than swapping button elements under focus). "Skip" appears beside
+    // it only when an update is available.
     const failed = updateStatus?.phase === "error" ? updateStatus.message : null;
+    const checking = check.state === "checking";
+    const primaryLabel = available
+      ? armed
+        ? "Press again to confirm"
+        : `Update to ${available.tag}`
+      : checking
+        ? "Checking…"
+        : "Check for updates";
+    const primaryVariant = available && armed ? "danger" : available ? "primary" : "default";
+    const onPrimary = available
+      ? () => void handleUpdate(available.tag!)
+      : () => void handleCheck();
+
     rows.push(
       <div key="check" className="flex justify-between items-center min-h-[44px]">
         <div className="pr-4">
@@ -205,25 +286,12 @@ export function UpdateSection() {
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {available ? (
-            <>
-              {skippedVersion !== available.tag && (
-                <Button onClick={() => handleSkip(available.tag!)}>
-                  Skip this version
-                </Button>
-              )}
-              <Button
-                variant={armed ? "danger" : "primary"}
-                onClick={() => void handleUpdate(available.tag!)}
-              >
-                {armed ? "Click again to confirm" : `Update to ${available.tag}`}
-              </Button>
-            </>
-          ) : (
-            <Button onClick={() => void handleCheck()} disabled={check.state === "checking"}>
-              {check.state === "checking" ? "Checking…" : "Check for updates"}
-            </Button>
+          {available && skippedVersion !== available.tag && (
+            <Button onClick={() => handleSkip(available.tag!)}>Skip this version</Button>
           )}
+          <Button variant={primaryVariant} onClick={onPrimary} disabled={checking}>
+            {primaryLabel}
+          </Button>
         </div>
       </div>,
     );

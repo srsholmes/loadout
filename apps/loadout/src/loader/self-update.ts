@@ -64,13 +64,7 @@ export function parseSha256Sums(text: string): Map<string, string> {
   return out;
 }
 
-export type SelfUpdatePhase =
-  | "idle"
-  | "downloading"
-  | "verifying"
-  | "applying"
-  | "done"
-  | "error";
+export type SelfUpdatePhase = "idle" | "downloading" | "verifying" | "applying" | "done" | "error";
 
 export interface SelfUpdateStatus {
   phase: SelfUpdatePhase;
@@ -86,10 +80,16 @@ export function getSelfUpdateStatus(): SelfUpdateStatus {
 
 function inFlight(): boolean {
   return (
-    status.phase === "downloading" ||
-    status.phase === "verifying" ||
-    status.phase === "applying"
+    status.phase === "downloading" || status.phase === "verifying" || status.phase === "applying"
   );
+}
+
+/** True while a self-update is mid-flight. Exported so `/api/restart`
+ *  refuses to restart the service in the middle of a binary/plugins
+ *  swap — a restart there can SIGTERM the apply between renames and
+ *  strand the install (finding 2). */
+export function isSelfUpdateInFlight(): boolean {
+  return inFlight();
 }
 
 /** Injected side effects so the flow is unit-testable without a real
@@ -106,6 +106,8 @@ export interface SelfUpdateDeps {
    *  mid-restart along with us). */
   scheduleRestart: () => void;
   sha256File: (path: string) => Promise<string>;
+  /** Whether a binary is on PATH (gates the optional `restorecon`). */
+  commandExists: (name: string) => Promise<boolean>;
 }
 
 async function defaultSha256File(path: string): Promise<string> {
@@ -135,6 +137,7 @@ export const DEFAULT_DEPS: SelfUpdateDeps = {
   currentVersion: LOADER_VERSION,
   scheduleRestart: defaultScheduleRestart,
   sha256File: defaultSha256File,
+  commandExists,
 };
 
 /**
@@ -281,10 +284,14 @@ async function runSelfUpdate(
   await downloadToFile(assetUrl(tag, pluginsAsset), pluginsTar, deps.fetchFn);
 
   // --- Verify ----------------------------------------------------------------
+  // Both artifacts are already on disk; on ANY mismatch remove BOTH so a
+  // failed verify never leaves a partial download for the next attempt
+  // or the boot cleanup to trip over.
   status = { phase: "verifying", tag };
   const gotBinSum = await deps.sha256File(newBin);
   if (gotBinSum !== binSum) {
     await rm(newBin, { force: true });
+    await rm(pluginsTar, { force: true });
     throw new Error(`checksum mismatch for ${binAsset}`);
   }
   const gotPluginsSum = await deps.sha256File(pluginsTar);
@@ -323,7 +330,7 @@ async function runSelfUpdate(
   // label on SELinux-enforcing distros (Bazzite/Fedora).
   await chmod(newBin, 0o755);
   await rename(newBin, exePath);
-  if (await commandExists("restorecon")) {
+  if (await deps.commandExists("restorecon")) {
     const rc = await deps.run(["restorecon", "-F", exePath]);
     if (rc.exitCode !== 0) {
       log.warn(`[self-update] restorecon failed (non-fatal): ${rc.stderr.trim()}`);
@@ -345,6 +352,11 @@ async function runSelfUpdate(
     await rename(stagedModules, modulesDir);
   } catch (err) {
     // Roll the old tree back so the restart doesn't come up pluginless.
+    // If `stagedPlugins`→`pluginsDir` already succeeded (so the failure
+    // was on the modules rename), move the new plugins back out first —
+    // otherwise `pluginsOld`→`pluginsDir` hits an occupied target and
+    // the rollback silently fails, leaving new-plugins/old-modules skew.
+    await rename(pluginsDir, stagedPlugins).catch(() => {});
     await rename(pluginsOld, pluginsDir).catch(() => {});
     await rename(modulesOld, modulesDir).catch(() => {});
     throw err;
@@ -370,18 +382,38 @@ export function scheduleServiceRestart(deps: SelfUpdateDeps = DEFAULT_DEPS): voi
 /**
  * Remove leftovers from a self-update that died mid-flight. Called
  * once at server boot; every target is best-effort.
+ *
+ * Restorative FIRST: if the process died between the plugins/modules
+ * swap renames, the live dir is missing while its `.old` sibling still
+ * holds the previous tree. Blindly deleting `.old` (as this used to)
+ * would erase the last surviving copy and boot the server permanently
+ * pluginless. So for each of plugins/node_modules, if the live dir is
+ * gone but `.old` exists, rename it back before the sweep (finding 2).
  */
 export async function cleanupStaleSelfUpdateArtifacts(
   pluginsDir: string,
   deps: SelfUpdateDeps = DEFAULT_DEPS,
 ): Promise<void> {
   const installDir = dirname(pluginsDir);
+  const modulesDir = join(installDir, "node_modules");
+  const swapPairs: Array<[live: string, old: string]> = [
+    [pluginsDir, `${pluginsDir}.old`],
+    [modulesDir, `${modulesDir}.old`],
+  ];
+  for (const [live, old] of swapPairs) {
+    const liveMissing = !(await stat(live).catch(() => null));
+    const oldExists = !!(await stat(old).catch(() => null));
+    if (liveMissing && oldExists) {
+      await rename(old, live).catch(() => {});
+    }
+  }
+
   const targets = [
     join(installDir, ".loadout-plugins.tar.xz"),
     join(installDir, ".loadout-sha256sums"),
     join(installDir, ".plugins-staging"),
     `${pluginsDir}.old`,
-    join(installDir, "node_modules.old"),
+    `${modulesDir}.old`,
   ];
   try {
     targets.push(join(dirname(deps.resolveExePath()), ".loadout.new"));

@@ -34,12 +34,7 @@ import * as fsp from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { runFull, spawn } from "@loadout/exec";
-import {
-  RELEASE_TAG_RE,
-  parseVersion,
-  isNewerVersion,
-  versionsEqual,
-} from "@loadout/types";
+import { RELEASE_TAG_RE, parseVersion, isNewerVersion, versionsEqual } from "@loadout/types";
 
 const REPO = "srsholmes/loadout";
 
@@ -96,6 +91,10 @@ export interface UpdaterDeps {
   backendBase: string;
   scheduleOverlayRestart: () => void;
   sha256File: (path: string) => Promise<string>;
+  /** Injectable clock — real timers in production, simulated in tests
+   *  so the multi-minute backend-restart poll is exercisable. */
+  sleep: (ms: number) => Promise<void>;
+  now: () => number;
 }
 
 async function defaultSha256File(path: string): Promise<string> {
@@ -111,15 +110,7 @@ function defaultScheduleOverlayRestart(): void {
   setTimeout(() => {
     try {
       spawn(
-        [
-          "systemd-run",
-          "--user",
-          "--collect",
-          "systemctl",
-          "--user",
-          "restart",
-          "loadout-overlay",
-        ],
+        ["systemd-run", "--user", "--collect", "systemctl", "--user", "restart", "loadout-overlay"],
         { stdout: "ignore", stderr: "ignore" },
       );
     } catch (err) {
@@ -135,6 +126,8 @@ export const DEFAULT_DEPS: UpdaterDeps = {
   backendBase: `http://127.0.0.1:${process.env.LOADOUT_PORT || 33820}`,
   scheduleOverlayRestart: defaultScheduleOverlayRestart,
   sha256File: defaultSha256File,
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  now: () => Date.now(),
 };
 
 // -- Release check ------------------------------------------------------------
@@ -155,13 +148,17 @@ export interface UpdateCheckResult {
  * non-`vX.Y.Z`) back as "latest", fall back to listing releases and
  * picking the highest semver tag ourselves.
  */
-export async function resolveLatestReleaseTag(
-  fetchFn: typeof fetch,
-): Promise<string | null> {
+export async function resolveLatestReleaseTag(fetchFn: typeof fetch): Promise<string | null> {
   const headers: Record<string, string> = {
     "User-Agent": "Loadout-Updater",
     Accept: "application/vnd.github+json",
   };
+  // api.github.com honours the token to lift the 60 req/hr anonymous
+  // limit — on CGNAT / shared-IP handhelds the every-boot auto-check
+  // would otherwise 403 persistently. (Unlike the asset downloads, the
+  // API host never redirects to S3, so there's no cross-auth hazard.)
+  const token = process.env.GITHUB_TOKEN;
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   // Bounded so the checkForUpdate RPC always answers well inside the
   // webview's request window — a dead network should surface as a
   // clean "check failed" result, not an RPC timeout.
@@ -178,10 +175,10 @@ export async function resolveLatestReleaseTag(
   } catch {
     // fall through to the list endpoint
   }
-  const listRes = await fetchFn(
-    `https://api.github.com/repos/${REPO}/releases?per_page=20`,
-    { headers, signal },
-  );
+  const listRes = await fetchFn(`https://api.github.com/repos/${REPO}/releases?per_page=20`, {
+    headers,
+    signal,
+  });
   if (!listRes.ok) return null;
   const list = (await listRes.json()) as Array<{
     tag_name?: string;
@@ -225,10 +222,18 @@ function assetUrl(tag: string, asset: string): string {
   return `https://github.com/${REPO}/releases/download/${tag}/${asset}`;
 }
 
-function githubHeaders(): Record<string, string> {
+/** Per-hop request headers for an asset download. The `Authorization`
+ *  token is attached ONLY on the initial `github.com` hop: release
+ *  assets 302 to a pre-signed `objects.githubusercontent.com` (S3) URL
+ *  that carries its own `X-Amz-*` query auth, and S3 rejects a request
+ *  bearing both query-signing AND an `Authorization` header with HTTP
+ *  400 "Only one auth mechanism allowed". Normal `fetch` strips auth
+ *  cross-origin; our manual redirect walk must do it deliberately. The
+ *  repo is public, so the token buys nothing on the asset anyway. */
+function assetHopHeaders(host: string): Record<string, string> {
   const headers: Record<string, string> = { "User-Agent": "Loadout-Updater" };
   const token = process.env.GITHUB_TOKEN;
-  if (token) headers["Authorization"] = `Bearer ${token}`;
+  if (token && host === "github.com") headers["Authorization"] = `Bearer ${token}`;
   return headers;
 }
 
@@ -250,7 +255,7 @@ async function fetchPinned(url: string, fetchFn: typeof fetch): Promise<Response
         `download refused: hop ${hop} pointed at untrusted host ${host || currentUrl}`,
       );
     }
-    res = await fetchFn(currentUrl, { headers: githubHeaders(), redirect: "manual" });
+    res = await fetchFn(currentUrl, { headers: assetHopHeaders(host), redirect: "manual" });
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get("location");
       if (!location) throw new Error(`HTTP ${res.status} without a Location header`);
@@ -278,7 +283,9 @@ async function downloadToFileWithProgress(
   let downloaded = 0;
   try {
     for await (const chunk of body) {
-      writer.write(chunk);
+      // Await the sink so a fast network + slow disk applies
+      // backpressure instead of buffering the whole ~300 MB in RAM.
+      await writer.write(chunk);
       downloaded += chunk.byteLength;
       onProgress?.(downloaded, total);
     }
@@ -362,6 +369,25 @@ export function startUpdate(
         message: "Restarting overlay…",
       };
       deps.scheduleOverlayRestart();
+      // Watchdog: scheduleOverlayRestart fire-and-forgets `systemd-run`,
+      // which silently no-ops if the unit/binary is absent (dev runs,
+      // an install without the user unit). Without this the process
+      // lives on pinned at "restarting" forever — every future update
+      // is refused as "already in progress" and the UI spins on
+      // "Restarting overlay…". Flip to error if we're still here after
+      // the restart should have happened. Unref'd so it never keeps the
+      // process (or a test) alive on its own.
+      const watchdog = setTimeout(() => {
+        if (status.phase === "restarting" && status.tag === tag) {
+          status = {
+            phase: "error",
+            tag,
+            message:
+              "the overlay did not restart automatically — restart it manually to finish updating",
+          };
+        }
+      }, 20_000);
+      (watchdog as { unref?: () => void }).unref?.();
     },
     (err) => {
       const message = err instanceof Error ? err.message : String(err);
@@ -392,9 +418,7 @@ async function runUpdate(tag: string, deps: UpdaterDeps): Promise<void> {
     const fs = await fsp.statfs(deps.home);
     const free = Number(fs.bavail) * Number(fs.bsize);
     if (free < REQUIRED_FREE_BYTES) {
-      throw new Error(
-        `not enough free space: need ~2.5 GB, have ${(free / 1e9).toFixed(1)} GB`,
-      );
+      throw new Error(`not enough free space: need ~2.5 GB, have ${(free / 1e9).toFixed(1)} GB`);
     }
   } catch (err) {
     if (err instanceof Error && err.message.startsWith("not enough free space")) {
@@ -441,14 +465,7 @@ async function runUpdate(tag: string, deps: UpdaterDeps): Promise<void> {
   await mkdir(stagingDir, { recursive: true });
   // Tar has a top-level loadout-overlay-dev/ dir; strip it so the
   // launcher lands at bin/launcher (same as install.sh).
-  const untar = await deps.run([
-    "tar",
-    "-xJf",
-    tarPath,
-    "-C",
-    stagingDir,
-    "--strip-components=1",
-  ]);
+  const untar = await deps.run(["tar", "-xJf", tarPath, "-C", stagingDir, "--strip-components=1"]);
   if (untar.exitCode !== 0) {
     throw new Error(`extract failed: ${untar.stderr.trim() || untar.exitCode}`);
   }
@@ -485,6 +502,11 @@ async function runUpdate(tag: string, deps: UpdaterDeps): Promise<void> {
 
   // --- Root half: backend binary + plugins, via the loader ------------------
   status = { phase: "backend", pct: 75, tag, message: "Updating backend…" };
+  // Snapshot the backend version BEFORE the update so the poll's
+  // version-match fallback can tell "already landed" from "was already
+  // here" — the same-version repair flow (backend already at `tag`)
+  // would otherwise read as done from tick one (finding 4).
+  const preVersion = await backendVersion(deps);
   const post = await backendJson<{ error?: string }>(deps, "/api/self-update", {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -493,7 +515,7 @@ async function runUpdate(tag: string, deps: UpdaterDeps): Promise<void> {
   if (post.status !== 202) {
     throw new Error(post.json?.error ?? `backend refused the update (HTTP ${post.status})`);
   }
-  await waitForBackendDone(tag, token, deps);
+  await waitForBackendDone({ tag, token, preVersion, deps });
 
   // --- Swap the overlay tree -------------------------------------------------
   status = { phase: "swapping", pct: 92, tag, message: "Installing overlay…" };
@@ -516,18 +538,27 @@ async function runUpdate(tag: string, deps: UpdaterDeps): Promise<void> {
  * marks `done` ~500 ms before restarting itself, so the poll usually
  * sees it — but if the restart wins the race (connection refused, 401
  * from a fresh token generation, or a fresh process reporting `idle`),
- * fall back to reading the NEW process's /api/status version: if it
- * already reports the target version, the update landed.
+ * fall back to reading the NEW process's /api/status version.
+ *
+ * The fallback only accepts a version match when it's *corroborated*:
+ * either we observed the backend actively working this run (`sawActive`)
+ * or the reported version differs from the pre-update snapshot. Without
+ * that, a same-version repair (backend already at `tag`) would read as
+ * done from the first flaky poll and the overlay would swap + restart
+ * while the backend was still applying (finding 4).
  */
-async function waitForBackendDone(
-  tag: string,
-  token: string,
-  deps: UpdaterDeps,
-): Promise<void> {
-  const deadline = Date.now() + 10 * 60_000;
+export async function waitForBackendDone(args: {
+  tag: string;
+  token: string;
+  preVersion: string | null;
+  deps: UpdaterDeps;
+}): Promise<void> {
+  const { tag, token, preVersion, deps } = args;
+  const preIsTag = preVersion !== null && versionsEqual(preVersion, tag);
+  const deadline = deps.now() + 10 * 60_000;
   let sawActive = false;
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 1000));
+  while (deps.now() < deadline) {
+    await deps.sleep(1000);
     let phase: string | null = null;
     let message: string | undefined;
     try {
@@ -556,7 +587,10 @@ async function waitForBackendDone(
     // Unreachable, unauthorized, or a fresh process reporting idle.
     if (phase === null || sawActive) {
       const version = await backendVersion(deps);
-      if (version && versionsEqual(version, tag)) return;
+      if (!version || !versionsEqual(version, tag)) continue;
+      // Corroborate before trusting a bare version match: the version
+      // changed to the target, or we watched the backend do the work.
+      if (sawActive || !preIsTag) return;
     }
   }
   throw new Error("timed out waiting for the backend update");
@@ -567,12 +601,28 @@ async function waitForBackendDone(
  * abandoned staging tree, and a leftover tarball. Reaching this after
  * an update IS the "next successful boot", which ends the `.old`
  * rollback window.
+ *
+ * Restorative first: if a crash between the two swap renames left the
+ * live overlay dir MISSING while `.old` still holds the previous tree,
+ * put `.old` back rather than deleting it — otherwise we'd erase the
+ * only surviving copy and leave the overlay permanently unlaunchable
+ * (finding 2, overlay twin).
  */
-export async function cleanupUpdateArtifacts(
-  home: string = DEFAULT_DEPS.home,
-): Promise<void> {
+export async function cleanupUpdateArtifacts(home: string = DEFAULT_DEPS.home): Promise<void> {
   const overlayDir = join(home, ".local", "share", "loadout-overlay");
-  for (const t of [`${overlayDir}.old`, `${overlayDir}.staging`, `${overlayDir}.update.tar.xz`]) {
+  const oldDir = `${overlayDir}.old`;
+  const liveMissing = !(await stat(overlayDir).catch(() => null));
+  const oldExists = !!(await stat(oldDir).catch(() => null));
+  if (liveMissing && oldExists) {
+    await rename(oldDir, overlayDir).catch(() => {});
+  }
+  for (const t of [oldDir, `${overlayDir}.staging`, `${overlayDir}.update.tar.xz`]) {
     await rm(t, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+/** Test seam — reset the module-level status singleton to idle so
+ *  tests don't leak in-flight/terminal state into one another. */
+export function resetUpdateStatusForTest(): void {
+  status = { phase: "idle" };
 }
