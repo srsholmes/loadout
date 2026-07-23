@@ -8,9 +8,9 @@
  * and back-compat exports so the rest of the plugin doesn't have
  * to know about the move.
  */
-import { pickFile, type PickFileOptions } from "@loadout/file-picker";
+import { pickFile } from "@loadout/file-picker";
 
-export { pickFile, type PickFileOptions };
+export { pickFile };
 
 /**
  * ROM-picker convenience: same defaults the recomp UI used before

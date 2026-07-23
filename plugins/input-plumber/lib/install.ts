@@ -21,7 +21,7 @@ import type { InstallRunResult, InstallStatus, ManagedBy } from "../shared";
 // Re-export so existing callers (backend.ts, tests) keep working without
 // caring whether the type lives here or in ../shared. The source of truth
 // is ../shared so the frontend can import it without dragging in fs/exec.
-export type { InstallRunResult, InstallStatus, ManagedBy };
+export type { InstallRunResult, InstallStatus };
 
 const PLUGIN_ROOT = join(import.meta.dir, "..");
 const INSTALL_SCRIPT = join(PLUGIN_ROOT, "scripts", "install-inputplumber.sh");

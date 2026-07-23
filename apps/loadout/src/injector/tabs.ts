@@ -112,31 +112,3 @@ export async function findBigPictureTab(options: GetTabsOptions): Promise<CEFTab
 
   return tab;
 }
-
-const QUICK_ACCESS_PREFIX = "QuickAccess_uid";
-
-export function isQuickAccessTab(tab: CEFTab): boolean {
-  return tab.title.startsWith(QUICK_ACCESS_PREFIX);
-}
-
-/**
- * Find the active QuickAccess tab. There may be multiple (one per Steam window),
- * so we pick the one with the most content (largest div count heuristic via URL params).
- */
-export async function findQuickAccessTab(options: GetTabsOptions): Promise<CEFTab> {
-  const tabs = await getTabs(options);
-  const qaTabs = tabs.filter(isQuickAccessTab);
-
-  // Return the first one — typically the Big Picture Mode QAM. An empty
-  // qaTabs is equivalent to the old `length === 0` check, so this throws
-  // the same error and drops the index assertion.
-  const first = qaTabs[0];
-  if (!first) {
-    const available = tabs.map((t) => `"${t.title}" (${t.url})`).join(", ");
-    throw new Error(
-      `QuickAccess tab not found. Available tabs: ${available}`,
-    );
-  }
-
-  return first;
-}

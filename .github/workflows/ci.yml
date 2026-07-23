@@ -51,6 +51,16 @@ jobs:
       - name: ESLint
         run: bun run lint
 
+      # Dead-code gate (knip): unused files, exports, types, and
+      # dependencies across every workspace. Entry points mirror the
+      # runtime-bundling architecture (plugin backend.ts/app.tsx, recomp
+      # setup modules, Electrobun bun+webview entries) — see knip.ts.
+      # NOTE: like tsgo above, knip's default bin shim is
+      # `#!/usr/bin/env node`; the script uses knip's `knip-bun` shim
+      # (`#!/usr/bin/env bun`) so no node install is needed.
+      - name: Dead code (knip)
+        run: bun run check:dead-code
+
       # Audit Q-011 / Q-012: enforce that every plugin entry point
       # ≥100 LOC has a sibling spec. Wave-5 closed the four outstanding
       # misses, so the check is now hard-gated.

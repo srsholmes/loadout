@@ -5,8 +5,11 @@
   "description": "Browse, install, and toggle community CSS themes for Steam's Big Picture UI",
   "dependencies": {
     "react": "^18.3.0",
-    "react-dom": "^18.3.0",
-    "@loadout/ui": "workspace:*"
+    "@loadout/ui": "workspace:*",
+    "@loadout/types": "workspace:*",
+    "@loadout/exec": "workspace:*",
+    "@loadout/steam-cdp": "workspace:*",
+    "@loadout/plugin-storage": "workspace:*"
   },
   "plugin": {
     "id": "theme-loader",

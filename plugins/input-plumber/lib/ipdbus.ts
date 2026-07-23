@@ -22,8 +22,6 @@ import { runFull } from "@loadout/exec";
 const SERVICE = "org.shadowblip.InputPlumber";
 const COMPOSITE_IFACE = "org.shadowblip.Input.CompositeDevice";
 const TARGET_IFACE = "org.shadowblip.Input.Target";
-const MANAGER_PATH = "/org/shadowblip/InputPlumber/Manager";
-const MANAGER_IFACE = "org.shadowblip.InputManager";
 
 // Match disable-controller-input's ceiling: busctl can block on the system
 // bus default timeout (~25s) while IP is mid-restart; 5s fails fast.
@@ -183,25 +181,6 @@ export interface CompositeDevice {
   path: string;
   name: string;
   capabilities: string[];
-}
-
-/** Enable/disable IP management of ALL supported devices (not just configs with
- *  `auto_manage`). Enabling lets IP manage EXTERNAL controllers (Xbox/PS pads)
- *  so the overlay can intercept their input instead of Steam reading them via
- *  hidraw. Onboard-safe: the handheld config is `auto_manage`, so disabling only
- *  releases the external pads. Enable EARLY (backend onLoad — before Steam grabs
- *  external pads at boot) so IP wins the race and Steam never sees the physical
- *  pad (a late enable causes a physical+emulated duplicate). */
-export async function setManageAllDevices(enable: boolean): Promise<ExecResult> {
-  return busctl([
-    "set-property",
-    SERVICE,
-    MANAGER_PATH,
-    MANAGER_IFACE,
-    "ManageAllDevices",
-    "b",
-    enable ? "true" : "false",
-  ]);
 }
 
 /** Enumerate the connected composite devices with their names + capabilities. */

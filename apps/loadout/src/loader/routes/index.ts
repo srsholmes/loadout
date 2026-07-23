@@ -74,4 +74,4 @@ export async function dispatchRoute(
   return null;
 }
 
-export type { RouteContext, RouteHandler } from "./types";
+export type { RouteContext } from "./types";

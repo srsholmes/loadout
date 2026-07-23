@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { useConfigValue, getConfigValue, setConfigValue } from "../lib/userConfig";
+import { useConfigValue, setConfigValue } from "../lib/userConfig";
 
 const ENABLED_KEY = "enabledPlugins";
 const WELCOME_KEY = "welcomeCompleted";
@@ -28,10 +28,6 @@ export function useEnabledPlugins() {
   );
 
   return { enabled, setEnabled, isEnabled, toggle };
-}
-
-export function isWelcomeCompleted(): boolean {
-  return getConfigValue<boolean>(WELCOME_KEY, false);
 }
 
 export function setWelcomeCompleted(v: boolean): void {

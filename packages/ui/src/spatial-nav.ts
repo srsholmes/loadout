@@ -258,9 +258,19 @@ export function navigateByDirection(direction: string, details?: object) {
   getSpatialNav()?.navigateByDirection(direction, details ?? {});
 }
 
+// The four helpers below have no in-repo callers today, but they complete the
+// norigin-spatial-navigation API surface this module mirrors, and out-of-tree
+// plugins can reach them via the `@loadout/ui/spatial-nav` subpath (plugin
+// code is bundled from source at runtime). @public keeps knip from flagging
+// them as dead exports.
+
+/** @public */
 export function pause() { getSpatialNav()?.pause(); }
+/** @public */
 export function resume() { getSpatialNav()?.resume(); }
+/** @public */
 export function updateAllLayouts() { getSpatialNav()?.updateAllLayouts(); }
+/** @public */
 export function destroy() { getSpatialNav()?.destroy(); }
 
 // ---- Back interceptor stack -------------------------------------------------
