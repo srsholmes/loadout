@@ -7,6 +7,7 @@
 // warning instead of an opaque TypeError or process crash.
 
 import type { ControllerShortcuts, ShortcutAction } from "../webview/lib/electrobun";
+import { RELEASE_TAG_RE } from "@loadout/types";
 
 const SHORTCUT_ACTION_TYPES = new Set([
   "None",
@@ -79,4 +80,30 @@ export function validateReadSoundFileFilename(params: unknown): string | null {
   if (!isPlainObject(params)) return null;
   if (typeof params.filename !== "string") return null;
   return params.filename;
+}
+
+/**
+ * Validate the params passed to the `checkForUpdate` RPC handler.
+ * Returns the installed-version string, or null when malformed. The
+ * value is only compared against release tags — an unparsable version
+ * (dev builds) is handled downstream, so any string is acceptable here.
+ */
+export function validateCheckForUpdateParams(params: unknown): string | null {
+  if (!isPlainObject(params)) return null;
+  if (typeof params.installedVersion !== "string") return null;
+  return params.installedVersion;
+}
+
+/**
+ * Validate the params passed to the `applyUpdate` RPC handler. Returns
+ * the release tag, or null when it isn't exactly `vX.Y.Z` — the tag is
+ * interpolated into a github.com download URL and forwarded to the
+ * root-side backend route, so the strict shape check happens on both
+ * ends.
+ */
+export function validateApplyUpdateTag(params: unknown): string | null {
+  if (!isPlainObject(params)) return null;
+  if (typeof params.tag !== "string") return null;
+  if (!RELEASE_TAG_RE.test(params.tag)) return null;
+  return params.tag;
 }

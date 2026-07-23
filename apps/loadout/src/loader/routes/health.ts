@@ -7,6 +7,7 @@
  */
 
 import { jsonResponse } from "../index";
+import { LOADER_VERSION } from "../../version";
 import type { RouteHandler } from "./types";
 
 export const statusRoute: RouteHandler = {
@@ -15,6 +16,10 @@ export const statusRoute: RouteHandler = {
   async handle(_req, _url, ctx) {
     return jsonResponse({
       ok: true,
+      // Canonical installed product version ("0.6.0", or "dev" for
+      // unversioned local builds). The overlay's update UI compares
+      // this against the latest GitHub release tag.
+      version: LOADER_VERSION,
       wsConnected: ctx.wsClients.size > 0,
       wsClients: ctx.wsClients.size,
       plugins: ctx.plugins.size,

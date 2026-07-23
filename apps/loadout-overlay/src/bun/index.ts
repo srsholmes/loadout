@@ -116,6 +116,7 @@ function detectGamescopeMode(): boolean {
 // instance without an exported setter dance.
 import { buildRpcHandlers } from "./rpc-handlers";
 import { overlayManagementLoop, shutdown } from "./lifecycle";
+import { cleanupUpdateArtifacts, reapOldGeneration } from "./lib/updater";
 
 // ---- Singleton refs ---------------------------------------------------------
 // Mutable state index.ts owns, wrapped as `{ current: T }` refs so
@@ -145,6 +146,13 @@ const pendingResumeTimer: { current: ReturnType<typeof setTimeout> | null } = {
 // is already covered by the startup SIGCONT; this covers a HANG, where the bun
 // process is alive but the CEF renderer is wedged.)
 const lastHeartbeat: { current: number } = { current: 0 };
+
+// True once the webview has sent its FIRST real heartbeat this session.
+// Only the overlayHeartbeat RPC handler sets it — never the freeze
+// watchdog's "assume alive at open" seeding of lastHeartbeat above —
+// so it is proof of a rendering webview, not merely an opened window.
+// Gates the `.old` rollback-generation reap below.
+const webviewEverAlive: { current: boolean } = { current: false };
 
 // Input interceptor — opens every controller + keyboard + QAM device
 // up-front and toggles EVIOCGRAB on the controllers when the overlay
@@ -200,6 +208,7 @@ const rpc = BrowserView.defineRPC({
     cachedSteamSoundsPath,
     steamPid,
     lastHeartbeat,
+    webviewEverAlive,
   }),
 });
 
@@ -782,6 +791,28 @@ if (!shortcutRegistered) {
 // refs so the lifecycle helpers and the in-file toggleOverlay see the
 // same value without a setter dance.
 const managementLoopRunning: { current: boolean } = { current: true };
+
+// Reap self-update leftovers (abandoned `.staging`, downloaded
+// tarball) and restore from `.old` if a mid-swap crash left the live
+// tree missing. The `.old` rollback generation itself is deliberately
+// KEPT at this point: "the bun process started" doesn't prove the new
+// overlay works — CEF can still crash after this line. It's reaped
+// below only once the webview's first heartbeat arrives (a rendering
+// webview = a genuinely working overlay), which is the real end of
+// the one-generation rollback window. If the new overlay never gets
+// healthy, `.old` survives as the manual recovery copy.
+void cleanupUpdateArtifacts({ keepOldGeneration: true });
+const oldGenReaper = setInterval(() => {
+  // Gate on webviewEverAlive, NOT lastHeartbeat: the freeze watchdog
+  // seeds lastHeartbeat on every overlay OPEN ("assume alive"), so a
+  // Guide-press on a crash-looping post-update CEF would otherwise
+  // reap the rollback copy in the exact case it exists for.
+  if (webviewEverAlive.current) {
+    clearInterval(oldGenReaper);
+    void reapOldGeneration();
+  }
+}, 5000);
+(oldGenReaper as unknown as { unref?: () => void }).unref?.();
 
 overlayManagementLoop({
   state,

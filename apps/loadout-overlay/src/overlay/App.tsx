@@ -1,6 +1,10 @@
 import { useRef, useState, useEffect, useCallback, useMemo, type CSSProperties } from "react";
 import { Toaster, toast } from "react-hot-toast";
-import { LoadoutProvider, TOAST_EVENT, type ToastEventDetail } from "@loadout/ui";
+import { LoadoutProvider, TOAST_EVENT, notify, type ToastEventDetail } from "@loadout/ui";
+import { versionsEqual, olderParseableVersion } from "@loadout/types";
+import { OVERLAY_VERSION } from "./version";
+import { checkForUpdate } from "./lib/host";
+import { apiUrl, authHeaders } from "./lib/backend";
 import { Sidebar } from "./components/Sidebar";
 import { PluginHost } from "./components/PluginHost";
 import {
@@ -147,6 +151,91 @@ export function App() {
     };
     window.addEventListener(TOAST_EVENT, onToast);
     return () => window.removeEventListener(TOAST_EVENT, onToast);
+  }, []);
+
+  // Release-update surface (issue #173). Two boot-time jobs, both
+  // gated on the persisted config being loaded (the skip marker and
+  // the pending-update marker live there):
+  //   1. If the last session kicked off an update, confirm or clear
+  //      it: `updatePendingTag` matching the now-running version means
+  //      the update landed — say so once, then drop the marker.
+  //   2. ~10s after boot, ask the Bun host whether a newer release is
+  //      published. Toast unless the user skipped that exact version
+  //      from Settings (a manual check there ignores the skip).
+  // Both toasts wait for the overlay to actually be VISIBLE before
+  // firing: the window boots hidden (minimize-on-close model) and the
+  // overlay unit starts at login, so a toast shown at boot lands in a
+  // window the user isn't looking at and is gone before they open it.
+  // Dev builds short-circuit inside checkForUpdate (unparsable
+  // version), so this never nags during development.
+  useEffect(() => {
+    let cancelled = false;
+    let visResolve: (() => void) | null = null;
+    const visReady = new Promise<void>((resolve) => {
+      visResolve = resolve;
+    });
+    const onVisible = (e: Event) => {
+      if ((e as CustomEvent<{ isOpen: boolean }>).detail?.isOpen) {
+        visResolve?.();
+        visResolve = null;
+      }
+    };
+    window.addEventListener("loadout:overlay-visibility", onVisible as EventListener);
+
+    (async () => {
+      await whenUserConfigLoaded();
+      if (cancelled) return;
+      const pending = getConfigValue<string | null>("updatePendingTag", null);
+      if (pending) {
+        if (versionsEqual(OVERLAY_VERSION, pending)) {
+          // Wait until the user is actually looking at the overlay, then
+          // toast and only THEN clear the marker — otherwise the
+          // confirmation is consumed while the window is hidden.
+          await visReady;
+          if (cancelled) return;
+          notify(`Loadout updated to ${pending}.`, {
+            kind: "success",
+            id: "loadout-update",
+            duration: 6000,
+          });
+        }
+        setConfigValue("updatePendingTag", null);
+      }
+      await new Promise((r) => setTimeout(r, 10_000));
+      if (cancelled) return;
+      // Compare against the OLDER of backend/overlay versions — same
+      // rule as Settings' UpdateSection. Using only OVERLAY_VERSION
+      // here meant a half-applied update (overlay landed, backend
+      // didn't) got no startup toast even though Settings offered the
+      // repair. Backend unreachable → fall back to the overlay's own.
+      let installedVersion = OVERLAY_VERSION;
+      try {
+        const statusRes = await fetch(apiUrl("/api/status"), { headers: authHeaders() });
+        const statusJson = (await statusRes.json()) as { version?: unknown };
+        if (typeof statusJson.version === "string") {
+          installedVersion =
+            olderParseableVersion(statusJson.version, OVERLAY_VERSION) ?? OVERLAY_VERSION;
+        }
+      } catch {
+        // backend down — the overlay bundle's version is the best we have
+      }
+      const res = await checkForUpdate(installedVersion);
+      if (cancelled || !res.available || !res.tag) return;
+      if (getConfigValue<string | null>("updateSkippedVersion", null) === res.tag) return;
+      await visReady;
+      if (cancelled) return;
+      // Re-check the skip marker: the user may have skipped it from
+      // Settings during the wait.
+      if (getConfigValue<string | null>("updateSkippedVersion", null) === res.tag) return;
+      notify(`Loadout ${res.tag} is available — update from Settings.`, {
+        id: "loadout-update",
+        duration: 8000,
+      });
+    })();
+    return () => {
+      cancelled = true;
+      window.removeEventListener("loadout:overlay-visibility", onVisible as EventListener);
+    };
   }, []);
 
   // Toasts render here in the parent, OUTSIDE AppInner's zoomed wrapper, so the
