@@ -290,8 +290,3 @@ export function _resetForTests(opts?: { cacheDir?: string }): void {
     CACHE_PATH = join(CACHE_DIR, "community-themes.json");
   }
 }
-
-/** Path of the on-disk cache. Exported for tests / diagnostics. */
-export function getCachePath(): string {
-  return CACHE_PATH;
-}

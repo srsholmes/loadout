@@ -1,5 +1,4 @@
 import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
-import { gamesDir } from "./platform";
 import type {
   PersistedState,
   Settings,
@@ -205,6 +204,3 @@ export async function removeScanPath(
     scanPaths: state.settings.scanPaths.filter((p) => p !== path),
   });
 }
-
-/** Re-export for callers that need the canonical install root. */
-export { gamesDir };

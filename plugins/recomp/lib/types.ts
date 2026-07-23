@@ -15,24 +15,6 @@ export type InstallType =
   | "build_from_source"
   | "custom";
 
-export const PLATFORM_DISPLAY: Record<string, string> = {
-  n64: "N64", ps1: "PS1", ps2: "PS2", gc: "GC", xbox360: "X360",
-  gb: "GB", gba: "GBA", gbc: "GBC", nes: "NES", snes: "SNES",
-  nds: "NDS", "3ds": "3DS", wii: "Wii", wiiu: "Wii U", switch: "Switch",
-  pc: "PC", mobile: "Mobile", multi: "Multi", arcade: "Arcade",
-  dreamcast: "DC", saturn: "Saturn", xbox: "Xbox", xboxone: "Xbox One",
-  other: "Other",
-};
-
-export const PLATFORM_COLOR: Record<string, string> = {
-  n64: "#dc2626", ps1: "#6366f1", ps2: "#2563eb", gc: "#7c3aed", xbox360: "#16a34a",
-  gb: "#22c55e", gba: "#4ade80", gbc: "#15803d", nes: "#ef4444", snes: "#b91c1c",
-  nds: "#3b82f6", "3ds": "#60a5fa", wii: "#06b6d4", wiiu: "#0891b2", switch: "#e11d48",
-  pc: "#a3a3a3", mobile: "#facc15", multi: "#8b5cf6", arcade: "#f472b6",
-  dreamcast: "#818cf8", saturn: "#c084fc", xbox: "#16a34a", xboxone: "#22c55e",
-  other: "#525252",
-};
-
 // ── Registry Types (matching games.json) ─────────────────────────────
 
 export interface PlatformAssets {

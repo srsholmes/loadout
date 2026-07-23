@@ -43,7 +43,7 @@ import type {
   WakeCaptureResult,
 } from "../shared";
 
-export type { WakeStatus, WakeStatusDevice, WakeOpResult, WakeCaptureResult };
+export type { WakeStatus, WakeOpResult, WakeCaptureResult };
 
 /** Re-exported so backend.ts can run it from onLoad without reaching into
  *  the Deck-specific submodule. No-ops cleanly on non-Deck because it just

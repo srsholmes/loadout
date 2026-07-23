@@ -5,7 +5,7 @@
  * and provides authenticated fetch/WebSocket helpers.
  */
 
-import { BACKEND_URL, BACKEND_WS } from "./config";
+import { BACKEND_URL } from "./config";
 
 let sessionToken: string | null = null;
 
@@ -41,12 +41,6 @@ export function getAuthToken(): string {
 export function authHeaders(): HeadersInit {
   const token = getAuthToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
-/** Get the WebSocket URL with auth token. */
-export function wsUrl(): string {
-  const token = getAuthToken();
-  return `${BACKEND_WS}/ws?token=${encodeURIComponent(token)}`;
 }
 
 /** Get the full URL for a backend API path. */
