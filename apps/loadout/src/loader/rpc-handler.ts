@@ -38,7 +38,16 @@ function invokeScoped<T>(entry: RpcPluginEntry, fn: () => T | Promise<T>): Promi
  */
 export const BROADCAST_PLUGIN_ID = "__broadcast";
 
-export function createRpcHandler(plugins: Map<string, RpcPluginEntry>) {
+export interface RpcHandlerOpts {
+  /** True when the id names a discovered-but-disabled plugin — lets the
+   *  handler return a precise "disabled" error instead of "not found". */
+  isDisabled?: (id: string) => boolean;
+}
+
+export function createRpcHandler(
+  plugins: Map<string, RpcPluginEntry>,
+  opts: RpcHandlerOpts = {},
+) {
   return async (message: string): Promise<string | null> => {
     let req: RpcRequest;
     try {
@@ -84,7 +93,9 @@ export function createRpcHandler(plugins: Map<string, RpcPluginEntry>) {
     if (!entry) {
       const res: RpcResponse = {
         id: req.id,
-        error: `Plugin "${req.plugin}" not found`,
+        error: opts.isDisabled?.(req.plugin)
+          ? `Plugin "${req.plugin}" is disabled`
+          : `Plugin "${req.plugin}" not found`,
       };
       return JSON.stringify(res);
     }

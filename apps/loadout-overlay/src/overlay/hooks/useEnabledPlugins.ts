@@ -1,33 +1,38 @@
 import { useCallback } from "react";
 import { useConfigValue, setConfigValue } from "../lib/userConfig";
 
-const ENABLED_KEY = "enabledPlugins";
+const DISABLED_KEY = "disabledPlugins";
 const WELCOME_KEY = "welcomeCompleted";
 
 /**
- * Persisted enable list for the sidebar / homepage. `undefined` means the
- * user hasn't picked yet (pre-welcome), in which case every plugin is
- * surfaced — the welcome modal sits on top regardless, so this only
- * matters if the user has dismissed it.
+ * Persisted plugin enablement — a deny-list (`disabledPlugins`) so
+ * plugins installed later default to enabled. The backend loader reads
+ * the same key at startup and never imports a disabled plugin's code;
+ * writing it through setConfigValue also triggers the loader's
+ * runtime-enable path (a newly-enabled plugin is loaded live, while a
+ * newly-disabled one needs an app restart to actually unload).
+ *
+ * The legacy `enabledPlugins` allow-list is migrated by the backend at
+ * startup, so this hook only ever sees the deny-list key.
  */
 export function useEnabledPlugins() {
-  const [enabled, setEnabled] = useConfigValue<string[] | undefined>(ENABLED_KEY, undefined);
+  const [disabled, setDisabled] = useConfigValue<string[] | undefined>(DISABLED_KEY, undefined);
 
   const isEnabled = useCallback(
-    (id: string) => (enabled ? enabled.includes(id) : true),
-    [enabled],
+    (id: string) => !(disabled ?? []).includes(id),
+    [disabled],
   );
 
   const toggle = useCallback(
-    (id: string, allKnownIds: string[]) => {
-      const base = enabled ?? allKnownIds;
+    (id: string) => {
+      const base = disabled ?? [];
       const next = base.includes(id) ? base.filter((x) => x !== id) : [...base, id];
-      setEnabled(next);
+      setDisabled(next);
     },
-    [enabled, setEnabled],
+    [disabled, setDisabled],
   );
 
-  return { enabled, setEnabled, isEnabled, toggle };
+  return { disabled, setDisabled, isEnabled, toggle };
 }
 
 export function setWelcomeCompleted(v: boolean): void {

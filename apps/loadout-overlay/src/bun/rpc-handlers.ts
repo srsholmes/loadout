@@ -52,6 +52,7 @@ import {
 } from "./lib/updater";
 import {
   restartServer,
+  restartApp,
   systemReboot,
   systemShutdown,
 } from "./system-actions";
@@ -133,6 +134,12 @@ export function buildRpcHandlers(deps: RpcHandlerDeps) {
       // /api/restart call.
       restartServer: async (): Promise<{ success: boolean; error?: string }> =>
         restartServer(),
+      // Restart the backend AND the overlay unit together. Used when the
+      // user disables plugins: a loaded plugin can't be unloaded in place,
+      // and a backend-only restart would strand the overlay's WebSocket —
+      // so both bounce and come back with the disabled plugin's code gone.
+      restartApp: async (): Promise<{ success: boolean; error?: string }> =>
+        restartApp(),
       // -- Self-update surface (issue #173) --------------------------------
       // The webview drives the whole flow: check → applyUpdate →
       // poll getUpdateStatus until "restarting" or "error". All the

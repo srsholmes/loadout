@@ -56,6 +56,15 @@ export interface LoadedPlugin {
   hasApp: boolean;
 }
 
+/** Discovery-level registry entry — every plugin found on disk, whether
+ *  or not its code was loaded. `disabled` entries were never imported. */
+export interface PluginRegistryEntry {
+  meta: LoadedPlugin["meta"];
+  hasApp: boolean;
+  hasBackend: boolean;
+  status: "loaded" | "disabled" | "error";
+}
+
 /**
  * Shared services + state every route module needs. Constructed once
  * in `index.ts` inside `startServer()` and passed by reference to
@@ -65,6 +74,16 @@ export interface LoadedPlugin {
 export interface RouteContext {
   // --- Server state ---
   readonly plugins: Map<string, LoadedPlugin>;
+  /** Every plugin discovered on disk, including disabled ones (which
+   *  have no entry in `plugins`). Keyed by plugin id. */
+  readonly registry: Map<string, PluginRegistryEntry>;
+  /**
+   * Notify the loader that /api/user-config wrote a new config. The
+   * loader reacts to `disabledPlugins` changes: a newly-enabled plugin
+   * is loaded live; a newly-disabled one stays loaded until the app
+   * restarts (no unload path exists). Fire-and-forget.
+   */
+  readonly onUserConfigChanged: (next: Record<string, unknown>) => void;
   readonly token: string;
   readonly wsClients: Set<WsClient>;
   readonly bundleCache: Map<string, string>;
