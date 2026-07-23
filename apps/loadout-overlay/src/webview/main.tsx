@@ -59,6 +59,15 @@ const electro = new Electroview({
   // runtime), so it's effectively `any` here — `defineRPC` is a static
   // method that lives on the runtime class.
   rpc: Electroview.defineRPC({
+    // Electrobun's DEFAULT_MAX_REQUEST_TIME is 1000ms — measured on the
+    // SENDER (this side) for webview→bun requests. Several of our RPCs
+    // legitimately take longer: checkForUpdate does a cold-DNS GitHub
+    // API round-trip, restartSteam walks a 3-5s graceful→forceful
+    // ladder, exportLogs reads the whole server log. At 1s those
+    // rejected with "RPC request timed out" mid-flight (the update
+    // check visibly hung Settings on first click). 30s is generous
+    // headroom; the bun handlers bound their own slow externals.
+    maxRequestTime: 30_000,
     handlers: {
       requests: {},
       messages: {},

@@ -33,6 +33,8 @@ import type { ControllerShortcuts } from "../webview/lib/electrobun";
 import {
   validateSetControllerShortcutsParams,
   validateReadSoundFileFilename,
+  validateCheckForUpdateParams,
+  validateApplyUpdateTag,
 } from "./rpc-validation";
 import {
   requestShow,
@@ -41,6 +43,13 @@ import {
   type OverlayState,
 } from "./lib/overlay-state";
 import { runRestartSteamLadder } from "./lib/restart-steam";
+import {
+  checkForUpdate,
+  startUpdate,
+  getUpdateStatus,
+  type UpdateCheckResult,
+  type UpdateStatus,
+} from "./lib/updater";
 import {
   restartServer,
   systemReboot,
@@ -68,6 +77,14 @@ export interface RpcHandlerDeps {
   /** Last time the webview sent an `overlayHeartbeat` (Date.now() ms). The
    *  freeze watchdog in index.ts reads this to detect a hung overlay. */
   lastHeartbeat: Ref<number>;
+  /** Flips true on the FIRST real webview heartbeat and stays true.
+   *  Gates the `.old` rollback-generation reap in index.ts: unlike
+   *  `lastHeartbeat` (which the freeze watchdog re-seeds on every
+   *  overlay OPEN, "assume alive"), this can only be set by a webview
+   *  that actually rendered and ran JS — the proof the post-update
+   *  overlay works. A Guide-press on a crash-looping CEF must NOT
+   *  close the rollback window. */
+  webviewEverAlive: Ref<boolean>;
 }
 
 /**
@@ -92,6 +109,7 @@ export function buildRpcHandlers(deps: RpcHandlerDeps) {
       // forget: returns nothing, never throws.
       overlayHeartbeat: async () => {
         deps.lastHeartbeat.current = Date.now();
+        deps.webviewEverAlive.current = true;
       },
       getControllerShortcuts: async () => deps.shortcuts.current,
       // BrowserView.defineRPC types every handler as (params?: unknown) => unknown,
@@ -112,9 +130,30 @@ export function buildRpcHandlers(deps: RpcHandlerDeps) {
       },
       // Restart the backend loadout.service so plugins rescan
       // their hardware from scratch. See system-actions.ts for the
-      // systemctl shell-out.
+      // /api/restart call.
       restartServer: async (): Promise<{ success: boolean; error?: string }> =>
         restartServer(),
+      // -- Self-update surface (issue #173) --------------------------------
+      // The webview drives the whole flow: check → applyUpdate →
+      // poll getUpdateStatus until "restarting" or "error". All the
+      // heavy lifting lives in lib/updater.ts.
+      checkForUpdate: async (params?: unknown): Promise<UpdateCheckResult> => {
+        const installedVersion = validateCheckForUpdateParams(params);
+        if (installedVersion === null) {
+          return { available: false, error: "malformed checkForUpdate payload" };
+        }
+        return checkForUpdate(installedVersion);
+      },
+      applyUpdate: async (
+        params?: unknown,
+      ): Promise<{ success: boolean; error?: string }> => {
+        const tag = validateApplyUpdateTag(params);
+        if (tag === null) {
+          return { success: false, error: "malformed applyUpdate payload" };
+        }
+        return startUpdate(tag);
+      },
+      getUpdateStatus: async (): Promise<UpdateStatus> => getUpdateStatus(),
       // Dump the overlay UI's captured console logs (sent over in the
       // payload) plus the backend server log file into a timestamped
       // file in the user's Downloads folder. See export-logs.ts. Used

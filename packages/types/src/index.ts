@@ -4,6 +4,17 @@ export type { RpcRequest, RpcResponse, RpcEvent } from "./ipc";
 export type { RetryScanner, RetryScannerOptions } from "./scanner";
 export { createRetryScanner } from "./scanner";
 export type { WebviewMessages, WebviewAnalogAxis } from "./webview-messages";
+export type { ParsedVersion } from "./version";
+export {
+  RELEASE_TAG_RE,
+  parseVersion,
+  compareVersions,
+  isNewerVersion,
+  versionsEqual,
+  olderParseableVersion,
+} from "./version";
+export type { UpdatePhase, UpdateStatus, UpdateCheckResult } from "./update-shared";
+export { isTrustedGithubHost, parseSha256Sums, makeIdleAbort } from "./update-shared";
 export type {
   GameSource,
   GameInfo,

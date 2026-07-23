@@ -976,6 +976,18 @@ Type=simple
 # killed it before this point — any lock we see here is stale.
 ExecStartPre=-/bin/sh -c 'rm -f %h/.cache/com.loadout.overlay/dev/CEF/SingletonLock %h/.cache/com.loadout.overlay/dev/CEF/SingletonCookie %h/.cache/com.loadout.overlay/dev/CEF/SingletonSocket'
 
+# Self-update crash recovery. The in-app updater swaps the overlay tree
+# with two renames (live -> .old, .staging -> live); a crash/power-loss
+# between them leaves NO live tree, this unit's ExecStart path gone, and
+# the unit crash-looping forever — the bun-side restore can never run
+# because it lives inside the tree being swapped. Repair from OUTSIDE
+# the tree: prefer the staged tree (completing the update), else fall
+# back to the previous generation. Staging is only promoted when it
+# carries the updater's `.verified` sentinel (written after extraction,
+# launcher validation AND the webkit .so carry-over) — an executable
+# launcher alone can exist in a half-written tree.
+ExecStartPre=-/bin/sh -c 'L=%h/.local/share/loadout-overlay; if [ ! -x "$L/bin/launcher" ]; then if [ -f "$L.staging/.verified" ] && [ -x "$L.staging/bin/launcher" ]; then rm -rf "$L"; mv "$L.staging" "$L"; elif [ -x "$L.old/bin/launcher" ]; then rm -rf "$L"; mv "$L.old" "$L"; fi; fi'
+
 # Wait for the plugin server to be up before launching so the webview
 # doesn't race its initial fetch.
 ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do curl -sf "http://localhost:${LOADOUT_PORT:-33820}/up" >/dev/null 2>&1 && exit 0; sleep 1; done; exit 0'
