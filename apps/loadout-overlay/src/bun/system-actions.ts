@@ -8,7 +8,7 @@
 // runSystemctl() is exported so the smaller handlers (systemShutdown /
 // systemReboot) can stay one-liners in the index.ts handler builder.
 
-import { runFull } from "@loadout/exec";
+import { runFull, spawn } from "@loadout/exec";
 
 /**
  * Run `systemctl <args…>` and report success/stderr. Used by the
@@ -124,4 +124,42 @@ export async function restartServer(): Promise<{
     console.error("[overlay] restartServer threw:", err);
     return { success: false, error: msg };
   }
+}
+
+/**
+ * Schedule a restart of the overlay's own user unit via a transient
+ * systemd-run unit — a plain child process would die with our cgroup
+ * mid-restart. Delayed so the RPC response (and any last status poll)
+ * reaches the webview before CEF goes down with us. Shared by the
+ * self-updater and restartApp().
+ */
+export function scheduleOverlayRestart(delayMs = 1200): void {
+  setTimeout(() => {
+    try {
+      spawn(
+        ["systemd-run", "--user", "--collect", "systemctl", "--user", "restart", "loadout-overlay"],
+        { stdout: "ignore", stderr: "ignore" },
+      );
+    } catch (err) {
+      console.error("[overlay] failed to schedule overlay restart:", err);
+    }
+  }, delayMs);
+}
+
+/**
+ * Restart the whole app: the backend loadout.service AND the overlay
+ * unit. Used when the user disables plugins — a loaded plugin can't be
+ * unloaded in place, and restarting only the backend would sever the
+ * overlay's WebSocket, so both go down together and come back clean.
+ * The overlay restart is scheduled (not awaited) so this RPC can still
+ * resolve to the webview before CEF dies.
+ */
+export async function restartApp(): Promise<{
+  success: boolean;
+  error?: string;
+}> {
+  const res = await restartServer();
+  if (!res.success) return res;
+  scheduleOverlayRestart();
+  return { success: true };
 }

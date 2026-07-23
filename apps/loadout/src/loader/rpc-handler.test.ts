@@ -34,6 +34,24 @@ describe("createRpcHandler", () => {
     expect(parsed.error).toContain("not found");
   });
 
+  it("reports a disabled plugin distinctly from a missing one", async () => {
+    const handler = createRpcHandler(new Map(), {
+      isDisabled: (id) => id === "tdp-control",
+    });
+    const disabled = JSON.parse(
+      (await handler(
+        JSON.stringify({ id: "1", plugin: "tdp-control", method: "foo", args: [] }),
+      ))!,
+    );
+    expect(disabled.error).toContain("is disabled");
+    const missing = JSON.parse(
+      (await handler(
+        JSON.stringify({ id: "2", plugin: "ghost", method: "foo", args: [] }),
+      ))!,
+    );
+    expect(missing.error).toContain("not found");
+  });
+
   it("returns error for unknown method", async () => {
     const plugins = makePlugins({ test: {} as PluginBackend });
     const handler = createRpcHandler(plugins);

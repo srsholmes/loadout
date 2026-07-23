@@ -33,7 +33,8 @@ import { mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import * as fsp from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { runFull, spawn } from "@loadout/exec";
+import { runFull } from "@loadout/exec";
+import { scheduleOverlayRestart } from "../system-actions";
 import {
   RELEASE_TAG_RE,
   parseVersion,
@@ -95,20 +96,10 @@ async function defaultSha256File(path: string): Promise<string> {
   return hasher.digest("hex");
 }
 
-function defaultScheduleOverlayRestart(): void {
-  // Delay so the RPC response + one last status poll reach the webview
-  // before CEF goes down with us.
-  setTimeout(() => {
-    try {
-      spawn(
-        ["systemd-run", "--user", "--collect", "systemctl", "--user", "restart", "loadout-overlay"],
-        { stdout: "ignore", stderr: "ignore" },
-      );
-    } catch (err) {
-      console.error("[updater] failed to schedule overlay restart:", err);
-    }
-  }, 1200);
-}
+// Shared with restartApp() (plugin disable) so both paths bounce the
+// overlay unit exactly the same way — via a transient systemd-run unit,
+// delayed so the RPC response reaches the webview before CEF dies.
+const defaultScheduleOverlayRestart = scheduleOverlayRestart;
 
 export const DEFAULT_DEPS: UpdaterDeps = {
   fetchFn: fetch,

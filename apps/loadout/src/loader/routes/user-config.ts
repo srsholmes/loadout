@@ -23,7 +23,7 @@ import type { RouteHandler } from "./types";
 export const userConfigRoute: RouteHandler = {
   name: "user-config",
   match: (_req, url) => url.pathname === "/api/user-config",
-  async handle(req, _url, _ctx) {
+  async handle(req, _url, ctx) {
     try {
       if (req.method === "GET") {
         return jsonResponse(await readUserConfig());
@@ -33,7 +33,11 @@ export const userConfigRoute: RouteHandler = {
         if (!body || typeof body !== "object" || Array.isArray(body)) {
           return jsonErrorResponse({ error: "Body must be an object" }, 400);
         }
-        return jsonResponse(await patchUserConfig(body));
+        const next = await patchUserConfig(body);
+        // Let the loader react to plugin enablement changes (loads a
+        // newly-enabled plugin live). Fire-and-forget by contract.
+        ctx.onUserConfigChanged(next);
+        return jsonResponse(next);
       }
       if (req.method === "PUT") {
         const body = (await req.json()) as UserConfig;
@@ -41,6 +45,7 @@ export const userConfigRoute: RouteHandler = {
           return jsonErrorResponse({ error: "Body must be an object" }, 400);
         }
         await writeUserConfig(body);
+        ctx.onUserConfigChanged(body);
         return jsonResponse(body);
       }
       return new Response("Method Not Allowed", { status: 405 });

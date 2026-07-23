@@ -13,11 +13,13 @@ import { apiUrl, authHeaders } from "../lib/backend";
 import { useSidebarAutoCollapseSetting } from "../hooks/useSidebarCollapse";
 import { OVERLAY_VERSION } from "../version";
 import { useEnabledPlugins } from "../hooks/useEnabledPlugins";
+import { useInstalledPlugins } from "../hooks/usePlugins";
 import { useConfigValue, getConfigValue, setConfigValue } from "../lib/userConfig";
 import {
   getControllerShortcuts,
   setControllerShortcuts,
   restartServer,
+  restartApp,
   restartSteam,
   forceUnfreezeSteam,
   systemShutdown,
@@ -519,12 +521,22 @@ function SettingsInner({
   );
   const [shortcuts, setShortcuts] = useState<ControllerShortcuts | null>(null);
   const { isEnabled, toggle: togglePluginEnabled } = useEnabledPlugins();
-  const allPluginIds = useMemo(() => plugins.map((p) => p.id), [plugins]);
+  // Full on-disk plugin list incl. disabled ones (which the `plugins`
+  // prop — the loaded set used for shortcut targets — never contains),
+  // so the Plugins tab can list and re-enable them.
+  const { plugins: installedPlugins } = useInstalledPlugins();
   const sortedPlugins = useMemo(
-    () => [...plugins].sort((a, b) => a.name.localeCompare(b.name)),
-    [plugins],
+    () => [...installedPlugins].sort((a, b) => a.name.localeCompare(b.name)),
+    [installedPlugins],
   );
   const enabledCount = sortedPlugins.filter((p) => isEnabled(p.id)).length;
+  // Plugins the user has turned off but the backend still has running
+  // (their code can't be unloaded in place) — restarting the app clears
+  // them. Enabling never needs a restart (the loader loads it live).
+  const pendingDisable = useMemo(
+    () => sortedPlugins.filter((p) => p.status === "loaded" && !isEnabled(p.id)),
+    [sortedPlugins, isEnabled],
+  );
 
   useEffect(() => {
     applyTheme(theme);
@@ -759,6 +771,24 @@ function SettingsInner({
                 {enabledCount} of {sortedPlugins.length} enabled
               </span>
             </div>
+            {pendingDisable.length > 0 && (
+              <div className="mb-4">
+                <MaintenanceActionRow
+                  action={{
+                    title: "Restart to unload disabled plugins",
+                    description: `${pendingDisable.length} plugin${
+                      pendingDisable.length === 1 ? "" : "s"
+                    } you turned off ${
+                      pendingDisable.length === 1 ? "is" : "are"
+                    } still running until Loadout restarts. The overlay will close and reopen; your game keeps running.`,
+                    idleLabel: "Restart Loadout",
+                    runningLabel: "Restarting...",
+                    successLabel: "Restarting",
+                    invoke: restartApp,
+                  }}
+                />
+              </div>
+            )}
             <div className="bg-base-200 rounded-2xl border border-base-300 p-2">
               {sortedPlugins.length === 0 && (
                 <div className="text-center py-8 text-sm text-base-content/40">
@@ -792,7 +822,7 @@ function SettingsInner({
                     <div className="shrink-0">
                       <Toggle
                         checked={on}
-                        onChange={() => togglePluginEnabled(plugin.id, allPluginIds)}
+                        onChange={() => togglePluginEnabled(plugin.id)}
                       />
                     </div>
                   </div>

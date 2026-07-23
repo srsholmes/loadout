@@ -16,7 +16,7 @@ import {
 import { Settings } from "./components/Settings";
 import { Homepage } from "./components/Homepage";
 import { WelcomeScreen } from "./components/WelcomeScreen";
-import { usePlugins } from "./hooks/usePlugins";
+import { usePlugins, useInstalledPlugins } from "./hooks/usePlugins";
 import { useSidebarAutoCollapseSetting } from "./hooks/useSidebarCollapse";
 import { useStatusMetrics } from "./hooks/useStatusMetrics";
 import { useEnabledPlugins } from "./hooks/useEnabledPlugins";
@@ -279,7 +279,10 @@ export function App() {
 /** Inner app component that can use GamepadNav hooks. */
 function AppInner() {
   const { plugins, loading } = usePlugins();
-  const { enabled: enabledList, isEnabled } = useEnabledPlugins();
+  // Every plugin on disk (incl. disabled ones the backend never loaded),
+  // so Settings + the welcome wizard can list and re-enable them.
+  const { plugins: installedPlugins } = useInstalledPlugins();
+  const { disabled: disabledList, isEnabled } = useEnabledPlugins();
   const [welcomeCompleted] = useConfigValue<boolean>("welcomeCompleted", false);
   // Lets Settings re-open the welcome flow even after it's been dismissed.
   const [welcomeForceOpen, setWelcomeForceOpen] = useState(false);
@@ -421,7 +424,11 @@ function AppInner() {
   const showSettings = route.view === "settings";
   const showHome = route.view === "home";
   const activePluginId = route.view === "plugin" ? route.pluginId : null;
-  const activePlugin = plugins.find((p) => p.id === activePluginId) ?? null;
+  // Resolve from visiblePlugins, not the full loaded list: a plugin the
+  // user just disabled is still loaded in the backend until the app
+  // restarts, but must not be reachable by `#/plugin/<id>` deep link or
+  // an OpenPlugin controller shortcut in the meantime.
+  const activePlugin = visiblePlugins.find((p) => p.id === activePluginId) ?? null;
 
   // The first time the user opens a keepAlive plugin, add it to the
   // mounted set so subsequent navigation away + back doesn't unmount.
@@ -435,7 +442,15 @@ function AppInner() {
     });
   }, [activePlugin]);
 
-  const keepAlivePluginsToRender = plugins.filter((p) => mountedKeepAlive.has(p.id));
+  // Only keep ENABLED keepAlive plugins mounted. A keepAlive plugin the
+  // user just disabled is still in the backend's loaded list (no unload
+  // until restart), but its `active` flag keys off the raw route id — so
+  // without this filter an OpenPlugin shortcut / #/plugin/<id> deep link /
+  // last-tab restore would render the disabled plugin full-screen even
+  // though the sidebar hides it. Filtering here unmounts its webview too.
+  const keepAlivePluginsToRender = plugins.filter(
+    (p) => mountedKeepAlive.has(p.id) && isEnabled(p.id),
+  );
 
   // Probe the active plugin for a `mountHeader` export so the topbar
   // can fall back to a name/subtitle line for plugins that don't ship
@@ -509,8 +524,8 @@ function AppInner() {
       <div style={wrapperStyle} className="bg-transparent text-base-content font-sans overflow-clip flex items-center justify-center p-3">
         <div className="flex flex-col flex-1 max-h-full h-full rounded-xl overflow-clip bg-base-100 border border-base-300 shadow-2xl">
           <WelcomeScreen
-            plugins={plugins}
-            initialEnabled={enabledList}
+            plugins={installedPlugins}
+            initialDisabled={disabledList}
             loading={loading}
             onClose={() => {
               setWelcomeForceOpen(false);

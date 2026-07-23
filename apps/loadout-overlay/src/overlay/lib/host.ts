@@ -67,6 +67,21 @@ export async function restartServer(): Promise<{ success: boolean; error?: strin
 }
 
 /**
+ * Restart the whole app — backend `loadout.service` AND the overlay
+ * unit. Used to unload plugins the user disabled: their code already ran
+ * and can't be torn down in place, so both processes bounce and come
+ * back clean. The overlay window closes and reopens; the game keeps
+ * running. No-op (`{ success: false }`) outside Electrobun.
+ */
+export async function restartApp(): Promise<{ success: boolean; error?: string }> {
+  const result = await rpcInvoke("restartApp");
+  if (!result || typeof result !== "object") {
+    return { success: false, error: "Host did not respond" };
+  }
+  return result as { success: boolean; error?: string };
+}
+
+/**
  * Dump the overlay UI's captured console logs and the backend server
  * log into a timestamped file in the user's Downloads folder (#130).
  * The UI logs are collected here from the in-webview ring buffer and

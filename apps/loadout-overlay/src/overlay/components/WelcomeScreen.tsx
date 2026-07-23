@@ -6,15 +6,17 @@ import {
   Select,
   TextInput,
   useBackend,
+  notify,
 } from "@loadout/ui";
 import { Focusable, useFocusable, FocusContext } from "./GamepadNav";
 import type { PluginInfo } from "../hooks/usePlugins";
 import { setWelcomeCompleted } from "../hooks/useEnabledPlugins";
-import { setConfigValue, getConfigValue } from "../lib/userConfig";
+import { setConfigValueFlushed, getConfigValue } from "../lib/userConfig";
 import { applyTheme, LOADOUT_THEMES } from "./Settings";
 import {
   getControllerShortcuts,
   setControllerShortcuts,
+  restartApp,
   type ControllerShortcuts,
   type ShortcutAction,
 } from "../lib/host";
@@ -69,9 +71,10 @@ function stringToAction(s: string): ShortcutAction {
 
 interface WelcomeScreenProps {
   plugins: PluginInfo[];
-  /** Plugins already enabled — used so re-opening from Settings reflects
-   *  the user's current set rather than the original defaults. */
-  initialEnabled?: string[];
+  /** Plugins currently disabled — used so re-opening from Settings
+   *  reflects the user's current set rather than the original defaults.
+   *  Deny-list: absent from this list (incl. newly installed) = enabled. */
+  initialDisabled?: string[];
   loading: boolean;
   onClose: () => void;
 }
@@ -88,7 +91,7 @@ interface WelcomeScreenProps {
  */
 export function WelcomeScreen({
   plugins,
-  initialEnabled,
+  initialDisabled,
   loading,
   onClose,
 }: WelcomeScreenProps) {
@@ -117,31 +120,33 @@ export function WelcomeScreen({
     applyTheme(id); // writes config + sets data-theme — same call Settings uses
   }
 
-  // Seed plugin selection from the current persisted list when re-opening,
-  // or — on first boot — turn every discovered plugin on by default.
-  const [selected, setSelected] = useState<Set<string>>(() => {
-    return new Set(initialEnabled ?? plugins.map((p) => p.id));
-  });
+  // `selected` holds the ENABLED set (toggle on = enabled). Seed it as the
+  // complement of the persisted deny-list when re-opening, or — on first
+  // boot (no deny-list yet) — turn every discovered plugin on by default.
+  const seedSelected = useCallback(
+    (disabled: string[] | undefined, all: PluginInfo[]) =>
+      new Set(
+        all
+          .map((p) => p.id)
+          .filter((id) => !(disabled ?? []).includes(id)),
+      ),
+    [],
+  );
+  const [selected, setSelected] = useState<Set<string>>(() =>
+    seedSelected(initialDisabled, plugins),
+  );
 
-  // Re-seed when `initialEnabled` resolves after async config load, or when
-  // the plugin list streams in on first boot (no persisted choice yet).
+  // Re-seed when `initialDisabled` resolves after async config load, or
+  // when the plugin list streams in on first boot.
   const sentinelRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (initialEnabled) {
-      const key = `saved:${initialEnabled.join("|")}`;
-      if (sentinelRef.current === key) return;
-      sentinelRef.current = key;
-      setSelected(new Set(initialEnabled));
-      return;
-    }
-    // First boot: enable all discovered plugins once they've loaded.
     if (plugins.length === 0) return;
-    const ids = plugins.map((p) => p.id);
-    const key = `all:${[...ids].sort().join("|")}`;
+    const ids = plugins.map((p) => p.id).sort();
+    const key = `${(initialDisabled ?? []).slice().sort().join("|")}::${ids.join("|")}`;
     if (sentinelRef.current === key) return;
     sentinelRef.current = key;
-    setSelected(new Set(ids));
-  }, [initialEnabled, plugins]);
+    setSelected(seedSelected(initialDisabled, plugins));
+  }, [initialDisabled, plugins, seedSelected]);
 
   const [shortcuts, setShortcuts] = useState<ControllerShortcuts | null>(null);
   useEffect(() => {
@@ -205,15 +210,65 @@ export function WelcomeScreen({
     if (stepIndex > 0) setStepIndex(stepIndex - 1);
   }
 
-  function handleComplete() {
-    setConfigValue("enabledPlugins", [...selected]);
+  // When completing turns OFF a plugin the backend currently has loaded,
+  // its code can't be unloaded in place — we prompt for an app restart
+  // instead of closing straight away. Holds the count of such plugins,
+  // or null when no prompt is pending.
+  const [restartPromptCount, setRestartPromptCount] = useState<number | null>(null);
+
+  async function handleComplete() {
+    const disabled = plugins
+      .map((p) => p.id)
+      .filter((id) => !selected.has(id));
+    // Plugins the backend is running right now that the user just turned
+    // off — these are the ones a restart actually unloads.
+    const nowLoadedButDisabled = plugins.filter(
+      (p) => p.status === "loaded" && !selected.has(p.id),
+    ).length;
+    // Flush the write before any restart so it can't race the bounce.
+    const saved = await setConfigValueFlushed("disabledPlugins", disabled);
     setWelcomeCompleted(true);
+    if (!saved) {
+      // Nothing persisted — prompting a restart would be pointless (it
+      // wouldn't unload anything). Tell the user and land them in the app.
+      notify("Couldn't save your plugin choices — try again from Settings.", {
+        kind: "error",
+        id: "welcome-plugins-save",
+      });
+      onClose();
+      return;
+    }
+    if (nowLoadedButDisabled > 0) {
+      setRestartPromptCount(nowLoadedButDisabled);
+      return;
+    }
     onClose();
   }
 
   const enabledCount = selected.size;
   const themeName =
     LOADOUT_THEMES.find((t) => t.id === theme)?.name ?? "Midnight";
+
+  if (restartPromptCount !== null) {
+    return (
+      <RestartPrompt
+        count={restartPromptCount}
+        onRestart={async () => {
+          const res = await restartApp();
+          // On success the app is bouncing — nothing more to do. On
+          // failure (e.g. an update in progress) surface it and leave the
+          // prompt so the user can retry or pick Later.
+          if (!res.success) {
+            notify(res.error ?? "Couldn't restart Loadout.", {
+              kind: "error",
+              id: "welcome-restart",
+            });
+          }
+        }}
+        onLater={onClose}
+      />
+    );
+  }
 
   return (
     <FocusContext.Provider value={focusKey}>
@@ -373,6 +428,76 @@ export function WelcomeScreen({
             </div>
           </div>
         </div>
+    </FocusContext.Provider>
+  );
+}
+
+// ─── Restart prompt ─────────────────────────────────────────────────────────
+// Shown after the wizard completes IF the user turned off a plugin the
+// backend already has running. A loaded plugin's code can't be unloaded
+// in place, so we ask to restart the whole app (backend + overlay) to
+// clear it — otherwise a "disabled" hardware plugin (TDP/fan/RGB) keeps
+// running and can fight other tools like Decky Loader.
+function RestartPrompt({
+  count,
+  onRestart,
+  onLater,
+}: {
+  count: number;
+  onRestart: () => void;
+  onLater: () => void;
+}) {
+  const { ref, focusKey, focusSelf } = useFocusable({
+    focusKey: "welcome-restart-prompt",
+    trackChildren: true,
+    isFocusBoundary: true,
+  });
+  useEffect(() => {
+    focusSelf();
+  }, [focusSelf]);
+  const noun = count === 1 ? "plugin" : "plugins";
+  return (
+    <FocusContext.Provider value={focusKey}>
+      <div
+        ref={ref}
+        className="h-full w-full bg-base-100 flex items-center justify-center p-8 animate-[viewEnter_180ms_ease-out]"
+      >
+        <div className="max-w-md flex flex-col items-center text-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-primary/15 text-primary flex items-center justify-center text-2xl">
+            ↻
+          </div>
+          <h2 className="text-xl font-bold text-base-content">
+            Restart to finish disabling {noun}
+          </h2>
+          <p className="text-sm text-base-content/60 leading-relaxed">
+            You turned off {count} {noun} that {count === 1 ? "is" : "are"}{" "}
+            still running in the background. Restart Loadout now to fully
+            unload {count === 1 ? "it" : "them"} — the overlay will close and
+            reopen, and your game keeps running. You can also do this later
+            from Settings.
+          </p>
+          <div className="flex items-center gap-2 mt-2">
+            <Focusable focusKey="welcome-restart-later" onActivate={onLater}>
+              <button
+                type="button"
+                onClick={onLater}
+                className="btn btn-ghost btn-sm min-w-[110px]"
+              >
+                Later
+              </button>
+            </Focusable>
+            <Focusable focusKey="welcome-restart-now" onActivate={onRestart}>
+              <button
+                type="button"
+                onClick={onRestart}
+                className="btn btn-primary btn-sm min-w-[140px]"
+              >
+                Restart now
+              </button>
+            </Focusable>
+          </div>
+        </div>
+      </div>
     </FocusContext.Provider>
   );
 }
