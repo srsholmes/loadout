@@ -4,9 +4,11 @@
   "type": "module",
   "dependencies": {
     "react": "^18.3.0",
-    "react-dom": "^18.3.0",
     "react-icons": "^5.6.0",
     "@loadout/ui": "workspace:*",
+    "@loadout/types": "workspace:*",
+    "@loadout/exec": "workspace:*",
+    "@loadout/plugin-storage": "workspace:*",
     "@loadout/wake": "workspace:*"
   },
   "plugin": {

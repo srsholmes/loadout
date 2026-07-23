@@ -5,11 +5,11 @@
   "description": "Install InputPlumber on distros that don't ship it natively (CachyOS, mutable Fedora, atomic Fedora variants without IP in the base image).",
   "dependencies": {
     "react": "^18.3.0",
-    "react-dom": "^18.3.0",
     "react-icons": "^5.6.0",
     "@loadout/ui": "workspace:*",
     "@loadout/types": "workspace:*",
     "@loadout/exec": "workspace:*",
+    "@loadout/plugin-storage": "workspace:*",
     "@loadout/deck-hid": "workspace:*"
   },
   "plugin": {
