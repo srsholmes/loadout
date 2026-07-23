@@ -99,11 +99,9 @@ export interface ModSDK {
  * `ctx` param is the same object the proxy reads from — convenient
  * for scripts that want both the SDK getters AND access to e.g.
  * `ctx.installed.steamAppId` without going through the proxy.
- */
-/**
- * @public — the authoring contract for game/mod `setup.ts` modules, which are
- * dynamic-imported at install time via games.json `setupModule` (lib/mods.ts);
- * no static importer exists by design.
+ *
+ * @public — setup.ts modules are dynamic-imported via games.json
+ * `setupModule` (lib/mods.ts), so no static importer exists by design.
  */
 export interface ModSetupModule {
   install(ctx: ModSDK): Promise<void>;

@@ -55,8 +55,9 @@ jobs:
       # dependencies across every workspace. Entry points mirror the
       # runtime-bundling architecture (plugin backend.ts/app.tsx, recomp
       # setup modules, Electrobun bun+webview entries) — see knip.ts.
-      # NOTE: like tsgo above, knip's bin shim is `#!/usr/bin/env node`,
-      # so the script invokes bin/knip.js via bun directly.
+      # NOTE: like tsgo above, knip's default bin shim is
+      # `#!/usr/bin/env node`; the script uses knip's `knip-bun` shim
+      # (`#!/usr/bin/env bun`) so no node install is needed.
       - name: Dead code (knip)
         run: bun run check:dead-code
 

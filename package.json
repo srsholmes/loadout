@@ -48,7 +48,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "check:specs": "sh scripts/check-plugin-specs.sh",
-    "check:dead-code": "bun ./node_modules/knip/bin/knip.js --no-progress --no-config-hints",
+    "check:dead-code": "knip-bun --no-progress --no-config-hints",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

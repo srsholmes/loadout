@@ -183,7 +183,6 @@ export interface CompositeDevice {
   capabilities: string[];
 }
 
-
 /** Enumerate the connected composite devices with their names + capabilities. */
 export async function listCompositeDevices(): Promise<CompositeDevice[]> {
   const out: CompositeDevice[] = [];
