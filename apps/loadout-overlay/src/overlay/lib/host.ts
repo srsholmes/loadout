@@ -111,21 +111,11 @@ export async function restartSteam(): Promise<{ success: boolean; error?: string
 
 // -- Self-update (issue #173) --------------------------------------------------
 
-export interface UpdateCheckResult {
-  available: boolean;
-  /** Release tag, e.g. "v0.7.0". */
-  tag?: string;
-  /** Bare version of the tag, e.g. "0.7.0". */
-  latestVersion?: string;
-  error?: string;
-}
-
-export interface UpdateStatus {
-  phase: "idle" | "downloading" | "verifying" | "backend" | "swapping" | "restarting" | "error";
-  pct?: number;
-  message?: string;
-  tag?: string;
-}
+// Both sides of the RPC boundary share the status/result shapes via
+// @loadout/types (the Bun host's lib/updater.ts produces them);
+// re-exported here so UI callers keep importing from lib/host.
+import type { UpdateCheckResult, UpdateStatus } from "@loadout/types";
+export type { UpdateCheckResult, UpdateStatus };
 
 /**
  * Ask the Bun host whether a newer release is published on GitHub.

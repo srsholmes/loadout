@@ -13,6 +13,8 @@ export {
   versionsEqual,
   olderParseableVersion,
 } from "./version";
+export type { UpdatePhase, UpdateStatus, UpdateCheckResult } from "./update-shared";
+export { isTrustedGithubHost, parseSha256Sums, makeIdleAbort } from "./update-shared";
 export type {
   GameSource,
   GameInfo,

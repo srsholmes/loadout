@@ -1,7 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
-  isTrustedGithubHost,
-  parseSha256Sums,
   startSelfUpdate,
   getSelfUpdateStatus,
   resetSelfUpdateStatusForTest,
@@ -55,40 +53,9 @@ async function awaitSettled(): Promise<string> {
   return getSelfUpdateStatus().phase;
 }
 
-describe("isTrustedGithubHost", () => {
-  test("accepts github release hosts", () => {
-    expect(isTrustedGithubHost("github.com")).toBe(true);
-    expect(isTrustedGithubHost("objects.githubusercontent.com")).toBe(true);
-    expect(isTrustedGithubHost("release-assets.githubusercontent.com")).toBe(true);
-  });
-
-  test("rejects lookalikes and everything else", () => {
-    expect(isTrustedGithubHost("evilgithub.com")).toBe(false);
-    expect(isTrustedGithubHost("github.com.evil.example")).toBe(false);
-    expect(isTrustedGithubHost("example.com")).toBe(false);
-    expect(isTrustedGithubHost("")).toBe(false);
-  });
-});
-
-describe("parseSha256Sums", () => {
-  test("parses sha256sum output", () => {
-    const text = [
-      "a".repeat(64) + "  loadout-x86_64",
-      "b".repeat(64) + " *loadout-plugins-x86_64.tar.xz",
-      "",
-      "not a sums line",
-    ].join("\n");
-    const sums = parseSha256Sums(text);
-    expect(sums.get("loadout-x86_64")).toBe("a".repeat(64));
-    expect(sums.get("loadout-plugins-x86_64.tar.xz")).toBe("b".repeat(64));
-    expect(sums.size).toBe(2);
-  });
-
-  test("lowercases hashes", () => {
-    const sums = parseSha256Sums("ABCDEF" + "0".repeat(58) + "  file");
-    expect(sums.get("file")).toBe("abcdef" + "0".repeat(58));
-  });
-});
+// (isTrustedGithubHost / parseSha256Sums / makeIdleAbort are covered in
+// packages/types/src/update-shared.test.ts — they moved to @loadout/types
+// when the loader + overlay copies made three duplicates repo-wide.)
 
 describe("startSelfUpdate validation", () => {
   const pluginsDir = join(tmp(), "plugins"); // tracked → swept by afterEach

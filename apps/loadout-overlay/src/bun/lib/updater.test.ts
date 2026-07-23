@@ -8,9 +8,6 @@ import {
   waitForBackendDone,
   cleanupUpdateArtifacts,
   reapOldGeneration,
-  makeIdleAbort,
-  isTrustedGithubHost,
-  parseSha256Sums,
   type UpdaterDeps,
 } from "./updater";
 import { rename as realRename } from "node:fs/promises";
@@ -462,40 +459,9 @@ describe("cleanupUpdateArtifacts / reapOldGeneration", () => {
   });
 });
 
-describe("makeIdleAbort", () => {
-  test("aborts after silence; reset() defers; clear() disarms", async () => {
-    const idle = makeIdleAbort(40);
-    // Keep resetting well inside the window — must stay alive.
-    for (let i = 0; i < 4; i++) {
-      await new Promise((r) => setTimeout(r, 15));
-      idle.reset();
-    }
-    expect(idle.signal.aborted).toBe(false);
-    // Now go silent past the window — must abort with a readable reason.
-    await new Promise((r) => setTimeout(r, 90));
-    expect(idle.signal.aborted).toBe(true);
-    expect(String(idle.signal.reason)).toContain("stalled");
-
-    const idle2 = makeIdleAbort(30);
-    idle2.clear();
-    await new Promise((r) => setTimeout(r, 60));
-    expect(idle2.signal.aborted).toBe(false); // cleared before firing
-  });
-});
-
-describe("helpers", () => {
-  test("isTrustedGithubHost pins exact hosts and subdomains only", () => {
-    expect(isTrustedGithubHost("github.com")).toBe(true);
-    expect(isTrustedGithubHost("release-assets.githubusercontent.com")).toBe(true);
-    expect(isTrustedGithubHost("notgithub.com")).toBe(false);
-    expect(isTrustedGithubHost("github.com.evil.example")).toBe(false);
-  });
-
-  test("parseSha256Sums extracts asset hashes", () => {
-    const sums = parseSha256Sums("e".repeat(64) + "  loadout-overlay-x86_64.tar.xz\n");
-    expect(sums.get("loadout-overlay-x86_64.tar.xz")).toBe("e".repeat(64));
-  });
-});
+// (isTrustedGithubHost / parseSha256Sums / makeIdleAbort are covered in
+// packages/types/src/update-shared.test.ts — they moved to @loadout/types
+// when the loader + overlay copies made three duplicates repo-wide.)
 
 // -- runUpdate apply path (overlay tree swap + .so carry-over) -----------------
 

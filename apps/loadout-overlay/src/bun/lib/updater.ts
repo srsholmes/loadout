@@ -34,24 +34,25 @@ import * as fsp from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { runFull, spawn } from "@loadout/exec";
-import { RELEASE_TAG_RE, parseVersion, isNewerVersion, versionsEqual } from "@loadout/types";
+import {
+  RELEASE_TAG_RE,
+  parseVersion,
+  isNewerVersion,
+  versionsEqual,
+  isTrustedGithubHost,
+  parseSha256Sums,
+  makeIdleAbort,
+  type UpdatePhase,
+  type UpdateStatus,
+  type UpdateCheckResult,
+} from "@loadout/types";
+
+// Status/result shapes live in @loadout/types (both sides of the
+// Electrobun RPC boundary consume them); re-exported so callers of
+// this module keep a single import site.
+export type { UpdatePhase, UpdateStatus, UpdateCheckResult };
 
 const REPO = "srsholmes/loadout";
-
-/** Same per-hop allow-list as the loader's self-update downloader
- *  (and plugins/store-bridge/lib/github-release.ts, where the pattern
- *  originates). Kept as a local copy per that module's note — pull
- *  into a shared package if yet another consumer appears. */
-const TRUSTED_GITHUB_HOSTS = [
-  "github.com",
-  "objects.githubusercontent.com",
-  "release-assets.githubusercontent.com",
-];
-
-export function isTrustedGithubHost(host: string): boolean {
-  const lower = host.toLowerCase();
-  return TRUSTED_GITHUB_HOSTS.some((t) => lower === t || lower.endsWith(`.${t}`));
-}
 
 /** Free bytes we insist on before starting. Real single-filesystem
  *  peak is ~1.7 GB (tar ~300 MB + extracted staging ~800 MB incl. the
@@ -60,23 +61,6 @@ export function isTrustedGithubHost(host: string): boolean {
  *  zero extra bytes). 2 GB leaves headroom without refusing near-full
  *  64 GB eMMC Decks an update that actually fits. */
 const REQUIRED_FREE_BYTES = 2_000_000_000;
-
-export type UpdatePhase =
-  | "idle"
-  | "downloading"
-  | "verifying"
-  | "backend"
-  | "swapping"
-  | "restarting"
-  | "error";
-
-export interface UpdateStatus {
-  phase: UpdatePhase;
-  /** 0-100 coarse overall progress across all phases. */
-  pct?: number;
-  message?: string;
-  tag?: string;
-}
 
 let status: UpdateStatus = { phase: "idle" };
 
@@ -145,15 +129,6 @@ export const DEFAULT_DEPS: UpdaterDeps = {
 };
 
 // -- Release check ------------------------------------------------------------
-
-export interface UpdateCheckResult {
-  available: boolean;
-  /** Release tag, e.g. "v0.7.0". Present whenever a release resolved. */
-  tag?: string;
-  /** Bare version of `tag`, e.g. "0.7.0". */
-  latestVersion?: string;
-  error?: string;
-}
 
 /**
  * Resolve the newest published release tag. `releases/latest` is the
@@ -294,42 +269,8 @@ async function fetchPinned(
 }
 
 /** How long a download may go without receiving a single byte before
- *  it's aborted. A half-open TCP connection would otherwise hang
- *  `fetch` forever, pinning the updater in a non-terminal phase where
- *  every retry is refused as "update already in progress" until the
- *  overlay restarts. */
+ *  the makeIdleAbort watchdog (from @loadout/types) kills it. */
 const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
-
-/** AbortController that fires after `ms` of silence; call reset() on
- *  every received chunk. Timers are unref'd so a pending watchdog
- *  never keeps the process (or a test) alive on its own.
- *  (Exported for tests; the loader keeps its own private copy.) */
-export function makeIdleAbort(ms: number): {
-  signal: AbortSignal;
-  reset: () => void;
-  clear: () => void;
-} {
-  const controller = new AbortController();
-  const arm = () => {
-    const t = setTimeout(
-      () => controller.abort(new Error(`download stalled (no data for ${ms / 1000}s)`)),
-      ms,
-    );
-    (t as unknown as { unref?: () => void }).unref?.();
-    return t;
-  };
-  let timer = arm();
-  return {
-    signal: controller.signal,
-    reset() {
-      clearTimeout(timer);
-      timer = arm();
-    },
-    clear() {
-      clearTimeout(timer);
-    },
-  };
-}
 
 async function downloadToFileWithProgress(
   url: string,
@@ -360,18 +301,6 @@ async function downloadToFileWithProgress(
   } finally {
     idle.clear();
   }
-}
-
-/** "<hex>  <filename>" lines → filename → lowercase hex. */
-export function parseSha256Sums(text: string): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const line of text.split("\n")) {
-    const m = /^([0-9a-fA-F]{64})\s+\*?(.+)$/.exec(line.trim());
-    const hash = m?.[1];
-    const name = m?.[2];
-    if (hash && name) out.set(name.trim(), hash.toLowerCase());
-  }
-  return out;
 }
 
 // -- Apply ---------------------------------------------------------------------
