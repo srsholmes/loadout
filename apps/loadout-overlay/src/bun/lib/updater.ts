@@ -42,7 +42,6 @@ import {
   isTrustedGithubHost,
   parseSha256Sums,
   makeIdleAbort,
-  type UpdatePhase,
   type UpdateStatus,
   type UpdateCheckResult,
 } from "@loadout/types";
@@ -50,7 +49,7 @@ import {
 // Status/result shapes live in @loadout/types (both sides of the
 // Electrobun RPC boundary consume them); re-exported so callers of
 // this module keep a single import site.
-export type { UpdatePhase, UpdateStatus, UpdateCheckResult };
+export type { UpdateStatus, UpdateCheckResult };
 
 const REPO = "srsholmes/loadout";
 
