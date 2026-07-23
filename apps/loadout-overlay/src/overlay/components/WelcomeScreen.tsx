@@ -6,6 +6,7 @@ import {
   Select,
   TextInput,
   useBackend,
+  notify,
 } from "@loadout/ui";
 import { Focusable, useFocusable, FocusContext } from "./GamepadNav";
 import type { PluginInfo } from "../hooks/usePlugins";
@@ -225,8 +226,18 @@ export function WelcomeScreen({
       (p) => p.status === "loaded" && !selected.has(p.id),
     ).length;
     // Flush the write before any restart so it can't race the bounce.
-    await setConfigValueFlushed("disabledPlugins", disabled);
+    const saved = await setConfigValueFlushed("disabledPlugins", disabled);
     setWelcomeCompleted(true);
+    if (!saved) {
+      // Nothing persisted — prompting a restart would be pointless (it
+      // wouldn't unload anything). Tell the user and land them in the app.
+      notify("Couldn't save your plugin choices — try again from Settings.", {
+        kind: "error",
+        id: "welcome-plugins-save",
+      });
+      onClose();
+      return;
+    }
     if (nowLoadedButDisabled > 0) {
       setRestartPromptCount(nowLoadedButDisabled);
       return;
@@ -242,8 +253,17 @@ export function WelcomeScreen({
     return (
       <RestartPrompt
         count={restartPromptCount}
-        onRestart={() => {
-          void restartApp();
+        onRestart={async () => {
+          const res = await restartApp();
+          // On success the app is bouncing — nothing more to do. On
+          // failure (e.g. an update in progress) surface it and leave the
+          // prompt so the user can retry or pick Later.
+          if (!res.success) {
+            notify(res.error ?? "Couldn't restart Loadout.", {
+              kind: "error",
+              id: "welcome-restart",
+            });
+          }
         }}
         onLater={onClose}
       />

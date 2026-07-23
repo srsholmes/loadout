@@ -442,7 +442,15 @@ function AppInner() {
     });
   }, [activePlugin]);
 
-  const keepAlivePluginsToRender = plugins.filter((p) => mountedKeepAlive.has(p.id));
+  // Only keep ENABLED keepAlive plugins mounted. A keepAlive plugin the
+  // user just disabled is still in the backend's loaded list (no unload
+  // until restart), but its `active` flag keys off the raw route id — so
+  // without this filter an OpenPlugin shortcut / #/plugin/<id> deep link /
+  // last-tab restore would render the disabled plugin full-screen even
+  // though the sidebar hides it. Filtering here unmounts its webview too.
+  const keepAlivePluginsToRender = plugins.filter(
+    (p) => mountedKeepAlive.has(p.id) && isEnabled(p.id),
+  );
 
   // Probe the active plugin for a `mountHeader` export so the topbar
   // can fall back to a name/subtitle line for plugins that don't ship

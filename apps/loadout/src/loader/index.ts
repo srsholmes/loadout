@@ -361,12 +361,18 @@ export async function startServer(options: ServerOptions = {}) {
   let addPluginWatcher: (id: string) => void = () => {};
   // Serialized so two racing PATCHes can't double-load the same plugin.
   let enableQueue: Promise<void> = Promise.resolve();
+  // Config PATCHes fire on every UI gesture (favorites, theme, layout
+  // bursts); only re-scan the registry when the disabled set actually
+  // changes. Seeded from the startup set.
+  let lastDisabledKey = [...disabledIds].sort().join("|");
   function onUserConfigChanged(next: Record<string, unknown>): void {
     const raw = next[DISABLED_PLUGINS_KEY];
     if (!Array.isArray(raw)) return;
-    const disabledNow = new Set(
-      raw.filter((x): x is string => typeof x === "string"),
-    );
+    const ids = raw.filter((x): x is string => typeof x === "string");
+    const key = [...ids].sort().join("|");
+    if (key === lastDisabledKey) return;
+    lastDisabledKey = key;
+    const disabledNow = new Set(ids);
     enableQueue = enableQueue
       .then(async () => {
         for (const [id, entry] of registry) {
