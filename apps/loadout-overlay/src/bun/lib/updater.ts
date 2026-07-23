@@ -53,9 +53,13 @@ export function isTrustedGithubHost(host: string): boolean {
   return TRUSTED_GITHUB_HOSTS.some((t) => lower === t || lower.endsWith(`.${t}`));
 }
 
-/** Free bytes we insist on before starting: tar (~300 MB) + extracted
- *  staging tree (~800 MB) on top of the live copy, with headroom. */
-const REQUIRED_FREE_BYTES = 2_500_000_000;
+/** Free bytes we insist on before starting. Real single-filesystem
+ *  peak is ~1.7 GB (tar ~300 MB + extracted staging ~800 MB incl. the
+ *  carried webkit closure, plus the backend's ~400 MB of binary/plugins
+ *  artifacts on the same fs on SteamOS — the .old swaps are renames,
+ *  zero extra bytes). 2 GB leaves headroom without refusing near-full
+ *  64 GB eMMC Decks an update that actually fits. */
+const REQUIRED_FREE_BYTES = 2_000_000_000;
 
 export type UpdatePhase =
   | "idle"
@@ -131,7 +135,12 @@ export const DEFAULT_DEPS: UpdaterDeps = {
   scheduleOverlayRestart: defaultScheduleOverlayRestart,
   sha256File: defaultSha256File,
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-  now: () => Date.now(),
+  // Monotonic (CLOCK_MONOTONIC excludes suspend on Linux): the 10/60
+  // minute budgets in waitForBackendDone should count RUNNING time —
+  // with Date.now(), closing the lid for an hour mid-update burned the
+  // whole absolute cap and produced a spurious "timed out" on resume
+  // while the backend finished anyway (skew).
+  now: () => performance.now(),
   rename,
 };
 
@@ -490,13 +499,21 @@ async function runUpdate(tag: string, deps: UpdaterDeps): Promise<void> {
     throw new Error(`no installed overlay tree at ${overlayDir}`);
   });
 
+  // Sweep a PREVIOUS attempt's leftovers BEFORE the disk preflight —
+  // they only get reaped at overlay-unit restart otherwise, and a
+  // failed attempt leaves ~1.1 GB of staging + tarball on disk. With
+  // the sweep after the statfs, a Deck that barely passed attempt 1
+  // would be refused every retry for space the retry itself reclaims.
+  await rm(tarPath, { force: true }).catch(() => {});
+  await rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+
   // Disk preflight. statfs is available in Bun's node:fs; if that ever
   // regresses we skip the check rather than block updates.
   try {
     const fs = await fsp.statfs(deps.home);
     const free = Number(fs.bavail) * Number(fs.bsize);
     if (free < REQUIRED_FREE_BYTES) {
-      throw new Error(`not enough free space: need ~2.5 GB, have ${(free / 1e9).toFixed(1)} GB`);
+      throw new Error(`not enough free space: need ~2 GB, have ${(free / 1e9).toFixed(1)} GB`);
     }
   } catch (err) {
     if (err instanceof Error && err.message.startsWith("not enough free space")) {
@@ -519,7 +536,6 @@ async function runUpdate(tag: string, deps: UpdaterDeps): Promise<void> {
   const wantSum = sums.get(asset);
   if (!wantSum) throw new Error(`SHA256SUMS for ${tag} has no entry for ${asset}`);
 
-  await rm(tarPath, { force: true });
   await downloadToFileWithProgress(
     assetUrl(tag, asset),
     tarPath,
@@ -582,6 +598,13 @@ async function runUpdate(tag: string, deps: UpdaterDeps): Promise<void> {
     }
   }
 
+  // Sentinel: the staged tree is now COMPLETE (extracted, launcher
+  // validated, webkit closure carried). The unit's ExecStartPre crash
+  // recovery only promotes a staging dir bearing this marker — an
+  // executable launcher alone can exist in a half-written tree (crash
+  // mid-tar after bin/launcher extracted, or mid-carryover).
+  await fsp.writeFile(join(stagingDir, ".verified"), "");
+
   // --- Root half: backend binary + plugins, via the loader ------------------
   status = { phase: "backend", pct: 75, tag, message: "Updating backend…" };
   // Snapshot the backend version BEFORE the update so the poll's
@@ -610,6 +633,10 @@ async function runUpdate(tag: string, deps: UpdaterDeps): Promise<void> {
     await deps.rename(oldDir, overlayDir).catch(() => {});
     throw err;
   }
+  // The sentinel did its job (it must survive INTO the swap so the
+  // crash window between the two renames stays covered); don't leave
+  // it littering the live tree.
+  await rm(join(overlayDir, ".verified"), { force: true }).catch(() => {});
   await rm(tarPath, { force: true }).catch(() => {});
   // `.old` is kept until the next successful boot (see
   // cleanupUpdateArtifacts) as a one-generation manual rollback.

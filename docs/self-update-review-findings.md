@@ -1,6 +1,40 @@
 # Self-update PR review — consolidated findings
 
-## Round 2 (2026-07-23, correctness + tests/UI lenses; failure-modes rerun pending)
+## Round 3 (2026-07-23, failure-modes/systemd lens)
+
+No HIGH findings; the webviewEverAlive gate and ExecStartPre recovery were
+independently re-verified as genuine (unit + install.sh copies byte-identical,
+systemd $-expansion semantics confirmed against the field-proven ExecStart).
+
+- [FIXED] Retry counted its own garbage: a failed attempt left ~1.1 GB of
+  staging/tarball that only an overlay-unit restart reaped, and the disk
+  preflight ran before the sweep — retries were refused for space they
+  would reclaim. Leftovers are now swept BEFORE the statfs check.
+- [FIXED] Wall-clock budgets counted suspended time: a lid-close during the
+  backend phase burned the 60-min absolute cap and produced a spurious
+  "timed out" + version skew on resume. deps.now() is now monotonic
+  (performance.now(), CLOCK_MONOTONIC excludes suspend).
+- [FIXED] ExecStartPre could promote a HALF-written staging tree (crash
+  mid-tar after bin/launcher extracted, or mid-.so-carryover): promotion
+  now requires the `.verified` sentinel the updater writes only after
+  extraction + launcher validation + closure carry-over. This also
+  neutralizes the transient-NFS-stat misfire (worst case now promotes a
+  complete, verified tree — a coherent roll-forward).
+- [FIXED] Overlay disk gate trimmed 2.5 GB → 2 GB (real peak ~1.7 GB);
+  near-full 64 GB eMMC Decks were being refused updates that fit.
+- [ACCEPTED] Session switch (PartOf=graphical-session.target) mid-backend-
+  phase discards a verified staging → full re-download on retry; skew
+  surfaced by the diverge row. Coherent, just wasteful; not worth
+  complicating the boot cleanup for.
+- [ACCEPTED] Shared-$HOME across two machines: one machine's boot cleanup
+  can reap the other's in-flight staging → clean terminal error, rollback
+  intact. Degrades gracefully.
+- [VERIFIED-BY-DESIGN] Idle-abort signal reaches every redirect hop, 59s
+  chunks survive, partial files are truncated/checksummed away on retry,
+  aborts land terminal on both sides. Crash-looping new overlay keeps
+  `.old` (webviewEverAlive never set) → SSH recovery preserved.
+
+## Round 2 (2026-07-23, correctness + tests/UI lenses)
 
 Round-1 items were verified implemented (13/15 fully; two had residuals,
 fixed below). New findings and dispositions:

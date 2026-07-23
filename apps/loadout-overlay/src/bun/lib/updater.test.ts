@@ -592,6 +592,9 @@ describe("runUpdate overlay apply", () => {
       "new-electrobun",
     );
     expect(existsSync(`${overlayDir}.old`)).toBe(true); // kept one gen for rollback
+    // The ExecStartPre sentinel is consumed by the swap, not littered
+    // into the live tree.
+    expect(existsSync(join(overlayDir, ".verified"))).toBe(false);
 
     // The cp carried ONLY the webkit lib — never Electrobun's own (already staged).
     const cp = runCalls.find((c) => c[0] === "cp");
