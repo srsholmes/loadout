@@ -10,7 +10,7 @@ import {
   type SelfUpdateDeps,
 } from "./self-update";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, rename as realRename, copyFile as realCopyFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,6 +25,8 @@ function fakeDeps(overrides: Partial<SelfUpdateDeps> = {}): SelfUpdateDeps {
     scheduleRestart: () => {},
     sha256File: async () => "0".repeat(64),
     commandExists: async () => false, // no restorecon in tests
+    rename: realRename,
+    copyFile: realCopyFile,
     ...overrides,
   };
 }
@@ -182,7 +184,7 @@ async function sha(text: string): Promise<string> {
  *  deps bag that serves a fake release and fakes tar/chown so
  *  runSelfUpdate can be driven end-to-end without a real GitHub or a
  *  real archive. */
-async function setupApply(opts: { correctSums?: boolean } = {}) {
+async function setupApply(opts: { correctSums?: boolean; rename?: SelfUpdateDeps["rename"] } = {}) {
   const installDir = tmp();
   const exePath = join(installDir, "loadout");
   const pluginsDir = join(installDir, "plugins");
@@ -228,6 +230,7 @@ async function setupApply(opts: { correctSums?: boolean } = {}) {
     currentVersion: "0.6.0",
     // real hashing so SHA256SUMS is actually enforced
     sha256File: async (p) => sha(await readFile(p, "utf8")),
+    ...(opts.rename ? { rename: opts.rename } : {}),
   });
   return { installDir, exePath, pluginsDir, modulesDir, deps };
 }
@@ -255,13 +258,58 @@ describe("runSelfUpdate apply path", () => {
   });
 
   test("checksum mismatch aborts before any swap — live binary untouched", async () => {
-    const { exePath, pluginsDir, deps } = await setupApply({ correctSums: false });
+    const { installDir, exePath, pluginsDir, deps } = await setupApply({ correctSums: false });
     const res = startSelfUpdate({ tag: "v0.7.0", pluginsDir }, deps);
     expect(res.ok).toBe(true); // accepted — the failure must land in status, not the return
     expect(await awaitSettled()).toBe("error");
     expect(getSelfUpdateStatus().message).toContain("checksum mismatch");
     expect(await readFile(exePath, "utf8")).toBe("OLD-BINARY"); // never replaced
     expect(await readFile(join(pluginsDir, "marker"), "utf8")).toBe("old-plugins");
+    // BOTH downloaded artifacts are removed on any mismatch — a failed
+    // verify must never leave a partial download for the next attempt
+    // or the boot cleanup to trip over.
+    expect(existsSync(join(installDir, ".loadout.new"))).toBe(false);
+    expect(existsSync(join(installDir, ".loadout-plugins.tar.xz"))).toBe(false);
+  });
+
+  test("modules-rename failure rolls BOTH old trees back, binary untouched", async () => {
+    // Fail the 4th swap rename (stagedModules → modulesDir). The
+    // rollback must first move the already-landed new plugins back out
+    // (occupied-target subtlety), then restore both .old trees.
+    const failing: SelfUpdateDeps["rename"] = async (from, to) => {
+      if (from.endsWith("/.plugins-staging/node_modules")) {
+        throw new Error("simulated EACCES on modules rename");
+      }
+      return realRename(from, to);
+    };
+    const { exePath, pluginsDir, modulesDir, deps } = await setupApply({ rename: failing });
+    startSelfUpdate({ tag: "v0.7.0", pluginsDir }, deps);
+    expect(await awaitSettled()).toBe("error");
+    expect(await readFile(join(pluginsDir, "marker"), "utf8")).toBe("old-plugins");
+    expect(await readFile(join(modulesDir, "marker"), "utf8")).toBe("old-modules");
+    expect(await readFile(exePath, "utf8")).toBe("OLD-BINARY"); // binary swap never reached
+  });
+
+  test("binary-swap failure rolls the plugins back too (no silent skew)", async () => {
+    // Plugins/modules land, then the final binary rename fails. The
+    // error path must restore the OLD plugins/modules — otherwise the
+    // still-running old binary faces new plugins on its next restart —
+    // and drop the .loadout.old copy (nothing was swapped).
+    const failing: SelfUpdateDeps["rename"] = async (from, to) => {
+      if (from.endsWith("/.loadout.new")) {
+        throw new Error("simulated EXDEV on binary rename");
+      }
+      return realRename(from, to);
+    };
+    const { installDir, exePath, pluginsDir, modulesDir, deps } = await setupApply({
+      rename: failing,
+    });
+    startSelfUpdate({ tag: "v0.7.0", pluginsDir }, deps);
+    expect(await awaitSettled()).toBe("error");
+    expect(await readFile(exePath, "utf8")).toBe("OLD-BINARY");
+    expect(await readFile(join(pluginsDir, "marker"), "utf8")).toBe("old-plugins");
+    expect(await readFile(join(modulesDir, "marker"), "utf8")).toBe("old-modules");
+    expect(existsSync(join(installDir, ".loadout.old"))).toBe(false);
   });
 });
 

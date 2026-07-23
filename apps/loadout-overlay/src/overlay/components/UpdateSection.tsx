@@ -19,7 +19,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Button, notify } from "@loadout/ui";
-import { parseVersion, compareVersions, versionsEqual } from "@loadout/types";
+import { parseVersion, versionsEqual, olderParseableVersion } from "@loadout/types";
 import { apiUrl, authHeaders } from "../lib/backend";
 import { OVERLAY_VERSION } from "../version";
 import { useConfigValue, setConfigValue } from "../lib/userConfig";
@@ -35,17 +35,6 @@ type CheckState =
   | { state: "idle" }
   | { state: "checking" }
   | { state: "checked"; result: UpdateCheckResult };
-
-/** The older of two version strings (for the update check), skipping
- *  any that don't parse. Returns null when neither parses (dev build). */
-function olderParseableVersion(a: string, b: string): string | null {
-  const pa = parseVersion(a);
-  const pb = parseVersion(b);
-  if (pa && pb) return compareVersions(pa, pb) <= 0 ? a : b;
-  if (pa) return a;
-  if (pb) return b;
-  return null;
-}
 
 function isActivePhase(phase: UpdateStatus["phase"]): boolean {
   return phase !== "error"; // "idle" never appears mid-run; every other phase is live
@@ -85,12 +74,13 @@ export function UpdateSection() {
     stopPoll();
     // A single transient RPC failure (getUpdateStatus → null) must NOT
     // be read as "done" — during the heavy backend/swap phases the host
-    // can miss a poll. Tolerate a run of nulls; only an explicit
-    // idle/error from the host is terminal. If the host truly vanishes
-    // (dev, host crash) give up after 15 consecutive nulls — ~11s when
-    // the RPC fails fast, up to ~40s when each call has to ride out
-    // the webview's 30s RPC window.
-    let consecutiveNulls = 0;
+    // can miss a poll. Tolerate silence; only an explicit idle/error
+    // from the host is terminal. The give-up horizon is TIME-based
+    // (90s since the last successful poll), not a null count: the busy
+    // guard below serializes calls, so with a slow-failing RPC (up to
+    // the webview's 30s request window per call) counting nulls would
+    // stretch the frozen-progress-bar state to many minutes.
+    let lastContact = Date.now();
     // setInterval doesn't serialize async callbacks: with the 30s RPC
     // window, a wedged host would otherwise stack ~43 overlapping
     // in-flight calls whose out-of-order resolutions can flash a stale
@@ -102,7 +92,7 @@ export function UpdateSection() {
       try {
         const s = await getUpdateStatus();
         if (s === null) {
-          if (++consecutiveNulls > 15) {
+          if (Date.now() - lastContact > 90_000) {
             stopPoll();
             inFlightRef.current = false;
             // Drive the UI to a terminal ERROR, not just stop polling —
@@ -117,7 +107,7 @@ export function UpdateSection() {
           }
           return;
         }
-        consecutiveNulls = 0;
+        lastContact = Date.now();
         setUpdateStatus(s);
         if (s.phase === "error" || s.phase === "idle") {
           stopPoll();

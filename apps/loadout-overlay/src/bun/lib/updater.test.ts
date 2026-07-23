@@ -8,6 +8,7 @@ import {
   waitForBackendDone,
   cleanupUpdateArtifacts,
   reapOldGeneration,
+  makeIdleAbort,
   isTrustedGithubHost,
   parseSha256Sums,
   type UpdaterDeps,
@@ -234,21 +235,25 @@ describe("waitForBackendDone", () => {
     // Faithfully models the auth gate: the restarted backend rejects the
     // STALE pre-update token with 401 (before route dispatch); only a
     // FRESH token reaches dispatch, where a build lacking the route 404s.
-    // This is the exact production path (the earlier "raw 404" was
-    // unreachable behind the 401). Must resolve, not hang.
-    let mintedFreshToken = false;
+    // /api/status THROWS throughout so the version-less-status probe
+    // cannot rescue the scenario — the first version of this test let
+    // that sibling branch mask deletion of both the 401 retry AND the
+    // 404 return (a second-generation tautology). Now ONLY the
+    // fresh-token 404 can resolve it; the clock advances so a
+    // regression fails fast as "timed out" instead of spinning.
+    let freshRoutePolls = 0;
+    let nowMs = 0;
     const fetchFn = (async (url: string | URL, init?: RequestInit) => {
       const u = String(url);
-      if (u.endsWith("/api/token")) {
-        mintedFreshToken = true;
-        return jsonResponse({ token: "fresh" });
-      }
-      if (u.endsWith("/api/status")) return jsonResponse({ ok: true }); // pre-feature: no version
+      if (u.endsWith("/api/token")) return jsonResponse({ token: "fresh" });
+      if (u.endsWith("/api/status")) throw new Error("status probe disabled in this test");
       if (u.endsWith("/api/self-update")) {
         const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
-        return auth === "Bearer fresh"
-          ? jsonResponse({ error: "not found" }, 404) // route absent on the new build
-          : jsonResponse({ error: "unauthorized" }, 401); // stale token
+        if (auth === "Bearer fresh") {
+          freshRoutePolls++;
+          return jsonResponse({ error: "not found" }, 404); // route absent on the new build
+        }
+        return jsonResponse({ error: "unauthorized" }, 401); // stale token
       }
       throw new Error(`unexpected ${u}`);
     }) as unknown as typeof fetch;
@@ -257,10 +262,80 @@ describe("waitForBackendDone", () => {
         tag: "v0.6.0",
         token: "stale",
         preVersion: "0.5.9",
-        deps: fakeDeps(fetchFn),
+        deps: fakeDeps(fetchFn, {
+          sleep: async () => {
+            nowMs += 1000;
+          },
+          now: () => nowMs,
+        }),
       }),
     ).resolves.toBeUndefined();
-    expect(mintedFreshToken).toBe(true); // proves the 401→re-bootstrap path ran
+    // Proves the route was RE-polled with the fresh token — the branch
+    // the whole scenario hinges on.
+    expect(freshRoutePolls).toBeGreaterThan(0);
+  });
+
+  test("observed restart corroborates a bare version match (sawRestart)", async () => {
+    // Restart wins every race: no active phase was ever seen and the
+    // pre-update snapshot is unknown (preIsTag ⇒ strict). The fresh
+    // process HAS the route (reports idle) and /api/status shows the
+    // target version — only the observed 401 (sawRestart) can
+    // corroborate the match. Without that term this times out.
+    let nowMs = 0;
+    const fetchFn = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/api/token")) return jsonResponse({ token: "fresh" });
+      if (u.endsWith("/api/status")) return jsonResponse({ version: "0.7.0" });
+      const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
+      return auth === "Bearer fresh"
+        ? jsonResponse({ phase: "idle" })
+        : jsonResponse({ error: "unauthorized" }, 401);
+    }) as unknown as typeof fetch;
+    await expect(
+      waitForBackendDone({
+        tag: "v0.7.0",
+        token: "stale",
+        preVersion: null,
+        deps: fakeDeps(fetchFn, {
+          sleep: async () => {
+            nowMs += 1000;
+          },
+          now: () => nowMs,
+        }),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  test("restart back to the PRE-update version fails fast (service died mid-apply)", async () => {
+    // 401 proves a restart, but the fresh process reports idle at the
+    // OLD version — the apply died and nothing will ever report done.
+    // Must throw promptly, not idle out the 10-minute deadline.
+    let nowMs = 0;
+    const fetchFn = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/api/token")) return jsonResponse({ token: "fresh" });
+      if (u.endsWith("/api/status")) return jsonResponse({ version: "0.6.0" }); // still old
+      const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
+      return auth === "Bearer fresh"
+        ? jsonResponse({ phase: "idle" })
+        : jsonResponse({ error: "unauthorized" }, 401);
+    }) as unknown as typeof fetch;
+    const startedAt = 0;
+    await expect(
+      waitForBackendDone({
+        tag: "v0.7.0",
+        token: "stale",
+        preVersion: "0.6.0",
+        deps: fakeDeps(fetchFn, {
+          sleep: async () => {
+            nowMs += 1000;
+          },
+          now: () => nowMs,
+        }),
+      }),
+    ).rejects.toThrow(/restarted without applying/);
+    // Fast: a couple of poll ticks, nowhere near the 10-minute idle deadline.
+    expect(nowMs - startedAt).toBeLessThan(10_000);
   });
 
   test("a slow but ACTIVE backend extends the idle deadline past 10 minutes", async () => {
@@ -384,6 +459,27 @@ describe("cleanupUpdateArtifacts / reapOldGeneration", () => {
     await cleanupUpdateArtifacts({ home });
     expect(existsSync(overlayDir)).toBe(true);
     expect(existsSync(`${overlayDir}.old`)).toBe(false);
+  });
+});
+
+describe("makeIdleAbort", () => {
+  test("aborts after silence; reset() defers; clear() disarms", async () => {
+    const idle = makeIdleAbort(40);
+    // Keep resetting well inside the window — must stay alive.
+    for (let i = 0; i < 4; i++) {
+      await new Promise((r) => setTimeout(r, 15));
+      idle.reset();
+    }
+    expect(idle.signal.aborted).toBe(false);
+    // Now go silent past the window — must abort with a readable reason.
+    await new Promise((r) => setTimeout(r, 90));
+    expect(idle.signal.aborted).toBe(true);
+    expect(String(idle.signal.reason)).toContain("stalled");
+
+    const idle2 = makeIdleAbort(30);
+    idle2.clear();
+    await new Promise((r) => setTimeout(r, 60));
+    expect(idle2.signal.aborted).toBe(false); // cleared before firing
   });
 });
 

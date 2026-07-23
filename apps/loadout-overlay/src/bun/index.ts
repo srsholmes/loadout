@@ -147,6 +147,13 @@ const pendingResumeTimer: { current: ReturnType<typeof setTimeout> | null } = {
 // process is alive but the CEF renderer is wedged.)
 const lastHeartbeat: { current: number } = { current: 0 };
 
+// True once the webview has sent its FIRST real heartbeat this session.
+// Only the overlayHeartbeat RPC handler sets it — never the freeze
+// watchdog's "assume alive at open" seeding of lastHeartbeat above —
+// so it is proof of a rendering webview, not merely an opened window.
+// Gates the `.old` rollback-generation reap below.
+const webviewEverAlive: { current: boolean } = { current: false };
+
 // Input interceptor — opens every controller + keyboard + QAM device
 // up-front and toggles EVIOCGRAB on the controllers when the overlay
 // shows/hides. Also emits wake events (F16 / Guide+B / Ctrl+4) that
@@ -201,6 +208,7 @@ const rpc = BrowserView.defineRPC({
     cachedSteamSoundsPath,
     steamPid,
     lastHeartbeat,
+    webviewEverAlive,
   }),
 });
 
@@ -795,7 +803,11 @@ const managementLoopRunning: { current: boolean } = { current: true };
 // healthy, `.old` survives as the manual recovery copy.
 void cleanupUpdateArtifacts({ keepOldGeneration: true });
 const oldGenReaper = setInterval(() => {
-  if (lastHeartbeat.current > 0) {
+  // Gate on webviewEverAlive, NOT lastHeartbeat: the freeze watchdog
+  // seeds lastHeartbeat on every overlay OPEN ("assume alive"), so a
+  // Guide-press on a crash-looping post-update CEF would otherwise
+  // reap the rollback copy in the exact case it exists for.
+  if (webviewEverAlive.current) {
     clearInterval(oldGenReaper);
     void reapOldGeneration();
   }

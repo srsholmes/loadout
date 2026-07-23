@@ -5,6 +5,7 @@ import {
   compareVersions,
   isNewerVersion,
   versionsEqual,
+  olderParseableVersion,
 } from "./version";
 
 describe("RELEASE_TAG_RE", () => {
@@ -71,6 +72,20 @@ describe("isNewerVersion", () => {
     expect(isNewerVersion("v0.7.0", "dev")).toBe(false);
     expect(isNewerVersion("rolling", "0.6.0")).toBe(false);
     expect(isNewerVersion("dev-abc", "dev")).toBe(false);
+  });
+});
+
+describe("olderParseableVersion", () => {
+  test("returns the older of two parseable versions", () => {
+    expect(olderParseableVersion("0.5.9", "0.6.0")).toBe("0.5.9");
+    expect(olderParseableVersion("0.7.0", "v0.6.0")).toBe("v0.6.0");
+    expect(olderParseableVersion("0.6.0", "0.6.0")).toBe("0.6.0");
+  });
+
+  test("skips the unparsable side; null when neither parses", () => {
+    expect(olderParseableVersion("dev", "0.6.0")).toBe("0.6.0");
+    expect(olderParseableVersion("0.6.0", "dev")).toBe("0.6.0");
+    expect(olderParseableVersion("dev", "dev-abc")).toBeNull();
   });
 });
 

@@ -1,4 +1,47 @@
-# Self-update PR review — consolidated findings (4-agent review, 2026-07-22)
+# Self-update PR review — consolidated findings
+
+## Round 2 (2026-07-23, correctness + tests/UI lenses; failure-modes rerun pending)
+
+Round-1 items were verified implemented (13/15 fully; two had residuals,
+fixed below). New findings and dispositions:
+
+- [FIXED] **Heartbeat reap gate forgeable by overlay OPEN** — the freeze
+  watchdog seeds `lastHeartbeat` on every show ("assume alive"), so a
+  Guide-press on a crash-looping post-update CEF reaped `.old` in the exact
+  case it exists for. Now gated on a dedicated `webviewEverAlive` ref set
+  only by the `overlayHeartbeat` RPC handler.
+- [FIXED] **401→404 test was a second-generation tautology** — the
+  version-less /api/status probe masked deletion of both the 401 retry and
+  the 404 return. The test now makes /api/status throw (only the
+  fresh-token 404 can resolve) and asserts the fresh-token route re-poll.
+- [FIXED] **sawRestart corroboration unpinned** — new test: 401 → fresh
+  process idle + version match + unknown snapshot must resolve.
+- [FIXED] **Loader rollback paths untestable** — `rename`/`copyFile` seams
+  added to `SelfUpdateDeps`; both rollback paths (modules-rename failure,
+  binary-swap failure) now have failing-without-the-code tests.
+- [FIXED] **Backend death mid-apply idled out the 10-min deadline** — a
+  restart observed (401) + fresh process reporting the PRE-update version
+  now fails fast ("restarted without applying the update").
+- [FIXED] **Give-up horizon ~7.5 min vs commented ~40s** — the poll's
+  give-up is now time-based (90s since last successful poll), immune to
+  how slowly each RPC fails.
+- [FIXED] **Startup toast used only OVERLAY_VERSION** — App.tsx now
+  compares against the older of backend//overlay versions
+  (`olderParseableVersion`, hoisted to @loadout/types), matching Settings.
+- [FIXED] **makeIdleAbort untested** — exported + reset/abort/clear test.
+- [FIXED] **Checksum-mismatch test didn't pin both-artifacts removal.**
+- [ACCEPTED] Power-loss between the completed plugins swap and the binary
+  rename commits new-plugins/old-binary and boot cleanup destroys the
+  evidence (`.old` pairs). Millisecond window; no swap order eliminates
+  it; same-version reinstall repairs it. Documented, not fixed.
+- [ACCEPTED] No `UpdateSection.spec.tsx` component test (Settings.tsx is
+  also spec-less; the poll state machine is covered indirectly via the
+  updater's status tests). Candidate follow-up, not a defect.
+- [ACCEPTED] Unit `ExecStartPre` rolls forward (.staging) while bun-side
+  cleanup rolls back (.old) — divergence only reachable in unit-less dev
+  runs; both outcomes coherent.
+
+# Round 1 — consolidated findings (4-agent review, 2026-07-22)
 
 Status legend: [DONE-HEAD] = already fixed in commits up to ccc3f90 or by the
 other active session · [OPEN] = still needs fixing · [WONTFIX] = accepted.

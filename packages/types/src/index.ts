@@ -11,6 +11,7 @@ export {
   compareVersions,
   isNewerVersion,
   versionsEqual,
+  olderParseableVersion,
 } from "./version";
 export type {
   GameSource,

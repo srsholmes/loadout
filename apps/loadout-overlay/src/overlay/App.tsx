@@ -1,9 +1,10 @@
 import { useRef, useState, useEffect, useCallback, useMemo, type CSSProperties } from "react";
 import { Toaster, toast } from "react-hot-toast";
 import { LoadoutProvider, TOAST_EVENT, notify, type ToastEventDetail } from "@loadout/ui";
-import { versionsEqual } from "@loadout/types";
+import { versionsEqual, olderParseableVersion } from "@loadout/types";
 import { OVERLAY_VERSION } from "./version";
 import { checkForUpdate } from "./lib/host";
+import { apiUrl, authHeaders } from "./lib/backend";
 import { Sidebar } from "./components/Sidebar";
 import { PluginHost } from "./components/PluginHost";
 import {
@@ -224,7 +225,23 @@ export function App() {
       }
       await new Promise((r) => setTimeout(r, 10_000));
       if (cancelled) return;
-      const res = await checkForUpdate(OVERLAY_VERSION);
+      // Compare against the OLDER of backend/overlay versions — same
+      // rule as Settings' UpdateSection. Using only OVERLAY_VERSION
+      // here meant a half-applied update (overlay landed, backend
+      // didn't) got no startup toast even though Settings offered the
+      // repair. Backend unreachable → fall back to the overlay's own.
+      let installedVersion = OVERLAY_VERSION;
+      try {
+        const statusRes = await fetch(apiUrl("/api/status"), { headers: authHeaders() });
+        const statusJson = (await statusRes.json()) as { version?: unknown };
+        if (typeof statusJson.version === "string") {
+          installedVersion =
+            olderParseableVersion(statusJson.version, OVERLAY_VERSION) ?? OVERLAY_VERSION;
+        }
+      } catch {
+        // backend down — the overlay bundle's version is the best we have
+      }
+      const res = await checkForUpdate(installedVersion);
       if (cancelled || !res.available || !res.tag) return;
       if (getConfigValue<string | null>("updateSkippedVersion", null) === res.tag) return;
       await visReady;

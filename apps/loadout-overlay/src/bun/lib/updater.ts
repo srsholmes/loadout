@@ -293,8 +293,9 @@ const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
 
 /** AbortController that fires after `ms` of silence; call reset() on
  *  every received chunk. Timers are unref'd so a pending watchdog
- *  never keeps the process (or a test) alive on its own. */
-function makeIdleAbort(ms: number): {
+ *  never keeps the process (or a test) alive on its own.
+ *  (Exported for tests; the loader keeps its own private copy.) */
+export function makeIdleAbort(ms: number): {
   signal: AbortSignal;
   reset: () => void;
   clear: () => void;
@@ -725,7 +726,19 @@ export async function waitForBackendDone(args: {
         // that re-poll races the restart and misses.
         return;
       }
-      if (!versionsEqual(probe.version, tag)) continue;
+      if (!versionsEqual(probe.version, tag)) {
+        // Restart observed (stale token) but the new process still
+        // reports the PRE-update version: the service died mid-apply
+        // (crash, OOM, manual restart) and systemd relaunched the old
+        // binary. Nothing will ever report done — fail now instead of
+        // idling out the 10-minute deadline.
+        if (sawRestart && preVersion !== null && versionsEqual(probe.version, preVersion)) {
+          throw new Error(
+            "backend update failed: the service restarted without applying the update",
+          );
+        }
+        continue;
+      }
       // Corroborate before trusting a bare version match: the version
       // changed to the target, we watched the backend do the work, or
       // we observed the restart that only follows a completed apply.

@@ -114,6 +114,13 @@ export interface SelfUpdateDeps {
   sha256File: (path: string) => Promise<string>;
   /** Whether a binary is on PATH (gates the optional `restorecon`). */
   commandExists: (name: string) => Promise<boolean>;
+  /** rename(2)/copyFile seams — real `node:fs/promises` in production;
+   *  injected in tests so the multi-rename swap sequences and BOTH
+   *  rollback paths (modules-rename failure, binary-swap failure) can
+   *  be exercised by making a specific call throw. Same seam the
+   *  overlay updater grew for its rollback test. */
+  rename: (from: string, to: string) => Promise<void>;
+  copyFile: (from: string, to: string) => Promise<void>;
 }
 
 async function defaultSha256File(path: string): Promise<string> {
@@ -144,6 +151,8 @@ export const DEFAULT_DEPS: SelfUpdateDeps = {
   scheduleRestart: defaultScheduleRestart,
   sha256File: defaultSha256File,
   commandExists,
+  rename,
+  copyFile,
 };
 
 /**
@@ -420,20 +429,20 @@ async function runSelfUpdate(
   const modulesOld = `${modulesDir}.old`;
   await rm(pluginsOld, { recursive: true, force: true });
   await rm(modulesOld, { recursive: true, force: true });
-  await rename(pluginsDir, pluginsOld).catch(() => {}); // may not exist on a broken install
-  await rename(modulesDir, modulesOld).catch(() => {});
+  await deps.rename(pluginsDir, pluginsOld).catch(() => {}); // may not exist on a broken install
+  await deps.rename(modulesDir, modulesOld).catch(() => {});
   try {
-    await rename(stagedPlugins, pluginsDir);
-    await rename(stagedModules, modulesDir);
+    await deps.rename(stagedPlugins, pluginsDir);
+    await deps.rename(stagedModules, modulesDir);
   } catch (err) {
     // Roll the old tree back so the restart doesn't come up pluginless.
     // If `stagedPlugins`→`pluginsDir` already succeeded (so the failure
     // was on the modules rename), move the new plugins back out first —
     // otherwise `pluginsOld`→`pluginsDir` hits an occupied target and
     // the rollback silently fails, leaving new-plugins/old-modules skew.
-    await rename(pluginsDir, stagedPlugins).catch(() => {});
-    await rename(pluginsOld, pluginsDir).catch(() => {});
-    await rename(modulesOld, modulesDir).catch(() => {});
+    await deps.rename(pluginsDir, stagedPlugins).catch(() => {});
+    await deps.rename(pluginsOld, pluginsDir).catch(() => {});
+    await deps.rename(modulesOld, modulesDir).catch(() => {});
     throw err;
   }
 
@@ -448,17 +457,17 @@ async function runSelfUpdate(
   // needed. restorecon keeps the bin_t label on SELinux-enforcing
   // distros (Bazzite/Fedora).
   try {
-    await copyFile(exePath, oldBin).catch(() => {}); // best-effort rollback copy
+    await deps.copyFile(exePath, oldBin).catch(() => {}); // best-effort rollback copy
     await chmod(newBin, 0o755);
-    await rename(newBin, exePath);
+    await deps.rename(newBin, exePath);
   } catch (err) {
     // Binary swap failed after the plugins landed — put the old
     // plugins back too, so the still-running old binary doesn't face
     // new plugins on its next restart.
-    await rename(pluginsDir, stagedPlugins).catch(() => {});
-    await rename(modulesDir, stagedModules).catch(() => {});
-    await rename(pluginsOld, pluginsDir).catch(() => {});
-    await rename(modulesOld, modulesDir).catch(() => {});
+    await deps.rename(pluginsDir, stagedPlugins).catch(() => {});
+    await deps.rename(modulesDir, stagedModules).catch(() => {});
+    await deps.rename(pluginsOld, pluginsDir).catch(() => {});
+    await deps.rename(modulesOld, modulesDir).catch(() => {});
     await rm(oldBin, { force: true }).catch(() => {});
     throw err;
   }

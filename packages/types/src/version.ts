@@ -61,3 +61,19 @@ export function versionsEqual(a: string, b: string): boolean {
   if (!pa || !pb) return false;
   return compareVersions(pa, pb) === 0;
 }
+
+/**
+ * The OLDER of two version strings, skipping any that don't parse;
+ * null when neither parses (dev build). The update check compares the
+ * latest release against this, so a half-applied update (backend
+ * advanced but overlay not, or vice-versa) still offers the repair —
+ * the backend allows a same-version reinstall for exactly that case.
+ */
+export function olderParseableVersion(a: string, b: string): string | null {
+  const pa = parseVersion(a);
+  const pb = parseVersion(b);
+  if (pa && pb) return compareVersions(pa, pb) <= 0 ? a : b;
+  if (pa) return a;
+  if (pb) return b;
+  return null;
+}

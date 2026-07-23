@@ -77,6 +77,14 @@ export interface RpcHandlerDeps {
   /** Last time the webview sent an `overlayHeartbeat` (Date.now() ms). The
    *  freeze watchdog in index.ts reads this to detect a hung overlay. */
   lastHeartbeat: Ref<number>;
+  /** Flips true on the FIRST real webview heartbeat and stays true.
+   *  Gates the `.old` rollback-generation reap in index.ts: unlike
+   *  `lastHeartbeat` (which the freeze watchdog re-seeds on every
+   *  overlay OPEN, "assume alive"), this can only be set by a webview
+   *  that actually rendered and ran JS — the proof the post-update
+   *  overlay works. A Guide-press on a crash-looping CEF must NOT
+   *  close the rollback window. */
+  webviewEverAlive: Ref<boolean>;
 }
 
 /**
@@ -101,6 +109,7 @@ export function buildRpcHandlers(deps: RpcHandlerDeps) {
       // forget: returns nothing, never throws.
       overlayHeartbeat: async () => {
         deps.lastHeartbeat.current = Date.now();
+        deps.webviewEverAlive.current = true;
       },
       getControllerShortcuts: async () => deps.shortcuts.current,
       // BrowserView.defineRPC types every handler as (params?: unknown) => unknown,
