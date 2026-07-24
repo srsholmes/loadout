@@ -373,4 +373,41 @@ describe("battery-tracker plugin", () => {
       jest.useRealTimers();
     }
   });
+
+  it("snaps the charge-limit slider back to the persisted value when the write fails", async () => {
+    callMock.mockImplementation((method: string) => {
+      // Limit already on at 80% so the slider renders.
+      if (method === "getChargeControl")
+        return Promise.resolve({ ...supportedChargeControl, chargeLimitPercent: 80 });
+      if (method === "getBatteryInfo") return Promise.resolve(mockBatteryInfo);
+      if (method === "getHistory") return Promise.resolve([]);
+      // The hardware rejects the new value.
+      if (method === "setChargeLimit") return Promise.resolve({ success: false, error: "rejected" });
+      return Promise.resolve({ success: true });
+    });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const { mount } = await import("./app");
+    const unmount = mount(container);
+
+    let range: HTMLInputElement | null = null;
+    await waitFor(() => {
+      range = container.querySelector('input[type="range"]');
+      expect(range).not.toBeNull();
+      expect(range!.value).toBe("80");
+    });
+
+    // Drag to 90 (optimistic local move), then commit via blur → write fails.
+    fireEvent.change(range!, { target: { value: "90" } });
+    await waitFor(() => expect(range!.value).toBe("90"));
+    fireEvent.blur(range!);
+    await waitFor(() => expect(callMock).toHaveBeenCalledWith("setChargeLimit", 90));
+
+    // Failure → slider snaps back to the persisted 80 rather than showing 90.
+    await waitFor(() => {
+      const r = container.querySelector('input[type="range"]') as HTMLInputElement;
+      expect(r.value).toBe("80");
+    });
+    unmount();
+  });
 });
