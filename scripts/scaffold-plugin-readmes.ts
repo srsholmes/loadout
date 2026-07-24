@@ -214,7 +214,7 @@ function pluginScreenshots(id: string): Shot[] {
  */
 const PLUGIN_ABOUT: Record<string, string> = {
   "battery-tracker":
-    "Keeps an eye on your battery while you play — current charge, how fast it's draining or charging, estimated time left, and a short history of the session. On a handheld it answers the question that matters: will I reach a save point before I need the charger?",
+    "Keeps an eye on your battery while you play — current charge, how fast it's draining or charging, estimated time left, and a short history of the session. On a handheld it answers the question that matters: will I reach a save point before I need the charger? On supported hardware it can also cap charging at a set percentage and bypass-charge (run off the adapter without charging the pack) to reduce battery wear.",
   bluetooth:
     "Connect, disconnect, and scan for paired Bluetooth devices straight from the overlay, so swapping to headphones or a controller never means dropping back to the desktop — handy in Gaming Mode where Steam's own Bluetooth controls are fiddly.",
   "disable-controller-input":

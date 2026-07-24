@@ -12,9 +12,9 @@ import { describe, it, expect, mock, beforeEach } from "bun:test";
 // Captured BEFORE mock.module() runs below so the spread includes the real
 // module. bun's mock.module is NOT hoisted (unlike vitest's vi.mock).
 import * as actualUi from "@loadout/ui";
-import { waitFor } from "../../test/render";
+import { waitFor, fireEvent } from "../../test/render";
 
-const callMock = mock((_method: string) => Promise.resolve(null));
+const callMock = mock((_method: string, ..._args: unknown[]) => Promise.resolve(null));
 const eventHandlers = new Map<string, (data: unknown) => void>();
 
 mock.module("@loadout/ui", () => ({
@@ -196,5 +196,85 @@ describe("battery-tracker plugin", () => {
     await waitFor(() => {
       expect(container.textContent).toContain("Real-time power monitoring");
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Charging controls (charge limit + bypass)
+  // -------------------------------------------------------------------------
+
+  const supportedChargeControl = {
+    supportsChargeLimit: true,
+    chargeLimitPercent: null as number | null,
+    supportsBypass: true,
+    supportsBypassAwake: true,
+    bypassMode: "disabled" as const,
+  };
+
+  function mockWithChargeControl(control: Record<string, unknown> | null) {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getBatteryInfo") return Promise.resolve(mockBatteryInfo);
+      if (method === "getHistory") return Promise.resolve([]);
+      if (method === "getChargeControl") return Promise.resolve(control);
+      return Promise.resolve({ success: true });
+    });
+  }
+
+  it("renders the charging controls when the device supports them", async () => {
+    mockWithChargeControl(supportedChargeControl);
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Charge limit");
+      expect(container.textContent).toContain("Bypass charging");
+    });
+  });
+
+  it("hides the charging controls when the device supports neither", async () => {
+    mockWithChargeControl({
+      supportsChargeLimit: false,
+      chargeLimitPercent: null,
+      supportsBypass: false,
+      supportsBypassAwake: false,
+      bypassMode: "disabled",
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Power Flow");
+    });
+    expect(container.textContent).not.toContain("Charge limit");
+    expect(container.textContent).not.toContain("Bypass charging");
+  });
+
+  it("enabling the charge-limit toggle calls setChargeLimit with the default", async () => {
+    mockWithChargeControl(supportedChargeControl);
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    let toggle: HTMLInputElement | null = null;
+    await waitFor(() => {
+      toggle = container.querySelector('input[type="checkbox"]');
+      expect(toggle).not.toBeNull();
+    });
+
+    fireEvent.click(toggle!);
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("setChargeLimit", 80);
+    });
+  });
+
+  it("does not render the charge-limit slider while the limit is off", async () => {
+    mockWithChargeControl(supportedChargeControl);
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Charge limit");
+    });
+    // Limit off (chargeLimitPercent null) → no range input yet.
+    expect(container.querySelector('input[type="range"]')).toBeNull();
   });
 });

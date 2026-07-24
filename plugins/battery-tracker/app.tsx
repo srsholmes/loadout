@@ -1,7 +1,17 @@
 import { useState, useEffect, useCallback } from "react";
-import { FaBatteryFull, FaBolt } from "react-icons/fa6";
-import { Button, Spinner, useBackend, mountComponent } from "@loadout/ui";
+import { FaBatteryFull, FaBolt, FaPlug } from "react-icons/fa6";
+import {
+  Button,
+  Select,
+  Slider,
+  Spinner,
+  Toggle,
+  notify,
+  useBackend,
+  mountComponent,
+} from "@loadout/ui";
 import type { BatteryInfo, HistoryEntry } from "./lib/battery";
+import type { BypassMode, ChargeControlInfo } from "./lib/charge-control";
 
 export const icon = FaBatteryFull;
 
@@ -76,6 +86,161 @@ function HistoryChart({ history }: { history: HistoryEntry[] }) {
 }
 
 // ---------------------------------------------------------------------------
+// ChargingControls
+// ---------------------------------------------------------------------------
+
+const DEFAULT_CHARGE_LIMIT = 80;
+// Practical slider bounds. 100 is intentionally excluded — a threshold of
+// 100 means "no limit", which the toggle expresses instead.
+const LIMIT_MIN = 50;
+const LIMIT_MAX = 95;
+
+/** Clamp a stored threshold into the slider's displayable range. */
+function clampLimit(percent: number): number {
+  return Math.max(LIMIT_MIN, Math.min(LIMIT_MAX, Math.round(percent)));
+}
+
+const BYPASS_LABELS: Record<BypassMode, string> = {
+  disabled: "Off",
+  awake: "While awake",
+  always: "Always",
+};
+
+type SetResult = { success: boolean; error?: string };
+
+/**
+ * Charge limit + bypass charging card. Capability-driven: rendered only
+ * when the backend reports at least one control is supported (the parent
+ * skips it entirely otherwise), and each row hides individually.
+ */
+function ChargingControls({
+  control,
+  call,
+  onRefresh,
+}: {
+  control: ChargeControlInfo;
+  call: (method: string, ...args: unknown[]) => Promise<unknown>;
+  onRefresh: () => void;
+}) {
+  const stored = control.chargeLimitPercent;
+  // Local slider position so dragging stays responsive; backend writes
+  // happen on commit only. Clamp the seed to the slider's bounds so an
+  // externally-set threshold (e.g. 98%, or an off-range value) never leaves
+  // the chip and the thumb showing different numbers.
+  const [sliderPct, setSliderPct] = useState(clampLimit(stored ?? DEFAULT_CHARGE_LIMIT));
+  useEffect(() => {
+    if (stored !== null) setSliderPct(clampLimit(stored));
+  }, [stored]);
+
+  const limitEnabled = stored !== null;
+
+  const applyLimit = useCallback(
+    async (percent: number | null) => {
+      try {
+        const result = (await call("setChargeLimit", percent)) as SetResult | null;
+        if (result?.success) {
+          notify(percent === null ? "Charge limit off" : `Charge limit set to ${percent}%`);
+        } else {
+          notify(result?.error ?? "Failed to set charge limit", { kind: "error" });
+        }
+      } catch {
+        notify("Failed to set charge limit", { kind: "error" });
+      } finally {
+        onRefresh();
+      }
+    },
+    [call, onRefresh],
+  );
+
+  const applyBypass = useCallback(
+    async (mode: BypassMode) => {
+      try {
+        const result = (await call("setBypassMode", mode)) as SetResult | null;
+        if (result?.success) {
+          notify(
+            mode === "disabled"
+              ? "Bypass charging off"
+              : `Bypass charging: ${BYPASS_LABELS[mode].toLowerCase()}`,
+          );
+        } else {
+          notify(result?.error ?? "Failed to set bypass mode", { kind: "error" });
+        }
+      } catch {
+        notify("Failed to set bypass mode", { kind: "error" });
+      } finally {
+        onRefresh();
+      }
+    },
+    [call, onRefresh],
+  );
+
+  const bypassOptions: BypassMode[] = control.supportsBypassAwake
+    ? ["disabled", "awake", "always"]
+    : ["disabled", "always"];
+
+  return (
+    <div className="card">
+      <div className="card-header flex items-center justify-between py-3.5 px-4.5 border-b border-base-300">
+        <div className="card-title flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-base-content/50">
+          <FaPlug className="w-3 h-3" /> CHARGING
+        </div>
+      </div>
+
+      {control.supportsChargeLimit && (
+        <div className="subsection">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="subsection-label mb-0">Charge limit</div>
+            <div className="flex items-center gap-3">
+              {limitEnabled && <span className="chip">{sliderPct}%</span>}
+              <Toggle
+                checked={limitEnabled}
+                onChange={(on) => void applyLimit(on ? sliderPct : null)}
+              />
+            </div>
+          </div>
+          {limitEnabled && (
+            <div className="mt-3">
+              <Slider
+                value={sliderPct}
+                onChange={setSliderPct}
+                onCommit={(v) => void applyLimit(v)}
+                min={LIMIT_MIN}
+                max={LIMIT_MAX}
+                step={1}
+              />
+            </div>
+          )}
+          <div className="subsection-desc">
+            Stop charging at a set percentage. Staying below 100% reduces
+            long-term battery wear, especially when docked.
+          </div>
+        </div>
+      )}
+
+      {control.supportsBypass && (
+        <div className="subsection">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="subsection-label mb-0">Bypass charging</div>
+            <Select
+              value={control.bypassMode}
+              options={bypassOptions}
+              labels={BYPASS_LABELS}
+              onChange={(mode) => void applyBypass(mode)}
+            />
+          </div>
+          <div className="subsection-desc">
+            Run from the power adapter without charging the pack — less heat
+            and no charge cycles during long plugged-in sessions.
+            {control.supportsBypassAwake &&
+              " “While awake” resumes normal charging when the device sleeps."}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // MetricTile
 // ---------------------------------------------------------------------------
 
@@ -111,11 +276,24 @@ function BatteryTracker() {
   const [battery, setBattery] = useState<BatteryInfo | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [chargeControl, setChargeControl] = useState<ChargeControlInfo | null>(null);
 
   useEvent({
     event: "batteryUpdate",
     handler: (data) => setBattery(data as BatteryInfo),
   });
+
+  // Older backends (and the spec's mock) return null for unknown methods —
+  // treat that as "no charge control support" and render nothing.
+  const refreshChargeControl = useCallback(() => {
+    call("getChargeControl")
+      .then((info) => {
+        setChargeControl((info as ChargeControlInfo | null) ?? null);
+      })
+      .catch(() => {
+        /* older backend / read failure — leave controls hidden */
+      });
+  }, [call]);
 
   useEffect(() => {
     call("getBatteryInfo").then((info) => {
@@ -124,7 +302,8 @@ function BatteryTracker() {
       else setBattery(data);
     });
     call("getHistory").then((h) => setHistory(h as HistoryEntry[]));
-  }, [call]);
+    refreshChargeControl();
+  }, [call, refreshChargeControl]);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -220,6 +399,15 @@ function BatteryTracker() {
             </div>
           </div>
         </div>
+
+        {/* CHARGE LIMIT + BYPASS (only when the hardware supports either) */}
+        {chargeControl && (chargeControl.supportsChargeLimit || chargeControl.supportsBypass) && (
+          <ChargingControls
+            control={chargeControl}
+            call={call}
+            onRefresh={refreshChargeControl}
+          />
+        )}
 
         {/* POWER FLOW + HEALTH + DETAILS */}
         <div className="card">
