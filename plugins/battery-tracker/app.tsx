@@ -122,10 +122,12 @@ function ChargingControls({
   control,
   call,
   onPatch,
+  batteryStatus,
 }: {
   control: ChargeControlInfo;
   call: (method: string, ...args: unknown[]) => Promise<unknown>;
   onPatch: (patch: Partial<ChargeControlInfo>) => void;
+  batteryStatus: string | null;
 }) {
   const stored = control.chargeLimitPercent;
   // Local slider position so dragging stays responsive; backend writes
@@ -152,12 +154,16 @@ function ChargingControls({
           onPatch({ chargeLimitPercent: percent });
         } else {
           notify(result?.error ?? "Failed to set charge limit", { kind: "error" });
+          // Write rejected — snap the slider back to the persisted value so
+          // it doesn't show a limit the hardware never accepted.
+          setSliderPct(clampLimit(stored ?? DEFAULT_CHARGE_LIMIT));
         }
       } catch {
         notify("Failed to set charge limit", { kind: "error" });
+        setSliderPct(clampLimit(stored ?? DEFAULT_CHARGE_LIMIT));
       }
     },
-    [call, onPatch],
+    [call, onPatch, stored],
   );
 
   // "Bypass didn't take effect" advisory. Some devices expose charge_behaviour
@@ -172,6 +178,15 @@ function ChargingControls({
     },
     [],
   );
+
+  // Self-heal: if charging later stops (a device whose EC honours the inhibit
+  // a bit after our 6s window, or any other reason), drop the warning so it
+  // doesn't linger falsely until the next mode change.
+  useEffect(() => {
+    if (bypassIneffective && batteryStatus && batteryStatus !== "Charging") {
+      setBypassIneffective(false);
+    }
+  }, [batteryStatus, bypassIneffective]);
 
   const applyBypass = useCallback(
     async (mode: BypassMode) => {
@@ -470,6 +485,7 @@ function BatteryTracker() {
             control={chargeControl}
             call={call}
             onPatch={patchChargeControl}
+            batteryStatus={battery?.status ?? null}
           />
         )}
 

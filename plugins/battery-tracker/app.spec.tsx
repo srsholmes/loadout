@@ -327,6 +327,13 @@ describe("battery-tracker plugin", () => {
         await Promise.resolve();
       });
       expect(container.textContent).toContain("Bypass didn’t take effect");
+
+      // Self-heal: a later non-charging update clears the warning.
+      await act(async () => {
+        eventHandlers.get("batteryUpdate")!({ ...mockBatteryInfo, status: "Not charging" });
+        await Promise.resolve();
+      });
+      expect(container.textContent).not.toContain("didn’t take effect");
       unmount();
     } finally {
       jest.useRealTimers();

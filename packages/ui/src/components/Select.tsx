@@ -37,12 +37,17 @@ interface MenuPosition {
  * a first-class layout property), so getBoundingClientRect returns post-zoom
  * device px. A portaled menu on <body> sits outside that wrapper, so we read
  * the zoom back off the DOM to reproduce it.
+ *
+ * The walk stops at <body>: the menu is portaled as a child of <body>, so it
+ * already inherits any zoom on <body>/<html> natively — re-applying those too
+ * would double-scale it. We only re-apply the zoom that lives *between* the
+ * trigger and <body> (today, the overlay's inner wrapper div).
  */
 function effectiveZoom(el: HTMLElement | null): number {
   let z = 1;
-  for (let node: HTMLElement | null = el; node; node = node.parentElement) {
-    const raw = getComputedStyle(node).zoom;
-    const v = parseFloat(raw);
+  const stop = el?.ownerDocument.body ?? null;
+  for (let node = el; node && node !== stop; node = node.parentElement) {
+    const v = parseFloat(getComputedStyle(node).zoom);
     if (!Number.isNaN(v) && v > 0) z *= v;
   }
   return z;
