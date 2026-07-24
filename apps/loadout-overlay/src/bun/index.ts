@@ -163,10 +163,14 @@ const webviewEverAlive: { current: boolean } = { current: false };
 // toggleOverlay.
 const intercept: { current: InputInterceptHandle | null } = { current: null };
 // Monotonic baseline for the startup phantom-wake guard (see onWake /
-// isStartupWakePhantom). Captured at module load — a hair before the input
-// paths open their evdev nodes below — so the grace window covers the boot
-// race where InputPlumber emits a spurious F16 before the session is up.
-const inputStartedAt = performance.now();
+// isStartupWakePhantom). Seeded at module load so the guard is armed even for
+// a wake that somehow arrives before the interceptors finish starting, then
+// RE-ANCHORED to the moment the evdev nodes actually open (the evdev
+// `onReady` below). The phantom F16 is observed ~1s after the nodes open, and
+// the async startup before that (persisted-config read + IP DBus discovery)
+// is variable — anchoring to node-open gives a deterministic 5s window that
+// matches the observed failure timing rather than eating into it.
+const inputStartedAt = { current: performance.now() };
 // InputPlumber intercept-mode path — runs alongside the evdev interceptor on
 // IP-managed handhelds (deck-uhid target, no grabbable evdev). On grab it sets
 // InterceptMode=2 so Steam BPM is starved and nav arrives over D-Bus; on hosts
@@ -571,7 +575,7 @@ function onWake(event: WakeEvent): void {
   // boot; acting on it opens the overlay invisibly and diverts the pad away
   // from Steam (Steam looks dead until InputPlumber is restarted). See
   // isStartupWakePhantom. Only opens are suppressed — a close always works.
-  const elapsed = performance.now() - inputStartedAt;
+  const elapsed = performance.now() - inputStartedAt.current;
   if (isStartupWakePhantom({ elapsedSinceStartMs: elapsed, isOpen: state.isOpen })) {
     trace(
       `[overlay] ignoring wake=${event} within startup grace (${Math.round(elapsed)}ms) — likely boot phantom`,
@@ -688,10 +692,16 @@ void (async () => {
         // main content area with its own rAF + momentum loop.
         sendToWebview("overlay-scroll", { axis, value });
       },
-      onReady: (c) =>
+      onReady: (c) => {
+        // Re-anchor the phantom-wake grace window to the moment the evdev
+        // nodes are open (see inputStartedAt). onReady fires synchronously
+        // after the devices are opened and before the read loop polls, so no
+        // wake can be observed before this reset.
+        inputStartedAt.current = performance.now();
         console.log(
           `[overlay] input intercept ready — ${c.controllers} controller(s), ${c.keyboards} keyboard(s), ${c.qam} qam device(s) (readVirtualPadsForNav=${readVirtualPadsForNav})`,
-        ),
+        );
+      },
     });
     intercept.current = handle;
   } catch (err) {
