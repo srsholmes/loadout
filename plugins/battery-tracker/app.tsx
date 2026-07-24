@@ -116,11 +116,11 @@ type SetResult = { success: boolean; error?: string };
 function ChargingControls({
   control,
   call,
-  onRefresh,
+  onPatch,
 }: {
   control: ChargeControlInfo;
   call: (method: string, ...args: unknown[]) => Promise<unknown>;
-  onRefresh: () => void;
+  onPatch: (patch: Partial<ChargeControlInfo>) => void;
 }) {
   const stored = control.chargeLimitPercent;
   // Local slider position so dragging stays responsive; backend writes
@@ -140,16 +140,19 @@ function ChargingControls({
         const result = (await call("setChargeLimit", percent)) as SetResult | null;
         if (result?.success) {
           notify(percent === null ? "Charge limit off" : `Charge limit set to ${percent}%`);
+          // Trust the successful write rather than immediately re-reading:
+          // charge_control_end_threshold is EC-backed and a read-back right
+          // after the write can still report the old value until the EC
+          // propagates it, which would visibly snap the slider back.
+          onPatch({ chargeLimitPercent: percent });
         } else {
           notify(result?.error ?? "Failed to set charge limit", { kind: "error" });
         }
       } catch {
         notify("Failed to set charge limit", { kind: "error" });
-      } finally {
-        onRefresh();
       }
     },
-    [call, onRefresh],
+    [call, onPatch],
   );
 
   const applyBypass = useCallback(
@@ -162,16 +165,17 @@ function ChargingControls({
               ? "Bypass charging off"
               : `Bypass charging: ${BYPASS_LABELS[mode].toLowerCase()}`,
           );
+          // Same EC read-back lag as the charge limit — reflect the mode we
+          // just wrote instead of racing a stale re-read.
+          onPatch({ bypassMode: mode });
         } else {
           notify(result?.error ?? "Failed to set bypass mode", { kind: "error" });
         }
       } catch {
         notify("Failed to set bypass mode", { kind: "error" });
-      } finally {
-        onRefresh();
       }
     },
-    [call, onRefresh],
+    [call, onPatch],
   );
 
   const bypassOptions: BypassMode[] = control.supportsBypassAwake
@@ -284,7 +288,9 @@ function BatteryTracker() {
   });
 
   // Older backends (and the spec's mock) return null for unknown methods —
-  // treat that as "no charge control support" and render nothing.
+  // treat that as "no charge control support" and render nothing. This reads
+  // hardware, so it's used only on mount; writes update state optimistically
+  // via patchChargeControl to avoid the EC read-back race.
   const refreshChargeControl = useCallback(() => {
     call("getChargeControl")
       .then((info) => {
@@ -294,6 +300,10 @@ function BatteryTracker() {
         /* older backend / read failure — leave controls hidden */
       });
   }, [call]);
+
+  const patchChargeControl = useCallback((patch: Partial<ChargeControlInfo>) => {
+    setChargeControl((prev) => (prev ? { ...prev, ...patch } : prev));
+  }, []);
 
   useEffect(() => {
     call("getBatteryInfo").then((info) => {
@@ -405,7 +415,7 @@ function BatteryTracker() {
           <ChargingControls
             control={chargeControl}
             call={call}
-            onRefresh={refreshChargeControl}
+            onPatch={patchChargeControl}
           />
         )}
 
