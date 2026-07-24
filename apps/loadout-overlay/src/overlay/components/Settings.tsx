@@ -796,7 +796,20 @@ function SettingsInner({
                     <div className="shrink-0">
                       <Toggle
                         checked={on}
-                        onChange={() => togglePluginEnabled(plugin.id)}
+                        onChange={() => {
+                          togglePluginEnabled(plugin.id);
+                          // Turning OFF a plugin the backend is running:
+                          // its code can't be unloaded in place, so it
+                          // keeps running until an app restart. Say so at
+                          // the moment of the action — the header "Restart
+                          // Loadout" button is the persistent affordance.
+                          if (on && plugin.status === "loaded") {
+                            notify(
+                              `${plugin.name} keeps running until you restart Loadout.`,
+                              { id: "plugin-disable", duration: 4000 },
+                            );
+                          }
+                        }}
                       />
                     </div>
                   </div>
