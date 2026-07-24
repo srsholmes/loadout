@@ -8,11 +8,11 @@
  * control call() and useEvent() without a live backend.
  */
 
-import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { describe, it, expect, mock, beforeEach, jest } from "bun:test";
 // Captured BEFORE mock.module() runs below so the spread includes the real
 // module. bun's mock.module is NOT hoisted (unlike vitest's vi.mock).
 import * as actualUi from "@loadout/ui";
-import { waitFor, fireEvent } from "../../test/render";
+import { waitFor, fireEvent, act } from "../../test/render";
 
 const callMock = mock((_method: string, ..._args: unknown[]) => Promise.resolve(null));
 const eventHandlers = new Map<string, (data: unknown) => void>();
@@ -276,5 +276,94 @@ describe("battery-tracker plugin", () => {
     });
     // Limit off (chargeLimitPercent null) → no range input yet.
     expect(container.querySelector('input[type="range"]')).toBeNull();
+  });
+
+  // --- Bypass effectiveness check ---------------------------------------
+
+  async function openBypassAndPick(container: HTMLElement, label: string) {
+    const trigger = container.querySelector(
+      'button[aria-haspopup="listbox"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      fireEvent.click(trigger);
+      jest.advanceTimersByTime(1);
+    });
+    const opt = Array.from(document.querySelectorAll('[role="option"]')).find(
+      (o) => o.textContent?.trim() === label,
+    ) as HTMLElement;
+    await act(async () => {
+      fireEvent.click(opt);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it("warns when 'always' bypass leaves the battery charging", async () => {
+    jest.useFakeTimers();
+    try {
+      callMock.mockImplementation((method: string) => {
+        if (method === "getChargeControl") return Promise.resolve(supportedChargeControl);
+        // Still charging after the write -> firmware ignored it.
+        if (method === "getBatteryInfo")
+          return Promise.resolve({ ...mockBatteryInfo, status: "Charging" });
+        if (method === "getHistory") return Promise.resolve([]);
+        return Promise.resolve({ success: true });
+      });
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const { mount } = await import("./app");
+      let unmount: () => void = () => {};
+      await act(async () => {
+        unmount = mount(container);
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(container.textContent).toContain("Bypass charging"));
+
+      await openBypassAndPick(container, "Always");
+      expect(container.textContent).not.toContain("didn’t take effect");
+      await act(async () => {
+        jest.advanceTimersByTime(6000);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("Bypass didn’t take effect");
+      unmount();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("does NOT warn for 'while awake' even if still charging (expected)", async () => {
+    jest.useFakeTimers();
+    try {
+      callMock.mockImplementation((method: string) => {
+        if (method === "getChargeControl") return Promise.resolve(supportedChargeControl);
+        if (method === "getBatteryInfo")
+          return Promise.resolve({ ...mockBatteryInfo, status: "Charging" });
+        if (method === "getHistory") return Promise.resolve([]);
+        return Promise.resolve({ success: true });
+      });
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const { mount } = await import("./app");
+      let unmount: () => void = () => {};
+      await act(async () => {
+        unmount = mount(container);
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(container.textContent).toContain("Bypass charging"));
+
+      await openBypassAndPick(container, "While awake");
+      await act(async () => {
+        jest.advanceTimersByTime(6000);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Charging while awake is correct for this mode — no warning.
+      expect(container.textContent).not.toContain("didn’t take effect");
+      unmount();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

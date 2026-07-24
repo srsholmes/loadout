@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
-import { FaBatteryFull, FaBolt, FaPlug } from "react-icons/fa6";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { FaBatteryFull, FaBolt, FaPlug, FaTriangleExclamation } from "react-icons/fa6";
 import {
+  Alert,
   Button,
   Select,
   Slider,
@@ -90,6 +91,10 @@ function HistoryChart({ history }: { history: HistoryEntry[] }) {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_CHARGE_LIMIT = 80;
+// After enabling "always" bypass, wait this long before checking whether the
+// battery actually stopped charging. The EC applies inhibit within a second or
+// two; this leaves margin for the read to reflect it.
+const BYPASS_CHECK_DELAY_MS = 6000;
 // Practical slider bounds. 100 is intentionally excluded — a threshold of
 // 100 means "no limit", which the toggle expresses instead.
 const LIMIT_MIN = 50;
@@ -155,8 +160,27 @@ function ChargingControls({
     [call, onPatch],
   );
 
+  // "Bypass didn't take effect" advisory. Some devices expose charge_behaviour
+  // but their firmware/driver silently ignores the inhibit (the write succeeds
+  // and reads back as set), so we verify by outcome instead. Device-agnostic —
+  // no per-model logic.
+  const [bypassIneffective, setBypassIneffective] = useState(false);
+  const checkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (checkTimer.current) clearTimeout(checkTimer.current);
+    },
+    [],
+  );
+
   const applyBypass = useCallback(
     async (mode: BypassMode) => {
+      // Any mode change clears a prior warning and cancels a pending check.
+      if (checkTimer.current) {
+        clearTimeout(checkTimer.current);
+        checkTimer.current = null;
+      }
+      setBypassIneffective(false);
       try {
         const result = (await call("setBypassMode", mode)) as SetResult | null;
         if (result?.success) {
@@ -168,6 +192,24 @@ function ChargingControls({
           // Same EC read-back lag as the charge limit — reflect the mode we
           // just wrote instead of racing a stale re-read.
           onPatch({ bypassMode: mode });
+          // Effectiveness check — ONLY for "always". "awake" deliberately keeps
+          // charging until the device sleeps, so still-charging there is
+          // correct, not a failure. If "always" is still Charging a few seconds
+          // on, the firmware/driver isn't honouring it: warn rather than
+          // pretend it worked. ("Full"/"Not charging"/"Discharging" don't warn
+          // — nothing to stop / already stopped.)
+          if (mode === "always") {
+            checkTimer.current = setTimeout(() => {
+              void call("getBatteryInfo")
+                .then((info) => {
+                  const d = info as BatteryInfoResult;
+                  if (d && !("error" in d) && d.status === "Charging") {
+                    setBypassIneffective(true);
+                  }
+                })
+                .catch(() => {});
+            }, BYPASS_CHECK_DELAY_MS);
+          }
         } else {
           notify(result?.error ?? "Failed to set bypass mode", { kind: "error" });
         }
@@ -238,6 +280,18 @@ function ChargingControls({
             {control.supportsBypassAwake &&
               " “While awake” resumes normal charging when the device sleeps."}
           </div>
+          {bypassIneffective && (
+            <Alert
+              variant="warning"
+              className="mt-3"
+              icon={<FaTriangleExclamation size={16} />}
+              title="Bypass didn’t take effect"
+            >
+              The battery is still charging. Your device’s firmware or kernel
+              driver may not support bypass charging yet, even though the option
+              is available.
+            </Alert>
+          )}
         </div>
       )}
     </div>
