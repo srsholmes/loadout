@@ -19,10 +19,33 @@ const MENU_GAP = 4;
 interface MenuPosition {
   left: number;
   minWidth: number;
+  /** Effective CSS `zoom` of the trigger's ancestor chain. The menu is
+   *  portaled to <body> (outside the overlay's zoomed wrapper), so it must
+   *  re-apply that zoom or it renders at 1× — smaller than the rest of the
+   *  scaled UI. All the px offsets below are in the menu's own (pre-zoom)
+   *  coordinate space, i.e. device px divided by this. */
+  zoom: number;
   /** Set for below-placement (fixed `top`). */
   top?: number;
   /** Set for above-placement (fixed `bottom`, measured from viewport bottom). */
   bottom?: number;
+}
+
+/**
+ * Cumulative CSS `zoom` applied to an element via its ancestor chain. The
+ * overlay scales its whole UI with `zoom` on a wrapper div (CEF treats it as
+ * a first-class layout property), so getBoundingClientRect returns post-zoom
+ * device px. A portaled menu on <body> sits outside that wrapper, so we read
+ * the zoom back off the DOM to reproduce it.
+ */
+function effectiveZoom(el: HTMLElement | null): number {
+  let z = 1;
+  for (let node: HTMLElement | null = el; node; node = node.parentElement) {
+    const raw = getComputedStyle(node).zoom;
+    const v = parseFloat(raw);
+    if (!Number.isNaN(v) && v > 0) z *= v;
+  }
+  return z;
 }
 
 export interface SelectOption<T extends string> {
@@ -79,15 +102,21 @@ export function Select<T extends string>({
     const el = wrapperRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
+    const z = effectiveZoom(el);
+    // The menu re-applies `zoom: z`, which scales its own inset/size values,
+    // so express every device-px measurement in the menu's pre-zoom space
+    // (÷ z). The flip threshold compares device px against the menu's real
+    // rendered height (MENU_MAX_HEIGHT · z).
     const spaceBelow = window.innerHeight - r.bottom;
     const spaceAbove = r.top;
-    const flipUp = spaceBelow < MENU_MAX_HEIGHT && spaceAbove > spaceBelow;
+    const flipUp = spaceBelow < MENU_MAX_HEIGHT * z && spaceAbove > spaceBelow;
     setMenuPos({
-      left: r.left,
-      minWidth: r.width,
+      zoom: z,
+      left: r.left / z,
+      minWidth: r.width / z,
       ...(flipUp
-        ? { bottom: window.innerHeight - r.top + MENU_GAP }
-        : { top: r.bottom + MENU_GAP }),
+        ? { bottom: (window.innerHeight - r.top + MENU_GAP) / z }
+        : { top: (r.bottom + MENU_GAP) / z }),
     });
   }, []);
 
@@ -216,6 +245,7 @@ export function Select<T extends string>({
               role="listbox"
               className="fixed z-50 max-h-60 overflow-y-auto rounded-box border border-base-300 bg-base-100 shadow-xl py-1"
               style={{
+                zoom: menuPos.zoom,
                 left: menuPos.left,
                 minWidth: menuPos.minWidth,
                 top: menuPos.top,
