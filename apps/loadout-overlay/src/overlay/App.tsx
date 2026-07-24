@@ -3,7 +3,7 @@ import { Toaster, toast } from "react-hot-toast";
 import { LoadoutProvider, TOAST_EVENT, notify, type ToastEventDetail } from "@loadout/ui";
 import { versionsEqual, olderParseableVersion } from "@loadout/types";
 import { OVERLAY_VERSION } from "./version";
-import { checkForUpdate } from "./lib/host";
+import { checkForUpdate, restartApp } from "./lib/host";
 import { apiUrl, authHeaders } from "./lib/backend";
 import { Sidebar } from "./components/Sidebar";
 import { PluginHost } from "./components/PluginHost";
@@ -293,6 +293,15 @@ function AppInner() {
   const visiblePlugins = useMemo(
     () => plugins.filter((p) => isEnabled(p.id)),
     [plugins, isEnabled],
+  );
+  // True when a plugin the backend currently has LOADED has been turned
+  // off — its code can't be unloaded in place, so an app restart is
+  // needed to actually clear it. Drives the "Restart Loadout" button in
+  // the Settings header; goes away the moment the change is reverted.
+  // (Enabling never needs a restart — the loader loads it live.)
+  const pendingRestart = useMemo(
+    () => installedPlugins.some((p) => p.status === "loaded" && !isEnabled(p.id)),
+    [installedPlugins, isEnabled],
   );
   const [route, setRoute] = useState<Route>(() => parseHash(window.location.hash));
   const [scale, setScale] = useConfigValue<number>("uiScale", loadScale(false));
@@ -614,6 +623,11 @@ function AppInner() {
                     <PluginFavoriteButton pluginId={activePlugin.id} />
                   </div>
                 )}
+                {showSettings && pendingRestart && (
+                  <div className="flex items-center gap-2 shrink-0">
+                    <RestartLoadoutButton />
+                  </div>
+                )}
                 {showHome && (
                   <div className="flex items-center gap-2 shrink-0">
                     <button
@@ -825,6 +839,46 @@ function AppInner() {
       </div>
 
     </>
+  );
+}
+
+// Header CTA shown on the Settings page when a loaded plugin has been
+// disabled and needs an app restart to actually unload. Restarts the
+// backend AND the overlay (restartApp) — a backend-only restart would
+// sever the overlay's WebSocket. The overlay closes and reopens; the
+// game keeps running. Surfaces a toast if the restart is refused (e.g.
+// an update is in progress).
+function RestartLoadoutButton() {
+  const [restarting, setRestarting] = useState(false);
+  const handleRestart = useCallback(async () => {
+    if (restarting) return;
+    setRestarting(true);
+    const res = await restartApp();
+    if (!res.success) {
+      setRestarting(false);
+      notify(res.error ?? "Couldn't restart Loadout.", {
+        kind: "error",
+        id: "restart-loadout",
+      });
+    }
+    // On success the app is already bouncing — keep the button disabled.
+  }, [restarting]);
+  return (
+    <Focusable focusKey="settings-restart-loadout" onActivate={handleRestart}>
+      <button
+        type="button"
+        onClick={handleRestart}
+        disabled={restarting}
+        tabIndex={-1}
+        className="btn btn-sm btn-primary"
+        title="Restart Loadout to apply your plugin changes"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        {restarting ? "Restarting…" : "Restart Loadout"}
+      </button>
+    </Focusable>
   );
 }
 
