@@ -51,7 +51,7 @@ import {
 
 import { trace } from "./native/trace";
 import { createOverlayState } from "./lib/overlay-state";
-import { routeWake } from "./lib/wake-routing";
+import { routeWake, isStartupWakePhantom } from "./lib/wake-routing";
 import { loadPersistedShortcuts } from "./lib/persisted-shortcuts";
 
 // ---- State ------------------------------------------------------------------
@@ -162,6 +162,11 @@ const webviewEverAlive: { current: boolean } = { current: false };
 // and to the close-path `intercept.current?.release()` inside
 // toggleOverlay.
 const intercept: { current: InputInterceptHandle | null } = { current: null };
+// Monotonic baseline for the startup phantom-wake guard (see onWake /
+// isStartupWakePhantom). Captured at module load — a hair before the input
+// paths open their evdev nodes below — so the grace window covers the boot
+// race where InputPlumber emits a spurious F16 before the session is up.
+const inputStartedAt = performance.now();
 // InputPlumber intercept-mode path — runs alongside the evdev interceptor on
 // IP-managed handhelds (deck-uhid target, no grabbable evdev). On grab it sets
 // InterceptMode=2 so Steam BPM is starved and nav arrives over D-Bus; on hosts
@@ -560,6 +565,19 @@ function toggleOverlay(source: string) {
 // these were a hardcoded subset that ignored the config — Guide+X
 // did nothing despite defaulting to ToggleOverlay).
 function onWake(event: WakeEvent): void {
+  // Drop boot-time phantom wakes that would open the overlay before the
+  // graphical session is ready. On IP-managed handhelds the InputPlumber
+  // virtual keyboard sometimes emits a spurious F16 (→ QamToggle) ~1s into
+  // boot; acting on it opens the overlay invisibly and diverts the pad away
+  // from Steam (Steam looks dead until InputPlumber is restarted). See
+  // isStartupWakePhantom. Only opens are suppressed — a close always works.
+  const elapsed = performance.now() - inputStartedAt;
+  if (isStartupWakePhantom({ elapsedSinceStartMs: elapsed, isOpen: state.isOpen })) {
+    trace(
+      `[overlay] ignoring wake=${event} within startup grace (${Math.round(elapsed)}ms) — likely boot phantom`,
+    );
+    return;
+  }
   // The branch-table for "which wake event does what given the current
   // shortcut config" is pure — extracted into lib/wake-routing.ts so
   // the table is unit-tested without booting the full main process.

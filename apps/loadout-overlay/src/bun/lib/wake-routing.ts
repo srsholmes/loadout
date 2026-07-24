@@ -73,6 +73,40 @@ function shortcutForEvent(
 }
 
 /**
+ * Grace window (ms) after the input interceptors start during which a wake
+ * event that would OPEN the overlay is dropped as a likely boot phantom.
+ * See {@link isStartupWakePhantom}.
+ */
+export const STARTUP_WAKE_GRACE_MS = 5000;
+
+/**
+ * True when a wake event should be ignored as a likely boot-time phantom.
+ *
+ * On IP-managed handhelds (OXP APEX etc.) the InputPlumber virtual keyboard
+ * sometimes emits a spurious F16 — routed here as `QamToggle` — about a second
+ * after the overlay opens its evdev nodes at boot, before gamescope / Steam are
+ * even up (the toggle logs `desktop mode (no gamescope)` on a device that IS in
+ * gaming mode). Acting on it opens the overlay invisibly: the open path grabs
+ * the pad and sets InterceptMode=GamepadOnly, diverting controller input to our
+ * DBus nav — so Steam looks dead to the controller while the hidden overlay
+ * eats the input. The user's workaround is to restart InputPlumber, which
+ * resets InterceptMode. Observed live in loadout-overlay logs (2026-07-24).
+ *
+ * We only suppress *opens* (`isOpen === false`): a close must never be blocked,
+ * so the user can always escape, and once the grace elapses everything behaves
+ * normally. At boot the session isn't ready to show the overlay anyway, so
+ * dropping a genuine early press costs nothing — pressing again works.
+ */
+export function isStartupWakePhantom(opts: {
+  elapsedSinceStartMs: number;
+  isOpen: boolean;
+  graceMs?: number;
+}): boolean {
+  const grace = opts.graceMs ?? STARTUP_WAKE_GRACE_MS;
+  return !opts.isOpen && opts.elapsedSinceStartMs < grace;
+}
+
+/**
  * Decide what side-effect (if any) a wake event should produce.
  * Pure — same inputs produce the same outputs, no state mutation. The
  * caller is responsible for actually running the side-effect.

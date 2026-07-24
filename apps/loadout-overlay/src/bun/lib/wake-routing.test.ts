@@ -1,5 +1,9 @@
 import { describe, it, expect } from "bun:test";
-import { routeWake } from "./wake-routing";
+import {
+  routeWake,
+  isStartupWakePhantom,
+  STARTUP_WAKE_GRACE_MS,
+} from "./wake-routing";
 import type { ControllerShortcuts } from "../../webview/lib/electrobun";
 
 // These specs cover audit finding B-006 — the onWake() branch table in
@@ -230,6 +234,70 @@ describe("routeWake — issue #141 action types (OpenSettings / OpenHome / Toggl
       kind: "ignore",
       reason: "reserved",
     });
+  });
+});
+
+// Regression: on IP-managed handhelds a spurious F16 (→ QamToggle) fires
+// ~1s into boot, before the session is up. Acting on it opened the overlay
+// invisibly and diverted the pad from Steam ("Steam looks dead to the
+// controller until InputPlumber is restarted"). Confirmed in loadout-overlay
+// journal 2026-07-24: `wake=QamToggle` → `QamToggle → SHOW` one second after
+// the interceptors started.
+describe("isStartupWakePhantom — boot-time phantom guard", () => {
+  it("suppresses an OPEN wake within the grace window", () => {
+    // The exact boot case: overlay closed, ~1s elapsed.
+    expect(
+      isStartupWakePhantom({ elapsedSinceStartMs: 1000, isOpen: false }),
+    ).toBe(true);
+  });
+
+  it("suppresses a would-be open right at t=0", () => {
+    expect(
+      isStartupWakePhantom({ elapsedSinceStartMs: 0, isOpen: false }),
+    ).toBe(true);
+  });
+
+  it("does NOT suppress once the grace window has elapsed", () => {
+    expect(
+      isStartupWakePhantom({
+        elapsedSinceStartMs: STARTUP_WAKE_GRACE_MS,
+        isOpen: false,
+      }),
+    ).toBe(false);
+    expect(
+      isStartupWakePhantom({
+        elapsedSinceStartMs: STARTUP_WAKE_GRACE_MS + 1,
+        isOpen: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("NEVER suppresses a close — an open overlay must always be escapable", () => {
+    // Even at t=0 with the overlay open, the wake (a close) goes through, so
+    // a user can never be trapped in the overlay by the guard.
+    expect(
+      isStartupWakePhantom({ elapsedSinceStartMs: 0, isOpen: true }),
+    ).toBe(false);
+    expect(
+      isStartupWakePhantom({ elapsedSinceStartMs: 1000, isOpen: true }),
+    ).toBe(false);
+  });
+
+  it("respects a caller-supplied graceMs override", () => {
+    expect(
+      isStartupWakePhantom({
+        elapsedSinceStartMs: 500,
+        isOpen: false,
+        graceMs: 100,
+      }),
+    ).toBe(false);
+    expect(
+      isStartupWakePhantom({
+        elapsedSinceStartMs: 50,
+        isOpen: false,
+        graceMs: 100,
+      }),
+    ).toBe(true);
   });
 });
 
