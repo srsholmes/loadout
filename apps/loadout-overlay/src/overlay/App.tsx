@@ -20,7 +20,7 @@ import { usePlugins, useInstalledPlugins } from "./hooks/usePlugins";
 import { useSidebarAutoCollapseSetting } from "./hooks/useSidebarCollapse";
 import { useStatusMetrics } from "./hooks/useStatusMetrics";
 import { useEnabledPlugins } from "./hooks/useEnabledPlugins";
-import { useConfigValue, getConfigValue, setConfigValue, whenUserConfigLoaded } from "./lib/userConfig";
+import { useConfigValue, getConfigValue, setConfigValue, setConfigValueFlushed, whenUserConfigLoaded } from "./lib/userConfig";
 import { GamepadNavProvider, useFocusable, Focusable, FocusContext, setFocus, getCurrentFocusKey } from "./components/GamepadNav";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { hideOverlay, isGamescopeMode, getControllerShortcuts, setControllerShortcuts, sendOverlayHeartbeat } from "./lib/host";
@@ -281,7 +281,7 @@ function AppInner() {
   const { plugins, loading } = usePlugins();
   // Every plugin on disk (incl. disabled ones the backend never loaded),
   // so Settings + the welcome wizard can list and re-enable them.
-  const { plugins: installedPlugins } = useInstalledPlugins();
+  const { plugins: installedPlugins, loading: installedLoading } = useInstalledPlugins();
   const { disabled: disabledList, isEnabled } = useEnabledPlugins();
   const [welcomeCompleted] = useConfigValue<boolean>("welcomeCompleted", false);
   // Lets Settings re-open the welcome flow even after it's been dismissed.
@@ -535,7 +535,7 @@ function AppInner() {
           <WelcomeScreen
             plugins={installedPlugins}
             initialDisabled={disabledList}
-            loading={loading}
+            loading={installedLoading}
             onClose={() => {
               setWelcomeForceOpen(false);
               if (!getConfigValue<boolean>("welcomeCompleted", false)) {
@@ -853,6 +853,26 @@ function RestartLoadoutButton() {
   const handleRestart = useCallback(async () => {
     if (restarting) return;
     setRestarting(true);
+    // Durably persist the disabled set BEFORE bouncing the backend. The
+    // Settings toggle PATCHes fire-and-forget (setConfigValue only writes
+    // the in-memory cache + localStorage mirror synchronously); without
+    // this flush the restart can race that write, the backend re-reads
+    // the stale config.json and reloads the just-disabled plugin, and
+    // then loadUserConfig() overwrites the mirror — silently losing the
+    // change. Awaiting a re-PATCH of the current value also drains any
+    // queued toggle write (the config mutex is FIFO).
+    const ok = await setConfigValueFlushed(
+      "disabledPlugins",
+      getConfigValue<string[]>("disabledPlugins", []),
+    );
+    if (!ok) {
+      setRestarting(false);
+      notify("Couldn't save your plugin changes — not restarting.", {
+        kind: "error",
+        id: "restart-loadout",
+      });
+      return;
+    }
     const res = await restartApp();
     if (!res.success) {
       setRestarting(false);

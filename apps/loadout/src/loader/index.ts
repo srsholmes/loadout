@@ -361,9 +361,16 @@ export async function startServer(options: ServerOptions = {}) {
   let addPluginWatcher: (id: string) => void = () => {};
   // Serialized so two racing PATCHes can't double-load the same plugin.
   let enableQueue: Promise<void> = Promise.resolve();
+  // The LIVE disabled set — updated synchronously on every change so the
+  // queued task below reads the latest membership, not a per-callback
+  // snapshot. Without this, a rapid enable→disable of a startup-disabled
+  // plugin could let the queued enable task load a plugin the newest
+  // config says is disabled (its onLoad may touch hardware). Seeded from
+  // the startup set.
+  let currentDisabled = new Set(disabledIds);
   // Config PATCHes fire on every UI gesture (favorites, theme, layout
   // bursts); only re-scan the registry when the disabled set actually
-  // changes. Seeded from the startup set.
+  // changes.
   let lastDisabledKey = [...disabledIds].sort().join("|");
   function onUserConfigChanged(next: Record<string, unknown>): void {
     const raw = next[DISABLED_PLUGINS_KEY];
@@ -372,11 +379,15 @@ export async function startServer(options: ServerOptions = {}) {
     const key = [...ids].sort().join("|");
     if (key === lastDisabledKey) return;
     lastDisabledKey = key;
-    const disabledNow = new Set(ids);
+    currentDisabled = new Set(ids);
     enableQueue = enableQueue
       .then(async () => {
         for (const [id, entry] of registry) {
-          if (entry.status !== "disabled" || disabledNow.has(id)) continue;
+          // Re-check against the LIVE set at execution time: a later
+          // PATCH may have re-disabled this plugin after this task was
+          // queued. Loading is the only direction here — disabling never
+          // unloads (restart-gated) — so a stale load is the only risk.
+          if (entry.status !== "disabled" || currentDisabled.has(id)) continue;
           log.info(`[plugins] Enabling ${id} at runtime`);
           const lp = await loadPlugin({ plugin: entry, broadcast, loaded: plugins });
           entry.status = lp ? "loaded" : "error";

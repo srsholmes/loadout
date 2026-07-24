@@ -444,7 +444,7 @@ function RestartPrompt({
   onLater,
 }: {
   count: number;
-  onRestart: () => void;
+  onRestart: () => void | Promise<void>;
   onLater: () => void;
 }) {
   const { ref, focusKey, focusSelf } = useFocusable({
@@ -452,6 +452,18 @@ function RestartPrompt({
     trackChildren: true,
     isFocusBoundary: true,
   });
+  const [restarting, setRestarting] = useState(false);
+  const handleRestart = useCallback(async () => {
+    if (restarting) return;
+    setRestarting(true);
+    try {
+      await onRestart();
+    } finally {
+      // On success the app is bouncing; on failure the caller toasts and
+      // we re-enable so the user can retry or pick Later.
+      setRestarting(false);
+    }
+  }, [restarting, onRestart]);
   useEffect(() => {
     focusSelf();
   }, [focusSelf]);
@@ -481,18 +493,20 @@ function RestartPrompt({
               <button
                 type="button"
                 onClick={onLater}
+                disabled={restarting}
                 className="btn btn-ghost btn-sm min-w-[110px]"
               >
                 Later
               </button>
             </Focusable>
-            <Focusable focusKey="welcome-restart-now" onActivate={onRestart}>
+            <Focusable focusKey="welcome-restart-now" onActivate={handleRestart}>
               <button
                 type="button"
-                onClick={onRestart}
+                onClick={handleRestart}
+                disabled={restarting}
                 className="btn btn-primary btn-sm min-w-[140px]"
               >
-                Restart now
+                {restarting ? "Restarting…" : "Restart now"}
               </button>
             </Focusable>
           </div>
