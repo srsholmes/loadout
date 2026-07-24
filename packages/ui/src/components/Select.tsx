@@ -1,11 +1,57 @@
 import {
   type CSSProperties,
   type ReactNode,
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { FocusContext, pushBackInterceptor, setFocus, useFocusable } from "../spatial-nav";
+
+/** Max dropdown height in px — keep in sync with the `max-h-60` class below
+ *  (15rem @ 16px). Used to decide whether the menu flips above the trigger. */
+const MENU_MAX_HEIGHT = 240;
+/** Gap between the trigger and the menu, px. */
+const MENU_GAP = 4;
+
+interface MenuPosition {
+  left: number;
+  minWidth: number;
+  /** Effective CSS `zoom` of the trigger's ancestor chain. The menu is
+   *  portaled to <body> (outside the overlay's zoomed wrapper), so it must
+   *  re-apply that zoom or it renders at 1× — smaller than the rest of the
+   *  scaled UI. All the px offsets below are in the menu's own (pre-zoom)
+   *  coordinate space, i.e. device px divided by this. */
+  zoom: number;
+  /** Set for below-placement (fixed `top`). */
+  top?: number;
+  /** Set for above-placement (fixed `bottom`, measured from viewport bottom). */
+  bottom?: number;
+}
+
+/**
+ * Cumulative CSS `zoom` applied to an element via its ancestor chain. The
+ * overlay scales its whole UI with `zoom` on a wrapper div (CEF treats it as
+ * a first-class layout property), so getBoundingClientRect returns post-zoom
+ * device px. A portaled menu on <body> sits outside that wrapper, so we read
+ * the zoom back off the DOM to reproduce it.
+ *
+ * The walk stops at <body>: the menu is portaled as a child of <body>, so it
+ * already inherits any zoom on <body>/<html> natively — re-applying those too
+ * would double-scale it. We only re-apply the zoom that lives *between* the
+ * trigger and <body> (today, the overlay's inner wrapper div).
+ */
+function effectiveZoom(el: HTMLElement | null): number {
+  let z = 1;
+  const stop = el?.ownerDocument.body ?? null;
+  for (let node = el; node && node !== stop; node = node.parentElement) {
+    const v = parseFloat(getComputedStyle(node).zoom);
+    if (!Number.isNaN(v) && v > 0) z *= v;
+  }
+  return z;
+}
 
 export interface SelectOption<T extends string> {
   value: T;
@@ -44,11 +90,40 @@ export function Select<T extends string>({
   placeholder?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState<MenuPosition | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLUListElement>(null);
 
   const { ref: triggerRef, focusKey: triggerFocusKey } = useFocusable({
     onEnterPress: () => setOpen((o) => !o),
   });
+
+  // Position the menu from the trigger's viewport rect. The menu is rendered
+  // in a portal with `position: fixed` (below) so it escapes any clipping
+  // ancestor — cards use `overflow: hidden` and pages are scroll containers,
+  // both of which would otherwise crop an in-flow absolute dropdown. Flip
+  // above the trigger when there isn't room below.
+  const updatePosition = useCallback(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const z = effectiveZoom(el);
+    // The menu re-applies `zoom: z`, which scales its own inset/size values,
+    // so express every device-px measurement in the menu's pre-zoom space
+    // (÷ z). The flip threshold compares device px against the menu's real
+    // rendered height (MENU_MAX_HEIGHT · z).
+    const spaceBelow = window.innerHeight - r.bottom;
+    const spaceAbove = r.top;
+    const flipUp = spaceBelow < MENU_MAX_HEIGHT * z && spaceAbove > spaceBelow;
+    setMenuPos({
+      zoom: z,
+      left: r.left / z,
+      minWidth: r.width / z,
+      ...(flipUp
+        ? { bottom: (window.innerHeight - r.top + MENU_GAP) / z }
+        : { top: (r.bottom + MENU_GAP) / z }),
+    });
+  }, []);
 
   // Normalize options to {value, label}[]
   const normalized: SelectOption<T>[] = (options as readonly unknown[]).map(
@@ -72,12 +147,33 @@ export function Select<T extends string>({
     setFocus(triggerFocusKey);
   };
 
-  // Close on outside pointer-down (use mousedown so we close before any
-  // click handler on the option fires).
+  // Compute the menu position when it opens, and keep it pinned to the
+  // trigger while any ancestor scrolls or the window resizes. useLayoutEffect
+  // so the first paint already has the correct position (no flash at 0,0).
+  useLayoutEffect(() => {
+    if (!open) return;
+    updatePosition();
+    const onReflow = () => updatePosition();
+    // Capture phase so scrolls inside nested containers are caught too.
+    window.addEventListener("scroll", onReflow, true);
+    window.addEventListener("resize", onReflow);
+    return () => {
+      window.removeEventListener("scroll", onReflow, true);
+      window.removeEventListener("resize", onReflow);
+    };
+  }, [open, updatePosition]);
+
+  // Close on outside pointer-down. The menu lives in a portal (not inside
+  // wrapperRef), so an option click counts as "outside" the wrapper — check
+  // the menu element too, otherwise mousedown would close before the option's
+  // click handler runs and the selection would be lost.
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (!wrapperRef.current?.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (wrapperRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
@@ -141,27 +237,42 @@ export function Select<T extends string>({
         </svg>
       </button>
 
-      {open && (
-        <FocusContext.Provider value={triggerFocusKey}>
-          <ul
-            role="listbox"
-            className="absolute left-0 top-full mt-1 z-50 min-w-full max-h-60 overflow-y-auto rounded-box border border-base-300 bg-base-100 shadow-xl py-1"
-          >
-            {normalized.map((opt) => (
-              <SelectOptionRow
-                key={opt.value}
-                focusKey={optionFocusKey(opt.value)}
-                option={opt}
-                isSelected={opt.value === value}
-                onSelect={() => {
-                  onChange(opt.value);
-                  closeAndRestoreFocus();
-                }}
-              />
-            ))}
-          </ul>
-        </FocusContext.Provider>
-      )}
+      {open &&
+        menuPos &&
+        createPortal(
+          // Portaled to <body> with fixed positioning so no clipping ancestor
+          // (cards' overflow:hidden, scrollable pages) can crop the menu.
+          // FocusContext still wraps it here in the React tree, so spatial
+          // nav is unaffected by the DOM relocation.
+          <FocusContext.Provider value={triggerFocusKey}>
+            <ul
+              ref={menuRef}
+              role="listbox"
+              className="fixed z-50 max-h-60 overflow-y-auto rounded-box border border-base-300 bg-base-100 shadow-xl py-1"
+              style={{
+                zoom: menuPos.zoom,
+                left: menuPos.left,
+                minWidth: menuPos.minWidth,
+                top: menuPos.top,
+                bottom: menuPos.bottom,
+              }}
+            >
+              {normalized.map((opt) => (
+                <SelectOptionRow
+                  key={opt.value}
+                  focusKey={optionFocusKey(opt.value)}
+                  option={opt}
+                  isSelected={opt.value === value}
+                  onSelect={() => {
+                    onChange(opt.value);
+                    closeAndRestoreFocus();
+                  }}
+                />
+              ))}
+            </ul>
+          </FocusContext.Provider>,
+          document.body,
+        )}
     </div>
   );
 }

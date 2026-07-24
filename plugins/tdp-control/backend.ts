@@ -64,9 +64,6 @@ const LEGION_GO_WMI_PATHS = {
   spl: "/sys/class/firmware-attributes/lenovo-wmi-other-0/attributes/ppt_pl1_spl/current_value",
 };
 
-const CHARGE_LIMIT_PATH =
-  "/sys/class/power_supply/BAT0/charge_control_end_threshold";
-
 // ---------------------------------------------------------------------------
 // Enums (the device database + matching live in @loadout/devices)
 // ---------------------------------------------------------------------------
@@ -231,7 +228,6 @@ interface TdpInfo {
    */
   cpuBoostSetting: boolean;
   acPowerOnline: boolean | null;
-  chargeLimitPercent: number | null;
 }
 
 interface SystemInfo {
@@ -252,7 +248,6 @@ interface SystemInfo {
   ryzenadjCanRead: boolean;
   gpuVendor: "AMD" | "Intel" | "Unknown";
   supportsGpuControl: boolean;
-  supportsChargeLimit: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -507,13 +502,11 @@ export default class TdpControlBackend implements PluginBackend {
     const currentGovernor = await this.readCurrentGovernor();
 
     // Read additional state for new fields
-    const [gpuInfo, smtEnabled, cpuBoostEnabled, chargeLimitPercent] =
-      await Promise.all([
-        this.readGpuInfo(),
-        this.readSmtEnabled(),
-        this.readCpuBoostEnabled(),
-        this.readChargeLimit(),
-      ]);
+    const [gpuInfo, smtEnabled, cpuBoostEnabled] = await Promise.all([
+      this.readGpuInfo(),
+      this.readSmtEnabled(),
+      this.readCpuBoostEnabled(),
+    ]);
 
     return {
       currentTdp: this.currentTdp,
@@ -547,7 +540,6 @@ export default class TdpControlBackend implements PluginBackend {
       cpuBoostEnabled,
       cpuBoostSetting: this.desiredCpuBoost(),
       acPowerOnline: this.acPowerOnline,
-      chargeLimitPercent,
     };
   }
 
@@ -688,8 +680,6 @@ export default class TdpControlBackend implements PluginBackend {
 
   async getSystemInfo(): Promise<SystemInfo> {
     await this.detectPlatformProfile();
-    const supportsChargeLimit =
-      (await readFileText(CHARGE_LIMIT_PATH)) !== null;
     return {
       deviceName: this.deviceName,
       dmiProductName: this.dmiProductName,
@@ -708,7 +698,6 @@ export default class TdpControlBackend implements PluginBackend {
       ryzenadjCanRead: this.ryzenadjCanRead,
       gpuVendor: this.gpuVendor,
       supportsGpuControl: this.gpuCardPath !== null,
-      supportsChargeLimit,
     };
   }
 
@@ -1214,41 +1203,6 @@ export default class TdpControlBackend implements PluginBackend {
   }
 
   // -----------------------------------------------------------------------
-  // RPC: Battery charge limit
-  // -----------------------------------------------------------------------
-
-  async getChargeLimit(): Promise<{ percent: number | null }> {
-    const val = await this.readChargeLimit();
-    return { percent: val };
-  }
-
-  async setChargeLimit(
-    percent: number,
-  ): Promise<{ success: boolean; error?: string }> {
-    if (percent < 20 || percent > 100) {
-      return {
-        success: false,
-        error: "Charge limit must be between 20 and 100 percent",
-      };
-    }
-    const exists = (await readFileText(CHARGE_LIMIT_PATH)) !== null;
-    if (!exists) {
-      return {
-        success: false,
-        error: "Charge limit control is not supported on this system",
-      };
-    }
-    try {
-      await writeSysfs(CHARGE_LIMIT_PATH, String(percent));
-      console.log(`[tdp-control] Charge limit set to ${percent}%`);
-      return { success: true };
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return { success: false, error: msg };
-    }
-  }
-
-  // -----------------------------------------------------------------------
   // RPC: Suspend/Resume handlers
   // -----------------------------------------------------------------------
 
@@ -1675,13 +1629,6 @@ export default class TdpControlBackend implements PluginBackend {
       // GPU read failed
     }
     return null;
-  }
-
-  private async readChargeLimit(): Promise<number | null> {
-    const text = await readFileText(CHARGE_LIMIT_PATH);
-    if (text === null) return null;
-    const val = parseInt(text, 10);
-    return isNaN(val) ? null : val;
   }
 
   // -----------------------------------------------------------------------

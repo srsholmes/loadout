@@ -127,6 +127,28 @@ describe("Select", () => {
     expect(screen.getByRole("button", { name: /Pick one/ })).toBeTruthy();
   });
 
+  it("renders the open menu in a portal, outside the trigger's wrapper", () => {
+    // Regression: the menu must escape the Select's own DOM subtree so a
+    // clipping ancestor (cards use overflow:hidden, pages scroll) can't crop
+    // it. It's portaled to <body> with position:fixed.
+    const { container } = render(
+      <div style={{ overflow: "hidden" }}>
+        <Select
+          value="a"
+          options={["a", "b"] as const}
+          labels={{ a: "Alpha", b: "Bravo" }}
+          onChange={() => {}}
+        />
+      </div>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Alpha/ }));
+    const listbox = screen.getByRole("listbox");
+    // Not inside the rendered container (the clipping wrapper)…
+    expect(container.contains(listbox)).toBe(false);
+    // …and positioned fixed so it's viewport-relative, not clipped.
+    expect(listbox.className).toContain("fixed");
+  });
+
   it("supports {value, label} option objects", () => {
     const onChange = mock();
     render(

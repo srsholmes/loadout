@@ -1,7 +1,18 @@
-import { useState, useEffect, useCallback } from "react";
-import { FaBatteryFull, FaBolt } from "react-icons/fa6";
-import { Button, Spinner, useBackend, mountComponent } from "@loadout/ui";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { FaBatteryFull, FaBolt, FaPlug, FaTriangleExclamation } from "react-icons/fa6";
+import {
+  Alert,
+  Button,
+  Select,
+  Slider,
+  Spinner,
+  Toggle,
+  notify,
+  useBackend,
+  mountComponent,
+} from "@loadout/ui";
 import type { BatteryInfo, HistoryEntry } from "./lib/battery";
+import type { BypassMode, ChargeControlInfo } from "./lib/charge-control";
 
 export const icon = FaBatteryFull;
 
@@ -76,6 +87,233 @@ function HistoryChart({ history }: { history: HistoryEntry[] }) {
 }
 
 // ---------------------------------------------------------------------------
+// ChargingControls
+// ---------------------------------------------------------------------------
+
+const DEFAULT_CHARGE_LIMIT = 80;
+// After enabling "always" bypass, wait this long before checking whether the
+// battery actually stopped charging. The EC applies inhibit within a second or
+// two; this leaves margin for the read to reflect it.
+const BYPASS_CHECK_DELAY_MS = 6000;
+// Practical slider bounds. 100 is intentionally excluded — a threshold of
+// 100 means "no limit", which the toggle expresses instead.
+const LIMIT_MIN = 50;
+const LIMIT_MAX = 95;
+
+/** Clamp a stored threshold into the slider's displayable range. */
+function clampLimit(percent: number): number {
+  return Math.max(LIMIT_MIN, Math.min(LIMIT_MAX, Math.round(percent)));
+}
+
+const BYPASS_LABELS: Record<BypassMode, string> = {
+  disabled: "Off",
+  awake: "While awake",
+  always: "Always",
+};
+
+type SetResult = { success: boolean; error?: string };
+
+/**
+ * Charge limit + bypass charging card. Capability-driven: rendered only
+ * when the backend reports at least one control is supported (the parent
+ * skips it entirely otherwise), and each row hides individually.
+ */
+function ChargingControls({
+  control,
+  call,
+  onPatch,
+  batteryStatus,
+}: {
+  control: ChargeControlInfo;
+  call: (method: string, ...args: unknown[]) => Promise<unknown>;
+  onPatch: (patch: Partial<ChargeControlInfo>) => void;
+  batteryStatus: string | null;
+}) {
+  const stored = control.chargeLimitPercent;
+  // Local slider position so dragging stays responsive; backend writes
+  // happen on commit only. Clamp the seed to the slider's bounds so an
+  // externally-set threshold (e.g. 98%, or an off-range value) never leaves
+  // the chip and the thumb showing different numbers.
+  const [sliderPct, setSliderPct] = useState(clampLimit(stored ?? DEFAULT_CHARGE_LIMIT));
+  useEffect(() => {
+    if (stored !== null) setSliderPct(clampLimit(stored));
+  }, [stored]);
+
+  const limitEnabled = stored !== null;
+
+  const applyLimit = useCallback(
+    async (percent: number | null) => {
+      try {
+        const result = (await call("setChargeLimit", percent)) as SetResult | null;
+        if (result?.success) {
+          notify(percent === null ? "Charge limit off" : `Charge limit set to ${percent}%`);
+          // Trust the successful write rather than immediately re-reading:
+          // charge_control_end_threshold is EC-backed and a read-back right
+          // after the write can still report the old value until the EC
+          // propagates it, which would visibly snap the slider back.
+          onPatch({ chargeLimitPercent: percent });
+        } else {
+          notify(result?.error ?? "Failed to set charge limit", { kind: "error" });
+          // Write rejected — snap the slider back to the persisted value so
+          // it doesn't show a limit the hardware never accepted.
+          setSliderPct(clampLimit(stored ?? DEFAULT_CHARGE_LIMIT));
+        }
+      } catch {
+        notify("Failed to set charge limit", { kind: "error" });
+        setSliderPct(clampLimit(stored ?? DEFAULT_CHARGE_LIMIT));
+      }
+    },
+    [call, onPatch, stored],
+  );
+
+  // "Bypass didn't take effect" advisory. Some devices expose charge_behaviour
+  // but their firmware/driver silently ignores the inhibit (the write succeeds
+  // and reads back as set), so we verify by outcome instead. Device-agnostic —
+  // no per-model logic.
+  const [bypassIneffective, setBypassIneffective] = useState(false);
+  const checkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (checkTimer.current) clearTimeout(checkTimer.current);
+    },
+    [],
+  );
+
+  // Self-heal: if charging later stops (a device whose EC honours the inhibit
+  // a bit after our 6s window, or any other reason), drop the warning so it
+  // doesn't linger falsely until the next mode change.
+  useEffect(() => {
+    if (bypassIneffective && batteryStatus && batteryStatus !== "Charging") {
+      setBypassIneffective(false);
+    }
+  }, [batteryStatus, bypassIneffective]);
+
+  const applyBypass = useCallback(
+    async (mode: BypassMode) => {
+      // Any mode change clears a prior warning and cancels a pending check.
+      if (checkTimer.current) {
+        clearTimeout(checkTimer.current);
+        checkTimer.current = null;
+      }
+      setBypassIneffective(false);
+      try {
+        const result = (await call("setBypassMode", mode)) as SetResult | null;
+        if (result?.success) {
+          notify(
+            mode === "disabled"
+              ? "Bypass charging off"
+              : `Bypass charging: ${BYPASS_LABELS[mode].toLowerCase()}`,
+          );
+          // Same EC read-back lag as the charge limit — reflect the mode we
+          // just wrote instead of racing a stale re-read.
+          onPatch({ bypassMode: mode });
+          // Effectiveness check — ONLY for "always". "awake" deliberately keeps
+          // charging until the device sleeps, so still-charging there is
+          // correct, not a failure. If "always" is still Charging a few seconds
+          // on, the firmware/driver isn't honouring it: warn rather than
+          // pretend it worked. ("Full"/"Not charging"/"Discharging" don't warn
+          // — nothing to stop / already stopped.)
+          if (mode === "always") {
+            checkTimer.current = setTimeout(() => {
+              void call("getBatteryInfo")
+                .then((info) => {
+                  const d = info as BatteryInfoResult;
+                  if (d && !("error" in d) && d.status === "Charging") {
+                    setBypassIneffective(true);
+                  }
+                })
+                .catch(() => {});
+            }, BYPASS_CHECK_DELAY_MS);
+          }
+        } else {
+          notify(result?.error ?? "Failed to set bypass mode", { kind: "error" });
+        }
+      } catch {
+        notify("Failed to set bypass mode", { kind: "error" });
+      }
+    },
+    [call, onPatch],
+  );
+
+  const bypassOptions: BypassMode[] = control.supportsBypassAwake
+    ? ["disabled", "awake", "always"]
+    : ["disabled", "always"];
+
+  return (
+    <div className="card">
+      <div className="card-header flex items-center justify-between py-3.5 px-4.5 border-b border-base-300">
+        <div className="card-title flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-base-content/50">
+          <FaPlug className="w-3 h-3" /> CHARGING
+        </div>
+      </div>
+
+      {control.supportsChargeLimit && (
+        <div className="subsection">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="subsection-label mb-0">Charge limit</div>
+            <div className="flex items-center gap-3">
+              {limitEnabled && <span className="chip">{sliderPct}%</span>}
+              <Toggle
+                checked={limitEnabled}
+                onChange={(on) => void applyLimit(on ? sliderPct : null)}
+              />
+            </div>
+          </div>
+          {limitEnabled && (
+            <div className="mt-3">
+              <Slider
+                value={sliderPct}
+                onChange={setSliderPct}
+                onCommit={(v) => void applyLimit(v)}
+                min={LIMIT_MIN}
+                max={LIMIT_MAX}
+                step={1}
+              />
+            </div>
+          )}
+          <div className="subsection-desc">
+            Stop charging at a set percentage. Staying below 100% reduces
+            long-term battery wear, especially when docked.
+          </div>
+        </div>
+      )}
+
+      {control.supportsBypass && (
+        <div className="subsection">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="subsection-label mb-0">Bypass charging</div>
+            <Select
+              value={control.bypassMode}
+              options={bypassOptions}
+              labels={BYPASS_LABELS}
+              onChange={(mode) => void applyBypass(mode)}
+            />
+          </div>
+          <div className="subsection-desc">
+            Run from the power adapter without charging the pack — less heat
+            and no charge cycles during long plugged-in sessions.
+            {control.supportsBypassAwake &&
+              " “While awake” resumes normal charging when the device sleeps."}
+          </div>
+          {bypassIneffective && (
+            <Alert
+              variant="warning"
+              className="mt-3"
+              icon={<FaTriangleExclamation size={16} />}
+              title="Bypass didn’t take effect"
+            >
+              The battery is still charging. Your device’s firmware or kernel
+              driver may not support bypass charging yet, even though the option
+              is available.
+            </Alert>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // MetricTile
 // ---------------------------------------------------------------------------
 
@@ -111,11 +349,30 @@ function BatteryTracker() {
   const [battery, setBattery] = useState<BatteryInfo | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [chargeControl, setChargeControl] = useState<ChargeControlInfo | null>(null);
 
   useEvent({
     event: "batteryUpdate",
     handler: (data) => setBattery(data as BatteryInfo),
   });
+
+  // Older backends (and the spec's mock) return null for unknown methods —
+  // treat that as "no charge control support" and render nothing. This reads
+  // hardware, so it's used only on mount; writes update state optimistically
+  // via patchChargeControl to avoid the EC read-back race.
+  const refreshChargeControl = useCallback(() => {
+    call("getChargeControl")
+      .then((info) => {
+        setChargeControl((info as ChargeControlInfo | null) ?? null);
+      })
+      .catch(() => {
+        /* older backend / read failure — leave controls hidden */
+      });
+  }, [call]);
+
+  const patchChargeControl = useCallback((patch: Partial<ChargeControlInfo>) => {
+    setChargeControl((prev) => (prev ? { ...prev, ...patch } : prev));
+  }, []);
 
   useEffect(() => {
     call("getBatteryInfo").then((info) => {
@@ -124,7 +381,8 @@ function BatteryTracker() {
       else setBattery(data);
     });
     call("getHistory").then((h) => setHistory(h as HistoryEntry[]));
-  }, [call]);
+    refreshChargeControl();
+  }, [call, refreshChargeControl]);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -220,6 +478,16 @@ function BatteryTracker() {
             </div>
           </div>
         </div>
+
+        {/* CHARGE LIMIT + BYPASS (only when the hardware supports either) */}
+        {chargeControl && (chargeControl.supportsChargeLimit || chargeControl.supportsBypass) && (
+          <ChargingControls
+            control={chargeControl}
+            call={call}
+            onPatch={patchChargeControl}
+            batteryStatus={battery?.status ?? null}
+          />
+        )}
 
         {/* POWER FLOW + HEALTH + DETAILS */}
         <div className="card">

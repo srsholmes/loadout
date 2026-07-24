@@ -192,6 +192,8 @@
       "name": "@loadout/plugin-battery-tracker",
       "version": "0.0.1",
       "dependencies": {
+        "@loadout/exec": "workspace:*",
+        "@loadout/plugin-storage": "workspace:*",
         "@loadout/types": "workspace:*",
         "@loadout/ui": "workspace:*",
         "react": "^18.3.0",
