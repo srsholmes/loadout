@@ -257,7 +257,7 @@ export default class BatteryTrackerBackend implements PluginBackend {
     if (!base) return;
 
     const limitPath = `${base}/charge_control_end_threshold`;
-    if (await this._sysfsReadable(limitPath)) {
+    if (await this._sysfsPresent(limitPath)) {
       this.chargeLimitPath = limitPath;
     }
 
@@ -341,6 +341,29 @@ export default class BatteryTrackerBackend implements PluginBackend {
   }
 
   /**
+   * Whether a sysfs attribute is PRESENT, even if reading its value fails.
+   *
+   * Some EC drivers expose `charge_control_end_threshold` as effectively
+   * write-only: the file exists and accepts writes, but read() returns EINVAL.
+   * Verified on the OneXPlayer APEX (oxpec) — `cat` yields "Invalid argument"
+   * while writes take effect. Probing support with a successful read
+   * (_sysfsReadable) therefore HIDES a control that actually works, which is
+   * why the charge-limit UI vanished on that device while bypass (a readable
+   * `charge_behaviour` attr) stayed. A genuinely-absent attribute fails with
+   * ENOENT/ENODEV; any other error (EINVAL, EIO, EACCES) means the node is
+   * there but the driver refused the read — so treat those as present.
+   */
+  private async _sysfsPresent(path: string): Promise<boolean> {
+    try {
+      await readFile(path, "utf8");
+      return true;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException | null)?.code;
+      return code !== "ENOENT" && code !== "ENODEV";
+    }
+  }
+
+  /**
    * Write a sysfs node. The backend runs as root (system service), so a
    * direct write succeeds; `tee` is a fallback for the rare node that
    * rejects a plain write() but accepts a fresh open via tee.
@@ -363,7 +386,18 @@ export default class BatteryTrackerBackend implements PluginBackend {
     let chargeLimitPercent: number | null = null;
     if (this.chargeLimitPath) {
       const raw = await this._readSysfs(this.chargeLimitPath).catch(() => null);
-      chargeLimitPercent = thresholdToLimitPercent(raw === null ? null : parseSysfsInt(raw));
+      if (raw !== null) {
+        chargeLimitPercent = thresholdToLimitPercent(parseSysfsInt(raw));
+      } else {
+        // Write-only EC (e.g. APEX oxpec: read → EINVAL). Fall back to the
+        // persisted intent so the slider shows the limit the user applied
+        // instead of snapping back to "unlimited" on every refresh.
+        const stored = await readPluginStorage<ChargeControlStorage>(PLUGIN_ID);
+        chargeLimitPercent =
+          typeof stored.chargeLimitPercent === "number"
+            ? thresholdToLimitPercent(stored.chargeLimitPercent)
+            : null;
+      }
     }
 
     let bypassMode: BypassMode = "disabled";

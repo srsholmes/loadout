@@ -530,6 +530,93 @@ describe("BatteryTrackerBackend", () => {
       expect(info.chargeLimitPercent).toBeNull();
     });
 
+    // Regression: the OneXPlayer APEX (oxpec) exposes
+    // charge_control_end_threshold as write-only — the file exists and accepts
+    // writes, but read() returns EINVAL. Detecting support via a successful
+    // read hid the charge-limit UI on that device while bypass stayed visible.
+    // Support must be recognised from PRESENCE, not readability.
+    it("detects charge-limit support when the attr exists but read() returns EINVAL", async () => {
+      // Battery files resolve as normal, but the threshold read is rejected
+      // with EINVAL (present-but-write-only) rather than ENOENT (absent).
+      const map = makeSysfsMap(base, {
+        type: "Battery",
+        capacity: "62",
+        status: "Full",
+      });
+      const limitPath = `${base}/charge_control_end_threshold`;
+      (fsPromises.readFile as ReturnType<typeof spyOn>).mockImplementation(
+        (path: unknown): Promise<string> => {
+          const p = path as string;
+          if (p === limitPath) {
+            return Promise.reject(Object.assign(new Error("EINVAL"), { code: "EINVAL" }));
+          }
+          if (map.has(p)) return Promise.resolve(map.get(p)!);
+          return Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+        },
+      );
+      readdirSpy.mockImplementation(() => Promise.resolve(["BATT"] as unknown as string[]));
+
+      await backend.onLoad();
+
+      const info = await backend.getChargeControl();
+      expect(info.supportsChargeLimit).toBe(true);
+      // Read fails, no persisted value yet → reported as unknown (null), but
+      // the control is advertised as supported so the UI renders.
+      expect(info.chargeLimitPercent).toBeNull();
+    });
+
+    // Companion to the above: on a write-only EC the current threshold can't be
+    // read back, so getChargeControl falls back to the persisted intent — the
+    // slider must show the applied limit, not snap back to "unlimited".
+    it("reports the persisted limit when the attr is write-only (read → EINVAL)", async () => {
+      const map = makeSysfsMap(base, {
+        type: "Battery",
+        capacity: "62",
+        status: "Full",
+      });
+      const limitPath = `${base}/charge_control_end_threshold`;
+      (fsPromises.readFile as ReturnType<typeof spyOn>).mockImplementation(
+        (path: unknown): Promise<string> => {
+          const p = path as string;
+          if (p === limitPath) {
+            return Promise.reject(Object.assign(new Error("EINVAL"), { code: "EINVAL" }));
+          }
+          if (map.has(p)) return Promise.resolve(map.get(p)!);
+          return Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+        },
+      );
+      readdirSpy.mockImplementation(() => Promise.resolve(["BATT"] as unknown as string[]));
+
+      // The storage fallback reads the persisted file via async readFile —
+      // delegate non-sysfs paths to the real fs so plugin-storage round-trips.
+      (fsPromises.readFile as ReturnType<typeof spyOn>).mockImplementation(
+        (path: unknown): Promise<string> => {
+          const p = path as string;
+          if (p === limitPath) {
+            return Promise.reject(Object.assign(new Error("EINVAL"), { code: "EINVAL" }));
+          }
+          if (p.startsWith("/sys/")) {
+            if (map.has(p)) return Promise.resolve(map.get(p)!);
+            return Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+          }
+          try {
+            return Promise.resolve(readFileSync(p, "utf8"));
+          } catch (e) {
+            return Promise.reject(e);
+          }
+        },
+      );
+
+      await backend.onLoad();
+      // Apply a limit (write succeeds); it persists to plugin storage.
+      const set = await backend.setChargeLimit(80);
+      expect(set.success).toBe(true);
+
+      const info = await backend.getChargeControl();
+      expect(info.supportsChargeLimit).toBe(true);
+      expect(info.chargeLimitPercent).toBe(80);
+    });
+
     it("accepts legacy charge_type bypass on OneXPlayer hardware only", async () => {
       setupBattery(
         { charge_type: "Standard" },
