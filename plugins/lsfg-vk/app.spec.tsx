@@ -282,7 +282,7 @@ describe("lsfg-vk plugin UI", () => {
     let compatRow: HTMLElement | undefined;
     await waitFor(() => {
       compatRow = Array.from(
-        container.querySelectorAll('[role="option"]'),
+        document.querySelectorAll('[role="option"]'),
       ).find((el) =>
         el.textContent?.includes("Compatibility"),
       ) as HTMLElement | undefined;

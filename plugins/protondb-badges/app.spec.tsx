@@ -180,7 +180,7 @@ describe("protondb-badges plugin", () => {
     // Click the "All games" option.
     const allOption = await waitFor(() => {
       const opt = Array.from(
-        headerSlot.querySelectorAll('[role="option"]'),
+        document.querySelectorAll('[role="option"]'),
       ).find((el) => el.textContent?.includes("All games")) as
         | HTMLElement
         | undefined;
