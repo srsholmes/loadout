@@ -328,7 +328,7 @@ describe("hltb plugin", () => {
     );
     await waitFor(() => {
       const opt = Array.from(
-        headerSlot.querySelectorAll('[role="option"]'),
+        document.querySelectorAll('[role="option"]'),
       ).find((o) => o.textContent?.includes("All games"));
       expect(opt).toBeTruthy();
       fireEvent.click(opt as HTMLElement);
@@ -389,7 +389,7 @@ describe("hltb plugin", () => {
     fireEvent.click(trigger);
 
     await waitFor(() => {
-      const listbox = headerSlot.querySelector(
+      const listbox = document.querySelector(
         '[role="listbox"]',
       ) as HTMLElement | null;
       expect(listbox).not.toBeNull();

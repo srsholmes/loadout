@@ -6,16 +6,21 @@
     "react": "^18.3.0",
     "react-icons": "^5.4.0",
     "@loadout/ui": "workspace:*",
-    "@loadout/types": "workspace:*"
+    "@loadout/types": "workspace:*",
+    "@loadout/exec": "workspace:*",
+    "@loadout/plugin-storage": "workspace:*"
   },
   "plugin": {
     "id": "battery-tracker",
-    "name": "Battery Tracker",
-    "description": "Battery level, charge rate, estimated time remaining, and charge history",
+    "name": "Battery",
+    "description": "Battery level, charge rate, time remaining, charge history, charge limit, and bypass charging",
     "permissions": {
-      "commands": [],
+      "commands": [
+        "tee"
+      ],
       "filesystem": [
-        "/sys/class/power_supply"
+        "/sys/class/power_supply",
+        "/sys/devices/virtual/dmi/id"
       ]
     },
     "category": "Performance",

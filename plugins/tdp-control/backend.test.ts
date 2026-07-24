@@ -131,43 +131,6 @@ describe("TdpControlBackend", () => {
     });
   });
 
-  // ── setChargeLimit ────────────────────────────────────────────────
-
-  describe("setChargeLimit", () => {
-    it("rejects percent below 20", async () => {
-      const result = await backend.setChargeLimit(10);
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("between 20 and 100");
-    });
-
-    it("rejects percent above 100", async () => {
-      const result = await backend.setChargeLimit(110);
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("between 20 and 100");
-    });
-
-    it("rejects boundary value 19", async () => {
-      const result = await backend.setChargeLimit(19);
-      expect(result.success).toBe(false);
-    });
-
-    it("returns error when charge limit sysfs path does not exist", async () => {
-      // On non-Linux or test env, the sysfs path won't exist
-      const result = await backend.setChargeLimit(80);
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("not supported");
-    });
-  });
-
-  // ── getChargeLimit ────────────────────────────────────────────────
-
-  describe("getChargeLimit", () => {
-    it("returns null percent when sysfs path doesn't exist", async () => {
-      const result = await backend.getChargeLimit();
-      expect(result.percent).toBeNull();
-    });
-  });
-
   // ── getAcPowerStatus ──────────────────────────────────────────────
 
   describe("getAcPowerStatus", () => {
@@ -695,7 +658,6 @@ describe("TdpControlBackend", () => {
       expect(info).toHaveProperty("smtEnabled");
       expect(info).toHaveProperty("cpuBoostEnabled");
       expect(info).toHaveProperty("acPowerOnline");
-      expect(info).toHaveProperty("chargeLimitPercent");
     });
 
     it("method is none when not initialized", async () => {
@@ -725,7 +687,6 @@ describe("TdpControlBackend", () => {
       expect(info).toHaveProperty("intelRaplAvailable");
       expect(info).toHaveProperty("gpuVendor");
       expect(info).toHaveProperty("supportsGpuControl");
-      expect(info).toHaveProperty("supportsChargeLimit");
     });
   });
 });
