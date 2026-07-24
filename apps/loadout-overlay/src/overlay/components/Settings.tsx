@@ -806,7 +806,7 @@ function SettingsInner({
                           if (on && plugin.status === "loaded") {
                             notify(
                               `${plugin.name} keeps running until you restart Loadout.`,
-                              { id: "plugin-disable", duration: 4000 },
+                              { kind: "info", id: "plugin-disable", duration: 4000 },
                             );
                           }
                         }}

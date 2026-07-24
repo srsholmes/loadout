@@ -146,7 +146,9 @@ export function App() {
           ? toast.error
           : detail.kind === "loading"
             ? toast.loading
-            : toast.success;
+            : detail.kind === "info"
+              ? toast // neutral — no status icon
+              : toast.success;
       fn(detail.message, { id: detail.id, duration: detail.duration });
     };
     window.addEventListener(TOAST_EVENT, onToast);

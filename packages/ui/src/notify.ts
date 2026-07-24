@@ -10,10 +10,11 @@
  * registry uses for cross-root D-pad nav.
  */
 
-export type ToastKind = "success" | "error" | "loading";
+export type ToastKind = "success" | "error" | "loading" | "info";
 
 export interface NotifyOptions {
-  /** Visual variant. Defaults to "success". */
+  /** Visual variant. Defaults to "success". "info" is a neutral toast
+   *  with no status icon — for reminders/notices that aren't a success. */
   kind?: ToastKind;
   /** Auto-dismiss after this many ms. Omit for the library default. */
   duration?: number;
