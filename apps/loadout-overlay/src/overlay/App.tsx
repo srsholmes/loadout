@@ -623,11 +623,6 @@ function AppInner() {
                     <PluginFavoriteButton pluginId={activePlugin.id} />
                   </div>
                 )}
-                {showSettings && pendingRestart && (
-                  <div className="flex items-center gap-2 shrink-0">
-                    <RestartLoadoutButton />
-                  </div>
-                )}
                 {showHome && (
                   <div className="flex items-center gap-2 shrink-0">
                     <button
@@ -795,9 +790,13 @@ function AppInner() {
             <span className="w-[7px] h-[7px] rounded-full bg-success shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-success)_25%,transparent)]" />
             <span className="font-medium text-base-content">Connected to Steam</span>
             <span className="w-px h-3.5 bg-base-300" />
-            <span className="mono text-base-content/60">
-              {plugins.length} plugins loaded
-            </span>
+            {pendingRestart ? (
+              <FooterRestart />
+            ) : (
+              <span className="mono text-base-content/60">
+                {plugins.length} plugins loaded
+              </span>
+            )}
             <div className="flex-1" />
             {metrics.cpuTemp != null && (
               <span className="mono">
@@ -842,15 +841,14 @@ function AppInner() {
   );
 }
 
-// Header CTA shown on the Settings page when a loaded plugin has been
-// disabled and needs an app restart to actually unload. Restarts the
-// backend AND the overlay (restartApp) — a backend-only restart would
-// sever the overlay's WebSocket. The overlay closes and reopens; the
-// game keeps running. Surfaces a toast if the restart is refused (e.g.
-// an update is in progress).
-function RestartLoadoutButton() {
+// Restart the whole app (backend + overlay) to apply pending plugin
+// changes. A loaded plugin can't be unloaded in place, so disabling one
+// needs this. Restarts the backend AND the overlay (restartApp) — a
+// backend-only restart would sever the overlay's WebSocket. The overlay
+// closes and reopens; the game keeps running.
+function useRestartLoadout() {
   const [restarting, setRestarting] = useState(false);
-  const handleRestart = useCallback(async () => {
+  const restart = useCallback(async () => {
     if (restarting) return;
     setRestarting(true);
     // Durably persist the disabled set BEFORE bouncing the backend. The
@@ -881,22 +879,32 @@ function RestartLoadoutButton() {
         id: "restart-loadout",
       });
     }
-    // On success the app is already bouncing — keep the button disabled.
+    // On success the app is already bouncing — keep it disabled.
   }, [restarting]);
+  return { restarting, restart };
+}
+
+// Footer affordance shown (in place of the "N plugins loaded" count)
+// whenever a loaded plugin has been disabled and an app restart is
+// needed to actually unload it. Lives in the always-visible status bar
+// so the reminder follows the user out of Settings — unlike a header
+// button, which would collide with each view's own header controls.
+function FooterRestart() {
+  const { restarting, restart } = useRestartLoadout();
   return (
-    <Focusable focusKey="settings-restart-loadout" onActivate={handleRestart}>
+    <Focusable focusKey="footer-restart" onActivate={restart}>
       <button
         type="button"
-        onClick={handleRestart}
+        onClick={restart}
         disabled={restarting}
         tabIndex={-1}
-        className="btn btn-sm btn-primary"
         title="Restart Loadout to apply your plugin changes"
+        className="flex items-center gap-1.5 rounded-md px-2 py-0.5 font-medium text-warning bg-warning/15 hover:bg-warning/25 transition-colors"
       >
-        <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
         </svg>
-        {restarting ? "Restarting…" : "Restart Loadout"}
+        {restarting ? "Restarting…" : "Restart required"}
       </button>
     </Focusable>
   );
