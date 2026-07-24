@@ -361,12 +361,18 @@ export async function startServer(options: ServerOptions = {}) {
   let addPluginWatcher: (id: string) => void = () => {};
   // Serialized so two racing PATCHes can't double-load the same plugin.
   let enableQueue: Promise<void> = Promise.resolve();
-  // The LIVE disabled set — updated synchronously on every change so the
-  // queued task below reads the latest membership, not a per-callback
-  // snapshot. Without this, a rapid enable→disable of a startup-disabled
-  // plugin could let the queued enable task load a plugin the newest
-  // config says is disabled (its onLoad may touch hardware). Seeded from
-  // the startup set.
+  // The LIVE disabled set — updated synchronously on every change so a
+  // queued enable task re-checks the latest membership instead of a
+  // per-callback snapshot. This is a BEST-EFFORT guard, not a guarantee:
+  // it prevents a stale enable only when that task is still queued behind
+  // earlier work by the time the later disable lands. In the empty-queue
+  // case the enable task's microtask can reach `loadPlugin` before the
+  // disable PATCH has even been persisted (its onUserConfigChanged runs
+  // only after the awaited disk write), so a rapid enable→disable of a
+  // startup-disabled plugin still loads it once — its onLoad runs, then it
+  // sits in the normal pending-disable state (loaded + "Restart required")
+  // until the next restart unloads it. A hard guarantee isn't possible
+  // without a plugin unload path (Audit A-009). Seeded from the startup set.
   let currentDisabled = new Set(disabledIds);
   // Config PATCHes fire on every UI gesture (favorites, theme, layout
   // bursts); only re-scan the registry when the disabled set actually

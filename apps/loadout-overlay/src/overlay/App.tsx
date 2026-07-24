@@ -297,7 +297,8 @@ function AppInner() {
   // True when a plugin the backend currently has LOADED has been turned
   // off — its code can't be unloaded in place, so an app restart is
   // needed to actually clear it. Drives the "Restart Loadout" button in
-  // the Settings header; goes away the moment the change is reverted.
+  // the footer "Restart required" button; goes away the moment the
+  // change is reverted.
   // (Enabling never needs a restart — the loader loads it live.)
   const pendingRestart = useMemo(
     () => installedPlugins.some((p) => p.status === "loaded" && !isEnabled(p.id)),
@@ -857,8 +858,11 @@ function useRestartLoadout() {
     // this flush the restart can race that write, the backend re-reads
     // the stale config.json and reloads the just-disabled plugin, and
     // then loadUserConfig() overwrites the mirror — silently losing the
-    // change. Awaiting a re-PATCH of the current value also drains any
-    // queued toggle write (the config mutex is FIFO).
+    // change. We write the CURRENT full disabledPlugins array (toggles
+    // always persist the whole array) and await it, so the on-disk value
+    // is correct regardless of how it races the toggle's own
+    // fire-and-forget PATCH: last full-array write wins, and we've
+    // awaited ours before restarting.
     const ok = await setConfigValueFlushed(
       "disabledPlugins",
       getConfigValue<string[]>("disabledPlugins", []),
