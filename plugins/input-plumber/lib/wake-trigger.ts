@@ -79,24 +79,10 @@ async function writeWake(wake: WakeState["wake"]): Promise<void> {
 
 // ── device detection ────────────────────────────────────────────────────────
 
-/** Steam Deck DMI signatures (product_name). Same identifiers tdp-control
- *  uses. We also accept a Valve sys_vendor as a belt-and-braces fallback. */
-const DECK_PRODUCTS = ["Jupiter", "Galileo"];
-
-async function readSysAttr(path: string): Promise<string> {
-  try {
-    return (await readFile(path, "utf-8")).trim();
-  } catch {
-    return "";
-  }
-}
-
-export async function isSteamDeck(): Promise<boolean> {
-  const product = await readSysAttr("/sys/class/dmi/id/product_name");
-  if (DECK_PRODUCTS.some((p) => product.includes(p))) return true;
-  const vendor = await readSysAttr("/sys/class/dmi/id/sys_vendor");
-  return vendor.includes("Valve");
-}
+/** Canonical DMI probe lives in @loadout/devices; re-exported so backend.ts
+ *  and the Deck submodule keep importing from here unchanged. */
+import { isSteamDeck } from "@loadout/devices";
+export { isSteamDeck };
 
 // ── status ──────────────────────────────────────────────────────────────────
 

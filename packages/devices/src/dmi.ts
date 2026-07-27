@@ -42,3 +42,17 @@ export function isApexDmi(info: DmiInfo): boolean {
 export async function isApex(): Promise<boolean> {
   return isApexDmi(await readDmi());
 }
+
+/** Steam Deck DMI signatures (product_name): Jupiter = LCD, Galileo = OLED.
+ *  Same identifiers tdp-control uses. A Valve sys_vendor is accepted as a
+ *  belt-and-braces fallback for future Deck revisions. */
+const DECK_PRODUCTS = ["Jupiter", "Galileo"];
+
+export function isSteamDeckDmi(info: DmiInfo): boolean {
+  if (DECK_PRODUCTS.some((p) => info.productName.includes(p))) return true;
+  return info.sysVendor.includes("Valve");
+}
+
+export async function isSteamDeck(): Promise<boolean> {
+  return isSteamDeckDmi(await readDmi());
+}
