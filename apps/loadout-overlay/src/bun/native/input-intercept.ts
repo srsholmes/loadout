@@ -604,6 +604,11 @@ export interface InputInterceptOptions {
    *  mirror would double every input. index.ts sets this to "no IP composites".
    */
   readVirtualPadsForNav?: boolean;
+  /** Non-evdev nav sources (e.g. "deck-hidraw") that inject events via
+   *  injectNavEvents. Listed here so pollOnce pumps their NavController
+   *  state every active tick — key repeat then fires on our 25 ms cadence
+   *  instead of depending on the source's own report cadence. */
+  externalNavSources?: string[];
 }
 
 export interface InputInterceptHandle {
@@ -612,6 +617,12 @@ export interface InputInterceptHandle {
   grab(): void;
   /** Stop intercept — release grabs, narrow masks back to idle. */
   release(): void;
+  /** Feed NavController-shaped events from an external (non-evdev) source,
+   *  e.g. the Deck hidraw watcher. No-op unless intercepting. The source id
+   *  is suffixed with the live grab generation, so state from a previous
+   *  overlay session can never leak into the next (nav.reset() on grab and
+   *  release covers the rest). */
+  injectNavEvents(sourceId: string, events: InputEvent[]): void;
   /** Close all FDs, release any outstanding grabs. Call from shutdown. */
   shutdown(): void;
   /** For diagnostic logs. */
@@ -635,6 +646,7 @@ export async function startInputIntercept(
   // it. index.ts sets readVirtualPadsForNav = "no IP composites present", i.e.
   // the Deck-alone case reads; the external-IP-pad case stays grab-only.
   const readVirtualPadsForNav = opts.readVirtualPadsForNav ?? true;
+  const externalNavSources = opts.externalNavSources ?? [];
 
   // Track controllers including the virtual pad; isSteamVirtual only decides
   // read-for-nav vs grab-only below (via `grabOnly` in openAndTrack).
@@ -802,6 +814,16 @@ export async function startInputIntercept(
         const cid = `${t.dev.hash}_${generation}`;
         const input = toInputEvents(events, t.cal);
         nav.processEvents(cid, input);
+      }
+    }
+
+    // Pump external nav sources (Deck hidraw) with an empty batch each
+    // active tick so their held buttons key-repeat on our cadence — the
+    // source only pushes events on state CHANGES, which would otherwise
+    // leave repeat at the mercy of its report timing.
+    if (intercepting) {
+      for (const id of externalNavSources) {
+        nav.processEvents(`${id}_${generation}`, []);
       }
     }
   }
@@ -1062,6 +1084,13 @@ export async function startInputIntercept(
   return {
     grab: doGrab,
     release: doRelease,
+    injectNavEvents: (sourceId: string, events: InputEvent[]): void => {
+      // Closed-overlay events are dropped, not queued: the source keeps its
+      // own state and re-baselines on the next open, so a stale press here
+      // would only ever produce a phantom action.
+      if (!intercepting) return;
+      nav.processEvents(`${sourceId}_${generation}`, events);
+    },
     shutdown: () => {
       if (timer) clearInterval(timer);
       timer = null;

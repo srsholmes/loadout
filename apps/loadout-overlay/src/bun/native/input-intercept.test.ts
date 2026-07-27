@@ -722,3 +722,83 @@ describe("__testing__.toInputEvents", () => {
 // iterated on with stricter config.
 void KEY_F16;
 void enqueueRead;
+
+describe("startInputIntercept — injectNavEvents (external nav sources)", () => {
+  it("drops events while not intercepting", async () => {
+    devicesOnSystem = [];
+    const actions: string[] = [];
+    const h = await startInputIntercept({
+      onWake: () => {},
+      onAction: (a) => actions.push(a),
+      externalNavSources: ["deck-hidraw"],
+    });
+    h.injectNavEvents("deck-hidraw", [
+      { kind: "button", button: "A", pressed: true },
+    ]);
+    expect(actions).toEqual([]);
+    h.shutdown();
+  });
+
+  it("routes events into NavController while intercepting", async () => {
+    devicesOnSystem = [];
+    const actions: string[] = [];
+    const h = await startInputIntercept({
+      onWake: () => {},
+      onAction: (a) => actions.push(a),
+      externalNavSources: ["deck-hidraw"],
+    });
+    h.grab();
+    h.injectNavEvents("deck-hidraw", [
+      { kind: "button", button: "A", pressed: true },
+    ]);
+    expect(actions).toEqual(["a"]);
+    // d-pad arrives as Hat axes and lands as directions.
+    h.injectNavEvents("deck-hidraw", [{ kind: "axis", axis: "HatY", value: 1 }]);
+    expect(actions).toEqual(["a", "down"]);
+    h.shutdown();
+  });
+
+  it("forwards right-stick axis events to onAxis for overlay scroll", async () => {
+    devicesOnSystem = [];
+    const axes: Array<[string, number]> = [];
+    const h = await startInputIntercept({
+      onWake: () => {},
+      onAction: () => {},
+      onAxis: (axis, value) => axes.push([axis, value]),
+      externalNavSources: ["deck-hidraw"],
+    });
+    h.grab();
+    h.injectNavEvents("deck-hidraw", [
+      { kind: "axis", axis: "RightStickY", value: 0.75 },
+    ]);
+    expect(axes).toEqual([["RightStickY", 0.75]]);
+    h.shutdown();
+  });
+
+  it("generation bump across release/grab isolates stale held state", async () => {
+    // A press injected in one overlay session must not produce a phantom
+    // action when its release arrives after a close→open cycle: the
+    // controller id embeds the grab generation, and nav.reset() on both
+    // transitions clears the rest.
+    devicesOnSystem = [];
+    const actions: string[] = [];
+    const h = await startInputIntercept({
+      onWake: () => {},
+      onAction: (a) => actions.push(a),
+      externalNavSources: ["deck-hidraw"],
+    });
+    h.grab();
+    h.injectNavEvents("deck-hidraw", [
+      { kind: "button", button: "Y", pressed: true },
+    ]);
+    expect(actions).toEqual(["y"]);
+    h.release();
+    h.grab();
+    // The stale release from the previous session's press.
+    h.injectNavEvents("deck-hidraw", [
+      { kind: "button", button: "Y", pressed: false },
+    ]);
+    expect(actions).toEqual(["y"]); // no phantom on the new generation
+    h.shutdown();
+  });
+});
