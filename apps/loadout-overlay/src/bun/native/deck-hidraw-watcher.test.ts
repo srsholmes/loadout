@@ -11,11 +11,12 @@
 
 import { describe, it, expect, spyOn, mock } from "bun:test";
 import * as deckHid from "@loadout/deck-hid";
-import { REPORT_ID_INPUT, REPORT_LEN } from "@loadout/deck-hid";
+import { REPORT_ID_INPUT, REPORT_LEN, decodeNavState } from "@loadout/deck-hid";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import { EventEmitter } from "node:events";
-import { startDeckHidrawWatcher } from "./deck-hidraw-watcher";
+import { startDeckHidrawWatcher, navStateToInputEvents } from "./deck-hidraw-watcher";
+import type { InputEvent } from "./nav-controller";
 
 /** The watcher pre-flights with fs.promises.open before constructing a
  *  stream from the resulting fd — that's how it surfaces EACCES sync.
@@ -271,5 +272,185 @@ describe("deck-hidraw-watcher", () => {
     findSpy.mockRestore();
     streamSpy.mockRestore();
     openSpy.mockRestore();
+  });
+});
+
+describe("deck-hidraw-watcher nav mode", () => {
+  /** Boilerplate: stubbed Deck stream + started watcher with nav sink. */
+  async function startWithNav() {
+    const findSpy = spyOn(deckHid, "findDeckHidrawPath").mockResolvedValue(
+      "/dev/hidraw-fake",
+    );
+    const stream = fakeStream();
+    const openSpy = stubOpenOk();
+    const streamSpy = spyOn(fs, "createReadStream").mockReturnValue(
+      stream as unknown as ReturnType<typeof fs.createReadStream>,
+    );
+    const onWake = mock(() => {});
+    const navBatches: InputEvent[][] = [];
+    const handle = await startDeckHidrawWatcher({
+      onWake,
+      initialButton: "Steam",
+      log: () => {},
+      onNavEvents: (events) => navBatches.push(events),
+    });
+    const restore = () => {
+      handle!.stop();
+      findSpy.mockRestore();
+      streamSpy.mockRestore();
+      openSpy.mockRestore();
+    };
+    return { stream, onWake, navBatches, handle: handle!, restore };
+  }
+
+  it("emits nothing while nav mode is off", async () => {
+    const t = await startWithNav();
+    t.stream.push(frame());
+    t.stream.push(frame({ 8: 0x80 })); // A pressed
+    expect(t.navBatches).toHaveLength(0);
+    t.restore();
+  });
+
+  it("latches the first frame as a silent baseline, then emits edges", async () => {
+    const t = await startWithNav();
+    t.handle.setNavActive(true);
+    // First frame arrives with A ALREADY held (wake button was "A") —
+    // baseline latch, no emission.
+    t.stream.push(frame({ 8: 0x80 }));
+    expect(t.navBatches).toHaveLength(0);
+    // Release → one batch with the A release edge.
+    t.stream.push(frame());
+    expect(t.navBatches).toHaveLength(1);
+    expect(t.navBatches[0]).toEqual([
+      { kind: "button", button: "A", pressed: false },
+    ]);
+    // Fresh press → press edge.
+    t.stream.push(frame({ 8: 0x80 }));
+    expect(t.navBatches[1]).toEqual([
+      { kind: "button", button: "A", pressed: true },
+    ]);
+    t.restore();
+  });
+
+  it("maps the d-pad to Hat axes and sticks to quantized axis events", async () => {
+    const t = await startWithNav();
+    t.handle.setNavActive(true);
+    t.stream.push(frame()); // baseline
+    // dpadRight (byte 9 bit 1) + left stick pushed fully right.
+    const f = frame({ 9: 0x02 });
+    f.writeInt16LE(32767, 48);
+    t.stream.push(f);
+    expect(t.navBatches).toHaveLength(1);
+    expect(t.navBatches[0]).toContainEqual({ kind: "axis", axis: "HatX", value: 1 });
+    expect(t.navBatches[0]).toContainEqual({ kind: "axis", axis: "LeftStickX", value: 1 });
+    // Back to neutral → both return to 0.
+    t.stream.push(frame());
+    expect(t.navBatches[1]).toContainEqual({ kind: "axis", axis: "HatX", value: 0 });
+    expect(t.navBatches[1]).toContainEqual({ kind: "axis", axis: "LeftStickX", value: 0 });
+    t.restore();
+  });
+
+  it("suppresses sub-quantum stick jitter", async () => {
+    const t = await startWithNav();
+    t.handle.setNavActive(true);
+    t.stream.push(frame()); // baseline
+    const jitter = frame();
+    jitter.writeInt16LE(60, 48); // ~0.0018 — far below one 1/128 quantum
+    t.stream.push(jitter);
+    expect(t.navBatches).toHaveLength(0);
+    t.restore();
+  });
+
+  it("wake still fires while nav mode is active", async () => {
+    const t = await startWithNav();
+    t.handle.setNavActive(true);
+    t.stream.push(frame()); // baseline + consumes startup edge-suppress
+    t.stream.push(frame({ 9: 0x20 })); // Steam (bound wake button) pressed
+    expect(t.onWake).toHaveBeenCalledTimes(1);
+    // The same press also reached nav as a Mode edge (Steam → Mode).
+    expect(t.navBatches[0]).toContainEqual({
+      kind: "button",
+      button: "Mode",
+      pressed: true,
+    });
+    t.restore();
+  });
+
+  it("setNavActive(false) stops emission and re-arming re-latches the baseline", async () => {
+    const t = await startWithNav();
+    t.handle.setNavActive(true);
+    t.stream.push(frame()); // baseline
+    t.stream.push(frame({ 8: 0x80 }));
+    expect(t.navBatches).toHaveLength(1);
+
+    t.handle.setNavActive(false);
+    t.stream.push(frame()); // A released while closed — must not emit
+    expect(t.navBatches).toHaveLength(1);
+
+    t.handle.setNavActive(true);
+    // Re-open with B already held: silent baseline again.
+    t.stream.push(frame({ 8: 0x20 }));
+    expect(t.navBatches).toHaveLength(1);
+    t.stream.push(frame());
+    expect(t.navBatches[1]).toEqual([
+      { kind: "button", button: "B", pressed: false },
+    ]);
+    t.restore();
+  });
+
+  it("decodes nav from each report of a coalesced chunk", async () => {
+    const t = await startWithNav();
+    t.handle.setNavActive(true);
+    t.stream.push(frame()); // baseline
+    // One chunk holding press-then-release — two batches, in order.
+    t.stream.push(Buffer.concat([frame({ 8: 0x80 }), frame()]));
+    expect(t.navBatches).toHaveLength(2);
+    expect(t.navBatches[0]).toEqual([{ kind: "button", button: "A", pressed: true }]);
+    expect(t.navBatches[1]).toEqual([{ kind: "button", button: "A", pressed: false }]);
+    t.restore();
+  });
+
+  it("ignores non-input reports in nav mode too", async () => {
+    const t = await startWithNav();
+    t.handle.setNavActive(true);
+    t.stream.push(frame()); // baseline
+    const nonInput = frame({ 8: 0xff });
+    nonInput[0] = 0x09;
+    t.stream.push(nonInput);
+    expect(t.navBatches).toHaveLength(0);
+    t.restore();
+  });
+});
+
+describe("navStateToInputEvents", () => {
+  const neutral = (): NonNullable<ReturnType<typeof decodeNavState>> =>
+    decodeNavState(frame())!;
+
+  it("returns [] for a null prev (baseline latch)", () => {
+    expect(navStateToInputEvents(null, neutral())).toEqual([]);
+  });
+
+  it("maps every button edge to the evdev-path names", () => {
+    const cur = {
+      ...neutral(),
+      a: true, b: true, x: true, y: true,
+      l1: true, r1: true, view: true, steam: true,
+    };
+    const events = navStateToInputEvents(neutral(), cur);
+    for (const button of ["A", "B", "X", "Y", "LB", "RB", "Select", "Mode"] as const) {
+      expect(events).toContainEqual({ kind: "button", button, pressed: true });
+    }
+  });
+
+  it("resolves opposing d-pad bits with positive direction winning", () => {
+    // Physically near-impossible, but the mapping must stay deterministic.
+    const cur = { ...neutral(), dpadLeft: true, dpadRight: true };
+    const events = navStateToInputEvents(neutral(), cur);
+    expect(events).toContainEqual({ kind: "axis", axis: "HatX", value: 1 });
+  });
+
+  it("does not emit for qam/menu (wake-path and unmapped buttons)", () => {
+    const cur = { ...neutral(), qam: true, menu: true };
+    expect(navStateToInputEvents(neutral(), cur)).toEqual([]);
   });
 });
