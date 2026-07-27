@@ -609,6 +609,14 @@ export interface InputInterceptOptions {
    *  state every active tick — key repeat then fires on our 25 ms cadence
    *  instead of depending on the source's own report cadence. */
   externalNavSources?: string[];
+  /** Deck strategy: treat every evdev node of the Deck's built-in controller
+   *  (28de:1205/1206 — raw gamepad + lizard-mode keyboard/mouse emulation)
+   *  as grab-only during intercept. Nav comes from the hidraw reader instead
+   *  (reading the raw gamepad node too would double every input), and
+   *  grabbing the emulation nodes stops lizard-mode kbd/mouse leaking to
+   *  desktop apps behind the overlay — the desktop-mode capture, where
+   *  Steam isn't frozen and consumers read evdev. Default false. */
+  grabDeckBuiltinNodes?: boolean;
 }
 
 export interface InputInterceptHandle {
@@ -647,12 +655,20 @@ export async function startInputIntercept(
   // the Deck-alone case reads; the external-IP-pad case stays grab-only.
   const readVirtualPadsForNav = opts.readVirtualPadsForNav ?? true;
   const externalNavSources = opts.externalNavSources ?? [];
+  const grabDeckBuiltinNodes = opts.grabDeckBuiltinNodes ?? false;
+
+  /** Devices we open at all. Deck built-in nodes include a mouse-only
+   *  emulation node with no controller/keyboard/qam caps — eligible only
+   *  when the Deck strategy wants it for grab-only capture. */
+  const isEligible = (d: InputDevice): boolean =>
+    d.flags.isController ||
+    d.flags.isKeyboard ||
+    d.flags.isQam ||
+    (grabDeckBuiltinNodes && d.isDeckBuiltin);
 
   // Track controllers including the virtual pad; isSteamVirtual only decides
   // read-for-nav vs grab-only below (via `grabOnly` in openAndTrack).
-  const devices = (await enumerateDevices()).filter(
-    (d) => d.flags.isController || d.flags.isKeyboard || d.flags.isQam,
-  );
+  const devices = (await enumerateDevices()).filter(isEligible);
 
   const tracked: TrackedDevice[] = [];
 
@@ -667,7 +683,12 @@ export async function startInputIntercept(
     }
     // A virtual pad is read for nav (grabOnly=false) on the Deck-alone case,
     // or grab-only when an external IP-managed pad drives nav over DBus.
-    const grabOnly = dev.isSteamVirtual && !readVirtualPadsForNav;
+    // On the Deck hidraw-nav strategy, every built-in-controller node (raw
+    // gamepad + lizard kbd/mouse emulation) is also grab-only: hidraw drives
+    // nav, evdev grabs just silence what's underneath.
+    const grabOnly =
+      (dev.isSteamVirtual && !readVirtualPadsForNav) ||
+      (grabDeckBuiltinNodes && dev.isDeckBuiltin);
     // Grab-only virtual pads are never read for nav, so masks + axis
     // calibration are irrelevant — skip them.
     if (!grabOnly) applyIdleMasks(fd, dev);
@@ -686,7 +707,9 @@ export async function startInputIntercept(
     tracked.push(t);
     const kinds = [
       grabOnly
-        ? "virtual(grab-only)"
+        ? dev.isSteamVirtual
+          ? "virtual(grab-only)"
+          : "deck-builtin(grab-only)"
         : dev.flags.isController
           ? "controller"
           : null,
@@ -918,7 +941,9 @@ export async function startInputIntercept(
     nav.reset();
     pendingGrabs.clear();
     for (const t of tracked) {
-      if (!t.dev.flags.isController) continue;
+      // Controllers, plus grab-only non-controllers (Deck lizard kbd/mouse
+      // emulation nodes) — keyboards/qam otherwise stay passive.
+      if (!t.dev.flags.isController && !t.grabOnly) continue;
       // Fresh modifier state each cycle: a guide/select/ctrl release missed
       // last session must not leave guideHeld stuck (→ every B reads as
       // Guide+B → re-toggles the overlay). resyncDeviceState (in grabOrDefer)
@@ -938,7 +963,7 @@ export async function startInputIntercept(
     // Those devices were never grabbed, so the loop below leaves them be.
     pendingGrabs.clear();
     for (const t of tracked) {
-      if (!t.dev.flags.isController) continue;
+      if (!t.dev.flags.isController && !t.grabOnly) continue;
       if (t.grabbed) {
         // Kernel semantics (drivers/input/evdev.c): EVIOCGRAB treats the
         // ioctl arg as a pointer and only checks null-vs-non-null — any
@@ -986,11 +1011,7 @@ export async function startInputIntercept(
       return;
     }
     if (!fresh) return;
-    const eligible =
-      fresh.flags.isController ||
-      fresh.flags.isKeyboard ||
-      fresh.flags.isQam;
-    if (!eligible) return;
+    if (!isEligible(fresh)) return;
     const t = openAndTrack(fresh);
     if (!t) return;
     // If the overlay is open, the new controller has to participate in
@@ -998,7 +1019,7 @@ export async function startInputIntercept(
     // broaden masks + EVIOCGRAB (grab-only virtual pads just get the grab,
     // so a pad's Steam Input virtual node created on connect is silenced too).
     // Keyboards / qam don't get grabbed.
-    if (intercepting && t.dev.flags.isController) {
+    if (intercepting && (t.dev.flags.isController || t.grabOnly)) {
       if (!t.grabOnly) applyInterceptMasks(t.fd);
       grabOrDefer(t);
     }
@@ -1060,16 +1081,12 @@ export async function startInputIntercept(
     const trackedPaths = new Set(tracked.map((t) => t.path));
     for (const dev of all) {
       if (trackedPaths.has(dev.eventPath)) continue;
-      const eligible =
-        dev.flags.isController ||
-        dev.flags.isKeyboard ||
-        dev.flags.isQam;
-      if (!eligible) continue;
+      if (!isEligible(dev)) continue;
       console.log(
         `[input-intercept] reconcile: ${dev.eventPath} '${dev.name}' new — opening`,
       );
       const t = openAndTrack(dev);
-      if (t && intercepting && t.dev.flags.isController) {
+      if (t && intercepting && (t.dev.flags.isController || t.grabOnly)) {
         if (!t.grabOnly) applyInterceptMasks(t.fd);
         grabOrDefer(t);
       }

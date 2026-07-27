@@ -173,7 +173,12 @@ function mkDevice(
   path: string,
   name: string,
   flags: Partial<InputDevice["flags"]> = {},
-  opts: { isSteamVirtual?: boolean; vendor?: string; product?: string } = {},
+  opts: {
+    isSteamVirtual?: boolean;
+    isDeckBuiltin?: boolean;
+    vendor?: string;
+    product?: string;
+  } = {},
 ): InputDevice {
   return {
     eventPath: path,
@@ -193,6 +198,7 @@ function mkDevice(
     hash: name.split("").reduce((a, c) => a + c.charCodeAt(0), 0),
     keyCaps: new Uint8Array(0),
     isSteamVirtual: opts.isSteamVirtual ?? false,
+    isDeckBuiltin: opts.isDeckBuiltin ?? false,
   };
 }
 
@@ -799,6 +805,87 @@ describe("startInputIntercept — injectNavEvents (external nav sources)", () =>
       { kind: "button", button: "Y", pressed: false },
     ]);
     expect(actions).toEqual(["y"]); // no phantom on the new generation
+    h.shutdown();
+  });
+});
+
+describe("startInputIntercept — Deck built-in nodes (grabDeckBuiltinNodes)", () => {
+  const EVIOCGRAB_REQ = 0x40044590n;
+
+  it("ignores Deck emulation nodes entirely when the option is off (default)", async () => {
+    devicesOnSystem = [
+      mkDevice("/dev/input/event4", "Valve Software Steam Controller", {}, {
+        isDeckBuiltin: true, vendor: "28de", product: "1205",
+      }),
+    ];
+    const h = await startInputIntercept({ onWake: () => {}, onAction: () => {} });
+    // Mouse-only node: no controller/keyboard/qam caps → not even opened.
+    expect(ffiCalls.filter((c) => c.kind === "open")).toHaveLength(0);
+    h.shutdown();
+  });
+
+  it("opens + grabs Deck built-in nodes (incl. mouse-only and keyboard) during intercept, releases with null", async () => {
+    devicesOnSystem = [
+      // Lizard mouse node — no caps at all.
+      mkDevice("/dev/input/event4", "Valve Software Steam Controller", {}, {
+        isDeckBuiltin: true, vendor: "28de", product: "1205",
+      }),
+      // Lizard keyboard node — keyboard-classified AND deck-builtin.
+      mkDevice("/dev/input/event10", "Valve Software Steam Controller", { isKeyboard: true }, {
+        isDeckBuiltin: true, vendor: "28de", product: "1205",
+      }),
+      // Raw gamepad node (Steam not running) — controller-classified.
+      mkDevice("/dev/input/event20", "Valve Software Steam Controller", { isController: true }, {
+        isDeckBuiltin: true, vendor: "28de", product: "1205",
+      }),
+      // External keyboard must stay passive.
+      mkDevice("/dev/input/event19", "Apple Inc. Magic Keyboard", { isKeyboard: true }),
+    ];
+    const h = await startInputIntercept({
+      onWake: () => {},
+      onAction: () => {},
+      grabDeckBuiltinNodes: true,
+    });
+    const opens = ffiCalls.filter((c) => c.kind === "open");
+    expect(opens.map((c) => (c as { path: string }).path).sort()).toEqual([
+      "/dev/input/event10",
+      "/dev/input/event19",
+      "/dev/input/event4",
+    ].concat(["/dev/input/event20"]).sort());
+
+    h.grab();
+    const grabs = ffiCalls.filter(
+      (c) => c.kind === "ioctl" && c.request === EVIOCGRAB_REQ && c.argKind === "pointer",
+    );
+    // All three deck nodes grabbed; the external keyboard is not.
+    expect(grabs).toHaveLength(3);
+
+    h.release();
+    const releases = ffiCalls.filter(
+      (c) => c.kind === "ioctl" && c.request === EVIOCGRAB_REQ && c.argKind === "null",
+    );
+    expect(releases).toHaveLength(3);
+    h.shutdown();
+  });
+
+  it("keeps the raw Deck gamepad node grab-only (never a nav read source)", async () => {
+    // With hidraw nav active, reading the raw gamepad evdev node would
+    // double every input. onReady's controller count covers only nav-read
+    // controllers, so a deck-builtin controller node must not count.
+    devicesOnSystem = [
+      mkDevice("/dev/input/event20", "Valve Software Steam Controller", { isController: true }, {
+        isDeckBuiltin: true, vendor: "28de", product: "1205",
+      }),
+      mkDevice("/dev/input/event12", "DualSense Wireless Controller", { isController: true }),
+    ];
+    let counts: { controllers: number } | null = null;
+    const h = await startInputIntercept({
+      onWake: () => {},
+      onAction: () => {},
+      onReady: (c) => (counts = c),
+      grabDeckBuiltinNodes: true,
+    });
+    expect(counts!.controllers).toBe(1); // only the external DualSense
     h.shutdown();
   });
 });
