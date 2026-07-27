@@ -13,6 +13,7 @@ import {
   parseHidUEvent,
   isDeckGamepadInterface,
   decodeButtons,
+  decodeNavState,
   diffTransitions,
   splitReports,
   findButton,
@@ -205,5 +206,85 @@ describe("splitReports", () => {
 
   it("yields an empty array for a chunk shorter than one report", () => {
     expect(splitReports(Buffer.alloc(32))).toEqual([]);
+  });
+});
+
+describe("decodeNavState", () => {
+  it("returns null for non-input report ids and short buffers", () => {
+    const wrongId = Buffer.alloc(REPORT_LEN);
+    wrongId[0] = 0x09;
+    expect(decodeNavState(wrongId)).toBeNull();
+    expect(decodeNavState(Buffer.alloc(32))).toBeNull();
+  });
+
+  it("decodes a neutral frame to all-false / centered", () => {
+    const s = decodeNavState(makeReport())!;
+    for (const k of [
+      "a", "b", "x", "y", "l1", "r1",
+      "dpadUp", "dpadDown", "dpadLeft", "dpadRight",
+      "view", "menu", "steam", "qam",
+    ] as const) {
+      expect(s[k]).toBe(false);
+    }
+    expect(s.lx).toBe(0);
+    expect(s.ly).toBe(0);
+    expect(s.rx).toBe(0);
+    expect(s.ry).toBe(0);
+  });
+
+  it("decodes each face/shoulder button bit of byte 8 individually", () => {
+    expect(decodeNavState(makeReport({ 8: 1 << 2 }))!.r1).toBe(true);
+    expect(decodeNavState(makeReport({ 8: 1 << 3 }))!.l1).toBe(true);
+    expect(decodeNavState(makeReport({ 8: 1 << 4 }))!.y).toBe(true);
+    expect(decodeNavState(makeReport({ 8: 1 << 5 }))!.b).toBe(true);
+    expect(decodeNavState(makeReport({ 8: 1 << 6 }))!.x).toBe(true);
+    expect(decodeNavState(makeReport({ 8: 1 << 7 }))!.a).toBe(true);
+  });
+
+  it("decodes each d-pad / system button bit of byte 9 individually", () => {
+    expect(decodeNavState(makeReport({ 9: 1 << 0 }))!.dpadUp).toBe(true);
+    expect(decodeNavState(makeReport({ 9: 1 << 1 }))!.dpadRight).toBe(true);
+    expect(decodeNavState(makeReport({ 9: 1 << 2 }))!.dpadLeft).toBe(true);
+    expect(decodeNavState(makeReport({ 9: 1 << 3 }))!.dpadDown).toBe(true);
+    expect(decodeNavState(makeReport({ 9: 1 << 4 }))!.view).toBe(true);
+    expect(decodeNavState(makeReport({ 9: 1 << 5 }))!.steam).toBe(true);
+    expect(decodeNavState(makeReport({ 9: 1 << 6 }))!.menu).toBe(true);
+  });
+
+  it("decodes the Quick Access button (byte 14 bit 2)", () => {
+    expect(decodeNavState(makeReport({ 14: 1 << 2 }))!.qam).toBe(true);
+  });
+
+  it("agrees with decodeButtons on every overlapping bit", () => {
+    // Cross-validation: the wake table and the nav decoder must never drift.
+    const frame = makeReport({ 8: 0x80, 9: 0x70, 14: 0x04 }); // A, View+Steam+Menu, Qam
+    const wake = decodeButtons(frame)!;
+    const nav = decodeNavState(frame)!;
+    expect(nav.a).toBe(wake.get("A")!);
+    expect(nav.view).toBe(wake.get("View")!);
+    expect(nav.steam).toBe(wake.get("Steam")!);
+    expect(nav.menu).toBe(wake.get("Menu")!);
+    expect(nav.qam).toBe(wake.get("Qam")!);
+  });
+
+  it("normalizes sticks and flips Y to the evdev down-positive convention", () => {
+    const frame = makeReport();
+    frame.writeInt16LE(32767, 48);  // LX full right
+    frame.writeInt16LE(32767, 50);  // LY full up (HID convention)
+    frame.writeInt16LE(-32768, 52); // RX full left
+    frame.writeInt16LE(-32768, 54); // RY full down (HID convention)
+    const s = decodeNavState(frame)!;
+    expect(s.lx).toBeCloseTo(1, 3);
+    expect(s.ly).toBeCloseTo(-1, 3); // up → negative after flip
+    expect(s.rx).toBeCloseTo(-1, 2);
+    expect(s.ry).toBeCloseTo(1, 2);  // down → positive after flip
+    // int16 min overshoots -1 slightly before clamping; verify the clamp.
+    expect(s.rx).toBeGreaterThanOrEqual(-1);
+    expect(s.ry).toBeLessThanOrEqual(1);
+  });
+
+  it("leaves centered sticks at exactly 0", () => {
+    const frame = makeReport({ 8: 0xff });
+    expect(decodeNavState(frame)!.lx).toBe(0);
   });
 });

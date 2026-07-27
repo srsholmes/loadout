@@ -246,3 +246,83 @@ export function splitReports(chunk: Buffer): Buffer[] {
   }
   return out;
 }
+
+// ── Nav-state decoding (full frame, overlay navigation) ─────────────────────
+//
+// The wake path above only chases single picker-exposed bits. Overlay nav
+// needs the full gamepad-relevant state of report 0x01. Layout references:
+//   - SDL SDL_hidapi_steamdeck.c `SteamDeckStatePacket_t` + STEAMDECK_*BUTTON_*
+//   - InputPlumber drivers/steam_deck/hid_report.rs
+// Both agree with DECK_BUTTONS above on every overlapping bit (A, View,
+// Steam, Menu, L5, R5, L4, R4, Qam), which cross-validates the table.
+//
+// ulButtons is a u64 at offset 8 (little-endian):
+//   byte 8:  bit0 R2 bit1 L2 bit2 R1 bit3 L1 bit4 Y bit5 B bit6 X bit7 A
+//   byte 9:  bit0 Up bit1 Right bit2 Left bit3 Down
+//            bit4 View bit5 Steam bit6 Menu bit7 L5
+//   byte 14: bit2 Quick Access (…)
+// Sticks are int16 LE: LX@48 LY@50 RX@52 RY@54. HID Y is up-positive; the
+// decoder negates it so consumers get the evdev convention (down-positive)
+// the overlay's NavController expects.
+
+/** Full nav-relevant state of one input report. */
+export interface DeckNavState {
+  a: boolean;
+  b: boolean;
+  x: boolean;
+  y: boolean;
+  l1: boolean;
+  r1: boolean;
+  dpadUp: boolean;
+  dpadDown: boolean;
+  dpadLeft: boolean;
+  dpadRight: boolean;
+  view: boolean;
+  menu: boolean;
+  steam: boolean;
+  qam: boolean;
+  /** Left stick, normalized -1..1, evdev sign convention (down/right positive). */
+  lx: number;
+  ly: number;
+  /** Right stick, same conventions. */
+  rx: number;
+  ry: number;
+}
+
+function bit(report: Buffer, byte: number, bitPos: number): boolean {
+  return ((report[byte] ?? 0) & (1 << bitPos)) !== 0;
+}
+
+function stick(report: Buffer, offset: number, negate: boolean): number {
+  const raw = report.readInt16LE(offset);
+  const v = Math.max(-1, Math.min(1, raw / 32767));
+  // `+ 0` normalizes -0 → 0 so centered sticks compare cleanly.
+  return negate ? -v + 0 : v;
+}
+
+/** Decode a single 64-byte input report 0x01 into a DeckNavState. Other
+ *  report ids and short buffers return null so the caller can skip them. */
+export function decodeNavState(report: Buffer): DeckNavState | null {
+  if (report.length < REPORT_LEN) return null;
+  if (report[0] !== REPORT_ID_INPUT) return null;
+  return {
+    r1: bit(report, 8, 2),
+    l1: bit(report, 8, 3),
+    y: bit(report, 8, 4),
+    b: bit(report, 8, 5),
+    x: bit(report, 8, 6),
+    a: bit(report, 8, 7),
+    dpadUp: bit(report, 9, 0),
+    dpadRight: bit(report, 9, 1),
+    dpadLeft: bit(report, 9, 2),
+    dpadDown: bit(report, 9, 3),
+    view: bit(report, 9, 4),
+    steam: bit(report, 9, 5),
+    menu: bit(report, 9, 6),
+    qam: bit(report, 14, 2),
+    lx: stick(report, 48, false),
+    ly: stick(report, 50, true),
+    rx: stick(report, 52, false),
+    ry: stick(report, 54, true),
+  };
+}
