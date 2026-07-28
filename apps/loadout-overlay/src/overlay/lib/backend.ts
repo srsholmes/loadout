@@ -72,6 +72,69 @@ export function pluginBundleUrl(pluginId: string): string {
  */
 const bundleCache = new Map<string, Promise<Record<string, unknown>>>();
 
+/** Backoff before each retry of a transient bundle fetch, in ms. Sized for
+ *  the failure this exists for — a single socket-pool flush, where the very
+ *  next attempt already succeeds — while still covering a slower blip. The
+ *  server is known reachable by this point (initBackend blocks on /api/token
+ *  until it answers), so a long ladder would only delay a real error. */
+const BUNDLE_RETRY_DELAYS_MS = [150, 400, 1000];
+
+/** Transient = worth retrying. A thrown fetch is a network-layer failure
+ *  (ERR_NETWORK_CHANGED, connection reset, …) and 5xx is a server hiccup;
+ *  both usually clear on the next attempt. A 4xx is a real answer — the
+ *  plugin is gone or unauthorized — and retrying just repeats it. */
+function isRetriableStatus(status: number): boolean {
+  return status >= 500;
+}
+
+/** Fetch the bundle source, retrying transient failures.
+ *
+ *  Why this exists: the overlay fires every plugin's bundle fetch in
+ *  parallel ~3 ms into page load. On a handheld that boots straight into
+ *  gaming mode, Wi-Fi is often still associating at that moment — when the
+ *  interface activates, Chromium's network-change notifier flushes the
+ *  socket pool and every in-flight request dies with ERR_NETWORK_CHANGED
+ *  (surfaced to JS as a bare `TypeError: Failed to fetch`). Whichever
+ *  bundles had already landed were fine; the rest failed, and since nothing
+ *  re-requested them, their widgets and icons stayed broken for the whole
+ *  session — until someone restarted the overlay by hand. */
+export async function fetchBundleSource({
+  pluginId,
+  delays = BUNDLE_RETRY_DELAYS_MS,
+}: {
+  pluginId: string;
+  /** Overridable so tests don't pay the real backoff. */
+  delays?: readonly number[];
+}): Promise<string> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    if (attempt > 0) {
+      const delay = delays[attempt - 1] ?? 1000;
+      console.warn(
+        `[bundle] retry ${attempt}/${delays.length} for ${pluginId} in ${delay}ms (${lastErr instanceof Error ? lastErr.message : String(lastErr)})`,
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+    // Cache-bust per ATTEMPT, not per call: a retry must not be served the
+    // failed response out of the HTTP cache.
+    const url = `${pluginBundleUrl(pluginId)}?t=${Date.now()}`;
+    try {
+      const res = await fetch(url);
+      if (res.ok) return await res.text();
+      const err = new Error(`HTTP ${res.status} loading ${pluginId} bundle`);
+      if (!isRetriableStatus(res.status)) throw err;
+      lastErr = err;
+    } catch (err) {
+      // A non-retriable HTTP error thrown just above must not be retried.
+      if (err instanceof Error && err.message.startsWith("HTTP ")) throw err;
+      lastErr = err;
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error(`failed to load ${pluginId} bundle: ${String(lastErr)}`);
+}
+
 export async function importPluginBundle(pluginId: string): Promise<Record<string, unknown>> {
   const cached = bundleCache.get(pluginId);
   if (cached) {
@@ -82,10 +145,10 @@ export async function importPluginBundle(pluginId: string): Promise<Record<strin
   console.log(`[bundle] fetching: ${pluginId}`);
   const t0 = performance.now();
   const promise = (async () => {
-    const url = `${pluginBundleUrl(pluginId)}?t=${Date.now()}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status} loading ${pluginId} bundle`);
-    const text = await res.text();
+    // Only the fetch is retried. A bundle that downloads but fails to
+    // evaluate is a build error, not a blip — re-importing it would fail
+    // identically, so that error propagates on the first attempt.
+    const text = await fetchBundleSource({ pluginId });
     const blob = new Blob([text], { type: "application/javascript" });
     const blobUrl = URL.createObjectURL(blob);
     try {
