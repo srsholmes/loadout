@@ -16,7 +16,12 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as exec from "@loadout/exec";
 import { EventEmitter } from "node:events";
-import { captureWakeButton, ensureDeckHidrawUaccess } from "./wake-trigger-deck";
+import {
+  captureWakeButton,
+  ensureDeckHidrawUaccess,
+  getWakeStatus,
+  setWakeButton,
+} from "./wake-trigger-deck";
 import {
   DECK_HIDRAW_UACCESS_RULE,
   DECK_HIDRAW_UACCESS_RULE_PATH,
@@ -79,11 +84,31 @@ describe("captureWakeButton (Deck)", () => {
     const p = captureWakeButton(5000);
     await tick();
     stream.push(frame()); // idle baseline
-    stream.push(frame({ 9: 0x20 })); // Steam press
+    stream.push(frame({ 13: 0x04 })); // R4 press
     const r = await p;
     expect(r.ok).toBe(true);
-    expect(r.capturedRaw).toBe("deck:Steam");
-    expect(store["input-plumber"].wake.selectedRaw).toBe("deck:Steam");
+    expect(r.capturedRaw).toBe("deck:R4");
+    expect(store["input-plumber"].wake.selectedRaw).toBe("deck:R4");
+    expect(storage.writePluginStorage).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores reserved Steam/Qam presses and captures the next bindable press", async () => {
+    // Steam and Quick Access are system buttons — pressing them mid-capture
+    // must not bind them (Steam reacts to them live via its own hidraw fd,
+    // so a wake bound there fights Steam's menus on every open).
+    const stream = fakeStream();
+    setup(stream);
+    const p = captureWakeButton(5000);
+    await tick();
+    stream.push(frame()); // idle baseline
+    stream.push(frame({ 9: 0x20 })); // Steam press — reserved, ignored
+    stream.push(frame()); // release
+    stream.push(frame({ 14: 0x04 })); // Qam press — reserved, ignored
+    stream.push(frame()); // release
+    stream.push(frame({ 10: 0x01 })); // R5 press — bindable, captured
+    const r = await p;
+    expect(r.ok).toBe(true);
+    expect(r.capturedRaw).toBe("deck:R5");
     expect(storage.writePluginStorage).toHaveBeenCalledTimes(1);
   });
 
@@ -92,14 +117,14 @@ describe("captureWakeButton (Deck)", () => {
     setup(stream);
     const p = captureWakeButton(5000);
     await tick();
-    const nonInput = frame({ 9: 0x20 });
+    const nonInput = frame({ 13: 0x04 });
     nonInput[0] = 0x09; // not an input report
     stream.push(nonInput);
     // No capture yet — a real press still wins afterwards.
-    stream.push(frame({ 14: 0x04 })); // Qam press (real input report)
+    stream.push(frame({ 10: 0x01 })); // R5 press (real input report)
     const r = await p;
     expect(r.ok).toBe(true);
-    expect(r.capturedRaw).toBe("deck:Qam");
+    expect(r.capturedRaw).toBe("deck:R5");
   });
 
   it("ignores a second press after commit (no double write)", async () => {
@@ -108,11 +133,11 @@ describe("captureWakeButton (Deck)", () => {
     const p = captureWakeButton(5000);
     await tick();
     stream.push(frame()); // idle
-    stream.push(frame({ 9: 0x20 })); // Steam press → commit
+    stream.push(frame({ 13: 0x04 })); // R4 press → commit
     stream.push(frame()); // release
-    stream.push(frame({ 14: 0x04 })); // Qam press AFTER commit — ignored
+    stream.push(frame({ 10: 0x01 })); // R5 press AFTER commit — ignored
     const r = await p;
-    expect(r.capturedRaw).toBe("deck:Steam");
+    expect(r.capturedRaw).toBe("deck:R4");
     expect(storage.writePluginStorage).toHaveBeenCalledTimes(1);
   });
 
@@ -157,10 +182,10 @@ describe("captureWakeButton (Deck)", () => {
     const p2 = captureWakeButton(5000);
     await tick();
     stream.push(frame()); // idle baseline
-    stream.push(frame({ 9: 0x20 })); // Steam press
+    stream.push(frame({ 13: 0x04 })); // R4 press
     const [r1, r2] = await Promise.all([p1, p2]);
     expect(r1.ok).toBe(true);
-    expect(r1.capturedRaw).toBe("deck:Steam");
+    expect(r1.capturedRaw).toBe("deck:R4");
     // Both callers see the same result envelope (same object reference,
     // since the inner Promise is shared via the gate).
     expect(r2).toBe(r1);
@@ -277,5 +302,50 @@ describe("ensureDeckHidrawUaccess", () => {
     // load on local-dev runs (where the user isn't root).
     await expect(ensureDeckHidrawUaccess()).resolves.toBeUndefined();
     for (const s of spies) s.mockRestore();
+  });
+});
+
+describe("reserved system buttons (Steam / Qam)", () => {
+  it("the picker options exclude Steam and Qam but keep every other button", async () => {
+    const stream = fakeStream();
+    setup(stream);
+    const status = await getWakeStatus();
+    const names = status.devices[0]!.buttons.map((b) => b.name);
+    expect(names).not.toContain("Steam");
+    expect(names).not.toContain("Qam");
+    expect(names).toEqual(
+      expect.arrayContaining(["View", "Menu", "L4", "L5", "R4", "R5", "A"]),
+    );
+  });
+
+  it("setWakeButton rejects a reserved button with a friendly error", async () => {
+    const stream = fakeStream();
+    setup(stream);
+    for (const raw of ["deck:Steam", "deck:Qam"]) {
+      const r = await setWakeButton(raw);
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain("reserved");
+    }
+    expect(storage.writePluginStorage).toHaveBeenCalledTimes(0);
+    // A bindable button still works.
+    const ok = await setWakeButton("deck:R4");
+    expect(ok.ok).toBe(true);
+    expect(store["input-plumber"].wake.selectedRaw).toBe("deck:R4");
+  });
+
+  it("getWakeStatus reports a stale persisted reserved binding as unbound", async () => {
+    // A user could have bound Steam/Qam before they were blocked. The stored
+    // value must read back as "nothing bound" (the overlay watcher filters it
+    // too) without rewriting storage from a read path.
+    const stream = fakeStream();
+    setup(stream);
+    store["input-plumber"] = {
+      wake: { selectedRaw: "deck:Steam", deviceName: "Steam Deck Controller" },
+    };
+    const status = await getWakeStatus();
+    expect(status.selectedRaw).toBeNull();
+    expect(storage.writePluginStorage).toHaveBeenCalledTimes(0);
+    // Storage itself is untouched (inert, not clobbered).
+    expect(store["input-plumber"].wake.selectedRaw).toBe("deck:Steam");
   });
 });

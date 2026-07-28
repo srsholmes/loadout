@@ -328,9 +328,11 @@ describe("wake-trigger orchestration", () => {
     expect(status.devices).toHaveLength(1);
     expect(status.devices[0].name).toBe("Steam Deck Controller");
     const names = status.devices[0].buttons.map((b) => b.name).sort();
-    expect(names).toContain("Steam");
-    expect(names).toContain("Qam");
+    // Steam/Qam are reserved system buttons — never offered as bindings.
+    expect(names).not.toContain("Steam");
+    expect(names).not.toContain("Qam");
     expect(names).toContain("L4");
+    expect(names).toContain("R4");
     // All buttons are flagged as recommended on Deck.
     expect(status.devices[0].buttons.every((b) => b.recommended)).toBe(true);
     // No busctl/systemctl/udevadm — the Deck path is pure.
@@ -343,13 +345,13 @@ describe("wake-trigger orchestration", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
 
-    const r = await setWakeButton("deck:Steam");
+    const r = await setWakeButton("deck:R4");
     expect(r.ok).toBe(true);
 
     const persisted = storage.get("input-plumber") as {
       wake?: { selectedRaw?: string; deviceName?: string };
     };
-    expect(persisted.wake?.selectedRaw).toBe("deck:Steam");
+    expect(persisted.wake?.selectedRaw).toBe("deck:R4");
     expect(persisted.wake?.deviceName).toBe("Steam Deck Controller");
     // No profile file written, no busctl/systemctl/udevadm.
     expect(writtenFiles.size).toBe(0);

@@ -55,6 +55,7 @@ import { routeWake, isStartupWakePhantom } from "./lib/wake-routing";
 import { loadPersistedShortcuts } from "./lib/persisted-shortcuts";
 import { decideInputStrategy } from "./lib/input-strategy";
 import { isSteamDeck } from "@loadout/devices";
+import { isBindableDeckButton } from "@loadout/deck-hid";
 
 // ---- State ------------------------------------------------------------------
 // PendingFlags + the flag-lifecycle helpers live in lib/overlay-state.ts so
@@ -879,8 +880,14 @@ async function readDeckWakeBinding(): Promise<string | null> {
   const raw = s.wake?.selectedRaw ?? null;
   // Raw is either a synthetic "deck:<Button>" string we wrote here, or an
   // InputPlumber capability string written on a non-Deck host. Only the
-  // deck:* form is meaningful for the watcher.
-  if (raw && raw.startsWith("deck:")) return raw.slice(5);
+  // deck:* form is meaningful for the watcher — and only bindable buttons:
+  // Steam/Qam are reserved system buttons (the picker no longer offers
+  // them, but a binding persisted before they were blocked must not arm
+  // the watcher either).
+  if (raw && raw.startsWith("deck:")) {
+    const name = raw.slice(5);
+    return isBindableDeckButton(name) ? name : null;
+  }
   return null;
 }
 

@@ -69,6 +69,27 @@ export const DECK_BUTTONS: readonly DeckButton[] = [
   { name: "A", label: "A Button", byte: 8, bit: 7 },
 ];
 
+/** Buttons that must NEVER be bindable as the overlay wake button. Steam and
+ *  Quick Access drive the whole device (Steam menu, QAM, chords) and Steam
+ *  reads them via hidraw concurrently with us — a press reaches Steam live
+ *  before the overlay can freeze it, so binding them means Steam's own menu
+ *  fights the overlay on every wake. They stay in DECK_BUTTONS (the decoder
+ *  and legacy persisted bindings still need their bit positions); every
+ *  binding surface (picker, set, press-to-capture, persisted-state readers)
+ *  must go through BINDABLE_DECK_BUTTONS / isBindableDeckButton instead. */
+export const RESERVED_DECK_BUTTONS: readonly string[] = ["Steam", "Qam"];
+
+/** DECK_BUTTONS minus the reserved system buttons — the only valid wake
+ *  binding candidates. */
+export const BINDABLE_DECK_BUTTONS: readonly DeckButton[] = DECK_BUTTONS.filter(
+  (b) => !RESERVED_DECK_BUTTONS.includes(b.name),
+);
+
+export function isBindableDeckButton(name: string | null): boolean {
+  if (!name) return false;
+  return BINDABLE_DECK_BUTTONS.some((b) => b.name === name);
+}
+
 /** Lookup index for parsing — byte → list of (bit, name). Built once, reused
  *  by frame-decode hot path. */
 export const DECK_BUTTONS_BY_BYTE: ReadonlyMap<number, ReadonlyArray<{ bit: number; name: string }>> =
