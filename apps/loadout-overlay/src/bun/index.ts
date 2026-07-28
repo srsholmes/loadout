@@ -387,6 +387,17 @@ let deckNavActive = false;
 /** Controller id prefix for hidraw-injected nav events (see
  *  externalNavSources in input-intercept). */
 const DECK_NAV_SOURCE = "deck-hidraw";
+// Deck resume-burst mitigation state (see the close path in toggleOverlay):
+// whether THIS open actually SIGSTOPped Steam, and the deferred evdev
+// release that stays grabbed across SIGCONT + drain so the game can't see
+// Steam's replayed hidraw backlog.
+let steamFrozenThisOpen = false;
+let pendingReleaseTimer: ReturnType<typeof setTimeout> | null = null;
+/** How long after SIGCONT the evdev grabs are held so Steam's buffered
+ *  hidraw backlog (≤64 reports) drains into a grabbed virtual pad instead
+ *  of the game. Chosen > TOGGLE_DEBOUNCE_MS - 250 so a reopen can overlap
+ *  it — the open path cancels + flushes the deferred release. */
+const DECK_RESUME_DRAIN_MS = 500;
 
 // Startup safety net for the frozen-Steam risk: a previous overlay instance
 // that crashed or was SIGKILLed *while open* could have left Steam SIGSTOPped
@@ -458,11 +469,18 @@ function forceCloseOverlay(reason: string): void {
     clearTimeout(pendingResumeTimer.current);
     pendingResumeTimer.current = null;
   }
+  if (pendingReleaseTimer !== null) {
+    clearTimeout(pendingReleaseTimer);
+    pendingReleaseTimer = null;
+  }
   if (steamPid.current === null) steamPid.current = findSteamPid();
   if (steamPid.current !== null) resumeSteam(steamPid.current);
+  // Emergency path: release immediately (no resume-burst drain — a wedged
+  // renderer is worse than a replayed edge) and thaw.
   intercept.current?.release();
   ipIntercept.current?.release();
   deckHidraw.current?.setNavActive(false);
+  steamFrozenThisOpen = false;
   atoms.hide().catch((e) => console.warn("[freeze-watchdog] atoms.hide:", e));
   try {
     overlay.minimize();
@@ -508,7 +526,20 @@ function toggleOverlay(source: string) {
     stopFreezeWatchdog();
     overlay.minimize();
     atoms.hide().catch((e) => console.warn("[overlay] atoms.hide:", e));
-    intercept.current?.release();
+    // Deck strategy resume-burst mitigation: while Steam was SIGSTOPped its
+    // own hidraw fd kept buffering (the kernel ring keeps the FIRST ~64
+    // reports after the freeze — which contain the wake button's release
+    // edge and any early nav input — and drops the rest). On SIGCONT Steam
+    // drains that backlog and forwards it to the virtual pad; if our evdev
+    // grabs were already gone, the game would replay those stale edges on
+    // every overlay close. So on a frozen-Deck close the evdev release is
+    // DEFERRED until after SIGCONT + a drain window, keeping the virtual
+    // pad (and built-in nodes) grabbed while the burst flushes. Steam's own
+    // BPM reaction to the buffered wake release can't be blocked this way —
+    // paddle wake bindings (R4/L4/…) avoid it entirely since Steam ignores
+    // unmapped paddles. Non-Deck hosts keep the immediate release.
+    const deferRelease = deckNavActive && steamFrozenThisOpen;
+    if (!deferRelease) intercept.current?.release();
     ipIntercept.current?.release();
     // Stop decoding Deck hidraw nav. The wake-bit path stays live so the
     // wake button can re-open; the diff baseline resets on next open.
@@ -529,8 +560,19 @@ function toggleOverlay(source: string) {
       pendingResumeTimer.current = setTimeout(() => {
         pendingResumeTimer.current = null;
         resumeSteam(pid);
+        if (deferRelease) {
+          if (pendingReleaseTimer !== null) clearTimeout(pendingReleaseTimer);
+          pendingReleaseTimer = setTimeout(() => {
+            pendingReleaseTimer = null;
+            intercept.current?.release();
+          }, DECK_RESUME_DRAIN_MS);
+        }
       }, 250);
+    } else if (deferRelease) {
+      // No Steam pid found — nothing to drain; release now rather than never.
+      intercept.current?.release();
     }
+    steamFrozenThisOpen = false;
     state.isOpen = false;
     broadcastOverlayVisibility();
     trace(`[toggle] ${source} → MINIMIZE`);
@@ -544,11 +586,26 @@ function toggleOverlay(source: string) {
     // so freezing it just wedges Steam — the bug this gate fixes. The evdev
     // grab below still runs in both modes, so the controller overlay keeps
     // working on the desktop without touching Steam.
+    // A rapid close→open can land while the close path's deferred SIGCONT /
+    // deferred release timers are still pending. Cancel them (this open owns
+    // the freeze again), and if the evdev release was still deferred (grabs
+    // held from last session), flush it synchronously so grab() below runs
+    // a fresh generation with clean NavController/combo state.
+    if (pendingResumeTimer.current !== null) {
+      clearTimeout(pendingResumeTimer.current);
+      pendingResumeTimer.current = null;
+    }
+    if (pendingReleaseTimer !== null) {
+      clearTimeout(pendingReleaseTimer);
+      pendingReleaseTimer = null;
+      intercept.current?.release();
+    }
     if (suspendSteamEnabled && isGameModeActive()) {
       if (steamPid.current === null) steamPid.current = findSteamPid();
       if (steamPid.current !== null) {
         suspendSteam(steamPid.current);
         startFreezeWatchdog();
+        steamFrozenThisOpen = true;
       }
     } else if (suspendSteamEnabled) {
       trace("[toggle] desktop mode (no gamescope) — skipping Steam freeze");
@@ -707,6 +764,28 @@ void (async () => {
       // nav mode can't be active before the first grab() anyway.
       onNavEvents: (events) =>
         intercept.current?.injectNavEvents(DECK_NAV_SOURCE, events),
+      // Mid-session stream death (driver rebind, controller re-enumeration
+      // around suspend/resume): under the Deck strategy the watcher is the
+      // ONLY nav source AND the wake button, while the baked-in strategy
+      // would still freeze Steam + grab everything on the next open — the
+      // exact stranded-with-zero-nav state the startup gate exists to
+      // prevent. The strategy can't be re-derived live (intercept options
+      // are fixed at startInputIntercept), so exit and let systemd restart
+      // us: startup re-probes and picks the right strategy (watcher back →
+      // full Deck strategy; still dead → legacy fallback). The startup
+      // unconditional SIGCONT covers a death while frozen.
+      onDeath: () => {
+        console.error(
+          "[overlay] Deck hidraw watcher died mid-session — " +
+            (deckNavActive
+              ? "restarting overlay to re-derive the input strategy"
+              : "Deck wake button lost until next overlay restart"),
+        );
+        if (deckNavActive) {
+          if (state.isOpen) forceCloseOverlay("deck hidraw watcher died");
+          process.exit(1);
+        }
+      },
     });
     if (handle) {
       deckHidraw.current = handle;
@@ -722,7 +801,9 @@ void (async () => {
   const strategy = decideInputStrategy({
     isDeck,
     ipAvailable: !!ipHandle?.available,
-    deckHidrawOpened: deckHidraw.current !== null,
+    // isAlive guards the (tiny) window where the stream died between open
+    // and this decision — a dead watcher must not enable the freeze.
+    deckHidrawOpened: deckHidraw.current?.isAlive() ?? false,
     suspendEnv: SUSPEND_STEAM_ENV,
     deckCaptureEnv: DECK_CAPTURE_ENV,
   });

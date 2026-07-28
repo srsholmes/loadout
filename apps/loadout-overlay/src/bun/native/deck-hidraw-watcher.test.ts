@@ -454,3 +454,171 @@ describe("navStateToInputEvents", () => {
     expect(navStateToInputEvents(neutral(), cur)).toEqual([]);
   });
 });
+
+describe("deck-hidraw-watcher stick dead-band", () => {
+  it("silences rest drift that straddles a quantization boundary", async () => {
+    const findSpy = spyOn(deckHid, "findDeckHidrawPath").mockResolvedValue(
+      "/dev/hidraw-fake",
+    );
+    const stream = fakeStream();
+    const openSpy = stubOpenOk();
+    const streamSpy = spyOn(fs, "createReadStream").mockReturnValue(
+      stream as unknown as ReturnType<typeof fs.createReadStream>,
+    );
+    const navBatches: InputEvent[][] = [];
+    const handle = await startDeckHidrawWatcher({
+      onWake: () => {},
+      initialButton: "Steam",
+      log: () => {},
+      onNavEvents: (events) => navBatches.push(events),
+    });
+    const t = {
+      handle: handle!,
+      stream,
+      navBatches,
+      restore: () => {
+        handle!.stop();
+        findSpy.mockRestore();
+        streamSpy.mockRestore();
+        openSpy.mockRestore();
+      },
+    };
+    t.handle.setNavActive(true);
+    t.stream.push(frame()); // baseline
+    // Alternate around a 1/128 boundary (raw 128 ≈ 0.0039, raw 384 ≈ 0.0117
+    // — both inside the 0.10 dead-band). Without the dead-band this would
+    // emit an axis RPC per report, forever.
+    for (let i = 0; i < 10; i++) {
+      const f = frame();
+      f.writeInt16LE(i % 2 === 0 ? 128 : 384, 52); // RightStickX
+      t.stream.push(f);
+    }
+    expect(t.navBatches).toHaveLength(0);
+    // Measured Jupiter rest drift (~0.04 ≈ raw 1300) also stays silent.
+    const drift = frame();
+    drift.writeInt16LE(1300, 48);
+    t.stream.push(drift);
+    expect(t.navBatches).toHaveLength(0);
+    // A deliberate tilt still gets through.
+    const tilt = frame();
+    tilt.writeInt16LE(16384, 52); // ~0.5
+    t.stream.push(tilt);
+    expect(t.navBatches).toHaveLength(1);
+    expect(t.navBatches[0]![0]).toEqual({
+      kind: "axis",
+      axis: "RightStickX",
+      value: expect.closeTo(0.5, 1),
+    });
+    t.restore();
+  });
+});
+
+describe("deck-hidraw-watcher death signal", () => {
+  it("fires onDeath on stream error (not on stop) and flips isAlive", async () => {
+    const findSpy = spyOn(deckHid, "findDeckHidrawPath").mockResolvedValue(
+      "/dev/hidraw-fake",
+    );
+    const stream = fakeStream();
+    const openSpy = stubOpenOk();
+    const streamSpy = spyOn(fs, "createReadStream").mockReturnValue(
+      stream as unknown as ReturnType<typeof fs.createReadStream>,
+    );
+    const onDeath = mock(() => {});
+    const handle = await startDeckHidrawWatcher({
+      onWake: () => {},
+      initialButton: "Steam",
+      log: () => {},
+      onDeath,
+    });
+    expect(handle!.isAlive()).toBe(true);
+    stream.emit("error", new Error("device unplugged"));
+    expect(onDeath).toHaveBeenCalledTimes(1);
+    expect(handle!.isAlive()).toBe(false);
+    // stop() after death is idempotent and does NOT re-fire onDeath.
+    handle!.stop();
+    expect(onDeath).toHaveBeenCalledTimes(1);
+    findSpy.mockRestore();
+    streamSpy.mockRestore();
+    openSpy.mockRestore();
+  });
+
+  it("does not fire onDeath on a deliberate stop()", async () => {
+    const findSpy = spyOn(deckHid, "findDeckHidrawPath").mockResolvedValue(
+      "/dev/hidraw-fake",
+    );
+    const stream = fakeStream();
+    const openSpy = stubOpenOk();
+    const streamSpy = spyOn(fs, "createReadStream").mockReturnValue(
+      stream as unknown as ReturnType<typeof fs.createReadStream>,
+    );
+    const onDeath = mock(() => {});
+    const handle = await startDeckHidrawWatcher({
+      onWake: () => {},
+      log: () => {},
+      onDeath,
+    });
+    handle!.stop();
+    expect(onDeath).toHaveBeenCalledTimes(0);
+    expect(handle!.isAlive()).toBe(false);
+    findSpy.mockRestore();
+    streamSpy.mockRestore();
+    openSpy.mockRestore();
+  });
+});
+
+describe("deck-hidraw-watcher wake-button-is-a-nav-button (production-shaped)", () => {
+  it("a closing wake press does not leak a nav edge; reopening re-latches", async () => {
+    // Wake bound to "A" — also a nav button. Production wiring: onWake runs
+    // toggleOverlay synchronously, which flips setNavActive. The closing
+    // press's wake fires BEFORE the same frame's nav decode (wake-bit chase
+    // runs first in onChunk), so by decode time navActive is false and no
+    // "A" edge may leak into a NavController that release() has just reset.
+    const findSpy = spyOn(deckHid, "findDeckHidrawPath").mockResolvedValue(
+      "/dev/hidraw-fake",
+    );
+    const stream = fakeStream();
+    const openSpy = stubOpenOk();
+    const streamSpy = spyOn(fs, "createReadStream").mockReturnValue(
+      stream as unknown as ReturnType<typeof fs.createReadStream>,
+    );
+    const navBatches: InputEvent[][] = [];
+    let isOpen = false;
+    let handleRef: Awaited<ReturnType<typeof startDeckHidrawWatcher>> = null;
+    const handle = await startDeckHidrawWatcher({
+      // Mirrors toggleOverlay: synchronous open/close flipping nav mode.
+      onWake: () => {
+        isOpen = !isOpen;
+        handleRef!.setNavActive(isOpen);
+      },
+      initialButton: "A",
+      log: () => {},
+      onNavEvents: (events) => navBatches.push(events),
+    });
+    handleRef = handle;
+
+    stream.push(frame()); // consume startup edge-suppress
+    // OPEN press: wake fires, nav mode activates mid-frame; the same frame
+    // becomes the silent baseline (A held) — no nav emission.
+    stream.push(frame({ 8: 0x80 }));
+    expect(isOpen).toBe(true);
+    expect(navBatches).toHaveLength(0);
+    // Release while open — the baseline held A releases; NavController-side
+    // this is a no-op (never counted as pressed), but the edge itself is
+    // fine to emit.
+    stream.push(frame());
+    expect(navBatches).toHaveLength(1);
+    expect(navBatches[0]).toEqual([
+      { kind: "button", button: "A", pressed: false },
+    ]);
+    // CLOSE press: wake fires first (overlay closes, nav deactivates), so
+    // the same frame's decode is skipped — NO nav press edge leaks.
+    stream.push(frame({ 8: 0x80 }));
+    expect(isOpen).toBe(false);
+    expect(navBatches).toHaveLength(1);
+
+    handle!.stop();
+    findSpy.mockRestore();
+    streamSpy.mockRestore();
+    openSpy.mockRestore();
+  });
+});

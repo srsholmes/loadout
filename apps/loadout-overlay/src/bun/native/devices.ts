@@ -89,9 +89,13 @@ export interface InputDevice {
   /** Parsed EV_KEY capability bitmask. Empty if the B: KEY= line is absent
    *  (non-input devices). */
   keyCaps: Uint8Array;
-  /** True for Steam Input's virtual Xbox 360 pad. Interception MUST skip
-   *  it — grabbing it would mean our overlay's own CEF Gamepad API and
-   *  Steam's BPM nav both lose input. */
+  /** True for Steam Input's virtual Xbox 360 pad (28de:11ff). Decides
+   *  read-for-nav vs grab-only in input-intercept (never plain "skip"):
+   *  grabbing it silences the game underneath while Steam BPM keeps reading
+   *  the physical pad via hidraw. NOTE: the grab/release loops assume every
+   *  11ff node has controller caps (true in the field — it's always the
+   *  virtual X360 pad); a hypothetical 11ff keyboard-only node would now be
+   *  grabbed too. */
   isSteamVirtual: boolean;
   /** True for any evdev node of the Deck's built-in controller (28de:1205 /
    *  28de:1206) — the raw gamepad node and the lizard-mode keyboard/mouse

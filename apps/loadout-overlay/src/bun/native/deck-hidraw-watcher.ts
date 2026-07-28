@@ -57,6 +57,12 @@ export interface DeckHidrawWatcherOptions {
    *  called while nav mode is off, so the idle wake path costs the same
    *  as before. */
   onNavEvents?: (events: InputEvent[]) => void;
+  /** Fires ONCE if the stream dies on its own (error/end) — NOT on stop().
+   *  When the watcher is the overlay's nav source (Deck strategy), a dead
+   *  stream means nav AND the wake button are gone while the strategy would
+   *  still freeze Steam on the next open; the caller must degrade or
+   *  restart. */
+  onDeath?: () => void;
 }
 
 export interface DeckHidrawWatcherHandle {
@@ -69,6 +75,9 @@ export interface DeckHidrawWatcherHandle {
    *  held from the opening press must not fire a nav action into the
    *  freshly-opened overlay. Deactivation clears all diff state. */
   setNavActive(active: boolean): void;
+  /** False once the stream has died (error/end) or stop() was called. The
+   *  strategy decision must not treat a dead watcher as a nav source. */
+  isAlive(): boolean;
   /** Path of the hidraw node we opened, for diagnostics. */
   path(): string;
   /** Tear down the stream. Idempotent. */
@@ -81,7 +90,18 @@ const DEFAULT_LOG = (msg: string) => console.log(`[deck-hidraw] ${msg}`);
  *  ADC noise on a resting stick doesn't emit a continuous event stream. */
 const STICK_QUANT = 128;
 
+/** Values within this of center clamp to exactly 0 BEFORE quantization.
+ *  Quantization alone can't silence a resting stick whose ADC noise
+ *  straddles a step boundary — it would alternate between two quantized
+ *  values at report rate (~250/s) and stream axis RPCs the whole time the
+ *  overlay is open. The evdev path gets this for free from kernel fuzz
+ *  filtering; the raw hidraw path must do its own. 0.10 comfortably covers
+ *  the ±0.04 rest drift measured on a worn Jupiter stick while staying far
+ *  below NavController's 0.5 nav deadzone and any deliberate scroll tilt. */
+const STICK_DEADBAND = 0.1;
+
 function quantize(v: number): number {
+  if (Math.abs(v) < STICK_DEADBAND) return 0;
   // `+ 0` normalizes -0 → 0 so a centered stick always compares equal.
   return Math.round(v * STICK_QUANT) / STICK_QUANT + 0;
 }
@@ -244,11 +264,13 @@ export async function startDeckHidrawWatcher(
     } catch {
       /* ignore */
     }
+    opts.onDeath?.();
   });
   stream.on("end", () => {
     if (stopped) return;
     log(`stream end on ${path} — watcher stopped.`);
     stopped = true;
+    opts.onDeath?.();
   });
 
   return {
@@ -272,6 +294,9 @@ export async function startDeckHidrawWatcher(
       // next frame latches silently (held wake button must not fire); on
       // exit stale state must not leak into the next overlay session.
       prevNav = null;
+    },
+    isAlive(): boolean {
+      return !stopped;
     },
     path(): string {
       return path;

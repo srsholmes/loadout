@@ -789,9 +789,31 @@ export async function startInputIntercept(
       // EVIOCGRAB so the game underneath gets nothing. We never feed their
       // events to NavController (the physical pads already drive overlay nav;
       // this mirrors them, so processing both would double every input) and
-      // never run wake detection on them. readRawEvents above already drained
-      // the fd so its buffer can't back up — just skip the rest.
-      if (t.grabOnly) continue;
+      // — on IP hosts — never run wake detection on them either (the physical
+      // pad already drives wake; processing the mirror would double-toggle).
+      // readRawEvents above already drained the fd so its buffer can't back up.
+      //
+      // Deck strategy exception: there the virtual pad (or the raw built-in
+      // gamepad node when Steam isn't running) is the ONLY evdev view of the
+      // built-in controller — no other device mirrors it — so combo wake
+      // detection (Guide+B etc.) must keep running or a Deck with no
+      // configured hidraw wake binding has no controller wake at all. Nav
+      // stays off (hidraw drives it; reading both would double).
+      if (t.grabOnly) {
+        if (grabDeckBuiltinNodes && t.dev.flags.isController && !pendingGrabs.has(t)) {
+          for (const e of events) {
+            if (e.type !== EV_KEY) continue;
+            const wake = processCombo(t.combo, e.code, e.value, now);
+            if (wake) {
+              trace(
+                `[input-intercept] wake=${wake} from grab-only '${t.dev.name}' (${t.path})`,
+              );
+              opts.onWake(wake);
+            }
+          }
+        }
+        continue;
+      }
 
       // A device with a still-deferred grab isn't ours yet — the app
       // underneath is reading it (that's the whole point of deferring, so it
@@ -888,9 +910,12 @@ export async function startInputIntercept(
       const rc = libc.symbols.ioctl(t.fd, EVIOCGRAB, ptr(intBuf));
       if (rc === 0) {
         t.grabbed = true;
-        console.log(
-          `[input-intercept] grabbed ${t.path} '${t.dev.name}'${t.grabOnly ? " (virtual, grab-only)" : ""}`,
-        );
+        const label = !t.grabOnly
+          ? ""
+          : t.dev.isSteamVirtual
+            ? " (virtual, grab-only)"
+            : " (deck-builtin, grab-only)";
+        console.log(`[input-intercept] grabbed ${t.path} '${t.dev.name}'${label}`);
       } else {
         // EBUSY is normal if another app (old overlay instance,
         // steamcompmgr) has it — log and move on.
@@ -983,7 +1008,7 @@ export async function startInputIntercept(
     }
     nav.reset();
     console.log(
-      `[input-intercept] released ${tracked.filter((t) => t.dev.flags.isController).length} controller(s)`,
+      `[input-intercept] released ${tracked.filter((t) => t.dev.flags.isController || t.grabOnly).length} device(s)`,
     );
     startTimer();
   }
