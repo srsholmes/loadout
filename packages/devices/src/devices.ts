@@ -410,16 +410,26 @@ export function effectiveMaxWatts({
 }
 
 /**
- * True when the global battery ceiling — not the device's own battery
- * figure — is what's limiting right now. Drives the UI warning: users need
- * to know why the slider stops short of a limit they set themselves.
+ * True when running on battery reduces the TDP ceiling at all — whether the
+ * cause is the device's own `batteryMaxTdp` or the global
+ * BATTERY_SAFE_MAX_WATTS. Drives the informational notice: a slider that
+ * stops short of the number the user set is confusing regardless of WHICH
+ * limit produced it, so the notice doesn't distinguish them.
+ *
+ * False when the on-battery ceiling equals the plugged one (e.g. Steam Deck
+ * at 15 W) — there is nothing to explain, and claiming the max "might be
+ * lower" would simply be wrong.
  */
-export function isBatterySafetyCapActive({
+export function isBatteryLimited({
   acOnline,
+  maxTdp,
   batteryMaxTdp,
 }: {
   acOnline: boolean | null;
+  maxTdp: number;
   batteryMaxTdp: number;
 }): boolean {
-  return acOnline === false && batteryMaxTdp > BATTERY_SAFE_MAX_WATTS;
+  return (
+    effectiveMaxWatts({ acOnline, maxTdp, batteryMaxTdp }) < maxTdp
+  );
 }

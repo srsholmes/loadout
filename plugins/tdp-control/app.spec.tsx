@@ -279,3 +279,95 @@ describe("tdp-control plugin", () => {
     });
   });
 });
+
+describe("on-battery TDP notice", () => {
+  /** Info as the backend reports it while on battery with a reduced ceiling. */
+  const onBattery = {
+    ...mockTdpInfo,
+    maxWatts: 25, // effective (battery) ceiling
+    pluggedMaxWatts: 30,
+    batteryMaxWatts: 25,
+    batteryLimited: true,
+  };
+
+  beforeEach(() => {
+    callMock.mockReset();
+    eventHandlers.clear();
+    currentGameValue = null;
+  });
+
+  async function mountWith(info: Record<string, unknown>) {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getTdpInfo") return Promise.resolve(info);
+      return Promise.resolve(null);
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => {
+      expect(container.textContent).toContain("CURRENT TDP");
+    });
+    return container;
+  }
+
+  it("shows the notice, naming both the battery and plugged ceilings", async () => {
+    const container = await mountWith(onBattery);
+    await waitFor(() => {
+      expect(container.textContent).toContain("On battery");
+    });
+    expect(container.textContent).toContain("25 W");
+    expect(container.textContent).toContain("30 W");
+  });
+
+  it("is informational, not a warning", async () => {
+    const container = await mountWith(onBattery);
+    await waitFor(() => {
+      expect(container.textContent).toContain("On battery");
+    });
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.className).toContain("alert-info");
+    expect(alert?.className).not.toContain("alert-warning");
+  });
+
+  it("renders under the slider, not at the top of the page", async () => {
+    const container = await mountWith(onBattery);
+    await waitFor(() => {
+      expect(container.textContent).toContain("On battery");
+    });
+    const slider = container.querySelector('input[type="range"]');
+    const alert = container.querySelector('[role="alert"]');
+    expect(slider).toBeTruthy();
+    expect(alert).toBeTruthy();
+    // DOCUMENT_POSITION_FOLLOWING => alert comes after the slider.
+    expect(
+      slider!.compareDocumentPosition(alert!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("hides after dismissal", async () => {
+    const container = await mountWith(onBattery);
+    await waitFor(() => {
+      expect(container.textContent).toContain("On battery");
+    });
+    const close = container.querySelector(
+      '[aria-label="Dismiss battery TDP notice"]',
+    ) as HTMLButtonElement;
+    expect(close).toBeTruthy();
+    fireEvent.click(close);
+    await waitFor(() => {
+      expect(container.textContent).not.toContain("On battery");
+    });
+  });
+
+  it("does not show when the battery ceiling equals the plugged one", async () => {
+    // Steam Deck case: nothing is reduced, so claiming otherwise would be wrong.
+    const container = await mountWith({ ...onBattery, batteryLimited: false });
+    expect(container.textContent).not.toContain("On battery");
+  });
+
+  it("does not show on AC", async () => {
+    const container = await mountWith({ ...mockTdpInfo, batteryLimited: false });
+    expect(container.textContent).not.toContain("On battery");
+  });
+});

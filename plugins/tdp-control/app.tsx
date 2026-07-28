@@ -35,8 +35,8 @@ interface TdpInfo {
   batteryMaxWatts: number;
   /** Global on-battery ceiling applied to every device. */
   batterySafeMaxWatts?: number;
-  /** True when that global ceiling is the binding constraint right now. */
-  batterySafetyCapActive?: boolean;
+  /** True when being on battery lowers the ceiling right now. */
+  batteryLimited?: boolean;
   platform: string;
   deviceName: string;
   method: string;
@@ -93,6 +93,27 @@ function TdpControl() {
 
   const [info, setInfo] = useState<TdpInfo | null>(null);
   const [sliderValue, setSliderValue] = useState<number>(15);
+  /**
+   * Dismissal state for the on-battery TDP notice, holding the TOKEN that was
+   * dismissed rather than a plain boolean.
+   *
+   * Re-show policy — the notice comes back when any of these happen:
+   *  1. The situation changes. The token is the ceiling pair, so unplugging,
+   *     replugging, or editing the device's limits all produce a new token
+   *     that no dismissal covers.
+   *  2. The user returns to the plugin. This is local state and tdp-control
+   *     isn't `keepAlive`, so navigating away unmounts and clears it.
+   *  3. The user drags the slider back up to the ceiling (see
+   *     handleSliderChange) — pressing against the limit is exactly when the
+   *     explanation is wanted again.
+   *
+   * What it deliberately does NOT do is reappear on every TDP change, which
+   * would be nagging: dismissing it while already at the ceiling keeps it
+   * hidden until one of the above actually occurs.
+   */
+  const [batteryNoticeDismissed, setBatteryNoticeDismissed] = useState<
+    string | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [perGameEnabled, setPerGameEnabled] = useState<boolean>(false);
@@ -141,10 +162,10 @@ function TdpControl() {
   useEvent({
     event: "acPowerChanged",
     handler: (data) => {
-      const { maxWatts, batterySafetyCapActive } = data as {
+      const { maxWatts, batteryLimited } = data as {
         online: boolean;
         maxWatts: number;
-        batterySafetyCapActive?: boolean;
+        batteryLimited?: boolean;
       };
       if (typeof maxWatts === "number") {
         setInfo((prev) =>
@@ -152,8 +173,8 @@ function TdpControl() {
             ? {
                 ...prev,
                 maxWatts,
-                ...(typeof batterySafetyCapActive === "boolean"
-                  ? { batterySafetyCapActive }
+                ...(typeof batteryLimited === "boolean"
+                  ? { batteryLimited }
                   : {}),
               }
             : prev,
@@ -268,10 +289,21 @@ function TdpControl() {
     [call],
   );
 
+  // Identifies the current on-battery situation. Changing ceilings (unplug,
+  // replug, device edit) yield a new token, which no prior dismissal covers.
+  const batteryNoticeToken = info
+    ? `${info.maxWatts}/${info.pluggedMaxWatts ?? info.maxWatts}`
+    : "";
+  const showBatteryNotice =
+    !!info?.batteryLimited && batteryNoticeDismissed !== batteryNoticeToken;
+
   const handleSliderChange = useCallback(
     (watts: number) => {
       setSliderValue(watts);
       slidingRef.current = true;
+      // Pushing the slider to the ceiling re-arms the notice: the user is
+      // asking for more than they can have right now, so tell them why.
+      if (info && watts >= info.maxWatts) setBatteryNoticeDismissed(null);
 
       // Debounce — only fire when user stops adjusting. When per-game is
       // on, the same release also persists the value: against the
@@ -295,7 +327,7 @@ function TdpControl() {
         }
       }, 500);
     },
-    [handleSetTdp, perGameEnabled, currentGame, call],
+    [handleSetTdp, perGameEnabled, currentGame, call, info],
   );
 
   const handleTogglePerGame = useCallback(
@@ -507,20 +539,6 @@ function TdpControl() {
       {header}
       <div className="p-7 h-full overflow-y-auto">
       <div className="page-content">
-        {/* Battery safety ceiling. Non-dismissable while it's biting: the
-            slider silently stopping short of a limit the user set themselves
-            is exactly the confusion issue #230 was reported as, so the reason
-            has to be on screen the whole time it applies. */}
-        {info.batterySafetyCapActive && (
-          <Alert
-            variant="warning"
-            icon={<FaBatteryHalf size={18} />}
-            title="TDP limited on battery"
-          >
-            {`Capped at ${info.batterySafeMaxWatts ?? 55} W while on battery — sustained draw above this degrades the battery. Plug in to use the full ${info.pluggedMaxWatts ?? info.maxWatts} W.`}
-          </Alert>
-        )}
-
         {/* CURRENT TDP — main card with big centered number + slider */}
         <div className="card">
           <div className="card-header flex items-center justify-between py-3.5 px-4.5 border-b border-base-300">
@@ -559,6 +577,20 @@ function TdpControl() {
                   <span>{Math.round(info.maxWatts / 2)}W</span>
                   <span>{info.maxWatts}W</span>
                 </div>
+                {/* Informational, not a warning: nothing is wrong, the range
+                    is simply narrower right now. Sits under the slider
+                    because that's the control it explains. */}
+                {showBatteryNotice && (
+                  <Alert
+                    variant="info"
+                    icon={<FaBatteryHalf size={16} />}
+                    className="mt-4 mb-0"
+                    onDismiss={() => setBatteryNoticeDismissed(batteryNoticeToken)}
+                    dismissLabel="Dismiss battery TDP notice"
+                  >
+                    {`On battery, so the maximum is ${info.maxWatts} W. Plug in for up to ${info.pluggedMaxWatts ?? info.maxWatts} W.`}
+                  </Alert>
+                )}
               </div>
             )}
           </div>

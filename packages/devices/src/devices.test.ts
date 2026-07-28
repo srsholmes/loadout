@@ -3,7 +3,7 @@ import {
   matchDevice,
   matchProfileName,
   effectiveMaxWatts,
-  isBatterySafetyCapActive,
+  isBatteryLimited,
   BATTERY_SAFE_MAX_WATTS,
 } from "./devices";
 
@@ -188,19 +188,31 @@ describe("battery safety ceiling", () => {
     ).toBe(BATTERY_SAFE_MAX_WATTS);
   });
 
-  it("flags the cap only when the GLOBAL ceiling is the binding constraint", () => {
-    // Device figure below the ceiling — the user isn't being overridden, so
-    // no banner (their own 30 W choice is what applies).
+  it("flags a battery limit whatever the cause — device figure or global cap", () => {
+    // Device's own lower figure.
     expect(
-      isBatterySafetyCapActive({ acOnline: false, batteryMaxTdp: 30 }),
-    ).toBe(false);
-    // Device/user figure above the ceiling — we ARE overriding them, so say so.
-    expect(
-      isBatterySafetyCapActive({ acOnline: false, batteryMaxTdp: 80 }),
+      isBatteryLimited({ acOnline: false, maxTdp: 80, batteryMaxTdp: 30 }),
     ).toBe(true);
-    // Never on AC.
+    // Global ceiling.
     expect(
-      isBatterySafetyCapActive({ acOnline: true, batteryMaxTdp: 80 }),
+      isBatteryLimited({ acOnline: false, maxTdp: 80, batteryMaxTdp: 80 }),
+    ).toBe(true);
+  });
+
+  it("does NOT flag when the on-battery ceiling equals the plugged one", () => {
+    // Steam Deck: 15 W either way. Saying "the max might be lower" would be
+    // plainly false, so the notice must not appear.
+    expect(
+      isBatteryLimited({ acOnline: false, maxTdp: 15, batteryMaxTdp: 15 }),
+    ).toBe(false);
+  });
+
+  it("never flags on AC or when AC state is unknown", () => {
+    expect(
+      isBatteryLimited({ acOnline: true, maxTdp: 80, batteryMaxTdp: 30 }),
+    ).toBe(false);
+    expect(
+      isBatteryLimited({ acOnline: null, maxTdp: 80, batteryMaxTdp: 30 }),
     ).toBe(false);
   });
 

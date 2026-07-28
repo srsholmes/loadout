@@ -16,7 +16,7 @@ import {
   type CpuVendor,
   BATTERY_SAFE_MAX_WATTS,
   effectiveMaxWatts,
-  isBatterySafetyCapActive,
+  isBatteryLimited,
 } from "@loadout/devices";
 import {
   readCustomDevice,
@@ -205,9 +205,9 @@ interface TdpInfo {
   batteryMaxWatts: number;
   /** Global on-battery ceiling applied to every device. */
   batterySafeMaxWatts: number;
-  /** True when the global ceiling — not the device's own battery figure —
-   *  is what's limiting. Drives the UI warning banner. */
-  batterySafetyCapActive: boolean;
+  /** True when being on battery lowers the ceiling right now (device figure
+   *  or global cap). Drives the UI's informational notice. */
+  batteryLimited: boolean;
   platform: string;
   deviceName: string;
   method: TdpMethod;
@@ -528,8 +528,8 @@ export default class TdpControlBackend implements PluginBackend {
       batteryMaxWatts: this.batteryMaxWatts,
       /** Global on-battery ceiling; see BATTERY_SAFE_MAX_WATTS. */
       batterySafeMaxWatts: BATTERY_SAFE_MAX_WATTS,
-      /** True when that global ceiling is the binding constraint right now. */
-      batterySafetyCapActive: this.batterySafetyCapActive(),
+      /** True when being on battery lowers the ceiling right now. */
+      batteryLimited: this.batteryLimited(),
       platform: this.dmiProductName,
       deviceName: this.deviceName,
       method: this.method,
@@ -1324,12 +1324,13 @@ export default class TdpControlBackend implements PluginBackend {
     });
   }
 
-  /** True when BATTERY_SAFE_MAX_WATTS — not the device's own battery figure
-   *  — is the binding constraint. The UI banners this so a user who set a
-   *  higher ceiling themselves understands why the slider stops short. */
-  private batterySafetyCapActive(): boolean {
-    return isBatterySafetyCapActive({
+  /** True when being on battery lowers the ceiling at all — device figure or
+   *  global cap, we don't distinguish. The UI shows an informational notice
+   *  so a slider stopping short of the user's own Max TDP is never a mystery. */
+  private batteryLimited(): boolean {
+    return isBatteryLimited({
       acOnline: this.acPowerOnline,
+      maxTdp: this.maxWatts,
       batteryMaxTdp: this.batteryMaxWatts,
     });
   }
@@ -1870,7 +1871,7 @@ export default class TdpControlBackend implements PluginBackend {
               data: {
                 online: this.acPowerOnline,
                 maxWatts: this.effectiveMaxWatts(),
-                batterySafetyCapActive: this.batterySafetyCapActive(),
+                batteryLimited: this.batteryLimited(),
               },
             });
             console.log(
