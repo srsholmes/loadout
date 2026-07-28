@@ -145,3 +145,43 @@ describe("persistence", () => {
     expect(await readCustomDevice(PLUGIN_ID)).toBeNull();
   });
 });
+
+describe("optional battery max (issue #230)", () => {
+  const base = {
+    name: "X2 Mini Pro",
+    minTdp: 5,
+    maxTdp: 80,
+    profiles: { Silent: 10, Balanced: 40, Performance: 80 },
+  };
+
+  it("defaults batteryMaxTdp to maxTdp when omitted", () => {
+    const r = validateCustomDevice(base);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.device.batteryMaxTdp).toBe(80);
+  });
+
+  it("treats an empty string (blank form field) the same as omitted", () => {
+    const r = validateCustomDevice({ ...base, batteryMaxTdp: "" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.device.batteryMaxTdp).toBe(80);
+  });
+
+  it("treats null (what the form now sends for blank) as omitted", () => {
+    const r = validateCustomDevice({ ...base, batteryMaxTdp: null });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.device.batteryMaxTdp).toBe(80);
+  });
+
+  it("still honours an explicit battery max, and still validates it", () => {
+    const ok = validateCustomDevice({ ...base, batteryMaxTdp: 40 });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.device.batteryMaxTdp).toBe(40);
+
+    // Above max is still rejected — omitting is the escape hatch, not garbage.
+    const bad = validateCustomDevice({ ...base, batteryMaxTdp: 100 });
+    expect(bad.ok).toBe(false);
+
+    const belowMin = validateCustomDevice({ ...base, batteryMaxTdp: 2 });
+    expect(belowMin.ok).toBe(false);
+  });
+});

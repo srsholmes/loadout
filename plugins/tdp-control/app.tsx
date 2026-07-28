@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { FaBolt, FaMicrochip, FaGear } from "react-icons/fa6";
+import { FaBolt, FaMicrochip, FaGear, FaBatteryHalf } from "react-icons/fa6";
 import {
   mountComponent,
   mountHeaderStub,
@@ -17,6 +17,7 @@ import {
   PluginHeader,
   HeaderBackButton,
   IconButton,
+  Alert,
 } from "@loadout/ui";
 import { steamArtworkUrls } from "@loadout/steam-paths/artwork";
 import type { CustomDevice } from "./lib/custom-device";
@@ -32,6 +33,10 @@ interface TdpInfo {
   pluggedMaxWatts: number;
   /** Ceiling when on battery (<= pluggedMaxWatts). */
   batteryMaxWatts: number;
+  /** Global on-battery ceiling applied to every device. */
+  batterySafeMaxWatts?: number;
+  /** True when that global ceiling is the binding constraint right now. */
+  batterySafetyCapActive?: boolean;
   platform: string;
   deviceName: string;
   method: string;
@@ -136,9 +141,23 @@ function TdpControl() {
   useEvent({
     event: "acPowerChanged",
     handler: (data) => {
-      const { maxWatts } = data as { online: boolean; maxWatts: number };
+      const { maxWatts, batterySafetyCapActive } = data as {
+        online: boolean;
+        maxWatts: number;
+        batterySafetyCapActive?: boolean;
+      };
       if (typeof maxWatts === "number") {
-        setInfo((prev) => (prev ? { ...prev, maxWatts } : prev));
+        setInfo((prev) =>
+          prev
+            ? {
+                ...prev,
+                maxWatts,
+                ...(typeof batterySafetyCapActive === "boolean"
+                  ? { batterySafetyCapActive }
+                  : {}),
+              }
+            : prev,
+        );
       }
     },
   });
@@ -488,6 +507,20 @@ function TdpControl() {
       {header}
       <div className="p-7 h-full overflow-y-auto">
       <div className="page-content">
+        {/* Battery safety ceiling. Non-dismissable while it's biting: the
+            slider silently stopping short of a limit the user set themselves
+            is exactly the confusion issue #230 was reported as, so the reason
+            has to be on screen the whole time it applies. */}
+        {info.batterySafetyCapActive && (
+          <Alert
+            variant="warning"
+            icon={<FaBatteryHalf size={18} />}
+            title="TDP limited on battery"
+          >
+            {`Capped at ${info.batterySafeMaxWatts ?? 55} W while on battery — sustained draw above this degrades the battery. Plug in to use the full ${info.pluggedMaxWatts ?? info.maxWatts} W.`}
+          </Alert>
+        )}
+
         {/* CURRENT TDP — main card with big centered number + slider */}
         <div className="card">
           <div className="card-header flex items-center justify-between py-3.5 px-4.5 border-b border-base-300">
@@ -813,11 +846,13 @@ function CustomDeviceForm({ info }: { info: TdpInfo }) {
     // the battery cap from `batteryMaxWatts`. Fall back to `maxWatts` for
     // older backends that don't report the split ceilings.
     const trueMax = i.pluggedMaxWatts ?? i.maxWatts;
-    const batteryMax = i.batteryMaxWatts ?? i.maxWatts;
     setName(i.deviceName && i.deviceName !== "Unknown" ? i.deviceName : "");
     setMinTdp(String(i.minWatts));
     setMaxTdp(String(trueMax));
-    setBatteryMaxTdp(String(batteryMax));
+    // Deliberately NOT seeded from the detected device (issue #230): a
+    // pre-filled 28-30 W from some other device's profile silently capped the
+    // slider once the user raised Max TDP. Blank means "same as Max TDP".
+    setBatteryMaxTdp("");
     setSilent(String(i.profiles.Silent ?? i.minWatts));
     setBalanced(
       String(i.profiles.Balanced ?? Math.round((i.minWatts + trueMax) / 2)),
@@ -856,7 +891,9 @@ function CustomDeviceForm({ info }: { info: TdpInfo }) {
       name: name.trim(),
       minTdp: parse(minTdp),
       maxTdp: parse(maxTdp),
-      batteryMaxTdp: parse(batteryMaxTdp),
+      // Blank => omit, so the backend defaults it to maxTdp. Sending NaN
+      // here would fail validation and re-create the #230 trap.
+      batteryMaxTdp: batteryMaxTdp.trim() === "" ? null : parse(batteryMaxTdp),
       profiles: {
         Silent: parse(silent),
         Balanced: parse(balanced),
@@ -913,7 +950,7 @@ function CustomDeviceForm({ info }: { info: TdpInfo }) {
   const numberFields: Array<[string, string, (v: string) => void]> = [
     ["Min TDP (W)", minTdp, setMinTdp],
     ["Max TDP (W)", maxTdp, setMaxTdp],
-    ["Battery max TDP (W)", batteryMaxTdp, setBatteryMaxTdp],
+    ["Battery max TDP (W, optional)", batteryMaxTdp, setBatteryMaxTdp],
     ["Silent preset (W)", silent, setSilent],
     ["Balanced preset (W)", balanced, setBalanced],
     ["Performance preset (W)", performance, setPerformance],
@@ -932,7 +969,8 @@ function CustomDeviceForm({ info }: { info: TdpInfo }) {
           On a newer or unlisted handheld? Enter your device's TDP range and
           power presets. Once saved it becomes the default device used by TDP
           control, overriding auto-detection. Clear it to return to
-          auto-detection.
+          auto-detection. Leave <strong>Battery max TDP</strong> blank to use
+          your Max TDP on battery too.
         </div>
 
         <div style={{ marginBottom: 10 }}>

@@ -372,3 +372,54 @@ export function matchProfileName(
   }
   return "Custom";
 }
+
+/**
+ * Hard ceiling on TDP while running on battery, in watts — applies to EVERY
+ * device regardless of its `batteryMaxTdp` or any user override.
+ *
+ * Sustained high-wattage draw on a handheld's cells is the failure mode this
+ * guards: it drives cell temperature and discharge current well past what
+ * these packs are specified for, degrading capacity and, at the extreme,
+ * risking damage. No device's battery ceiling should exceed this, so it is
+ * enforced as a floor-of-last-resort rather than left to per-device data or
+ * to whatever a user types into the custom-device form.
+ *
+ * Applies ONLY on battery. Plugged in, the device's own `maxTdp` governs and
+ * this value is irrelevant.
+ */
+export const BATTERY_SAFE_MAX_WATTS = 55;
+
+/**
+ * The TDP ceiling that applies right now, given power state. Pure.
+ *
+ * `acOnline === false` means "known to be on battery" — an unknown/null AC
+ * state deliberately does NOT restrict, because misreporting AC as absent
+ * would throttle a plugged-in device for no reason.
+ */
+export function effectiveMaxWatts({
+  acOnline,
+  maxTdp,
+  batteryMaxTdp,
+}: {
+  acOnline: boolean | null;
+  maxTdp: number;
+  batteryMaxTdp: number;
+}): number {
+  if (acOnline !== false) return maxTdp;
+  return Math.min(batteryMaxTdp, BATTERY_SAFE_MAX_WATTS);
+}
+
+/**
+ * True when the global battery ceiling — not the device's own battery
+ * figure — is what's limiting right now. Drives the UI warning: users need
+ * to know why the slider stops short of a limit they set themselves.
+ */
+export function isBatterySafetyCapActive({
+  acOnline,
+  batteryMaxTdp,
+}: {
+  acOnline: boolean | null;
+  batteryMaxTdp: number;
+}): boolean {
+  return acOnline === false && batteryMaxTdp > BATTERY_SAFE_MAX_WATTS;
+}

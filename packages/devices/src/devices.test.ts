@@ -1,5 +1,11 @@
 import { describe, it, expect } from "bun:test";
-import { matchDevice, matchProfileName } from "./devices";
+import {
+  matchDevice,
+  matchProfileName,
+  effectiveMaxWatts,
+  isBatterySafetyCapActive,
+  BATTERY_SAFE_MAX_WATTS,
+} from "./devices";
 
 describe("matchDevice", () => {
   it("matches a known device by DMI product-name substring", () => {
@@ -134,5 +140,75 @@ describe("matchProfileName", () => {
   it('returns "Custom" when no preset is within ±1 W', () => {
     expect(matchProfileName(25, profiles)).toBe("Custom");
     expect(matchProfileName(13, profiles)).toBe("Custom");
+  });
+});
+
+describe("battery safety ceiling", () => {
+  it("never allows more than BATTERY_SAFE_MAX_WATTS on battery", () => {
+    // The whole point: no device's own figure, and no user override, can
+    // raise the on-battery ceiling above this.
+    for (const batteryMaxTdp of [55, 65, 80, 200]) {
+      expect(
+        effectiveMaxWatts({ acOnline: false, maxTdp: 200, batteryMaxTdp }),
+      ).toBeLessThanOrEqual(BATTERY_SAFE_MAX_WATTS);
+    }
+  });
+
+  it("keeps a device's lower battery figure when it is below the ceiling", () => {
+    // Steam Deck-class devices must not be raised TO the ceiling.
+    expect(
+      effectiveMaxWatts({ acOnline: false, maxTdp: 15, batteryMaxTdp: 15 }),
+    ).toBe(15);
+    expect(
+      effectiveMaxWatts({ acOnline: false, maxTdp: 30, batteryMaxTdp: 25 }),
+    ).toBe(25);
+  });
+
+  it("does not restrict on AC, or when AC state is unknown", () => {
+    // null must NOT throttle: a misread AC state would otherwise cap a
+    // plugged-in device for no reason.
+    expect(
+      effectiveMaxWatts({ acOnline: true, maxTdp: 80, batteryMaxTdp: 30 }),
+    ).toBe(80);
+    expect(
+      effectiveMaxWatts({ acOnline: null, maxTdp: 80, batteryMaxTdp: 30 }),
+    ).toBe(80);
+  });
+
+  it("reproduces issue #230: max 80 with a stale battery figure of 30", () => {
+    // Before the fix the form seeded batteryMaxTdp from the detected device,
+    // so this is what the reporter actually had saved.
+    expect(
+      effectiveMaxWatts({ acOnline: false, maxTdp: 80, batteryMaxTdp: 30 }),
+    ).toBe(30);
+    // With the field left blank it defaults to maxTdp, and the global ceiling
+    // is what limits — 55, not 30.
+    expect(
+      effectiveMaxWatts({ acOnline: false, maxTdp: 80, batteryMaxTdp: 80 }),
+    ).toBe(BATTERY_SAFE_MAX_WATTS);
+  });
+
+  it("flags the cap only when the GLOBAL ceiling is the binding constraint", () => {
+    // Device figure below the ceiling — the user isn't being overridden, so
+    // no banner (their own 30 W choice is what applies).
+    expect(
+      isBatterySafetyCapActive({ acOnline: false, batteryMaxTdp: 30 }),
+    ).toBe(false);
+    // Device/user figure above the ceiling — we ARE overriding them, so say so.
+    expect(
+      isBatterySafetyCapActive({ acOnline: false, batteryMaxTdp: 80 }),
+    ).toBe(true);
+    // Never on AC.
+    expect(
+      isBatterySafetyCapActive({ acOnline: true, batteryMaxTdp: 80 }),
+    ).toBe(false);
+  });
+
+  it("caps the shipped devices that exceed the ceiling", () => {
+    // OneXPlayer Super X ships batteryMaxTdp 65 — this is a real behaviour
+    // change for that device and is intentional.
+    expect(
+      effectiveMaxWatts({ acOnline: false, maxTdp: 90, batteryMaxTdp: 65 }),
+    ).toBe(BATTERY_SAFE_MAX_WATTS);
   });
 });

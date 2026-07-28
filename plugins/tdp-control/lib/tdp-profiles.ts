@@ -57,8 +57,14 @@ export interface TdpProfileEngineOptions {
 // Constants
 // ---------------------------------------------------------------------------
 
-const MIN_TDP_WATTS = 3;
-const MAX_TDP_WATTS = 80;
+// Sanity bounds only — NOT the per-device limit. The real ceiling is applied
+// in backend.applyTdp() via effectiveMaxWatts(), which is device- and
+// power-state-aware. These were 3-80, which silently truncated saved per-game
+// profiles on devices whose max exceeds 80 W: OneXPlayer Super X (90 W) and
+// GPD Win 5 (85 W) are both in the shipped device table, so this bit users
+// with no custom device involved at all.
+const MIN_TDP_WATTS = 1;
+const MAX_TDP_WATTS = 200;
 const DEFAULT_TDP_WATTS = 15;
 
 // ---------------------------------------------------------------------------

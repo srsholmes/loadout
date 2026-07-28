@@ -46,9 +46,12 @@ function isWholeNumber(n: unknown): n is number {
 /**
  * Validate an untrusted object into a `CustomDevice`, or return a
  * user-facing error string. Rules: non-empty name; whole-number watts in
- * [MIN_WATTS, MAX_WATTS]; `minTdp < maxTdp`; `minTdp <= batteryMaxTdp <=
- * maxTdp`; each preset within `[minTdp, maxTdp]`. Pure — reused by the
- * backend RPC and by `readCustomDevice` to reject corrupt stored data.
+ * [MIN_WATTS, MAX_WATTS]; `minTdp < maxTdp`; each preset within
+ * `[minTdp, maxTdp]`. `batteryMaxTdp` is OPTIONAL and defaults to `maxTdp`
+ * when omitted — when given it must satisfy `minTdp <= batteryMaxTdp <=
+ * maxTdp`. Whatever it ends up as, BATTERY_SAFE_MAX_WATTS still caps the
+ * applied wattage on battery. Pure — reused by the backend RPC and by
+ * `readCustomDevice` to reject corrupt stored data.
  */
 export function validateCustomDevice(input: unknown): ValidationResult {
   if (!input || typeof input !== "object") {
@@ -68,8 +71,16 @@ export function validateCustomDevice(input: unknown): ValidationResult {
   const ranges: Array<[string, unknown]> = [
     ["Min TDP", o.minTdp],
     ["Max TDP", o.maxTdp],
-    ["Battery max TDP", o.batteryMaxTdp],
   ];
+  // Battery max is OPTIONAL. Requiring it is what produced issue #230: the
+  // form pre-seeded this field from the AUTO-DETECTED device, so raising Max
+  // TDP to 80 while leaving a detected 28-30 here silently capped the slider
+  // at that lower figure whenever the handheld was on battery — with nothing
+  // in the UI saying why. Omitted now means "same as Max TDP", and the global
+  // BATTERY_SAFE_MAX_WATTS ceiling protects the battery regardless.
+  if (o.batteryMaxTdp != null && o.batteryMaxTdp !== "") {
+    ranges.push(["Battery max TDP", o.batteryMaxTdp]);
+  }
   for (const [label, value] of ranges) {
     if (!isWholeNumber(value)) {
       return { ok: false, error: `${label} must be a whole number` };
@@ -83,7 +94,10 @@ export function validateCustomDevice(input: unknown): ValidationResult {
   }
   const minTdp = o.minTdp as number;
   const maxTdp = o.maxTdp as number;
-  const batteryMaxTdp = o.batteryMaxTdp as number;
+  const batteryMaxTdp =
+    o.batteryMaxTdp == null || o.batteryMaxTdp === ""
+      ? maxTdp
+      : (o.batteryMaxTdp as number);
 
   if (minTdp >= maxTdp) {
     return { ok: false, error: "Min TDP must be less than Max TDP" };

@@ -14,6 +14,9 @@ import {
   matchProfileName,
   PLATFORM_PROFILE_TDP_MAP,
   type CpuVendor,
+  BATTERY_SAFE_MAX_WATTS,
+  effectiveMaxWatts,
+  isBatterySafetyCapActive,
 } from "@loadout/devices";
 import {
   readCustomDevice,
@@ -200,6 +203,11 @@ interface TdpInfo {
   pluggedMaxWatts: number;
   /** Ceiling when on battery (<= pluggedMaxWatts). */
   batteryMaxWatts: number;
+  /** Global on-battery ceiling applied to every device. */
+  batterySafeMaxWatts: number;
+  /** True when the global ceiling — not the device's own battery figure —
+   *  is what's limiting. Drives the UI warning banner. */
+  batterySafetyCapActive: boolean;
   platform: string;
   deviceName: string;
   method: TdpMethod;
@@ -518,6 +526,10 @@ export default class TdpControlBackend implements PluginBackend {
       maxWatts: this.effectiveMaxWatts(),
       pluggedMaxWatts: this.maxWatts,
       batteryMaxWatts: this.batteryMaxWatts,
+      /** Global on-battery ceiling; see BATTERY_SAFE_MAX_WATTS. */
+      batterySafeMaxWatts: BATTERY_SAFE_MAX_WATTS,
+      /** True when that global ceiling is the binding constraint right now. */
+      batterySafetyCapActive: this.batterySafetyCapActive(),
       platform: this.dmiProductName,
       deviceName: this.deviceName,
       method: this.method,
@@ -1295,11 +1307,31 @@ export default class TdpControlBackend implements PluginBackend {
 
   /**
    * The TDP ceiling that currently applies, given power state. On battery we
-   * cap lower to protect runtime/thermals; plugged in (or when AC state is
-   * unknown — don't over-restrict) we allow the device's full max.
+   * cap lower to protect runtime/thermals — and never above
+   * BATTERY_SAFE_MAX_WATTS, whatever the device data or a user override says.
+   * Plugged in (or when AC state is unknown — don't over-restrict) we allow
+   * the device's full max.
+   *
+   * applyTdp() clamps the hardware write to this, so the ceiling is enforced
+   * for every path (slider, per-game profiles, AC transitions), not just the
+   * slider's max attribute.
    */
   private effectiveMaxWatts(): number {
-    return this.acPowerOnline === false ? this.batteryMaxWatts : this.maxWatts;
+    return effectiveMaxWatts({
+      acOnline: this.acPowerOnline,
+      maxTdp: this.maxWatts,
+      batteryMaxTdp: this.batteryMaxWatts,
+    });
+  }
+
+  /** True when BATTERY_SAFE_MAX_WATTS — not the device's own battery figure
+   *  — is the binding constraint. The UI banners this so a user who set a
+   *  higher ceiling themselves understands why the slider stops short. */
+  private batterySafetyCapActive(): boolean {
+    return isBatterySafetyCapActive({
+      acOnline: this.acPowerOnline,
+      batteryMaxTdp: this.batteryMaxWatts,
+    });
   }
 
   private async detectTdpMethod(): Promise<void> {
@@ -1838,6 +1870,7 @@ export default class TdpControlBackend implements PluginBackend {
               data: {
                 online: this.acPowerOnline,
                 maxWatts: this.effectiveMaxWatts(),
+                batterySafetyCapActive: this.batterySafetyCapActive(),
               },
             });
             console.log(
