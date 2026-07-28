@@ -6,30 +6,45 @@
  */
 
 import { BACKEND_URL } from "./config";
+import {
+  HttpError,
+  exponentialDelays,
+  fetchTextNoCache,
+  fixedDelays,
+  retryAsync,
+} from "./retry";
 
 let sessionToken: string | null = null;
 
 /**
  * Fetch the session token from the Bun server.
- * Retries with exponential backoff until the server is reachable.
+ *
+ * Unbounded backoff on purpose: there is no meaningful failure path here.
+ * Without a token the overlay can't talk to the backend at all, so the only
+ * sane behaviour is to keep waiting for the server to come up. Every status
+ * is retried, including 4xx — a not-yet-ready server can answer oddly during
+ * startup, and giving up would strand the session.
  */
 export async function initBackend(): Promise<void> {
-  for (let attempt = 0; ; attempt++) {
-    try {
+  await retryAsync({
+    label: "[backend] token",
+    delays: exponentialDelays({ base: 1000, cap: 10000 }),
+    isRetriable: () => true,
+    run: async () => {
       const res = await fetch(`${BACKEND_URL}/api/token`);
-      if (res.ok) {
-        const data = await res.json();
-        sessionToken = data.token;
-        // Backward compat for ws-client.ts which reads from window
-        window.__LOADOUT_TOKEN__ = sessionToken ?? undefined;
-        console.log("[backend] Token acquired");
-        return;
+      if (!res.ok) {
+        throw new HttpError({
+          status: res.status,
+          message: `HTTP ${res.status} fetching session token`,
+        });
       }
-    } catch {}
-    const delay = Math.min(1000 * 2 ** attempt, 10000);
-    console.warn(`[backend] Server not ready, retrying in ${delay}ms...`);
-    await new Promise((r) => setTimeout(r, delay));
-  }
+      const data = await res.json();
+      sessionToken = data.token;
+      // Backward compat for ws-client.ts which reads from window
+      window.__LOADOUT_TOKEN__ = sessionToken ?? undefined;
+      console.log("[backend] Token acquired");
+    },
+  });
 }
 
 /** Get the current auth token. */
@@ -88,14 +103,6 @@ const bundleCache = new Map<string, Promise<Record<string, unknown>>>();
  *  nothing about whether an interface is about to come up and flush the pool. */
 const BUNDLE_RETRY_DELAYS_MS = [150, 400, 1000, 2500];
 
-/** Transient = worth retrying. A thrown fetch is a network-layer failure
- *  (ERR_NETWORK_CHANGED, connection reset, …) and 5xx is a server hiccup;
- *  both usually clear on the next attempt. A 4xx is a real answer — the
- *  plugin is gone or unauthorized — and retrying just repeats it. */
-function isRetriableStatus(status: number): boolean {
-  return status >= 500;
-}
-
 /** Fetch the bundle source, retrying transient failures.
  *
  *  Why this exists: the overlay fires every plugin's bundle fetch in
@@ -115,52 +122,15 @@ export async function fetchBundleSource({
   /** Overridable so tests don't pay the real backoff. */
   delays?: readonly number[];
 }): Promise<string> {
-  let lastErr: unknown;
-  for (let attempt = 0; attempt <= delays.length; attempt++) {
-    if (attempt > 0) {
-      // No `?? fallback`: attempt is bounded by delays.length, so this index
-      // is always in range. A fallback here would turn a future off-by-one
-      // into a silently different ladder instead of a loud failure.
-      const delay = delays[attempt - 1];
-      console.warn(
-        `[bundle] retry ${attempt}/${delays.length} for ${pluginId} in ${delay}ms (${lastErr instanceof Error ? lastErr.message : String(lastErr)})`,
-      );
-      await new Promise((r) => setTimeout(r, delay));
-    }
-    // Cache-bust per ATTEMPT, not per call: a retry must not be served the
-    // failed response out of the HTTP cache.
-    const url = `${pluginBundleUrl(pluginId)}?t=${Date.now()}`;
-
-    // Each stage is caught separately so the non-retriable throw below sits
-    // OUTSIDE any try that could swallow it. Sniffing the message to tell
-    // "the 4xx I just threw" from "a network error" would make correctness
-    // rest on a string prefix.
-    let res: Response;
-    try {
-      res = await fetch(url);
-    } catch (err) {
-      lastErr = err; // network layer: ERR_NETWORK_CHANGED, conn reset, …
-      continue;
-    }
-
-    if (!res.ok) {
-      const err = new Error(`HTTP ${res.status} loading ${pluginId} bundle`);
-      if (!isRetriableStatus(res.status)) throw err;
-      lastErr = err;
-      continue;
-    }
-
-    try {
-      // Retried on purpose: a body that dies mid-stream is the shape a flush
-      // takes when it lands after the response headers arrived.
-      return await res.text();
-    } catch (err) {
-      lastErr = err;
-    }
-  }
-  throw lastErr instanceof Error
-    ? lastErr
-    : new Error(`failed to load ${pluginId} bundle: ${String(lastErr)}`);
+  return retryAsync({
+    label: `[bundle] ${pluginId}`,
+    delays: fixedDelays(delays),
+    run: () =>
+      fetchTextNoCache({
+        url: pluginBundleUrl(pluginId),
+        what: `${pluginId} bundle`,
+      }),
+  });
 }
 
 export async function importPluginBundle(pluginId: string): Promise<Record<string, unknown>> {

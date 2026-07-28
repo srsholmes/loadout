@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { authHeaders, apiUrl } from "../lib/backend";
+import { exponentialDelays, retryAsync } from "../lib/retry";
 import { onConnect, subscribe } from "@loadout/ui/ws-client";
 
 export interface PluginInfo {
@@ -63,18 +64,24 @@ function usePluginList(path: string) {
 
   useEffect(() => {
     let cancelled = false;
-    let retryTimer: ReturnType<typeof setTimeout>;
 
-    async function fetchWithRetry(attempt = 0) {
-      if (cancelled) return;
-      const ok = await fetchPlugins();
-      if (!ok && !cancelled) {
-        const delay = Math.min(1000 * 2 ** attempt, 10000);
-        retryTimer = setTimeout(() => fetchWithRetry(attempt + 1), delay);
-      }
-    }
-
-    fetchWithRetry();
+    // Unbounded backoff: the sidebar is useless without a plugin list, so
+    // there's no failure path worth surfacing — keep waiting for the server.
+    // `shouldContinue` is what makes this safe in an effect: it's checked
+    // before every attempt AND after every wait, so an unmount stops the
+    // chain without firing another request.
+    void retryAsync({
+      label: "[overlay] plugin list",
+      delays: exponentialDelays({ base: 1000, cap: 10000 }),
+      isRetriable: () => true,
+      shouldContinue: () => !cancelled,
+      run: async () => {
+        if (!(await fetchPlugins())) throw new Error("plugin list fetch failed");
+      },
+    }).catch(() => {
+      // Only reachable via cancellation (unmount) — fetchPlugins already
+      // logged anything worth seeing.
+    });
 
     // Re-fetch whenever the WebSocket (re)connects — server is up
     const unsub = onConnect(() => {
@@ -93,7 +100,6 @@ function usePluginList(path: string) {
 
     return () => {
       cancelled = true;
-      clearTimeout(retryTimer);
       unsub();
       unsubChanged();
     };
