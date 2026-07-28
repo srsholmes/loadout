@@ -689,4 +689,73 @@ describe("TdpControlBackend", () => {
       expect(info).toHaveProperty("supportsGpuControl");
     });
   });
+
+  // ── custom device ─────────────────────────────────────────────────
+  //
+  // A user-defined device only requires a name + TDP range; the battery cap
+  // and power presets are optional and derived when omitted. The derived
+  // battery cap is the full max, so raising Max TDP is respected on battery
+  // (regression: a raised max still clamped to the low detected battery cap).
+
+  describe("custom device", () => {
+    let dir: string;
+    let prevXdg: string | undefined;
+
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "tdp-custom-device-"));
+      prevXdg = process.env.XDG_CONFIG_HOME;
+      process.env.XDG_CONFIG_HOME = dir;
+    });
+
+    afterEach(() => {
+      if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevXdg;
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("derives the battery cap + presets and respects the custom max on battery", async () => {
+      const b = backend as unknown as { acPowerOnline: boolean | null };
+
+      const result = await backend.setCustomDevice({
+        name: "Big Handheld",
+        minTdp: 5,
+        maxTdp: 80,
+      });
+      expect(result.success).toBe(true);
+
+      // Stored device is complete: battery cap defaults to the full max (no
+      // throttle) and presets span the range.
+      expect(await backend.getCustomDevice()).toEqual({
+        name: "Big Handheld",
+        minTdp: 5,
+        maxTdp: 80,
+        batteryMaxTdp: 80,
+        profiles: { Silent: 5, Balanced: 43, Performance: 80 },
+      });
+
+      // The custom range becomes the active device. On battery the effective
+      // cap is the full 80W — the reported "80W clamps to ~30W" bug is gone.
+      b.acPowerOnline = false;
+      const info = await backend.getTdpInfo();
+      expect(info.minWatts).toBe(5);
+      expect(info.pluggedMaxWatts).toBe(80);
+      expect(info.batteryMaxWatts).toBe(80);
+      expect(info.maxWatts).toBe(80); // effective cap on battery
+      expect(info.usingCustomDevice).toBe(true);
+
+      // The UI was told the range changed.
+      expect(emittedEvents.some((e) => e.event === "deviceChanged")).toBe(true);
+    });
+
+    it("rejects an explicit battery cap above the max", async () => {
+      const result = await backend.setCustomDevice({
+        name: "Bad",
+        minTdp: 5,
+        maxTdp: 40,
+        batteryMaxTdp: 60,
+      });
+      expect(result.success).toBe(false);
+      expect(await backend.getCustomDevice()).toBeNull();
+    });
+  });
 });

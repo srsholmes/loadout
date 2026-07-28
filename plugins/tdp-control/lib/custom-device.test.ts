@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   validateCustomDevice,
+  deriveDeviceDefaults,
   readCustomDevice,
   writeCustomDevice,
   clearCustomDevice,
@@ -88,10 +89,75 @@ describe("validateCustomDevice", () => {
     ).toBe(true);
   });
 
-  test("rejects missing profiles", () => {
-    const { profiles, ...rest } = VALID;
-    void profiles;
+  test("derives battery cap and presets when omitted", () => {
+    // Only name + range supplied — the optional fields fall back to the
+    // deterministic formula (battery cap = maxTdp, no artificial throttle).
+    const result = validateCustomDevice({ name: "Bare", minTdp: 5, maxTdp: 80 });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.device).toEqual({
+        name: "Bare",
+        minTdp: 5,
+        maxTdp: 80,
+        batteryMaxTdp: 80,
+        profiles: { Silent: 5, Balanced: 43, Performance: 80 },
+      });
+    }
+  });
+
+  test("derives individual presets left blank, keeps supplied ones", () => {
+    // Balanced supplied, Silent/Performance omitted → derived from the range.
+    const result = validateCustomDevice({
+      name: "Partial",
+      minTdp: 5,
+      maxTdp: 80,
+      profiles: { Balanced: 30 },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.device.profiles).toEqual({
+        Silent: 5,
+        Balanced: 30,
+        Performance: 80,
+      });
+    }
+  });
+
+  test("still validates supplied optional fields", () => {
+    // A supplied battery cap above max is rejected, not silently derived.
+    expect(
+      validateCustomDevice({
+        name: "Bad battery",
+        minTdp: 5,
+        maxTdp: 40,
+        batteryMaxTdp: 60,
+      }).ok,
+    ).toBe(false);
+  });
+
+  test("rejects missing required range", () => {
+    const { minTdp, ...rest } = VALID;
+    void minTdp;
     expect(validateCustomDevice(rest).ok).toBe(false);
+  });
+});
+
+describe("deriveDeviceDefaults", () => {
+  test("battery cap defaults to the full max (no throttle)", () => {
+    expect(deriveDeviceDefaults(5, 80).batteryMaxTdp).toBe(80);
+  });
+
+  test("presets span the range with a rounded midpoint", () => {
+    expect(deriveDeviceDefaults(5, 80).profiles).toEqual({
+      Silent: 5,
+      Balanced: 43,
+      Performance: 80,
+    });
+    expect(deriveDeviceDefaults(4, 15).profiles).toEqual({
+      Silent: 4,
+      Balanced: 10, // round((4 + 15) / 2) = 9.5 → 10
+      Performance: 15,
+    });
   });
 });
 

@@ -649,20 +649,32 @@ describe("TDP Profile Engine", () => {
   // -------------------------------------------------------------------------
 
   describe("TDP clamping", () => {
-    test("clamps TDP below minimum (3W) to 3", async () => {
+    // The engine's sanity bounds are 1-200 W (mirroring the custom-device
+    // absolute range) so custom devices above the old 80 W cap aren't clamped
+    // by the per-game path. The real per-device limit is applied downstream in
+    // the backend's applyTdp().
+    test("clamps TDP below minimum (1W) to 1", async () => {
       const engine = createEngine();
       await engine.loadProfiles();
 
-      await engine.setProfile(100, "Low Game", 1);
-      expect(engine.getProfile(100)?.tdpWatts).toBe(3);
+      await engine.setProfile(100, "Low Game", 0);
+      expect(engine.getProfile(100)?.tdpWatts).toBe(1);
     });
 
-    test("clamps TDP above maximum (80W) to 80", async () => {
+    test("clamps TDP above maximum (200W) to 200", async () => {
       const engine = createEngine();
       await engine.loadProfiles();
 
-      await engine.setProfile(200, "High Game", 100);
-      expect(engine.getProfile(200)?.tdpWatts).toBe(80);
+      await engine.setProfile(200, "High Game", 250);
+      expect(engine.getProfile(200)?.tdpWatts).toBe(200);
+    });
+
+    test("allows a high custom-device wattage (e.g. 100W) unchanged", async () => {
+      const engine = createEngine();
+      await engine.loadProfiles();
+
+      await engine.setProfile(300, "Big Handheld", 100);
+      expect(engine.getProfile(300)?.tdpWatts).toBe(100);
     });
 
     test("clamps default TDP to valid range", async () => {
@@ -670,10 +682,10 @@ describe("TDP Profile Engine", () => {
       await engine.loadProfiles();
 
       await engine.setDefaultTdp(0);
-      expect(engine.getDefaultTdp()).toBe(3);
+      expect(engine.getDefaultTdp()).toBe(1);
 
-      await engine.setDefaultTdp(100);
-      expect(engine.getDefaultTdp()).toBe(80);
+      await engine.setDefaultTdp(250);
+      expect(engine.getDefaultTdp()).toBe(200);
     });
 
     test("clamps values loaded from config file", async () => {
@@ -681,16 +693,16 @@ describe("TDP Profile Engine", () => {
         defaultTdp: 999,
         profiles: [
           { appId: 1, gameName: "Low", tdpWatts: -5 },
-          { appId: 2, gameName: "High", tdpWatts: 100 },
+          { appId: 2, gameName: "High", tdpWatts: 250 },
         ],
       });
 
       const engine = createEngine();
       await engine.loadProfiles();
 
-      expect(engine.getDefaultTdp()).toBe(80);
-      expect(engine.getProfile(1)?.tdpWatts).toBe(3);
-      expect(engine.getProfile(2)?.tdpWatts).toBe(80);
+      expect(engine.getDefaultTdp()).toBe(200);
+      expect(engine.getProfile(1)?.tdpWatts).toBe(1);
+      expect(engine.getProfile(2)?.tdpWatts).toBe(200);
     });
   });
 

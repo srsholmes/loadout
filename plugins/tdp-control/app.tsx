@@ -14,12 +14,13 @@ import {
   SegmentedItem,
   Toggle,
   TextInput,
+  Collapse,
   PluginHeader,
   HeaderBackButton,
   IconButton,
 } from "@loadout/ui";
 import { steamArtworkUrls } from "@loadout/steam-paths/artwork";
-import type { CustomDevice } from "./lib/custom-device";
+import { deriveDeviceDefaults, type CustomDevice } from "./lib/custom-device";
 
 export const icon = FaBolt;
 
@@ -808,21 +809,21 @@ function CustomDeviceForm({ info }: { info: TdpInfo }) {
 
   const fillFromDetected = useCallback(() => {
     const i = infoRef.current;
+    // Seed only the required fields (name + range) from auto-detection. The
+    // optional battery cap and presets are left BLANK so they derive from the
+    // range the user enters. Seeding the battery cap from the detected value
+    // is what caused a raised Max TDP to still clamp to the old (~30W) cap.
     // `maxWatts` is the power-state-aware *effective* cap (== battery cap when
-    // on battery), so seed the true device ceiling from `pluggedMaxWatts` and
-    // the battery cap from `batteryMaxWatts`. Fall back to `maxWatts` for
-    // older backends that don't report the split ceilings.
+    // on battery), so seed the true device ceiling from `pluggedMaxWatts`,
+    // falling back to `maxWatts` for older backends without the split ceiling.
     const trueMax = i.pluggedMaxWatts ?? i.maxWatts;
-    const batteryMax = i.batteryMaxWatts ?? i.maxWatts;
     setName(i.deviceName && i.deviceName !== "Unknown" ? i.deviceName : "");
     setMinTdp(String(i.minWatts));
     setMaxTdp(String(trueMax));
-    setBatteryMaxTdp(String(batteryMax));
-    setSilent(String(i.profiles.Silent ?? i.minWatts));
-    setBalanced(
-      String(i.profiles.Balanced ?? Math.round((i.minWatts + trueMax) / 2)),
-    );
-    setPerformance(String(i.profiles.Performance ?? trueMax));
+    setBatteryMaxTdp("");
+    setSilent("");
+    setBalanced("");
+    setPerformance("");
   }, []);
 
   // Seed the form on mount: from the saved custom device if one exists,
@@ -847,6 +848,10 @@ function CustomDeviceForm({ info }: { info: TdpInfo }) {
   }, [call, fillFrom, fillFromDetected]);
 
   const parse = (v: string): number => (v.trim() === "" ? NaN : Number(v));
+  // Optional fields: blank → undefined (derived server-side); otherwise parsed
+  // (NaN for garbage, which the validator rejects with a clear message).
+  const parseOpt = (v: string): number | undefined =>
+    v.trim() === "" ? undefined : Number(v);
 
   const handleSave = useCallback(async () => {
     setBusy(true);
@@ -856,11 +861,11 @@ function CustomDeviceForm({ info }: { info: TdpInfo }) {
       name: name.trim(),
       minTdp: parse(minTdp),
       maxTdp: parse(maxTdp),
-      batteryMaxTdp: parse(batteryMaxTdp),
+      batteryMaxTdp: parseOpt(batteryMaxTdp),
       profiles: {
-        Silent: parse(silent),
-        Balanced: parse(balanced),
-        Performance: parse(performance),
+        Silent: parseOpt(silent),
+        Balanced: parseOpt(balanced),
+        Performance: parseOpt(performance),
       },
     };
     try {
@@ -910,13 +915,27 @@ function CustomDeviceForm({ info }: { info: TdpInfo }) {
     }
   }, [call, fillFromDetected]);
 
-  const numberFields: Array<[string, string, (v: string) => void]> = [
+  const requiredFields: Array<[string, string, (v: string) => void]> = [
     ["Min TDP (W)", minTdp, setMinTdp],
     ["Max TDP (W)", maxTdp, setMaxTdp],
-    ["Battery max TDP (W)", batteryMaxTdp, setBatteryMaxTdp],
-    ["Silent preset (W)", silent, setSilent],
-    ["Balanced preset (W)", balanced, setBalanced],
-    ["Performance preset (W)", performance, setPerformance],
+  ];
+
+  // Live preview of the deterministic defaults, surfaced as placeholders on the
+  // optional fields so the user can see what "leave blank" will produce.
+  const minNum = parse(minTdp);
+  const maxNum = parse(maxTdp);
+  const preview =
+    Number.isInteger(minNum) && Number.isInteger(maxNum) && minNum < maxNum
+      ? deriveDeviceDefaults(minNum, maxNum)
+      : null;
+
+  const optionalFields: Array<
+    [string, string, (v: string) => void, number | undefined]
+  > = [
+    ["Battery max TDP (W)", batteryMaxTdp, setBatteryMaxTdp, preview?.batteryMaxTdp],
+    ["Silent preset (W)", silent, setSilent, preview?.profiles.Silent],
+    ["Balanced preset (W)", balanced, setBalanced, preview?.profiles.Balanced],
+    ["Performance preset (W)", performance, setPerformance, preview?.profiles.Performance],
   ];
 
   return (
@@ -948,7 +967,7 @@ function CustomDeviceForm({ info }: { info: TdpInfo }) {
         </div>
 
         <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
-          {numberFields.map(([label, value, setter]) => (
+          {requiredFields.map(([label, value, setter]) => (
             <div key={label}>
               <div className="subsection-label" style={{ marginBottom: 4 }}>
                 {label}
@@ -962,6 +981,41 @@ function CustomDeviceForm({ info }: { info: TdpInfo }) {
               />
             </div>
           ))}
+        </div>
+
+        <div style={{ marginTop: 10 }}>
+          {/* Re-key on hasCustom so the region opens for an existing custom
+              device (loaded async) and closes again when cleared. */}
+          <Collapse
+            key={hasCustom ? "custom" : "detected"}
+            defaultOpen={hasCustom}
+            ariaLabel="Toggle power presets and battery cap"
+            title={
+              <div className="subsection-label">
+                Power presets &amp; battery cap (optional)
+              </div>
+            }
+          >
+            <div className="subsection-desc" style={{ marginBottom: 10 }}>
+              Leave any field blank to auto-calculate it from your TDP range.
+            </div>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
+              {optionalFields.map(([label, value, setter, derived]) => (
+                <div key={label}>
+                  <div className="subsection-label" style={{ marginBottom: 4 }}>
+                    {label}
+                  </div>
+                  <TextInput
+                    value={value}
+                    onChange={setter}
+                    inputMode="numeric"
+                    placeholder={derived != null ? String(derived) : "Auto"}
+                    disabled={busy}
+                  />
+                </div>
+              ))}
+            </div>
+          </Collapse>
         </div>
 
         {formError && (

@@ -57,8 +57,13 @@ export interface TdpProfileEngineOptions {
 // Constants
 // ---------------------------------------------------------------------------
 
-const MIN_TDP_WATTS = 3;
-const MAX_TDP_WATTS = 80;
+// Sanity bounds for stored per-game/default TDP values. These are a guard
+// against corrupt data, NOT the per-device limit — the real clamp to the active
+// device's range happens in the backend's applyTdp(). They mirror the
+// custom-device absolute bounds (1-200 W) so a custom device above the old 80 W
+// cap isn't silently limited through the per-game path.
+const MIN_TDP_WATTS = 1;
+const MAX_TDP_WATTS = 200;
 const DEFAULT_TDP_WATTS = 15;
 
 // ---------------------------------------------------------------------------

@@ -44,11 +44,42 @@ function isWholeNumber(n: unknown): n is number {
 }
 
 /**
+ * Derive the optional device fields (battery cap + power presets) from just the
+ * TDP range, so a user only has to enter Min and Max. Deterministic and pure —
+ * the single source of truth used both by the form (to preview) and by
+ * `validateCustomDevice` (to fill any field the user left blank).
+ *
+ * Battery max defaults to the full `maxTdp`: for an unlisted/custom device we
+ * have no thermal profile to justify a lower cap, and silently capping battery
+ * TDP below the entered max is exactly the bug users hit ("80W clamps to 30W").
+ * Users who want a lower battery cap can still set one explicitly.
+ */
+export function deriveDeviceDefaults(
+  minTdp: number,
+  maxTdp: number,
+): { batteryMaxTdp: number; profiles: CustomDevice["profiles"] } {
+  return {
+    batteryMaxTdp: maxTdp,
+    profiles: {
+      Silent: minTdp,
+      Balanced: Math.round((minTdp + maxTdp) / 2),
+      Performance: maxTdp,
+    },
+  };
+}
+
+/**
  * Validate an untrusted object into a `CustomDevice`, or return a
  * user-facing error string. Rules: non-empty name; whole-number watts in
- * [MIN_WATTS, MAX_WATTS]; `minTdp < maxTdp`; `minTdp <= batteryMaxTdp <=
- * maxTdp`; each preset within `[minTdp, maxTdp]`. Pure — reused by the
- * backend RPC and by `readCustomDevice` to reject corrupt stored data.
+ * [MIN_WATTS, MAX_WATTS]; `minTdp < maxTdp`.
+ *
+ * `batteryMaxTdp` and each `profiles` preset are OPTIONAL: any that is absent
+ * (`null`/`undefined`) is derived from the range via `deriveDeviceDefaults`, so
+ * the form only has to require name + Min + Max. When a value IS supplied it is
+ * validated as before (`minTdp <= batteryMaxTdp <= maxTdp`; each preset within
+ * `[minTdp, maxTdp]`; presets ascending). The returned device is always
+ * complete. Pure — reused by the backend RPC and by `readCustomDevice` to
+ * reject corrupt stored data.
  */
 export function validateCustomDevice(input: unknown): ValidationResult {
   if (!input || typeof input !== "object") {
@@ -65,12 +96,12 @@ export function validateCustomDevice(input: unknown): ValidationResult {
     };
   }
 
-  const ranges: Array<[string, unknown]> = [
+  // Min and Max TDP are the only required numeric fields.
+  const requiredRanges: Array<[string, unknown]> = [
     ["Min TDP", o.minTdp],
     ["Max TDP", o.maxTdp],
-    ["Battery max TDP", o.batteryMaxTdp],
   ];
-  for (const [label, value] of ranges) {
+  for (const [label, value] of requiredRanges) {
     if (!isWholeNumber(value)) {
       return { ok: false, error: `${label} must be a whole number` };
     }
@@ -83,25 +114,39 @@ export function validateCustomDevice(input: unknown): ValidationResult {
   }
   const minTdp = o.minTdp as number;
   const maxTdp = o.maxTdp as number;
-  const batteryMaxTdp = o.batteryMaxTdp as number;
 
   if (minTdp >= maxTdp) {
     return { ok: false, error: "Min TDP must be less than Max TDP" };
   }
-  if (batteryMaxTdp < minTdp || batteryMaxTdp > maxTdp) {
-    return {
-      ok: false,
-      error: "Battery max TDP must be between Min and Max TDP",
-    };
+
+  // Everything below is optional — fall back to the deterministic formula.
+  const derived = deriveDeviceDefaults(minTdp, maxTdp);
+
+  // Battery max TDP (optional).
+  let batteryMaxTdp = derived.batteryMaxTdp;
+  if (o.batteryMaxTdp != null) {
+    if (!isWholeNumber(o.batteryMaxTdp)) {
+      return { ok: false, error: "Battery max TDP must be a whole number" };
+    }
+    if (o.batteryMaxTdp < minTdp || o.batteryMaxTdp > maxTdp) {
+      return {
+        ok: false,
+        error: "Battery max TDP must be between Min and Max TDP",
+      };
+    }
+    batteryMaxTdp = o.batteryMaxTdp;
   }
 
-  if (!o.profiles || typeof o.profiles !== "object") {
-    return { ok: false, error: "Power presets are required" };
-  }
-  const rawProfiles = o.profiles as Record<string, unknown>;
-  const profiles = {} as CustomDevice["profiles"];
+  // Power presets (optional, per-field). Any preset the user left blank is
+  // derived from the range; supplied ones are validated.
+  const rawProfiles =
+    o.profiles && typeof o.profiles === "object"
+      ? (o.profiles as Record<string, unknown>)
+      : {};
+  const profiles = { ...derived.profiles };
   for (const key of PROFILE_KEYS) {
     const value = rawProfiles[key];
+    if (value == null) continue; // left blank → keep derived default
     if (!isWholeNumber(value)) {
       return { ok: false, error: `${key} preset must be a whole number` };
     }

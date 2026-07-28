@@ -141,6 +141,45 @@ describe("tdp-control plugin", () => {
     });
   });
 
+  it("keeps presets & battery cap in an optional collapsed region", async () => {
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("15W");
+    });
+
+    // Open the custom-device form.
+    const gear = container.querySelector(
+      '[aria-label="Custom device settings"]',
+    ) as HTMLButtonElement;
+    fireEvent.click(gear);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("CUSTOM DEVICE");
+    });
+
+    // Required fields are always visible; the presets/battery cap live in a
+    // collapsed "optional" region and aren't rendered until it's expanded.
+    expect(container.textContent).toContain("Min TDP");
+    expect(container.textContent).toContain("Max TDP");
+    expect(container.textContent).toContain("Power presets");
+    expect(container.textContent).not.toContain("Silent preset");
+
+    // Expanding the region reveals the optional preset fields.
+    const toggle = container.querySelector(
+      '[aria-label="Toggle power presets and battery cap"]',
+    ) as HTMLElement;
+    expect(toggle).toBeTruthy();
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Silent preset");
+      expect(container.textContent).toContain("Battery max TDP");
+    });
+  });
+
   it("calls getTdpInfo on mount", async () => {
     const container = document.createElement("div");
     const { mount } = await import("./app");
