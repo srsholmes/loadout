@@ -462,7 +462,14 @@ function startFreezeWatchdog(): void {
 // Emergency teardown when the watchdog fires: thaw Steam IMMEDIATELY, drop the
 // grabs/intercept, hide the window and mark closed. Mirrors the close path but
 // skips the debounce/deferred-resume so a wedged overlay self-heals.
-function forceCloseOverlay(reason: string): void {
+/** Returns once the gamescope atom writes have settled. Callers that are
+ *  about to kill the process MUST await this (see the onDeath handler):
+ *  atoms.hide() restores ROOT STEAM_TOUCH_CLICK_MODE and Steam's BPM
+ *  STEAM_OVERLAY / STEAM_INPUT_FOCUS, none of which die with our window.
+ *  Exiting before those writes land leaves gamescope routing touch at a
+ *  window that no longer exists — the same strand shutdown() in
+ *  lifecycle.ts already guards with an awaited, retried hide(). */
+function forceCloseOverlay(reason: string): Promise<void> {
   console.warn(`[freeze-watchdog] ${reason} — emergency close + thaw Steam`);
   trace(`[freeze-watchdog] ${reason} — emergency close`);
   stopFreezeWatchdog();
@@ -482,7 +489,9 @@ function forceCloseOverlay(reason: string): void {
   ipIntercept.current?.release();
   deckHidraw.current?.setNavActive(false);
   steamFrozenThisOpen = false;
-  atoms.hide().catch((e) => console.warn("[freeze-watchdog] atoms.hide:", e));
+  const hidden = atoms
+    .hide()
+    .catch((e) => console.warn("[freeze-watchdog] atoms.hide:", e));
   try {
     overlay.minimize();
   } catch (e) {
@@ -490,7 +499,13 @@ function forceCloseOverlay(reason: string): void {
   }
   state.isOpen = false;
   broadcastOverlayVisibility();
+  return hidden;
 }
+
+/** Cap on how long a process-killing path waits for forceCloseOverlay's atom
+ *  writes. Bounded because the writes shell out to xprop — if that wedges we
+ *  still have to exit, and systemd's ExecStopPost thaws Steam regardless. */
+const ATOM_CLEAR_TIMEOUT_MS = 1000;
 
 // Minimum gap between toggleOverlay() calls. On the OXP Apex, InputPlumber
 // emits F16 on several evdev nodes simultaneously when the user presses
@@ -599,14 +614,25 @@ function toggleOverlay(source: string) {
     if (pendingReleaseTimer !== null) {
       clearTimeout(pendingReleaseTimer);
       pendingReleaseTimer = null;
-      intercept.current?.release();
     }
+    // Release UNCONDITIONALLY, not just when a deferred release was pending.
+    // A reopen inside the close path's 250ms pre-SIGCONT window cancels the
+    // resume timer above while pendingReleaseTimer is still null (it's only
+    // armed inside the resume callback), so keying the flush off that handle
+    // would skip it — and doGrab() below would then early-return on
+    // `intercepting`, reusing the previous generation's NavController and
+    // combo state (stuck-held direction, or dead nav for the whole session).
+    // doRelease() no-ops when not intercepting, so this is free otherwise.
+    intercept.current?.release();
     if (suspendSteamEnabled && isGameModeActive()) {
       if (steamPid.current === null) steamPid.current = findSteamPid();
       if (steamPid.current !== null) {
-        suspendSteam(steamPid.current);
-        startFreezeWatchdog();
-        steamFrozenThisOpen = true;
+        // Track what ACTUALLY happened: steamPid is cached for the session, so
+        // after Steam restarts the SIGSTOP can fail with ESRCH/EPERM. Assuming
+        // success made every later close take the deferred-release path and
+        // hold the grabs ~750ms for a drain that never happens.
+        steamFrozenThisOpen = suspendSteam(steamPid.current);
+        if (steamFrozenThisOpen) startFreezeWatchdog();
       }
     } else if (suspendSteamEnabled) {
       trace("[toggle] desktop mode (no gamescope) — skipping Steam freeze");
@@ -783,8 +809,20 @@ void (async () => {
               : "Deck wake button lost until next overlay restart"),
         );
         if (deckNavActive) {
-          if (state.isOpen) forceCloseOverlay("deck hidraw watcher died");
-          process.exit(1);
+          // Steam's SIGCONT and the evdev release inside forceCloseOverlay are
+          // synchronous, so they're already done when it returns. The atom
+          // writes are NOT — they shell out to xprop — and exiting before they
+          // land strands ROOT STEAM_TOUCH_CLICK_MODE at TOUCH_MODE_OVERLAY,
+          // i.e. gamescope routing touch to a window that no longer exists.
+          // Deferring the exit costs nothing: nothing else can use this
+          // process, and the timeout bounds a wedged xprop.
+          const settled = state.isOpen
+            ? forceCloseOverlay("deck hidraw watcher died")
+            : Promise.resolve();
+          void Promise.race([
+            settled,
+            new Promise((r) => setTimeout(r, ATOM_CLEAR_TIMEOUT_MS)),
+          ]).then(() => process.exit(1));
         }
       },
     });

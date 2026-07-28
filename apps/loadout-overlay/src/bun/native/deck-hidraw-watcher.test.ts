@@ -29,9 +29,14 @@ function stubOpenOk() {
 }
 
 /** Build a Deck input report (REPORT_LEN bytes) with optional byte overrides. */
+/** Realistic Deck state frame — header `01 00 09 40`. See makeReport in
+ *  packages/deck-hid/src/index.test.ts. */
 function frame(overrides: Record<number, number> = {}): Buffer {
   const b = Buffer.alloc(REPORT_LEN);
   b[0] = REPORT_ID_INPUT;
+  b[1] = 0x00;
+  b[2] = 0x09;
+  b[3] = 0x40;
   for (const [k, v] of Object.entries(overrides)) b[parseInt(k, 10)] = v;
   return b;
 }

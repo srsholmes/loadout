@@ -20,6 +20,8 @@ import {
   DECK_BUTTONS,
   REPORT_LEN,
   REPORT_ID_INPUT,
+  REPORT_TYPE_DECK_STATE,
+  isDeckStateReport,
 } from "./index";
 
 const JUPITER_GAMEPAD_UEVENT = `\
@@ -113,9 +115,17 @@ describe("findButton", () => {
 /** Build a 64-byte report 0x01 with the given byte overrides. All other bytes
  *  are zero, so the only buttons "set" are the ones the test explicitly
  *  overrides. */
+/** A realistic Deck state frame. The header matters: a real frame is
+ *  `01 00 09 40` — version 0x0001, ucType 0x09 (ID_CONTROLLER_DECK_STATE),
+ *  payload length 0x40. Fixtures used to emit `01 00 00 00`, which no real
+ *  controller sends, so they could not catch the decoder accepting the wrong
+ *  report type. Pass `2: <other>` to forge a different ucType. */
 function makeReport(overrides: Record<number, number> = {}): Buffer {
   const buf = Buffer.alloc(REPORT_LEN);
   buf[0] = REPORT_ID_INPUT;
+  buf[1] = 0x00;
+  buf[2] = REPORT_TYPE_DECK_STATE;
+  buf[3] = 0x40;
   for (const [k, v] of Object.entries(overrides)) {
     buf[parseInt(k, 10)] = v;
   }
@@ -123,9 +133,13 @@ function makeReport(overrides: Record<number, number> = {}): Buffer {
 }
 
 describe("decodeButtons", () => {
-  it("returns null for a non-input report id", () => {
-    const buf = Buffer.alloc(REPORT_LEN);
-    buf[0] = 0x09; // some other report id
+  it("returns null for a non-state report type", () => {
+    // Forge ucType (byte 2), NOT byte 0. Byte 0 is the protocol version and
+    // is 0x01 on every Valve in-report, so a fixture that changed it was
+    // testing a case the hardware never produces — which is how the decoder
+    // shipped accepting every report type.
+    const buf = makeReport({ 2: 0x0b });
+    expect(buf[0]).toBe(REPORT_ID_INPUT); // still a valid-looking header
     expect(decodeButtons(buf)).toBeNull();
   });
 
@@ -210,10 +224,12 @@ describe("splitReports", () => {
 });
 
 describe("decodeNavState", () => {
-  it("returns null for non-input report ids and short buffers", () => {
-    const wrongId = Buffer.alloc(REPORT_LEN);
-    wrongId[0] = 0x09;
-    expect(decodeNavState(wrongId)).toBeNull();
+  it("returns null for non-state report types and short buffers", () => {
+    // A sensor/feature report carries a real header and real-looking payload
+    // bytes; only ucType tells it apart. Decoding one as gamepad state is
+    // what produced phantom presses / stick snaps on a real Deck.
+    const sensors = makeReport({ 2: 0x0b, 8: 0xff, 9: 0xff, 48: 0xff, 49: 0x7f });
+    expect(decodeNavState(sensors)).toBeNull();
     expect(decodeNavState(Buffer.alloc(32))).toBeNull();
   });
 
@@ -286,5 +302,31 @@ describe("decodeNavState", () => {
   it("leaves centered sticks at exactly 0", () => {
     const frame = makeReport({ 8: 0xff });
     expect(decodeNavState(frame)!.lx).toBe(0);
+  });
+});
+
+describe("isDeckStateReport", () => {
+  it("accepts a real state frame header (01 00 09 40)", () => {
+    expect(isDeckStateReport(makeReport())).toBe(true);
+  });
+
+  it("rejects every other ucType while byte 0 still reads 0x01", () => {
+    // The regression guard: byte 0 alone cannot discriminate, so each of
+    // these would have been decoded as gamepad state before the fix.
+    for (const ucType of [0x01, 0x02, 0x0b, 0x0f, 0xff]) {
+      if (ucType === REPORT_TYPE_DECK_STATE) continue;
+      const forged = makeReport({ 2: ucType });
+      expect(forged[0]).toBe(REPORT_ID_INPUT);
+      expect(isDeckStateReport(forged)).toBe(false);
+    }
+  });
+
+  it("rejects a wrong protocol version", () => {
+    expect(isDeckStateReport(makeReport({ 0: 0x02 }))).toBe(false);
+    expect(isDeckStateReport(makeReport({ 1: 0x01 }))).toBe(false);
+  });
+
+  it("rejects a short buffer", () => {
+    expect(isDeckStateReport(Buffer.alloc(REPORT_LEN - 1))).toBe(false);
   });
 });

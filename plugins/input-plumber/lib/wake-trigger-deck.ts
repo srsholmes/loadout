@@ -37,9 +37,9 @@ import {
   findButton,
   findDeckHidrawPath,
   splitReports,
-  REPORT_ID_INPUT,
   REPORT_LEN,
   type DeckButton,
+  isDeckStateReport,
 } from "@loadout/deck-hid";
 import {
   DECK_HIDRAW_UACCESS_RULE,
@@ -347,7 +347,7 @@ async function captureInner(timeoutMs: number): Promise<WakeCaptureResult> {
       let pressed: DeckButton | null = null;
       for (const report of splitReports(buf)) {
         // Only report id 0x01 carries button state; skip interleaved frames.
-        if (report[0] !== REPORT_ID_INPUT) continue;
+        if (!isDeckStateReport(report)) continue;
         // Edge state is tracked for ALL buttons (a reserved press must still
         // update its held memory), but only BINDABLE ones can be captured —
         // pressing Steam/Qam mid-capture is ignored and the wait continues.

@@ -2,7 +2,7 @@
  * Tests for the Deck press-to-capture path. Stubs findDeckHidrawPath +
  * createReadStream + plugin-storage so no real Deck / fs is needed. Covers:
  *   - a real 0→1 press captures and persists the binding
- *   - non-input (non-0x01) report frames are ignored even with the bit set
+ *   - non-state report types (ucType != 0x09) are ignored even with the bit set
  *   - a button already held when capture starts doesn't auto-fire
  *   - a second press after commit is ignored (no double write / re-entrancy)
  *   - timeout returns timedOut:true and leaves an existing binding intact
@@ -28,9 +28,13 @@ import {
 } from "./profile";
 
 /** Deck input report (id 0x01, REPORT_LEN bytes) with optional byte overrides. */
+/** Realistic Deck state frame — header `01 00 09 40`. */
 function frame(overrides: Record<number, number> = {}): Buffer {
   const b = Buffer.alloc(REPORT_LEN);
   b[0] = REPORT_ID_INPUT;
+  b[1] = 0x00;
+  b[2] = 0x09;
+  b[3] = 0x40;
   for (const [k, v] of Object.entries(overrides)) b[parseInt(k, 10)] = v;
   return b;
 }
@@ -112,13 +116,13 @@ describe("captureWakeButton (Deck)", () => {
     expect(storage.writePluginStorage).toHaveBeenCalledTimes(1);
   });
 
-  it("ignores non-input report frames even when the bit is set", async () => {
+  it("ignores non-state report types even when the bit is set", async () => {
     const stream = fakeStream();
     setup(stream);
     const p = captureWakeButton(5000);
     await tick();
-    const nonInput = frame({ 13: 0x04 });
-    nonInput[0] = 0x09; // not an input report
+    // Forge ucType (byte 2), not byte 0 — byte 0 is 0x01 on every in-report.
+    const nonInput = frame({ 13: 0x04, 2: 0x0b });
     stream.push(nonInput);
     // No capture yet — a real press still wins afterwards.
     stream.push(frame({ 10: 0x01 })); // R5 press (real input report)

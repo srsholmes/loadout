@@ -30,12 +30,50 @@ const PRODUCT_GALILEO = 0x1206;
  *  presents it that way. External Steam Controllers also bus 0x0003. */
 const BUS_USB = 0x0003;
 
-/** Steam Deck HID gamepad report ID. The hidraw stream interleaves a few
- *  report types; only 0x01 carries button + axis state. */
+/** Byte 0 of every Valve in-report: the low half of `unReportVersion`.
+ *
+ *  NOT a report-type discriminator — it is 0x01 on EVERY in-report the
+ *  controller emits, so testing it alone accepts all of them. The header is
+ *  (per drivers/hid/hid-steam.c):
+ *
+ *      0-1 | always 0x01, 0x00 — protocol version
+ *        2 | ucType — message type   ← the actual discriminator
+ *        3 | payload length
+ *
+ *  Use isDeckStateReport() to select gamepad state frames. */
 export const REPORT_ID_INPUT = 0x01;
+
+/** `ID_CONTROLLER_DECK_STATE` — ucType of the 64-byte gamepad state report.
+ *  Matches `ID_CONTROLLER_DECK_STATE = 9` in hid-steam.c and SDL's
+ *  `k_EDeckStateReport`. */
+export const REPORT_TYPE_DECK_STATE = 0x09;
 
 /** Every input report is 64 bytes. */
 export const REPORT_LEN = 64;
+
+/**
+ * True only for a Steam Deck gamepad-state frame.
+ *
+ * Mirrors the kernel's own gate, which is the authority on this stream:
+ *
+ *     if (size != 64 || data[0] != 1 || data[1] != 0) return 0;
+ *     switch (data[2]) { case ID_CONTROLLER_DECK_STATE: ... }
+ *
+ * Previously every caller tested `report[0] !== REPORT_ID_INPUT`, which is
+ * constant across report types — so any other 64-byte in-report the
+ * controller emitted (Steam Input drives feature reports on this endpoint
+ * concurrently) was decoded as button + stick state. On a real Deck that
+ * surfaces as phantom presses or a stick snap into a freshly-opened overlay,
+ * or a spurious wake toggle while it is closed.
+ */
+export function isDeckStateReport(report: Buffer): boolean {
+  return (
+    report.length >= REPORT_LEN &&
+    report[0] === REPORT_ID_INPUT &&
+    report[1] === 0x00 &&
+    report[2] === REPORT_TYPE_DECK_STATE
+  );
+}
 
 // ── Button bit map (issue #86, verified on a Jupiter Deck) ─────────────────
 
@@ -231,7 +269,7 @@ export interface DeckButtonTransition {
  *  report ids and short buffers return null so the caller can skip them. */
 export function decodeButtons(report: Buffer): Map<string, boolean> | null {
   if (report.length < REPORT_LEN) return null;
-  if (report[0] !== REPORT_ID_INPUT) return null;
+  if (!isDeckStateReport(report)) return null;
   const out = new Map<string, boolean>();
   for (const [byteIdx, defs] of DECK_BUTTONS_BY_BYTE) {
     const v = report[byteIdx] ?? 0;
@@ -325,7 +363,7 @@ function stick(report: Buffer, offset: number, negate: boolean): number {
  *  report ids and short buffers return null so the caller can skip them. */
 export function decodeNavState(report: Buffer): DeckNavState | null {
   if (report.length < REPORT_LEN) return null;
-  if (report[0] !== REPORT_ID_INPUT) return null;
+  if (!isDeckStateReport(report)) return null;
   return {
     r1: bit(report, 8, 2),
     l1: bit(report, 8, 3),

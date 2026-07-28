@@ -34,10 +34,10 @@ import {
   findButton,
   splitReports,
   decodeNavState,
-  REPORT_ID_INPUT,
   REPORT_LEN,
   type DeckButton,
   type DeckNavState,
+  isDeckStateReport,
 } from "@loadout/deck-hid";
 import type { WakeEvent } from "./input-intercept";
 import type { InputEvent } from "./nav-controller";
@@ -220,7 +220,7 @@ export async function startDeckHidrawWatcher(
       // button state. Skip everything else WITHOUT touching edge state —
       // reading a non-input frame's bytes would both misfire and corrupt
       // lastBitValue, desyncing the next real press.
-      if (report[0] !== REPORT_ID_INPUT) continue;
+      if (!isDeckStateReport(report)) continue;
       // We track only the SINGLE bound bit's transitions. Decoding the full
       // button map per frame is unnecessary on the hot path — chase the one
       // bit and bail. (Less GC pressure than building a Map every report.)
