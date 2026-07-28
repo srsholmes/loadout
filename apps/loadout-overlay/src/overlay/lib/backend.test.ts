@@ -25,7 +25,13 @@ let calls: string[] = [];
 let origFetch: unknown;
 
 /** Queue a scripted sequence of outcomes, one per fetch attempt. Errors are
- *  thrown (network layer); Responses are returned (HTTP layer). */
+ *  thrown (network layer); Responses are returned (HTTP layer). The last
+ *  entry repeats forever, so "fails and keeps failing" is one entry.
+ *
+ *  Footgun: repeating an entry hands back the SAME Response object, so a
+ *  script whose repeated entry is an `ok()` would throw "Body already used"
+ *  on the second read. Only repeat entries whose body is never read (errors,
+ *  or non-2xx, which short-circuit before `.text()`). */
 function scriptFetch(results: FetchResult[]): void {
   let i = 0;
   (globalThis as { fetch: unknown }).fetch = (url: string) => {
@@ -115,10 +121,54 @@ describe("fetchBundleSource", () => {
     }
   });
 
-  it("waits the configured backoff between attempts", async () => {
-    scriptFetch([networkChanged(), ok("slow")]);
+  it("uses the ladder rungs in order, not some other index", async () => {
+    // Two rungs, far apart, with BOTH bounds asserted. A single-rung test
+    // can't catch an off-by-one: `delays[attempt]` would read past the end,
+    // and any fallback (or a re-read of the wrong rung) still "waits a bit".
+    // Failing twice forces both rungs to be paid — 40 + 250 = 290ms — so
+    // reading the wrong index lands outside the window.
+    scriptFetch([networkChanged(), networkChanged(), ok("third time")]);
     const t0 = performance.now();
-    await fetchBundleSource({ pluginId: "network-info", delays: [60] });
-    expect(performance.now() - t0).toBeGreaterThanOrEqual(50);
+    const text = await fetchBundleSource({
+      pluginId: "network-info",
+      delays: [40, 250],
+    });
+    const elapsed = performance.now() - t0;
+    expect(text).toBe("third time");
+    expect(elapsed).toBeGreaterThanOrEqual(280);
+    // Generous headroom for scheduler jitter, but far below 40+40 (wrong rung
+    // reused), 250+250, or a 1000ms fallback creeping in.
+    expect(elapsed).toBeLessThan(700);
+  });
+
+  it("keeps the HTTP status in the error when a 5xx exhausts the ladder", async () => {
+    // Guards the `lastErr = err` on the 5xx branch: without it the rejection
+    // degrades to "…: undefined" and the status — the only diagnostic the
+    // user ever sees — is lost.
+    scriptFetch([status(503)]);
+    await expect(
+      fetchBundleSource({ pluginId: "storage", delays: NO_DELAY }),
+    ).rejects.toThrow("HTTP 503");
+    expect(calls.length).toBe(NO_DELAY.length + 1);
+  });
+
+  it("retries a body that dies mid-stream after headers arrived", async () => {
+    const truncated = {
+      ok: true,
+      status: 200,
+      text: () => Promise.reject(new TypeError("Failed to fetch")),
+    } as unknown as Response;
+    scriptFetch([truncated, ok("intact")]);
+    const text = await fetchBundleSource({ pluginId: "hltb", delays: NO_DELAY });
+    expect(text).toBe("intact");
+    expect(calls.length).toBe(2);
+  });
+
+  it("makes exactly one attempt when the ladder is empty", async () => {
+    scriptFetch([networkChanged()]);
+    await expect(
+      fetchBundleSource({ pluginId: "apex", delays: [] }),
+    ).rejects.toThrow("Failed to fetch");
+    expect(calls.length).toBe(1);
   });
 });

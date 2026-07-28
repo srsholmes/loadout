@@ -72,12 +72,21 @@ export function pluginBundleUrl(pluginId: string): string {
  */
 const bundleCache = new Map<string, Promise<Record<string, unknown>>>();
 
-/** Backoff before each retry of a transient bundle fetch, in ms. Sized for
- *  the failure this exists for — a single socket-pool flush, where the very
- *  next attempt already succeeds — while still covering a slower blip. The
- *  server is known reachable by this point (initBackend blocks on /api/token
- *  until it answers), so a long ladder would only delay a real error. */
-const BUNDLE_RETRY_DELAYS_MS = [150, 400, 1000];
+/** Backoff before each retry of a transient bundle fetch, in ms.
+ *
+ *  This is a ~4 s wall-clock budget, not "4 chances": a flushed request fails
+ *  instantly, so each attempt is exposed for only a single-digit-ms loopback
+ *  round trip. Surviving a flush needs a few ms of calm, which the first rung
+ *  already buys. The later rungs are there because NetworkChangeNotifierLinux
+ *  fires per netlink RTM_NEWADDR — v4 lease, v6 link-local, v6 SLAAC, and on a
+ *  host bringing up both eth0 and wlan0 those can spread over seconds. Nobody
+ *  is blocked on the outcome (a failure just renders a widget placeholder), so
+ *  the extra rungs cost nothing on the success path.
+ *
+ *  Note the ladder does NOT key off backend reachability: the server is on
+ *  loopback and answers with no network at all, so initBackend succeeding says
+ *  nothing about whether an interface is about to come up and flush the pool. */
+const BUNDLE_RETRY_DELAYS_MS = [150, 400, 1000, 2500];
 
 /** Transient = worth retrying. A thrown fetch is a network-layer failure
  *  (ERR_NETWORK_CHANGED, connection reset, …) and 5xx is a server hiccup;
@@ -109,7 +118,10 @@ export async function fetchBundleSource({
   let lastErr: unknown;
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     if (attempt > 0) {
-      const delay = delays[attempt - 1] ?? 1000;
+      // No `?? fallback`: attempt is bounded by delays.length, so this index
+      // is always in range. A fallback here would turn a future off-by-one
+      // into a silently different ladder instead of a loud failure.
+      const delay = delays[attempt - 1];
       console.warn(
         `[bundle] retry ${attempt}/${delays.length} for ${pluginId} in ${delay}ms (${lastErr instanceof Error ? lastErr.message : String(lastErr)})`,
       );
@@ -118,15 +130,31 @@ export async function fetchBundleSource({
     // Cache-bust per ATTEMPT, not per call: a retry must not be served the
     // failed response out of the HTTP cache.
     const url = `${pluginBundleUrl(pluginId)}?t=${Date.now()}`;
+
+    // Each stage is caught separately so the non-retriable throw below sits
+    // OUTSIDE any try that could swallow it. Sniffing the message to tell
+    // "the 4xx I just threw" from "a network error" would make correctness
+    // rest on a string prefix.
+    let res: Response;
     try {
-      const res = await fetch(url);
-      if (res.ok) return await res.text();
+      res = await fetch(url);
+    } catch (err) {
+      lastErr = err; // network layer: ERR_NETWORK_CHANGED, conn reset, …
+      continue;
+    }
+
+    if (!res.ok) {
       const err = new Error(`HTTP ${res.status} loading ${pluginId} bundle`);
       if (!isRetriableStatus(res.status)) throw err;
       lastErr = err;
+      continue;
+    }
+
+    try {
+      // Retried on purpose: a body that dies mid-stream is the shape a flush
+      // takes when it lands after the response headers arrived.
+      return await res.text();
     } catch (err) {
-      // A non-retriable HTTP error thrown just above must not be retried.
-      if (err instanceof Error && err.message.startsWith("HTTP ")) throw err;
       lastErr = err;
     }
   }
