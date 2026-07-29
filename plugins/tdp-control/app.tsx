@@ -164,9 +164,10 @@ function TdpControl() {
   useEvent({
     event: "acPowerChanged",
     handler: (data) => {
-      const { maxWatts, batteryLimited } = data as {
+      const { maxWatts, pluggedMaxWatts, batteryLimited } = data as {
         online: boolean;
         maxWatts: number;
+        pluggedMaxWatts?: number;
         batteryLimited?: boolean;
       };
       if (typeof maxWatts === "number") {
@@ -175,6 +176,9 @@ function TdpControl() {
             ? {
                 ...prev,
                 maxWatts,
+                ...(typeof pluggedMaxWatts === "number"
+                  ? { pluggedMaxWatts }
+                  : {}),
                 ...(typeof batteryLimited === "boolean"
                   ? { batteryLimited }
                   : {}),

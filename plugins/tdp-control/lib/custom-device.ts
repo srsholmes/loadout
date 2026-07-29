@@ -185,3 +185,54 @@ export async function clearCustomDevice(pluginId: string): Promise<void> {
     return next;
   });
 }
+
+/** Marks the issue-#230 battery-max migration as already considered. */
+const MIGRATED_KEY = "batteryMaxMigrated";
+
+/**
+ * One-time repair of a custom device carrying the issue-#230 seed.
+ *
+ * `batteryMaxTdp` was required from the first release and the form pre-filled
+ * it from the AUTO-DETECTED device, so every custom device saved before this
+ * change has an explicit value — and anyone who raised Max TDP without
+ * noticing that field is still capped by it. Making the field optional only
+ * helps new saves, so existing users need a nudge.
+ *
+ * Runs AT MOST ONCE, ever, guarded by a persisted flag, and rewrites storage
+ * rather than patching in memory. Both properties matter: the seeded values
+ * ARE the fallback defaults (28 W generic-AMD, 30 W generic-Intel), which are
+ * also the roundest numbers a user might deliberately type. A per-load
+ * in-memory heuristic would therefore (a) misfire on a deliberate 28, and
+ * (b) be impossible to escape — re-entering 28 would just be re-migrated on
+ * the next load. Persisting the flag means a value the user sets afterwards
+ * is theirs and is never touched again.
+ *
+ * @returns the previous value if it was migrated away, else null.
+ */
+export async function migrateSeededBatteryMax({
+  pluginId,
+  detectedBatteryMaxTdp,
+}: {
+  pluginId: string;
+  /** batteryMaxTdp of the DMI-detected device — the value the old form seeded. */
+  detectedBatteryMaxTdp: number;
+}): Promise<number | null> {
+  let migratedFrom: number | null = null;
+  await mutatePluginStorage<Record<string, unknown>>(pluginId, (existing) => {
+    if (existing[MIGRATED_KEY]) return existing;
+    const next = { ...existing, [MIGRATED_KEY]: true };
+    const raw = existing[STORAGE_KEY] as Record<string, unknown> | undefined;
+    if (!raw) return next; // nothing to migrate, but never consider it again
+    const stored = validateCustomDevice(raw);
+    if (!stored.ok) return next;
+    const d = stored.device;
+    // Fingerprint of the bug: below the user's own max AND exactly the value
+    // the old form would have seeded from detection.
+    if (d.batteryMaxTdp >= d.maxTdp) return next;
+    if (d.batteryMaxTdp !== detectedBatteryMaxTdp) return next;
+    migratedFrom = d.batteryMaxTdp;
+    const { batteryMaxTdp: _dropped, ...rest } = d;
+    return { ...next, [STORAGE_KEY]: rest };
+  });
+  return migratedFrom;
+}

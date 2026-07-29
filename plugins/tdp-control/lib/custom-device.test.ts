@@ -7,6 +7,7 @@ import {
   readCustomDevice,
   writeCustomDevice,
   clearCustomDevice,
+  migrateSeededBatteryMax,
   type CustomDevice,
 } from "./custom-device";
 import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
@@ -183,5 +184,85 @@ describe("optional battery max (issue #230)", () => {
 
     const belowMin = validateCustomDevice({ ...base, batteryMaxTdp: 2 });
     expect(belowMin.ok).toBe(false);
+  });
+});
+
+describe("one-time battery-max migration (issue #230)", () => {
+  // Same tmpdir isolation the persistence block uses — these write storage,
+  // and the real ~/.config/loadout/plugins is root-owned on a machine where
+  // the backend service has run.
+  let dir: string;
+  let prevXdg: string | undefined;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "custom-device-migrate-"));
+    prevXdg = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = dir;
+  });
+
+  afterEach(() => {
+    if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = prevXdg;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const seeded = {
+    name: "X2 Mini Pro",
+    minTdp: 5,
+    maxTdp: 80,
+    batteryMaxTdp: 28, // the generic-AMD default the old form pre-filled
+    profiles: { Silent: 10, Balanced: 40, Performance: 80 },
+  };
+
+  it("clears a battery max that matches the detected default and sits below max", async () => {
+    await writeCustomDevice(PLUGIN_ID, seeded);
+    const from = await migrateSeededBatteryMax({
+      pluginId: PLUGIN_ID,
+      detectedBatteryMaxTdp: 28,
+    });
+    expect(from).toBe(28);
+    const after = await readCustomDevice(PLUGIN_ID);
+    // Cleared => defaults to maxTdp; the global 55W ceiling still applies.
+    expect(after?.batteryMaxTdp).toBe(80);
+  });
+
+  it("runs only once, so a value re-entered afterwards is never touched", async () => {
+    await writeCustomDevice(PLUGIN_ID, seeded);
+    expect(
+      await migrateSeededBatteryMax({ pluginId: PLUGIN_ID, detectedBatteryMaxTdp: 28 }),
+    ).toBe(28);
+    // The user decides they really did want 28 and sets it again.
+    await writeCustomDevice(PLUGIN_ID, seeded);
+    expect(
+      await migrateSeededBatteryMax({ pluginId: PLUGIN_ID, detectedBatteryMaxTdp: 28 }),
+    ).toBeNull();
+    expect((await readCustomDevice(PLUGIN_ID))?.batteryMaxTdp).toBe(28);
+  });
+
+  it("leaves a value that does not match the detected default", async () => {
+    await writeCustomDevice(PLUGIN_ID, { ...seeded, batteryMaxTdp: 40 });
+    expect(
+      await migrateSeededBatteryMax({ pluginId: PLUGIN_ID, detectedBatteryMaxTdp: 28 }),
+    ).toBeNull();
+    expect((await readCustomDevice(PLUGIN_ID))?.batteryMaxTdp).toBe(40);
+  });
+
+  it("leaves a battery max already equal to the device max", async () => {
+    await writeCustomDevice(PLUGIN_ID, { ...seeded, batteryMaxTdp: 80 });
+    expect(
+      await migrateSeededBatteryMax({ pluginId: PLUGIN_ID, detectedBatteryMaxTdp: 80 }),
+    ).toBeNull();
+  });
+
+  it("marks itself done even with no custom device saved", async () => {
+    expect(
+      await migrateSeededBatteryMax({ pluginId: PLUGIN_ID, detectedBatteryMaxTdp: 28 }),
+    ).toBeNull();
+    // A device saved later must not be retro-migrated.
+    await writeCustomDevice(PLUGIN_ID, seeded);
+    expect(
+      await migrateSeededBatteryMax({ pluginId: PLUGIN_ID, detectedBatteryMaxTdp: 28 }),
+    ).toBeNull();
+    expect((await readCustomDevice(PLUGIN_ID))?.batteryMaxTdp).toBe(28);
   });
 });
