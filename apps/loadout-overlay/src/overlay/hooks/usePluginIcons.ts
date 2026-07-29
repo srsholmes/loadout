@@ -38,8 +38,14 @@ async function loadIcon(pluginId: string): Promise<PluginIconComponent | null> {
       iconCache.set(pluginId, icon);
       return icon;
     } catch (err) {
+      // Deliberately NOT cached. `iconCache` has no invalidation, so caching
+      // a failure here burns the icon to the letter fallback for the whole
+      // page lifetime — and the overlay window is shown/hidden, never
+      // reloaded, so that means the whole session. A transient fetch failure
+      // (see fetchBundleSource: a network-change socket-pool flush during
+      // boot) must stay retryable on the next sidebar mount. Only the success
+      // path caches, where `null` legitimately means "plugin exports no icon".
       console.warn(`[usePluginIcons] Failed to load icon for ${pluginId}:`, err);
-      iconCache.set(pluginId, null);
       return null;
     } finally {
       inFlight.delete(pluginId);

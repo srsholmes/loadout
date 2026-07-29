@@ -5,7 +5,6 @@
   "description": "RGB LED control for Linux handhelds — supports OpenRGB, sysfs LEDs, and platform-specific interfaces",
   "dependencies": {
     "react": "^18.3.0",
-    "react-dom": "^18.3.0",
     "react-icons": "^5.6.0",
     "@loadout/ui": "workspace:*",
     "@loadout/types": "workspace:*",

@@ -51,19 +51,25 @@ export const FAN_CURVES: Record<PresetName, FanCurvePoint[]> = {
  * percent. Pure.
  */
 export function interpolateCurve(curve: FanCurvePoint[], tempC: number): number {
-  if (tempC <= curve[0].tempC) return curve[0].percent;
-  if (tempC >= curve[curve.length - 1].tempC) return curve[curve.length - 1].percent;
+  const first = curve[0];
+  const last = curve[curve.length - 1];
+  if (!first || !last) return 0;
+  if (tempC <= first.tempC) return first.percent;
+  if (tempC >= last.tempC) return last.percent;
 
   for (let i = 0; i < curve.length - 1; i++) {
+    // i < curve.length - 1, so both are in bounds for any valid curve; the
+    // guard only degrades a would-be undefined (impossible here) to a skip.
     const lo = curve[i];
     const hi = curve[i + 1];
+    if (!lo || !hi) continue;
     if (tempC >= lo.tempC && tempC <= hi.tempC) {
       const ratio = (tempC - lo.tempC) / (hi.tempC - lo.tempC);
       return Math.round(lo.percent + ratio * (hi.percent - lo.percent));
     }
   }
 
-  return curve[curve.length - 1].percent;
+  return last.percent;
 }
 
 /** Clamp a percent into [0, 100] and round to a whole number. Pure. */

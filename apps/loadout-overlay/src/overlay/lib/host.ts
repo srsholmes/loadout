@@ -6,10 +6,7 @@
 
 const isElectrobun = typeof window.__electrobun !== "undefined";
 
-async function rpcInvoke(
-  cmd: string,
-  args?: Record<string, unknown>,
-): Promise<unknown> {
+async function rpcInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
   if (!isElectrobun) return undefined;
   // overlay-electrobun/src/webview/main.tsx constructs an Electroview
   // and stashes it on window. Without it there's no WebSocket
@@ -18,7 +15,17 @@ async function rpcInvoke(
   if (!requester) return;
   const fn = requester[cmd];
   if (typeof fn !== "function") return;
-  return await fn(args);
+  try {
+    return await fn(args);
+  } catch (err) {
+    // Electrobun rejects in-flight requests ("RPC request timed out.")
+    // rather than resolving. Every caller already handles an undefined
+    // result with a safe default, so map rejection onto that path —
+    // otherwise one slow RPC leaves UI state machines (e.g. the update
+    // check's "Checking…" button) wedged forever.
+    console.warn(`[host] rpc ${cmd} failed:`, err);
+    return undefined;
+  }
 }
 
 /** Liveness ping for the bun-side freeze watchdog. Fire-and-forget — if the
@@ -71,6 +78,21 @@ export async function restartServer(): Promise<{ success: boolean; error?: strin
 }
 
 /**
+ * Restart the whole app — backend `loadout.service` AND the overlay
+ * unit. Used to unload plugins the user disabled: their code already ran
+ * and can't be torn down in place, so both processes bounce and come
+ * back clean. The overlay window closes and reopens; the game keeps
+ * running. No-op (`{ success: false }`) outside Electrobun.
+ */
+export async function restartApp(): Promise<{ success: boolean; error?: string }> {
+  const result = await rpcInvoke("restartApp");
+  if (!result || typeof result !== "object") {
+    return { success: false, error: "Host did not respond" };
+  }
+  return result as { success: boolean; error?: string };
+}
+
+/**
  * Dump the overlay UI's captured console logs and the backend server
  * log into a timestamped file in the user's Downloads folder (#130).
  * The UI logs are collected here from the in-webview ring buffer and
@@ -91,9 +113,7 @@ export async function exportLogs(): Promise<{
   return result as { success: boolean; error?: string; path?: string };
 }
 
-async function rpcResultOrError(
-  cmd: string,
-): Promise<{ success: boolean; error?: string }> {
+async function rpcResultOrError(cmd: string): Promise<{ success: boolean; error?: string }> {
   const result = await rpcInvoke(cmd);
   if (!result || typeof result !== "object") {
     return { success: false, error: "Host did not respond" };
@@ -113,6 +133,58 @@ export async function forceUnfreezeSteam(): Promise<{ success: boolean; error?: 
  *  isn't enough. */
 export async function restartSteam(): Promise<{ success: boolean; error?: string }> {
   return rpcResultOrError("restartSteam");
+}
+
+// -- Self-update (issue #173) --------------------------------------------------
+
+// Both sides of the RPC boundary share the status/result shapes via
+// @loadout/types (the Bun host's lib/updater.ts produces them);
+// re-exported here so UI callers keep importing from lib/host.
+import type { UpdateCheckResult, UpdateStatus } from "@loadout/types";
+export type { UpdateCheckResult, UpdateStatus };
+
+/**
+ * Ask the Bun host whether a newer release is published on GitHub.
+ * `installedVersion` should be the backend's `/api/status` version
+ * when reachable, else `OVERLAY_VERSION`. Outside Electrobun this
+ * reports "not available" so standalone dev keeps rendering.
+ */
+export async function checkForUpdate(installedVersion: string): Promise<UpdateCheckResult> {
+  const result = await rpcInvoke("checkForUpdate", { installedVersion });
+  if (!result || typeof result !== "object") {
+    return { available: false, error: "Host did not respond" };
+  }
+  return result as UpdateCheckResult;
+}
+
+/**
+ * Start the full self-update to `tag` (download + verify + backend
+ * swap + overlay swap + restart). Resolves as soon as the update is
+ * ACCEPTED; poll {@link getUpdateStatus} for progress. Terminal
+ * phases: "restarting" (success — the overlay is about to bounce)
+ * and "error".
+ */
+export async function applyUpdate(tag: string): Promise<{ success: boolean; error?: string }> {
+  const result = await rpcInvoke("applyUpdate", { tag });
+  if (!result || typeof result !== "object") {
+    return { success: false, error: "Host did not respond" };
+  }
+  return result as { success: boolean; error?: string };
+}
+
+/**
+ * Poll the in-flight update's status. Returns `null` when the host
+ * didn't respond (RPC timed out / not in Electrobun) — callers MUST
+ * distinguish that from a real `{ phase: "idle" }`: during the heavy
+ * backend/swapping phases a single transient timeout would otherwise
+ * read as "idle" and tear down the progress UI mid-update.
+ */
+export async function getUpdateStatus(): Promise<UpdateStatus | null> {
+  const result = await rpcInvoke("getUpdateStatus");
+  if (!result || typeof result !== "object") {
+    return null;
+  }
+  return result as UpdateStatus;
 }
 
 /** `systemctl poweroff`. Polkit-gated on the host side. */
@@ -161,9 +233,7 @@ export async function getControllerShortcuts(): Promise<ControllerShortcuts> {
   return (result as ControllerShortcuts) ?? loadShortcutsFromStorage();
 }
 
-export async function setControllerShortcuts(
-  shortcuts: ControllerShortcuts,
-): Promise<void> {
+export async function setControllerShortcuts(shortcuts: ControllerShortcuts): Promise<void> {
   // Cache in the user config file so the UI has a value immediately on
   // next open even before the Bun side responds. The Bun side is still
   // the source of truth when running under Electrobun.
@@ -173,10 +243,7 @@ export async function setControllerShortcuts(
 }
 
 function loadShortcutsFromStorage(): ControllerShortcuts {
-  const fromConfig = getConfigValue<ControllerShortcuts | undefined>(
-    CONFIG_KEY,
-    undefined,
-  );
+  const fromConfig = getConfigValue<ControllerShortcuts | undefined>(CONFIG_KEY, undefined);
   if (fromConfig) return fromConfig;
   return {
     // Guide+A and Guide+Y are reserved by Steam / InputPlumber on Bazzite

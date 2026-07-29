@@ -91,6 +91,12 @@ error() {
 # CLI is logged in.
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 
+# Pin a specific release instead of the newest one. Set LOADOUT_VERSION to a
+# release tag (e.g. v0.1.0) to install/downgrade to that exact version; unset,
+# the installer resolves the GitHub "latest" release. The tag flows through to
+# the binary, overlay, plugin, and SHA256SUMS asset URLs automatically.
+LOADOUT_VERSION="${LOADOUT_VERSION:-}"
+
 # curl/wget wrappers that add an Authorization header when GITHUB_TOKEN is
 # set. Pass-through otherwise — public repos keep working with no token.
 curl_gh() {
@@ -231,19 +237,44 @@ verify_sha256() {
     return 0
 }
 
-# Prompt user for yes/no (defaults to $2 if provided, otherwise no)
+# Where prompts read from. Under the documented `curl … | sh` install,
+# stdin is the script text itself, so `[ -t 0 ]` is false and a bare
+# `read` would eat the script rather than the user's answer — every
+# prompt silently took its default (Phase 2 could never run). Read the
+# controlling terminal instead, which exists in both the piped and the
+# `sh install.sh` cases. Empty only when there's genuinely no terminal
+# (CI, systemd, `docker run -d`), where prompts fall back to defaults.
+PROMPT_TTY=""
+if { true < /dev/tty; } 2>/dev/null; then
+    PROMPT_TTY=/dev/tty
+fi
+
+# Prompt user for yes/no. y/Y accepts, anything else declines.
+#   $1 — prompt text
+#   $2 — default taken on a bare <enter> (default: n)
+#   $3 — default taken when there is no terminal to ask on, e.g. CI or
+#        systemd (default: $2). Kept separate from $2 so a prompt can
+#        treat <enter> as consent while still refusing to take a
+#        sudo/system-modifying action unattended.
 prompt_yn() {
-    if [ ! -t 0 ]; then
-        # Non-interactive: use default
-        case "${2:-n}" in
+    if [ -z "$PROMPT_TTY" ]; then
+        # No terminal to ask on: use the non-interactive default
+        case "${3:-${2:-n}}" in
             [Yy]*) return 0 ;;
             *) return 1 ;;
         esac
     fi
-    printf "%s " "$1"
-    read -r answer
+    printf "%s " "$1" > "$PROMPT_TTY"
+    # EOF on the terminal is treated as the default rather than hanging.
+    read -r answer < "$PROMPT_TTY" || answer=""
     case "$answer" in
         [Yy]*) return 0 ;;
+        "")
+            case "${2:-n}" in
+                [Yy]*) return 0 ;;
+                *) return 1 ;;
+            esac
+            ;;
         *) return 1 ;;
     esac
 }
@@ -292,7 +323,13 @@ phase1() {
 
     # --- Download or locate binary ---
 
-    RELEASE_URL="https://api.github.com/repos/$REPO/releases/latest"
+    # LOADOUT_VERSION pins a specific tag; otherwise take the newest release.
+    if [ -n "$LOADOUT_VERSION" ]; then
+        info "Pinned to release $LOADOUT_VERSION"
+        RELEASE_URL="https://api.github.com/repos/$REPO/releases/tags/$LOADOUT_VERSION"
+    else
+        RELEASE_URL="https://api.github.com/repos/$REPO/releases/latest"
+    fi
 
     DOWNLOAD_URL=""
     DOWNLOAD_ACCEPT_HEADER=""
@@ -310,6 +347,15 @@ phase1() {
                 DOWNLOAD_URL="$(printf '%s' "$RELEASE_JSON" | grep -o "\"browser_download_url\": *\"[^\"]*/loadout-${ARCH}\"" | head -1 | sed 's/.*"browser_download_url": *"//;s/"$//')"
             fi
         fi
+    fi
+
+    # A pinned version that doesn't resolve (typo, or a tag with no published
+    # release) leaves RELEASE_JSON empty. Fail loudly here instead of falling
+    # through to the "latest"-literal URL below, which 404s with a misleading
+    # error and hides the real problem.
+    if [ -n "$LOADOUT_VERSION" ] && [ -z "${RELEASE_JSON:-}" ]; then
+        error "Pinned release $LOADOUT_VERSION not found (no such tag, or it has no published release). See https://github.com/$REPO/releases"
+        exit 1
     fi
 
     if [ -z "$DOWNLOAD_URL" ]; then
@@ -341,7 +387,11 @@ phase1() {
     # user to delete the binary first.
     INSTALL_BINARY=1
     if [ -f "$BINARY_PATH" ]; then
-        if prompt_yn "Loadout binary already exists. Overwrite? (y/N)"; then
+        # Default-yes everywhere: re-running the documented install one-liner
+        # IS the upgrade path, so both a bare <enter> and a headless re-run
+        # should refresh the binary. It lives in ~/.local/bin (no sudo), same
+        # as the fresh-install path just below, which never asked.
+        if prompt_yn "Loadout binary already exists. Overwrite? (Y/n)" "y"; then
             info "Overwriting existing binary..."
         else
             info "Keeping existing binary (overlay + plugins will still be refreshed)."
@@ -901,6 +951,11 @@ SERVICEEOF
     # Audit 2026-05 H-001.
     if [ -x "$OVERLAY_LAUNCHER" ]; then
         info "Writing overlay systemd user service file..."
+        # ~/.config/systemd/user doesn't exist yet on a fresh install where
+        # the user has never enabled a systemd --user unit (common on
+        # Bazzite). Without this the `cat >` redirect below fails with
+        # "no such file or directory" and `set -e` aborts the whole install.
+        mkdir -p "$SERVICE_DIR"
         cat > "$OVERLAY_SERVICE_FILE" <<'OVERLAYEOF'
 [Unit]
 Description=Loadout Overlay
@@ -920,6 +975,18 @@ Type=simple
 # run. If the overlay is actually still alive, systemctl already
 # killed it before this point — any lock we see here is stale.
 ExecStartPre=-/bin/sh -c 'rm -f %h/.cache/com.loadout.overlay/dev/CEF/SingletonLock %h/.cache/com.loadout.overlay/dev/CEF/SingletonCookie %h/.cache/com.loadout.overlay/dev/CEF/SingletonSocket'
+
+# Self-update crash recovery. The in-app updater swaps the overlay tree
+# with two renames (live -> .old, .staging -> live); a crash/power-loss
+# between them leaves NO live tree, this unit's ExecStart path gone, and
+# the unit crash-looping forever — the bun-side restore can never run
+# because it lives inside the tree being swapped. Repair from OUTSIDE
+# the tree: prefer the staged tree (completing the update), else fall
+# back to the previous generation. Staging is only promoted when it
+# carries the updater's `.verified` sentinel (written after extraction,
+# launcher validation AND the webkit .so carry-over) — an executable
+# launcher alone can exist in a half-written tree.
+ExecStartPre=-/bin/sh -c 'L=%h/.local/share/loadout-overlay; if [ ! -x "$L/bin/launcher" ]; then if [ -f "$L.staging/.verified" ] && [ -x "$L.staging/bin/launcher" ]; then rm -rf "$L"; mv "$L.staging" "$L"; elif [ -x "$L.old/bin/launcher" ]; then rm -rf "$L"; mv "$L.old" "$L"; fi; fi'
 
 # Wait for the plugin server to be up before launching so the webview
 # doesn't race its initial fetch.
@@ -964,11 +1031,26 @@ ExecStart=/bin/sh -c '\
   if [ -n "$PID" ] && [ -r "/proc/$PID/environ" ]; then \
     GS_DISPLAY=$(tr "\\0" "\\n" < "/proc/$PID/environ" | sed -n "s/^GAMESCOPE_DISPLAY=//p" | head -n1); \
     GS_WAYLAND=$(tr "\\0" "\\n" < "/proc/$PID/environ" | sed -n "s/^GAMESCOPE_WAYLAND_DISPLAY=//p" | head -n1); \
+    # SteamOS exports GAMESCOPE_WAYLAND_DISPLAY into steam's environment but
+    # not GAMESCOPE_DISPLAY, so the sed above comes back empty in Gaming Mode
+    # and the pgrep branch below is what actually resolves the display there.
+    # Steam already knows the inner X display, so read it rather than letting
+    # the fallback assume ":0".
+    if [ -z "$GS_DISPLAY" ] && [ -n "$GS_WAYLAND" ]; then \
+      GS_DISPLAY=$(tr "\\0" "\\n" < "/proc/$PID/environ" | sed -n "s/^DISPLAY=//p" | head -n1); \
+    fi; \
   fi; \
-  # gamescope's kernel comm name on Linux is "gamescope-wl" so `pgrep -x`
-  # on it fails. Match via -f against a pattern. steamcompmgr is a
-  # reliable secondary signal.
-  if [ -z "$GS_DISPLAY" ] && pgrep -f "gamescope[- ]" > /dev/null 2>&1; then \
+  # gamescope's kernel comm name on Linux is "gamescope-wl", so a bare
+  # `pgrep -x gamescope` misses it — match the real comm instead.
+  #
+  # Do NOT go back to `pgrep -f`: -f matches against full command lines,
+  # and this entire script is the argv of the `sh -c` that runs it. The
+  # GS_WAYLAND="gamescope-0" assignment below is therefore part of our own
+  # command line, so `pgrep -f "gamescope[- ]"` matched this very shell
+  # (pgrep excludes itself, but not its parent) and reported gamescope on
+  # every desktop session. `pgrep -x` matches comm, which is "sh" here, so
+  # it cannot self-match.
+  if [ -z "$GS_DISPLAY" ] && { pgrep -x gamescope-wl > /dev/null 2>&1 || pgrep -x gamescope > /dev/null 2>&1; }; then \
     GS_DISPLAY=":0"; \
     [ -z "$GS_WAYLAND" ] && GS_WAYLAND="gamescope-0"; \
   fi; \
@@ -999,9 +1081,20 @@ WantedBy=graphical-session.target
 OVERLAYEOF
         success "Overlay service file written to $OVERLAY_SERVICE_FILE"
 
-        systemctl --user daemon-reload
-        systemctl --user enable loadout-overlay
-        success "Overlay service enabled (starts with graphical session)"
+        # Guard the --user calls: on a sessionless install (curl|sh over SSH
+        # with no graphical session and no lingering, or run as root) the
+        # per-user systemd bus is unavailable and these fail. Without `|| true`
+        # `set -e` would abort here — right after the unit was written but
+        # before the user-facing summary — leaving a confusing half-install.
+        # The unit file is on disk regardless, so it'll be picked up on the
+        # next graphical login even if we couldn't reload/enable now.
+        if systemctl --user daemon-reload 2>/dev/null && systemctl --user enable loadout-overlay 2>/dev/null; then
+            success "Overlay service enabled (starts with graphical session)"
+        else
+            warn "Couldn't enable the overlay user service now (no active user session?)."
+            warn "It'll be picked up on your next graphical login; or enable it manually:"
+            warn "  systemctl --user enable --now loadout-overlay"
+        fi
 
         # Start it right now (not just on next login) and pop the window so
         # the user can set their wake button immediately — no reboot, no
@@ -1093,25 +1186,14 @@ phase2_input_group() {
     info "controller buttons. That requires membership in the 'input' group."
     echo ""
 
-    # Default-yes: empty answer (just <enter>) accepts. Honors the (Y/n)
-    # hint without needing to restructure the shared prompt_yn helper.
-    INPUT_GROUP_ANSWER=""
-    if [ -t 0 ]; then
-        printf "Add %s to the 'input' group? (needed for the overlay to capture controller buttons) (Y/n) " "$USER"
-        read -r INPUT_GROUP_ANSWER
-    else
-        # Non-interactive (curl|sh): default to yes since the overlay is
-        # useless without it.
-        INPUT_GROUP_ANSWER="y"
+    # Default-yes: a bare <enter> accepts, since the overlay can't capture
+    # controllers without it.
+    if ! prompt_yn "Add $USER to the 'input' group? (needed for the overlay to capture controller buttons) (Y/n)" "y"; then
+        warn "Skipped. You'll need to add yourself to 'input' manually before the overlay can grab controllers:"
+        warn "  sudo usermod -aG input \"\$USER\""
+        warn "  # then log out and back in"
+        return
     fi
-    case "$INPUT_GROUP_ANSWER" in
-        [Nn]*)
-            warn "Skipped. You'll need to add yourself to 'input' manually before the overlay can grab controllers:"
-            warn "  sudo usermod -aG input \"\$USER\""
-            warn "  # then log out and back in"
-            return
-            ;;
-    esac
 
     info "Adding $USER to the input group (requires sudo)..."
     if sudo usermod -aG input "$USER"; then
@@ -1137,9 +1219,19 @@ phase2_input_group() {
 #
 # Delegates to the input-plumber plugin's own installer
 # (./plugins/input-plumber/scripts/install-inputplumber.sh), which:
-#   - Detects + installs IP via pacman / dnf / upstream tarball
-#   - Enables + starts inputplumber.service
-#   - Stops + masks any conflicting hhd*.service units
+#   - Exits early ("nothing to do") when IP is already on PATH
+#   - Otherwise installs IP via pacman / dnf / upstream tarball, then
+#     enables + starts inputplumber.service
+#
+# It does NOT touch HHD. This comment used to claim it "stops + masks any
+# conflicting hhd*.service units"; nothing here has ever done that.
+#
+# That early exit is load-bearing, not an optimisation: SteamOS ships IP
+# with the image (disabled), and Bazzite ships it too, so on both the
+# installer short-circuits before it can enable anything. That is what
+# makes the "leaves it untouched" promise below true and what keeps IP
+# from being enabled alongside a live HHD. Don't remove detect_installed
+# without replacing the guarantee.
 # Idempotent — re-running is safe.
 phase2_inputplumber() {
     echo ""
@@ -1173,12 +1265,13 @@ phase2_inputplumber() {
     info "built-in controller) happens in-app when you choose an overlay wake"
     info "button, so it stays opt-in."
     info "On CachyOS/Arch this installs the pacman package."
-    info ""
-    info "If Handheld Daemon (HHD) is running it'll be stopped and masked —"
-    info "it conflicts with IP over controller HID ownership."
     echo ""
 
-    if ! prompt_yn "Install / enable InputPlumber now? (y/N)"; then
+    # Default-yes on <enter> to match the Phase 2 gate: controller wake
+    # in-game doesn't work without IP, and the guard above already made
+    # this a no-op when IP is installed and uncontested. The gate is what
+    # refuses to run any of this unattended, so no separate default here.
+    if ! prompt_yn "Install / enable InputPlumber now? (Y/n)" "y"; then
         info "Skipping. You can do this later from the welcome wizard."
         return
     fi
@@ -1206,7 +1299,11 @@ main() {
     phase1
 
     echo ""
-    if prompt_yn "Run Phase 2 (input group + InputPlumber)? May require sudo. (y/N)"; then
+    # Default-yes on <enter>: without Phase 2 the overlay can't capture
+    # controllers, so the common single-command install should get it.
+    # Still declined with no terminal — this shells out to sudo, installs a
+    # package and masks HHD, none of which should happen unattended.
+    if prompt_yn "Run Phase 2 (input group + InputPlumber)? May require sudo. (Y/n)" "y" "n"; then
         phase2
     else
         info "Skipping Phase 2."

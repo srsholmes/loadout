@@ -1,8 +1,21 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { FaFan, FaTemperatureHalf } from "react-icons/fa6";
+import {
+  FaFan,
+  FaTemperatureHalf,
+  FaPlus,
+  FaTrashCan,
+  FaArrowRotateLeft,
+  FaChevronLeft,
+  FaChevronRight,
+} from "react-icons/fa6";
 import {
   Alert,
+  Badge,
   Button,
+  Collapse,
+  GameCard,
+  GameCardGrid,
+  IconButton,
   PluginHeader,
   Slider,
   Spinner,
@@ -13,6 +26,16 @@ import {
   useCurrentGame,
   SegmentedItem,
 } from "@loadout/ui";
+import { steamArtworkUrls } from "@loadout/steam-paths/artwork";
+import { FAN_CURVES, type FanCurvePoint } from "./lib/fan-curves";
+import {
+  CURVE_MAX_POINTS,
+  CURVE_MIN_POINTS,
+  CURVE_TEMP_MAX,
+  CURVE_TEMP_MIN,
+  DEFAULT_CUSTOM_CURVE,
+} from "./lib/custom-curve";
+import { FanCurveGraph } from "./components/FanCurveGraph";
 
 export const icon = FaFan;
 
@@ -42,6 +65,7 @@ interface FanInfo {
   fanCount: number;
   available: boolean;
   activePreset: string | null;
+  customCurveActive: boolean;
   usingEctool: boolean;
   warning: string | null;
   safetyEngaged: boolean;
@@ -114,11 +138,13 @@ function usePerGameProfiles(
   const boundToGame = perGameEnabled && currentGame !== null;
   const persistGameProfile = useCallback(
     (mode: "auto" | "manual", speed?: number) => {
-      if (!boundToGame) return;
+      // boundToGame already implies currentGame is non-null; the explicit
+      // check just narrows the type without changing the early-return outcome.
+      if (!boundToGame || currentGame === null) return;
       call(
         "setGameProfile",
-        currentGame!.appId,
-        currentGame!.gameName,
+        currentGame.appId,
+        currentGame.gameName,
         { mode, speed },
       ).catch(() => {});
     },
@@ -142,6 +168,11 @@ function FanControl() {
   const [fanInfo, setFanInfo] = useState<FanInfo | null>(null);
   const [sliderValue, setSliderValue] = useState(50);
   const [activePreset, setActivePreset] = useState<Preset | null>(null);
+  const [customActive, setCustomActive] = useState(false);
+  const [customPoints, setCustomPoints] = useState<FanCurvePoint[]>(() =>
+    DEFAULT_CUSTOM_CURVE.map((p) => ({ ...p })),
+  );
+  const [selectedPoint, setSelectedPoint] = useState(0);
   const [loading, setLoading] = useState(true);
   const {
     perGameEnabled,
@@ -156,23 +187,42 @@ function FanControl() {
     handler: (data) => {
       const info = data as FanInfo;
       setFanInfo(info);
+      // Each tick only asserts a positive selection (preset XOR custom),
+      // never clears to "none" — the click handlers own clearing, so a
+      // stale 2 s-cadence event can't wipe an optimistic selection.
       if (info.activePreset) {
         setActivePreset(info.activePreset as Preset);
+        setCustomActive(false);
+      }
+      if (info.customCurveActive) {
+        setCustomActive(true);
+        setActivePreset(null);
       }
       setLoading(false);
     },
   });
 
-  // Fetch initial fan info on mount
+  // Fetch initial fan info + the saved custom curve on mount.
   useEffect(() => {
     call("getFanInfo").then((info) => {
       const data = info as FanInfo;
       setFanInfo(data);
-      if (data.fans.length > 0) {
-        setSliderValue(data.fans[0].percent);
+      const primary = data.fans[0];
+      if (primary) {
+        setSliderValue(primary.percent);
       }
+      setActivePreset(data.activePreset ? (data.activePreset as Preset) : null);
+      setCustomActive(Boolean(data.customCurveActive));
       setLoading(false);
     });
+    call("getCustomCurve")
+      .then((pts) => {
+        const curve = pts as FanCurvePoint[];
+        if (Array.isArray(curve) && curve.length >= CURVE_MIN_POINTS) {
+          setCustomPoints(curve);
+        }
+      })
+      .catch(() => {});
   }, [call]);
 
   const handleSetMode = useCallback(
@@ -180,6 +230,7 @@ function FanControl() {
       await call("setFanMode", mode);
       if (mode === "auto") {
         setActivePreset(null);
+        setCustomActive(false);
         persistGameProfile("auto");
       } else {
         persistGameProfile("manual", sliderValue);
@@ -192,6 +243,7 @@ function FanControl() {
     async (percent: number) => {
       setSliderValue(percent);
       setActivePreset(null);
+      setCustomActive(false);
       await call("setFanSpeed", percent);
       persistGameProfile("manual", percent);
     },
@@ -201,11 +253,79 @@ function FanControl() {
   const handleApplyPreset = useCallback(
     async (preset: Preset) => {
       setActivePreset(preset);
+      setCustomActive(false);
       await call("applyPreset", preset);
       persistGameProfile("manual", sliderValue);
     },
     [call, persistGameProfile, sliderValue],
   );
+
+  const handleSelectCustom = useCallback(async () => {
+    setActivePreset(null);
+    setCustomActive(true);
+    await call("applyCustomCurve").catch(() => {});
+    persistGameProfile("manual", sliderValue);
+  }, [call, persistGameProfile, sliderValue]);
+
+  // Persist edited points to the backend. setCustomCurve sanitises and
+  // returns the canonical curve, which we adopt so the UI never drifts
+  // from what's stored / running (e.g. a dropped duplicate point).
+  const commitCustomPoints = useCallback(
+    async (pts: FanCurvePoint[]) => {
+      setCustomPoints(pts);
+      const res = (await call("setCustomCurve", pts).catch(() => null)) as
+        | { curve?: FanCurvePoint[] }
+        | null;
+      const curve = res?.curve;
+      if (curve && Array.isArray(curve)) {
+        setCustomPoints(curve);
+        setSelectedPoint((i) => Math.min(i, curve.length - 1));
+      }
+    },
+    [call],
+  );
+
+  // Live edit of one point's temp/percent. The curve maths live in pure
+  // module helpers; here we just push the result to state and (on commit)
+  // persist — no side effects inside the setState updater, so a Strict /
+  // concurrent re-render can't double-fire the backend write.
+  const updatePoint = useCallback(
+    ({
+      index,
+      next,
+      commit,
+    }: {
+      index: number;
+      next: Partial<FanCurvePoint>;
+      commit: boolean;
+    }) => {
+      const pts = editCurvePoint(customPoints, index, next);
+      setCustomPoints(pts);
+      if (commit) void commitCustomPoints(pts);
+    },
+    [customPoints, commitCustomPoints],
+  );
+
+  const handleAddPoint = useCallback(() => {
+    if (customPoints.length >= CURVE_MAX_POINTS) return;
+    const { points: pts, index } = insertCurvePoint(customPoints);
+    setCustomPoints(pts);
+    setSelectedPoint(index);
+    void commitCustomPoints(pts);
+  }, [customPoints, commitCustomPoints]);
+
+  const handleRemovePoint = useCallback(() => {
+    if (customPoints.length <= CURVE_MIN_POINTS) return;
+    const pts = customPoints.filter((_, i) => i !== selectedPoint);
+    setCustomPoints(pts);
+    setSelectedPoint((i) => Math.min(i, pts.length - 1));
+    void commitCustomPoints(pts);
+  }, [customPoints, selectedPoint, commitCustomPoints]);
+
+  const handleResetCurve = useCallback(() => {
+    setSelectedPoint(0);
+    void commitCustomPoints(DEFAULT_CUSTOM_CURVE.map((p) => ({ ...p })));
+  }, [commitCustomPoints]);
 
   const handleTogglePerGame = useCallback(
     async (next: boolean) => {
@@ -334,10 +454,41 @@ function FanControl() {
           </Alert>
         )}
 
-        {/* FAN SPEED + PRESETS — Auto/Manual toggle and driver chip
-            live in the portaled topbar header. The card collapses
-            entirely in Auto mode so the body shows only the live
-            status / per-game cards beneath. */}
+        {/* LIVE STATUS (top) — fan RPM + edge-temp tiles and status rows,
+            full width. Temperature sensors live in their own collapsible
+            box further down. */}
+        <div className="card">
+          <div className="subsection">
+            <div className="subsection-label">Live Status</div>
+            <div className="grid grid-cols-2 gap-2.5 mb-3.5">
+              <div className="bg-base-300/50 rounded-xl px-3.5 py-4 text-center">
+                <div className="metric-value mono" style={{ fontSize: 30, color: "var(--accent)" }}>
+                  {primaryFan?.rpm.toLocaleString() ?? "—"}
+                </div>
+                <div className="metric-label mt-1">RPM</div>
+              </div>
+              <div className="bg-base-300/50 rounded-xl px-3.5 py-4 text-center">
+                <div className="metric-value mono" style={{ fontSize: 30, color: getTempColor(primaryTemp) }}>
+                  {primaryTemp}°
+                </div>
+                <div className="metric-label mt-1">EDGE TEMP</div>
+              </div>
+            </div>
+            {primaryFan && !fanInfo.usingEctool && (
+              <>
+                <div className="row"><span className="row-label">PWM value</span><span className="row-value">{primaryFan.pwm} / 255</span></div>
+                <div className="row"><span className="row-label">Fan speed</span><span className="row-value">{primaryFan.percent}%</span></div>
+              </>
+            )}
+            <div className="row"><span className="row-label">Mode</span><span className="row-value capitalize">{fanInfo.mode}</span></div>
+            {activePreset && (
+              <div className="row"><span className="row-label">Active preset</span><span className="row-value capitalize">{activePreset}</span></div>
+            )}
+          </div>
+        </div>
+
+        {/* FAN SPEED + PRESETS (Manual only) — the Auto/Manual toggle lives
+            in the portaled topbar header. */}
         {isManual && (
         <div className="card">
             <div className="subsection">
@@ -371,7 +522,7 @@ function FanControl() {
                 {PRESETS.map((preset) => (
                   <SegmentedItem
                     key={preset.key}
-                    active={activePreset === preset.key}
+                    active={!customActive && activePreset === preset.key}
                     onSelect={() => handleApplyPreset(preset.key)}
                     style={{ flex: 1 }}
                   >
@@ -381,12 +532,231 @@ function FanControl() {
                     </span>
                   </SegmentedItem>
                 ))}
+                <SegmentedItem
+                  active={customActive}
+                  onSelect={handleSelectCustom}
+                  style={{ flex: 1 }}
+                >
+                  <span className="flex flex-col items-center leading-tight">
+                    <span className="text-[13px] font-semibold">Custom</span>
+                    <span className="text-[10.5px] opacity-60 mt-0.5">Your own curve</span>
+                  </span>
+                </SegmentedItem>
               </div>
             </div>
+
+            {/* PRESET CURVE PREVIEW — the same graph, read-only, so the
+                user can see the shape of the selected built-in preset
+                without being able to edit it. Switching to Custom swaps in
+                the editable editor below. */}
+            {!customActive && activePreset && (
+              <div className="subsection">
+                <div className="subsection-label mb-3">
+                  {PRESETS.find((p) => p.key === activePreset)?.label ?? "Preset"} Curve
+                </div>
+                <div className="bg-base-300/40 rounded-xl p-3">
+                  <FanCurveGraph
+                    points={FAN_CURVES[activePreset]}
+                    currentTempC={primaryTemp}
+                    editable={false}
+                  />
+                </div>
+                <div className="subsection-desc mt-2.5">
+                  Preview of the {PRESETS.find((p) => p.key === activePreset)?.label ?? "preset"} curve
+                  (read-only). The dashed line marks the current temperature — pick Custom to draw your own.
+                </div>
+              </div>
+            )}
+
+            {/* CUSTOM CURVE EDITOR — graph + per-point sliders. Pointer
+                users drag nodes on the graph; gamepad users select a node
+                and edit it with the two sliders below. */}
+            {customActive && (
+              <div className="subsection">
+                {(() => {
+                  const sel = customPoints[selectedPoint] ?? customPoints[0];
+                  if (!sel) return null;
+                  const prev =
+                    selectedPoint > 0
+                      ? customPoints[selectedPoint - 1]
+                      : undefined;
+                  const next =
+                    selectedPoint < customPoints.length - 1
+                      ? customPoints[selectedPoint + 1]
+                      : undefined;
+                  const minTemp = prev ? prev.tempC + 1 : CURVE_TEMP_MIN;
+                  const maxTemp = next ? next.tempC - 1 : CURVE_TEMP_MAX;
+                  return (
+                    <>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="subsection-label mb-0">Custom Curve</div>
+                        <Button
+                          size="sm"
+                          variant="neutral"
+                          onClick={handleResetCurve}
+                        >
+                          <span className="inline-flex items-center gap-1.5">
+                            <FaArrowRotateLeft className="w-3 h-3" /> Reset
+                          </span>
+                        </Button>
+                      </div>
+
+                      <div className="bg-base-300/40 rounded-xl p-3 mb-3.5">
+                        <FanCurveGraph
+                          points={customPoints}
+                          selectedIndex={selectedPoint}
+                          currentTempC={primaryTemp}
+                          onSelectPoint={setSelectedPoint}
+                          onChangePoint={(i, p) =>
+                            updatePoint({ index: i, next: p, commit: false })
+                          }
+                          onCommit={() => commitCustomPoints(customPoints)}
+                        />
+                      </div>
+
+                      {/* Point selector */}
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <IconButton
+                            ariaLabel="Previous point"
+                            title="Previous point"
+                            onClick={() =>
+                              setSelectedPoint((i) => Math.max(0, i - 1))
+                            }
+                            disabled={selectedPoint <= 0}
+                          >
+                            <FaChevronLeft className="w-3 h-3" />
+                          </IconButton>
+                          <span className="mono text-[12px] text-base-content/70 min-w-[64px] text-center">
+                            Point {selectedPoint + 1} / {customPoints.length}
+                          </span>
+                          <IconButton
+                            ariaLabel="Next point"
+                            title="Next point"
+                            onClick={() =>
+                              setSelectedPoint((i) =>
+                                Math.min(customPoints.length - 1, i + 1),
+                              )
+                            }
+                            disabled={selectedPoint >= customPoints.length - 1}
+                          >
+                            <FaChevronRight className="w-3 h-3" />
+                          </IconButton>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <IconButton
+                            ariaLabel="Add point"
+                            title="Add point"
+                            variant="accent"
+                            onClick={handleAddPoint}
+                            disabled={customPoints.length >= CURVE_MAX_POINTS}
+                          >
+                            <FaPlus className="w-3 h-3" />
+                          </IconButton>
+                          <IconButton
+                            ariaLabel="Remove point"
+                            title="Remove point"
+                            variant="danger"
+                            onClick={handleRemovePoint}
+                            disabled={customPoints.length <= CURVE_MIN_POINTS}
+                          >
+                            <FaTrashCan className="w-3 h-3" />
+                          </IconButton>
+                        </div>
+                      </div>
+
+                      {/* Selected-point editing */}
+                      <div className="mb-3">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-[12px] text-base-content/70">
+                            Temperature
+                          </span>
+                          <span className="mono text-[12px] font-semibold">
+                            {sel.tempC}°C
+                          </span>
+                        </div>
+                        <Slider
+                          value={sel.tempC}
+                          min={minTemp}
+                          max={maxTemp}
+                          step={1}
+                          onChange={(val) =>
+                            updatePoint({ index: selectedPoint, next: { tempC: val }, commit: false })
+                          }
+                          onCommit={(val) =>
+                            updatePoint({ index: selectedPoint, next: { tempC: val }, commit: true })
+                          }
+                        />
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-[12px] text-base-content/70">
+                            Fan speed
+                          </span>
+                          <span
+                            className="mono text-[12px] font-semibold"
+                            style={{ color: "var(--accent)" }}
+                          >
+                            {sel.percent}%
+                          </span>
+                        </div>
+                        <Slider
+                          value={sel.percent}
+                          min={0}
+                          max={100}
+                          step={1}
+                          onChange={(val) =>
+                            updatePoint({ index: selectedPoint, next: { percent: val }, commit: false })
+                          }
+                          onCommit={(val) =>
+                            updatePoint({ index: selectedPoint, next: { percent: val }, commit: true })
+                          }
+                        />
+                      </div>
+
+                      <div className="subsection-desc mt-2.5">
+                        Drag points on the graph, or pick a point and use the
+                        sliders. The dashed line marks the current temperature.
+                        The safety floor still overrides the curve above 75°C.
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
         </div>
         )}
 
-        {/* PER-GAME PROFILES */}
+        {/* TEMPERATURE SENSORS — collapsible box, closed by default so the
+            page stays compact; expand to see per-zone readings. */}
+        {fanInfo.temps.length > 0 && (
+          <Collapse
+            ariaLabel="Toggle temperature sensors"
+            title={
+              // Matches the .subsection-label look (10.5px uppercase) but
+              // without its margin-bottom, which would break the header's
+              // vertical centering.
+              <span
+                className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.1em]"
+                style={{ color: "var(--fg-3)" }}
+              >
+                <FaTemperatureHalf className="w-3 h-3" /> Temperature Sensors
+              </span>
+            }
+          >
+            {fanInfo.temps.map((t, i) => (
+              <div className="row" key={i}>
+                <span className="row-label mono text-xs">{t.label}</span>
+                <span className="flex items-center gap-2.5">
+                  <span className="text-[10.5px] text-base-content/50 uppercase tracking-[0.06em]">{t.zone}</span>
+                  <span className="row-value" style={{ color: getTempColor(t.tempC) }}>{t.tempC}°C</span>
+                </span>
+              </div>
+            ))}
+          </Collapse>
+        )}
+
+        {/* PER-GAME PROFILES — at the end, full width. */}
         <div className="card">
           <div className="subsection">
             <div className="flex items-center justify-between mb-3.5">
@@ -402,99 +772,130 @@ function FanControl() {
                 onChange={(next) => handleTogglePerGame(Boolean(next))}
               />
             </div>
-            {perGameEnabled && currentGame && (
-              <div className="row">
-                <span className="row-label truncate">
-                  Currently bound to {currentGame.gameName || `App ${currentGame.appId}`}
-                </span>
-                <span className="row-value capitalize">
-                  {(() => {
-                    const p = gameProfiles.find((x) => x.appId === currentGame.appId);
-                    if (!p) return "Unsaved";
-                    return p.mode === "manual" && typeof p.speed === "number"
-                      ? `Manual ${p.speed}%`
-                      : p.mode;
-                  })()}
-                </span>
-              </div>
-            )}
             {perGameEnabled && gameProfiles.length > 0 && (
-              <div className="mt-2 flex flex-col gap-1">
-                {gameProfiles.map((p) => (
-                  <div key={p.appId} className="row">
-                    <span className="row-label truncate">
-                      {p.gameName || `App ${p.appId}`}
-                    </span>
-                    <span className="row-value capitalize">
-                      {p.mode === "manual" && typeof p.speed === "number"
-                        ? `Manual ${p.speed}%`
-                        : p.mode}
-                    </span>
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      onClick={() => handleRemoveProfile(p.appId)}
-                    >
-                      Remove
-                    </Button>
-                  </div>
-                ))}
+              <div style={{ marginTop: 8 }}>
+                <div className="subsection-desc" style={{ marginBottom: 4 }}>
+                  Saved profiles ({gameProfiles.length})
+                </div>
+                {/* Cover grid — mirrors the TDP Control per-game grid
+                    (game capsule art, a RUNNING chip for the active game,
+                    the saved fan setting as an overlay badge, and a Remove
+                    action). Wired to BOTH the card's onPick (controller A /
+                    Enter) and the Remove button's onClick so it's fully
+                    usable with a gamepad. */}
+                <GameCardGrid>
+                  {gameProfiles.map((p) => {
+                    const isCurrent =
+                      currentGame !== null && currentGame.appId === p.appId;
+                    const removeProfile = () => handleRemoveProfile(p.appId);
+                    return (
+                      <GameCard
+                        key={p.appId}
+                        imageUrl={steamArtworkUrls(p.appId).capsule}
+                        fallbackImageUrl={steamArtworkUrls(p.appId).header}
+                        title={p.gameName || `App ${p.appId}`}
+                        highlighted={isCurrent}
+                        onPick={removeProfile}
+                        topLeftBadge={
+                          isCurrent ? (
+                            <span className="chip chip-accent">RUNNING</span>
+                          ) : undefined
+                        }
+                        overlayBadges={
+                          <Badge
+                            variant="accent"
+                            size="xs"
+                            className="font-semibold"
+                          >
+                            <span className="mono">{fanProfileBadge(p)}</span>
+                          </Badge>
+                        }
+                        action={
+                          <Button
+                            size="sm"
+                            fullWidth
+                            variant="danger"
+                            onClick={removeProfile}
+                          >
+                            Remove
+                          </Button>
+                        }
+                      />
+                    );
+                  })}
+                </GameCardGrid>
               </div>
             )}
           </div>
-        </div>
-
-        {/* LIVE STATUS — big tiles + rows */}
-        <div className="card">
-          <div className="subsection">
-            <div className="subsection-label">Live Status</div>
-            <div className="grid grid-cols-2 gap-2.5 mb-3.5">
-              <div className="bg-base-300/50 rounded-xl px-3.5 py-4 text-center">
-                <div className="metric-value mono" style={{ fontSize: 30, color: "var(--accent)" }}>
-                  {primaryFan?.rpm.toLocaleString() ?? "—"}
-                </div>
-                <div className="metric-label mt-1">RPM</div>
-              </div>
-              <div className="bg-base-300/50 rounded-xl px-3.5 py-4 text-center">
-                <div className="metric-value mono" style={{ fontSize: 30, color: getTempColor(primaryTemp) }}>
-                  {primaryTemp}°
-                </div>
-                <div className="metric-label mt-1">EDGE TEMP</div>
-              </div>
-            </div>
-            {primaryFan && !fanInfo.usingEctool && (
-              <>
-                <div className="row"><span className="row-label">PWM value</span><span className="row-value">{primaryFan.pwm} / 255</span></div>
-                <div className="row"><span className="row-label">Fan speed</span><span className="row-value">{primaryFan.percent}%</span></div>
-              </>
-            )}
-            <div className="row"><span className="row-label">Mode</span><span className="row-value capitalize">{fanInfo.mode}</span></div>
-            {activePreset && (
-              <div className="row"><span className="row-label">Active preset</span><span className="row-value capitalize">{activePreset}</span></div>
-            )}
-          </div>
-
-          {fanInfo.temps.length > 0 && (
-            <div className="subsection">
-              <div className="subsection-label flex items-center gap-1.5">
-                <FaTemperatureHalf className="w-3 h-3" /> Temperature Sensors
-              </div>
-              {fanInfo.temps.map((t, i) => (
-                <div className="row" key={i}>
-                  <span className="row-label mono text-xs">{t.label}</span>
-                  <span className="flex items-center gap-2.5">
-                    <span className="text-[10.5px] text-base-content/50 uppercase tracking-[0.06em]">{t.zone}</span>
-                    <span className="row-value" style={{ color: getTempColor(t.tempC) }}>{t.tempC}°C</span>
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       </div>
       </div>
     </>
   );
+}
+
+/** Compact saved-profile label for a per-game fan card's overlay badge,
+ *  e.g. "55%" for a manual speed or "AUTO" for auto mode. */
+export function fanProfileBadge(p: FanGameProfile): string {
+  return p.mode === "manual" && typeof p.speed === "number"
+    ? `${p.speed}%`
+    : "AUTO";
+}
+
+/** Return a new curve with one point's temp/percent edited. Percent is
+ *  clamped to [0,100]; temp is clamped between its neighbours (1 °C gap)
+ *  so the curve can never reorder. Pure — out-of-range index is a no-op. */
+export function editCurvePoint(
+  points: FanCurvePoint[],
+  index: number,
+  next: Partial<FanCurvePoint>,
+): FanCurvePoint[] {
+  if (index < 0 || index >= points.length) return points;
+  const pts = points.map((p) => ({ ...p }));
+  const point = pts[index]; // in-bounds: index checked above
+  if (!point) return points;
+  if (typeof next.percent === "number") {
+    point.percent = Math.max(0, Math.min(100, Math.round(next.percent)));
+  }
+  if (typeof next.tempC === "number") {
+    const prev = index > 0 ? pts[index - 1] : undefined;
+    const nextPt = index < pts.length - 1 ? pts[index + 1] : undefined;
+    const minT = prev ? prev.tempC + 1 : CURVE_TEMP_MIN;
+    const maxT = nextPt ? nextPt.tempC - 1 : CURVE_TEMP_MAX;
+    point.tempC = Math.max(minT, Math.min(maxT, Math.round(next.tempC)));
+  }
+  return pts;
+}
+
+/** Insert a node into the widest temperature gap (midpoint of temp +
+ *  percent), returning the new array and the inserted index. Pure. */
+export function insertCurvePoint(points: FanCurvePoint[]): {
+  points: FanCurvePoint[];
+  index: number;
+} {
+  let gapIdx = 0;
+  let gapSize = -1;
+  for (let i = 0; i < points.length - 1; i++) {
+    const lo = points[i]; // both in-bounds: i < length - 1
+    const hi = points[i + 1];
+    if (!lo || !hi) continue;
+    const size = hi.tempC - lo.tempC;
+    if (size > gapSize) {
+      gapSize = size;
+      gapIdx = i;
+    }
+  }
+  const lo = points[gapIdx];
+  const hi = points[gapIdx + 1];
+  if (!lo || !hi) return { points, index: gapIdx };
+  const mid: FanCurvePoint = {
+    tempC: Math.round((lo.tempC + hi.tempC) / 2),
+    percent: Math.round((lo.percent + hi.percent) / 2),
+  };
+  return {
+    points: [...points.slice(0, gapIdx + 1), mid, ...points.slice(gapIdx + 1)],
+    index: gapIdx + 1,
+  };
 }
 
 /** Returns a color based on temperature thresholds. Uses theme tokens
@@ -552,20 +953,22 @@ function FanHomeWidget() {
   // Returns the backend's PWM-derived `percent` directly. Will be 0 on
   // ectool-only hardware where the EC's duty isn't readable.
   const deriveAutoDuty = useCallback((info: FanInfo): number => {
-    if (!info.fans || info.fans.length === 0) return 0;
-    return Math.max(0, Math.min(100, info.fans[0].percent));
+    const first = info.fans?.[0];
+    if (!first) return 0;
+    return Math.max(0, Math.min(100, first.percent));
   }, []);
 
   useEffect(() => {
     call("getFanInfo").then((result) => {
       const info = result as FanInfo;
-      if (info.fans.length > 0) {
-        setRpm(info.fans[0].rpm);
+      const primary = info.fans[0];
+      if (primary) {
+        setRpm(primary.rpm);
         // Seed manualSpeed from the live percent only if the backend
         // can actually report it (direct hwmon). On ectool we leave the
         // 50 default so the slider doesn't snap to 0 when the user
         // flips to Manual.
-        const reported = info.fans[0].percent;
+        const reported = primary.percent;
         if (reported > 0) setManualSpeed(reported);
         setAutoDuty(deriveAutoDuty(info));
       }
@@ -579,8 +982,9 @@ function FanHomeWidget() {
     event: "fan-update",
     handler: useCallback((data: unknown) => {
       const info = data as FanInfo;
-      if (info.fans?.length > 0) {
-        setRpm(info.fans[0].rpm);
+      const primary = info.fans?.[0];
+      if (primary) {
+        setRpm(primary.rpm);
         // Always refresh the auto-duty estimate. The render-time selector
         // below picks whether to display it (mode === "auto") or the
         // user's manualSpeed (mode === "manual"). This keeps the slider
@@ -608,13 +1012,17 @@ function FanHomeWidget() {
   const sliderDisabled = mode !== "manual";
   // Match TDP's chip semantics so per-game state reads identically across
   // the two performance widgets.
-  const savedProfile = boundToGame
-    ? gameProfiles.find((p) => p.appId === currentGame!.appId)
-    : undefined;
-  const profileLabel = boundToGame
+  // boundToGame already implies currentGame is non-null; the extra check
+  // narrows the type without changing which branch runs.
+  const savedProfile =
+    boundToGame && currentGame
+      ? gameProfiles.find((p) => p.appId === currentGame.appId)
+      : undefined;
+  const profileLabel =
+    boundToGame && currentGame
     ? savedProfile
-      ? `Saved · ${currentGame!.gameName || `App ${currentGame!.appId}`}`
-      : `Set for ${currentGame!.gameName || `App ${currentGame!.appId}`}`
+      ? `Saved · ${currentGame.gameName || `App ${currentGame.appId}`}`
+      : `Set for ${currentGame.gameName || `App ${currentGame.appId}`}`
     : mode === "manual"
     ? "Manual"
     : mode === "full"

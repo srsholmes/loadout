@@ -1,5 +1,5 @@
 import { renameSync } from "node:fs";
-import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
+import { readPluginStorage, mutatePluginStorage } from "@loadout/plugin-storage";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,14 +43,28 @@ export interface TdpProfileEngineOptions {
   onApplyTdp: (watts: number) => Promise<void>;
   /** Notify the UI that the active profile changed. */
   onProfileChanged: (profile: TdpProfile | null, gameName: string) => void;
+  /**
+   * The user's manual "no game" TDP (persisted by the backend). When it
+   * returns a value that value is the fallback applied on game exit and for
+   * games without a saved profile, taking precedence over the engine's
+   * stored `defaultTdp`. Returns null when the user has no saved manual TDP,
+   * in which case `defaultTdp` is used.
+   */
+  getNoGameTdp?: () => number | null;
 }
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const MIN_TDP_WATTS = 3;
-const MAX_TDP_WATTS = 80;
+// Sanity bounds only — NOT the per-device limit. The real ceiling is applied
+// in backend.applyTdp() via effectiveMaxWatts(), which is device- and
+// power-state-aware. These were 3-80, which silently truncated saved per-game
+// profiles on devices whose max exceeds 80 W: OneXPlayer Super X (90 W) and
+// GPD Win 5 (85 W) are both in the shipped device table, so this bit users
+// with no custom device involved at all.
+const MIN_TDP_WATTS = 1;
+const MAX_TDP_WATTS = 200;
 const DEFAULT_TDP_WATTS = 15;
 
 // ---------------------------------------------------------------------------
@@ -105,7 +119,16 @@ function normalizeStore(parsed: unknown): TdpProfileStore | null {
 // ---------------------------------------------------------------------------
 
 export function createTdpProfileEngine(options: TdpProfileEngineOptions) {
-  const { pluginId, configPath, onApplyTdp, onProfileChanged } = options;
+  const { pluginId, configPath, onApplyTdp, onProfileChanged, getNoGameTdp } =
+    options;
+
+  // The TDP to apply when no per-game profile is in effect — i.e. a game
+  // exited, or a game without a saved profile launched. The user's manual
+  // TDP (set from the slider / home widget) is authoritative; the engine's
+  // stored default is only a fallback for users who never set one.
+  function noGameTdp(): number {
+    return getNoGameTdp?.() ?? store.defaultTdp;
+  }
   if ((!pluginId && !configPath) || (pluginId && configPath)) {
     throw new Error(
       "createTdpProfileEngine: exactly one of `pluginId` or `configPath` must be provided",
@@ -203,7 +226,20 @@ export function createTdpProfileEngine(options: TdpProfileEngineOptions) {
 
   async function writeRaw(): Promise<void> {
     if (pluginId) {
-      await writePluginStorage(pluginId, store);
+      // Merge (don't overwrite) so co-tenant keys in the same plugin file —
+      // notably the custom-device override (see lib/custom-device.ts) — are
+      // preserved through a profile save. mutatePluginStorage serializes the
+      // read-modify-write against other writers on this file.
+      await mutatePluginStorage<Record<string, unknown>>(
+        pluginId,
+        (existing) => ({
+          ...existing,
+          version: store.version,
+          defaultTdp: store.defaultTdp,
+          profiles: store.profiles,
+          perGameEnabled: store.perGameEnabled,
+        }),
+      );
       return;
     }
     // configPath mode (tests). Mirror the atomic-write semantics of the
@@ -251,8 +287,9 @@ export function createTdpProfileEngine(options: TdpProfileEngineOptions) {
       await commitTdp(profile.tdpWatts);
       onProfileChanged(profile, gameName);
     } else {
-      currentTdp = store.defaultTdp;
-      await commitTdp(store.defaultTdp);
+      const watts = noGameTdp();
+      currentTdp = watts;
+      await commitTdp(watts);
       onProfileChanged(null, gameName);
     }
   }
@@ -268,8 +305,8 @@ export function createTdpProfileEngine(options: TdpProfileEngineOptions) {
       return;
     }
 
-    currentTdp = store.defaultTdp;
-    await commitTdp(store.defaultTdp);
+    currentTdp = noGameTdp();
+    await commitTdp(currentTdp);
     onProfileChanged(null, "");
   }
 
@@ -312,8 +349,11 @@ export function createTdpProfileEngine(options: TdpProfileEngineOptions) {
     if (isGameRunning && activeAppId === appId) {
       activeProfile = null;
       if (store.perGameEnabled) {
-        currentTdp = store.defaultTdp;
-        await commitTdp(store.defaultTdp);
+        // The running game no longer has a profile → same "no profile in
+        // effect" state as a game exit, so fall back to the manual no-game
+        // TDP (matches handleGameExit), not the raw engine default.
+        currentTdp = noGameTdp();
+        await commitTdp(currentTdp);
       }
       onProfileChanged(null, "");
     }
@@ -365,7 +405,7 @@ export function createTdpProfileEngine(options: TdpProfileEngineOptions) {
     if (enabled && isGameRunning && activeAppId != null) {
       const profile = store.profiles.find((p) => p.appId === activeAppId);
       activeProfile = profile ?? null;
-      currentTdp = profile?.tdpWatts ?? store.defaultTdp;
+      currentTdp = profile?.tdpWatts ?? noGameTdp();
       await commitTdp(currentTdp);
       onProfileChanged(profile ?? null, profile?.gameName ?? "");
     }

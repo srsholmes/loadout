@@ -459,7 +459,7 @@ async function raiseAppViaGamescope(
     }
     const m = read.stdout.match(/=\s*([\d,\s]+)/);
     const ids = m
-      ? m[1]
+      ? (m[1] ?? "") // group 1 always captures when the match succeeds
           .split(",")
           .map((s) => Number(s.trim()))
           .filter((n) => Number.isFinite(n) && n > 0)

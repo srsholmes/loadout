@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Thanks for the report! Please confirm the bug reproduces on the
-        latest rolling build before filing.
+        latest release before filing.
   - type: textarea
     id: what-happened
     attributes:

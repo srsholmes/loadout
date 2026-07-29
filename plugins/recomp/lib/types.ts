@@ -15,24 +15,6 @@ export type InstallType =
   | "build_from_source"
   | "custom";
 
-export const PLATFORM_DISPLAY: Record<string, string> = {
-  n64: "N64", ps1: "PS1", ps2: "PS2", gc: "GC", xbox360: "X360",
-  gb: "GB", gba: "GBA", gbc: "GBC", nes: "NES", snes: "SNES",
-  nds: "NDS", "3ds": "3DS", wii: "Wii", wiiu: "Wii U", switch: "Switch",
-  pc: "PC", mobile: "Mobile", multi: "Multi", arcade: "Arcade",
-  dreamcast: "DC", saturn: "Saturn", xbox: "Xbox", xboxone: "Xbox One",
-  other: "Other",
-};
-
-export const PLATFORM_COLOR: Record<string, string> = {
-  n64: "#dc2626", ps1: "#6366f1", ps2: "#2563eb", gc: "#7c3aed", xbox360: "#16a34a",
-  gb: "#22c55e", gba: "#4ade80", gbc: "#15803d", nes: "#ef4444", snes: "#b91c1c",
-  nds: "#3b82f6", "3ds": "#60a5fa", wii: "#06b6d4", wiiu: "#0891b2", switch: "#e11d48",
-  pc: "#a3a3a3", mobile: "#facc15", multi: "#8b5cf6", arcade: "#f472b6",
-  dreamcast: "#818cf8", saturn: "#c084fc", xbox: "#16a34a", xboxone: "#22c55e",
-  other: "#525252",
-};
-
 // ── Registry Types (matching games.json) ─────────────────────────────
 
 export interface PlatformAssets {
@@ -61,6 +43,40 @@ export interface RomInfo {
    *  no CLI extraction mode despite `extractionCommand` historically
    *  trying to invoke a `--generate-otr` flag that doesn't exist. */
   placeRomAs?: string;
+  /**
+   * How the user's dump is structured, when it isn't a single flat
+   * ROM file. Drives `lib/rom-source.ts`'s staging step:
+   *
+   *   - `"raw"` (or absent): existing behavior — the picked file IS
+   *     the ROM; `placeRomAs` / `extractionCommand` handle it.
+   *   - `"xgd-iso"`: an Xbox / Xbox 360 disc image. The GDF
+   *     filesystem is unpacked into `extractTo`.
+   *   - `"stfs"`: an Xbox 360 STFS (LIVE/PIRS/CON) package — XBLA
+   *     titles. Unpacked into `extractTo`.
+   *
+   * For the non-raw formats the picked file may also be a zip/7z/rar
+   * wrapping the dump — the staging step unwraps it and locates the
+   * dump by magic bytes, so `extensions` should include the archive
+   * extensions users actually have.
+   */
+  sourceFormat?: "raw" | "xgd-iso" | "stfs";
+  /** Directory (relative to the install dir) that receives the
+   *  unpacked dump for non-raw `sourceFormat`s. Defaults to
+   *  `"assets"` — the ReXGlue family's `--game_data_root` default. */
+  extractTo?: string;
+  /**
+   * File (relative to `extractTo`) whose presence proves the dump was
+   * the right game — `default.xex` for Xbox 360 titles. Missing ⇒ the
+   * install fails with a clear message instead of shipping a data dir
+   * the engine can't boot. Also the launch-time guard's probe target:
+   * the backend refuses to launch when it's absent (the engine would
+   * just exit with a cryptic "game_data_root does not exist").
+   */
+  anchorFile?: string;
+  /** Known-good SHA-1s of `anchorFile`. Mismatch is a WARNING, not an
+   *  error — other-region dumps frequently work and upstreams mostly
+   *  document them as "untested" rather than broken. */
+  anchorChecksums?: string[];
 }
 
 export interface ToolchainInfo {

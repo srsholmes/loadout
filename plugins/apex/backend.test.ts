@@ -82,7 +82,7 @@ const startWakeListenerImpl = mock((_deps: unknown, onResume: () => void) => {
   capturedOnResume = onResume;
   return { stop: stopSpy };
 });
-mock.module("./lib/wake-listener", () => ({
+mock.module("@loadout/wake", () => ({
   startWakeListener: startWakeListenerImpl,
 }));
 

@@ -26,6 +26,8 @@ import { steamGridRoute } from "./steam-grid";
 import { pluginsRoutes } from "./plugins";
 import { rpcRoute } from "./rpc";
 import { injectRoutes } from "./inject";
+import { overlayButtonRoute } from "./overlay-button";
+import { selfUpdateRoute, restartRoute } from "./self-update";
 
 /**
  * Ordered route list. Populated incrementally as A-001 progresses;
@@ -38,6 +40,9 @@ const routes: RouteHandler[] = [
   steamGridRoute,
   ...pluginsRoutes,
   rpcRoute,
+  overlayButtonRoute,
+  selfUpdateRoute,
+  restartRoute,
   ...injectRoutes,
 ];
 
@@ -69,4 +74,4 @@ export async function dispatchRoute(
   return null;
 }
 
-export type { RouteContext, RouteHandler } from "./types";
+export type { RouteContext } from "./types";

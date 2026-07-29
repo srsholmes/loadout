@@ -30,12 +30,50 @@ const PRODUCT_GALILEO = 0x1206;
  *  presents it that way. External Steam Controllers also bus 0x0003. */
 const BUS_USB = 0x0003;
 
-/** Steam Deck HID gamepad report ID. The hidraw stream interleaves a few
- *  report types; only 0x01 carries button + axis state. */
+/** Byte 0 of every Valve in-report: the low half of `unReportVersion`.
+ *
+ *  NOT a report-type discriminator — it is 0x01 on EVERY in-report the
+ *  controller emits, so testing it alone accepts all of them. The header is
+ *  (per drivers/hid/hid-steam.c):
+ *
+ *      0-1 | always 0x01, 0x00 — protocol version
+ *        2 | ucType — message type   ← the actual discriminator
+ *        3 | payload length
+ *
+ *  Use isDeckStateReport() to select gamepad state frames. */
 export const REPORT_ID_INPUT = 0x01;
+
+/** `ID_CONTROLLER_DECK_STATE` — ucType of the 64-byte gamepad state report.
+ *  Matches `ID_CONTROLLER_DECK_STATE = 9` in hid-steam.c and SDL's
+ *  `k_EDeckStateReport`. */
+export const REPORT_TYPE_DECK_STATE = 0x09;
 
 /** Every input report is 64 bytes. */
 export const REPORT_LEN = 64;
+
+/**
+ * True only for a Steam Deck gamepad-state frame.
+ *
+ * Mirrors the kernel's own gate, which is the authority on this stream:
+ *
+ *     if (size != 64 || data[0] != 1 || data[1] != 0) return 0;
+ *     switch (data[2]) { case ID_CONTROLLER_DECK_STATE: ... }
+ *
+ * Previously every caller tested `report[0] !== REPORT_ID_INPUT`, which is
+ * constant across report types — so any other 64-byte in-report the
+ * controller emitted (Steam Input drives feature reports on this endpoint
+ * concurrently) was decoded as button + stick state. On a real Deck that
+ * surfaces as phantom presses or a stick snap into a freshly-opened overlay,
+ * or a spurious wake toggle while it is closed.
+ */
+export function isDeckStateReport(report: Buffer): boolean {
+  return (
+    report.length >= REPORT_LEN &&
+    report[0] === REPORT_ID_INPUT &&
+    report[1] === 0x00 &&
+    report[2] === REPORT_TYPE_DECK_STATE
+  );
+}
 
 // ── Button bit map (issue #86, verified on a Jupiter Deck) ─────────────────
 
@@ -68,6 +106,27 @@ export const DECK_BUTTONS: readonly DeckButton[] = [
   { name: "R5", label: "Right Back Paddle (R5)", byte: 10, bit: 0 },
   { name: "A", label: "A Button", byte: 8, bit: 7 },
 ];
+
+/** Buttons that must NEVER be bindable as the overlay wake button. Steam and
+ *  Quick Access drive the whole device (Steam menu, QAM, chords) and Steam
+ *  reads them via hidraw concurrently with us — a press reaches Steam live
+ *  before the overlay can freeze it, so binding them means Steam's own menu
+ *  fights the overlay on every wake. They stay in DECK_BUTTONS (the decoder
+ *  and legacy persisted bindings still need their bit positions); every
+ *  binding surface (picker, set, press-to-capture, persisted-state readers)
+ *  must go through BINDABLE_DECK_BUTTONS / isBindableDeckButton instead. */
+export const RESERVED_DECK_BUTTONS: readonly string[] = ["Steam", "Qam"];
+
+/** DECK_BUTTONS minus the reserved system buttons — the only valid wake
+ *  binding candidates. */
+export const BINDABLE_DECK_BUTTONS: readonly DeckButton[] = DECK_BUTTONS.filter(
+  (b) => !RESERVED_DECK_BUTTONS.includes(b.name),
+);
+
+export function isBindableDeckButton(name: string | null): boolean {
+  if (!name) return false;
+  return BINDABLE_DECK_BUTTONS.some((b) => b.name === name);
+}
 
 /** Lookup index for parsing — byte → list of (bit, name). Built once, reused
  *  by frame-decode hot path. */
@@ -128,15 +187,29 @@ export function parseHidUEvent(content: string): HidUEvent {
       // Format: BUS:VENDOR:PRODUCT, all hex, vendor/product zero-padded to 8.
       const parts = value.split(":");
       if (parts.length === 3) {
-        out.bus = parseInt(parts[0], 16);
-        out.vendor = parseInt(parts[1], 16);
-        out.product = parseInt(parts[2], 16);
+        // parts.length was checked === 3, so all three are present; the
+        // guard only satisfies the type checker.
+        const [busStr, vendorStr, productStr] = parts;
+        if (
+          busStr !== undefined &&
+          vendorStr !== undefined &&
+          productStr !== undefined
+        ) {
+          out.bus = parseInt(busStr, 16);
+          out.vendor = parseInt(vendorStr, 16);
+          out.product = parseInt(productStr, 16);
+        }
       }
     } else if (key === "HID_PHYS") {
       out.hidPhys = value;
       // Tail "/inputN" — the kernel encodes the USB interface number here.
       const m = value.match(/\/input(\d+)\s*$/);
-      if (m) out.interfaceNum = parseInt(m[1], 10);
+      // group 1 is a required capture, so it is always present when m
+      // matched; the guard only satisfies the type checker.
+      if (m) {
+        const iface = m[1];
+        if (iface !== undefined) out.interfaceNum = parseInt(iface, 10);
+      }
     }
   }
   return out;
@@ -196,10 +269,10 @@ export interface DeckButtonTransition {
  *  report ids and short buffers return null so the caller can skip them. */
 export function decodeButtons(report: Buffer): Map<string, boolean> | null {
   if (report.length < REPORT_LEN) return null;
-  if (report[0] !== REPORT_ID_INPUT) return null;
+  if (!isDeckStateReport(report)) return null;
   const out = new Map<string, boolean>();
   for (const [byteIdx, defs] of DECK_BUTTONS_BY_BYTE) {
-    const v = report[byteIdx];
+    const v = report[byteIdx] ?? 0;
     for (const { bit, name } of defs) {
       out.set(name, (v & (1 << bit)) !== 0);
     }
@@ -231,4 +304,84 @@ export function splitReports(chunk: Buffer): Buffer[] {
     out.push(chunk.subarray(off, off + REPORT_LEN));
   }
   return out;
+}
+
+// ── Nav-state decoding (full frame, overlay navigation) ─────────────────────
+//
+// The wake path above only chases single picker-exposed bits. Overlay nav
+// needs the full gamepad-relevant state of report 0x01. Layout references:
+//   - SDL SDL_hidapi_steamdeck.c `SteamDeckStatePacket_t` + STEAMDECK_*BUTTON_*
+//   - InputPlumber drivers/steam_deck/hid_report.rs
+// Both agree with DECK_BUTTONS above on every overlapping bit (A, View,
+// Steam, Menu, L5, R5, L4, R4, Qam), which cross-validates the table.
+//
+// ulButtons is a u64 at offset 8 (little-endian):
+//   byte 8:  bit0 R2 bit1 L2 bit2 R1 bit3 L1 bit4 Y bit5 B bit6 X bit7 A
+//   byte 9:  bit0 Up bit1 Right bit2 Left bit3 Down
+//            bit4 View bit5 Steam bit6 Menu bit7 L5
+//   byte 14: bit2 Quick Access (…)
+// Sticks are int16 LE: LX@48 LY@50 RX@52 RY@54. HID Y is up-positive; the
+// decoder negates it so consumers get the evdev convention (down-positive)
+// the overlay's NavController expects.
+
+/** Full nav-relevant state of one input report. */
+export interface DeckNavState {
+  a: boolean;
+  b: boolean;
+  x: boolean;
+  y: boolean;
+  l1: boolean;
+  r1: boolean;
+  dpadUp: boolean;
+  dpadDown: boolean;
+  dpadLeft: boolean;
+  dpadRight: boolean;
+  view: boolean;
+  menu: boolean;
+  steam: boolean;
+  qam: boolean;
+  /** Left stick, normalized -1..1, evdev sign convention (down/right positive). */
+  lx: number;
+  ly: number;
+  /** Right stick, same conventions. */
+  rx: number;
+  ry: number;
+}
+
+function bit(report: Buffer, byte: number, bitPos: number): boolean {
+  return ((report[byte] ?? 0) & (1 << bitPos)) !== 0;
+}
+
+function stick(report: Buffer, offset: number, negate: boolean): number {
+  const raw = report.readInt16LE(offset);
+  const v = Math.max(-1, Math.min(1, raw / 32767));
+  // `+ 0` normalizes -0 → 0 so centered sticks compare cleanly.
+  return negate ? -v + 0 : v;
+}
+
+/** Decode a single 64-byte input report 0x01 into a DeckNavState. Other
+ *  report ids and short buffers return null so the caller can skip them. */
+export function decodeNavState(report: Buffer): DeckNavState | null {
+  if (report.length < REPORT_LEN) return null;
+  if (!isDeckStateReport(report)) return null;
+  return {
+    r1: bit(report, 8, 2),
+    l1: bit(report, 8, 3),
+    y: bit(report, 8, 4),
+    b: bit(report, 8, 5),
+    x: bit(report, 8, 6),
+    a: bit(report, 8, 7),
+    dpadUp: bit(report, 9, 0),
+    dpadRight: bit(report, 9, 1),
+    dpadLeft: bit(report, 9, 2),
+    dpadDown: bit(report, 9, 3),
+    view: bit(report, 9, 4),
+    steam: bit(report, 9, 5),
+    menu: bit(report, 9, 6),
+    qam: bit(report, 14, 2),
+    lx: stick(report, 48, false),
+    ly: stick(report, 50, true),
+    rx: stick(report, 52, false),
+    ry: stick(report, 54, true),
+  };
 }

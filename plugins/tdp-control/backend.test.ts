@@ -1,6 +1,11 @@
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { EmitPayload } from "@loadout/types";
 import TdpControlBackend from "./backend";
+import { readSavedTdp } from "./lib/saved-tdp";
+import { readCpuBoostPref, writeCpuBoostPref } from "./lib/cpu-boost-pref";
 
 /**
  * TdpControlBackend tests.
@@ -126,43 +131,6 @@ describe("TdpControlBackend", () => {
     });
   });
 
-  // ── setChargeLimit ────────────────────────────────────────────────
-
-  describe("setChargeLimit", () => {
-    it("rejects percent below 20", async () => {
-      const result = await backend.setChargeLimit(10);
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("between 20 and 100");
-    });
-
-    it("rejects percent above 100", async () => {
-      const result = await backend.setChargeLimit(110);
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("between 20 and 100");
-    });
-
-    it("rejects boundary value 19", async () => {
-      const result = await backend.setChargeLimit(19);
-      expect(result.success).toBe(false);
-    });
-
-    it("returns error when charge limit sysfs path does not exist", async () => {
-      // On non-Linux or test env, the sysfs path won't exist
-      const result = await backend.setChargeLimit(80);
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("not supported");
-    });
-  });
-
-  // ── getChargeLimit ────────────────────────────────────────────────
-
-  describe("getChargeLimit", () => {
-    it("returns null percent when sysfs path doesn't exist", async () => {
-      const result = await backend.getChargeLimit();
-      expect(result.percent).toBeNull();
-    });
-  });
-
   // ── getAcPowerStatus ──────────────────────────────────────────────
 
   describe("getAcPowerStatus", () => {
@@ -217,6 +185,23 @@ describe("TdpControlBackend", () => {
   // hardware write so we can assert the clamp math without /sys.
 
   describe("power-state limits", () => {
+    const acTempDirs: string[] = [];
+    afterEach(() => {
+      for (const d of acTempDirs.splice(0)) {
+        rmSync(d, { recursive: true, force: true });
+      }
+    });
+
+    /** A stand-in for /sys/class/power_supply/<supply>/online, so AC state in
+     *  these tests is ours and not the host's. */
+    function acFile(contents: "0" | "1"): string {
+      const dir = mkdtempSync(join(tmpdir(), "tdp-ac-"));
+      acTempDirs.push(dir);
+      const f = join(dir, "online");
+      writeFileSync(f, `${contents}\n`);
+      return f;
+    }
+
     function configure(opts: { ac: boolean | null }) {
       const b = backend as unknown as {
         method: string;
@@ -236,6 +221,66 @@ describe("TdpControlBackend", () => {
       b.setTdpViaRyzenadj = async () => {}; // stub the SMU write
       return b;
     }
+
+    it("resume preserves the standing intent, so plugging back in springs up", async () => {
+      // Regression: onResume used to re-apply trackedTdp (the CLAMPED figure)
+      // and applyTdp rewrites desiredTdp from what it is given — so an 80W
+      // intent collapsed to 55W permanently and never sprang back on AC.
+      const b = configure({ ac: true }) as unknown as {
+        desiredTdp: number | null;
+        currentTdp: number | null;
+        trackedTdp: number | null;
+        acPowerOnline: boolean | null;
+        acPowerPath: string | null;
+        setTdpViaRyzenadj: (w: number) => Promise<void>;
+      };
+      const applied: number[] = [];
+      b.setTdpViaRyzenadj = async (w: number) => {
+        applied.push(w);
+      };
+
+      await backend.setTdp(80);
+      expect(b.desiredTdp).toBe(80);
+
+      // Point AC state at a FILE we control, reading "0" (on battery).
+      // Setting acPowerPath = null instead would make refreshAcPower fall
+      // through to detectAcPower() and read the HOST's /sys — which passed on
+      // an unplugged dev machine and failed on CI, where no Mains node exists
+      // so acPowerOnline becomes null ("unknown AC") and nothing clamps.
+      // Tests must not depend on whether the machine running them is plugged in.
+      b.acPowerPath = acFile("0");
+      b.acPowerOnline = false;
+      // trackedTdp is what was last WRITTEN, i.e. already clamped — it must
+      // differ from the intent or this test can't tell the two apart.
+      b.trackedTdp = 55;
+      applied.length = 0;
+
+      await backend.onResume();
+
+      // Clamped for the write...
+      expect(applied).toEqual([55]);
+      // ...but the INTENT survives, so AC restores 80.
+      expect(b.desiredTdp).toBe(80);
+    });
+
+    it("resume writes the SMU once, not twice", async () => {
+      const b = configure({ ac: false }) as unknown as {
+        trackedTdp: number | null;
+        acPowerPath: string | null;
+        setTdpViaRyzenadj: (w: number) => Promise<void>;
+      };
+      const applied: number[] = [];
+      b.setTdpViaRyzenadj = async (w: number) => {
+        applied.push(w);
+      };
+      await backend.setTdp(40);
+      b.trackedTdp = 40;
+      b.acPowerPath = acFile("0");
+      applied.length = 0;
+
+      await backend.onResume();
+      expect(applied.length).toBe(1);
+    });
 
     it("applies the full value when plugged in", async () => {
       const b = configure({ ac: true });
@@ -268,6 +313,311 @@ describe("TdpControlBackend", () => {
       expect(info.maxWatts).toBe(55); // effective (on battery)
       expect(info.pluggedMaxWatts).toBe(80);
       expect(info.batteryMaxWatts).toBe(55);
+    });
+  });
+
+  // ── TDP read-back via bundled ryzenadj ────────────────────────────
+  //
+  // readTdpViaRyzenadj() must exec the resolved ryzenadjPath (the bundled
+  // binary on stock SteamOS), not a bare "ryzenadj" that only works when a
+  // system install happens to be on $PATH. Regression: the read-back
+  // silently failed on every poll and the UI stayed on the "tracked" value.
+
+  describe("TDP read-back via ryzenadjPath", () => {
+    let dir: string;
+
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "tdp-ryzenadj-read-"));
+    });
+
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("reads STAPM LIMIT through the resolved binary path", async () => {
+      const fake = join(dir, "ryzenadj");
+      await Bun.write(
+        fake,
+        '#!/bin/sh\necho "STAPM LIMIT : 25.000 | some other columns"\n',
+      );
+      chmodSync(fake, 0o755);
+
+      const b = backend as unknown as {
+        method: string;
+        ryzenadjCanRead: boolean;
+        ryzenadjPath: string;
+      };
+      b.method = "ryzenadj";
+      b.ryzenadjCanRead = true;
+      b.ryzenadjPath = fake;
+
+      const info = await backend.getTdpInfo();
+      expect(info.currentTdp).toBe(25);
+      expect(info.tdpReadSource).toBe("read");
+    });
+  });
+
+  // ── manual TDP persistence ────────────────────────────────────────
+  //
+  // The user's chosen TDP must survive a shutdown: setTdp() persists it to
+  // the plugin config file, and automatic applies (per-game/AC/resume, which
+  // route through the private applyTdp()) must NOT overwrite it.
+
+  describe("manual TDP persistence", () => {
+    let dir: string;
+    let prevXdg: string | undefined;
+
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "tdp-persist-test-"));
+      prevXdg = process.env.XDG_CONFIG_HOME;
+      process.env.XDG_CONFIG_HOME = dir;
+    });
+
+    afterEach(() => {
+      if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevXdg;
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    function configure() {
+      const b = backend as unknown as {
+        method: string;
+        minWatts: number;
+        maxWatts: number;
+        batteryMaxWatts: number;
+        acPowerOnline: boolean | null;
+        setTdpViaRyzenadj: (w: number) => Promise<void>;
+        applyTdp: (w: number) => Promise<{ success: boolean }>;
+      };
+      b.method = "ryzenadj";
+      b.minWatts = 5;
+      b.maxWatts = 80;
+      b.batteryMaxWatts = 55;
+      b.acPowerOnline = true;
+      b.setTdpViaRyzenadj = async () => {}; // stub the SMU write
+      return b;
+    }
+
+    it("setTdp persists the user's chosen value", async () => {
+      configure();
+      const result = await backend.setTdp(28);
+      expect(result.success).toBe(true);
+      expect(await readSavedTdp("tdp-control")).toBe(28);
+    });
+
+    it("applyProfile persists the preset value", async () => {
+      const b = configure();
+      // Seed a known preset so applyProfile has something to apply.
+      (b as unknown as { profiles: Record<string, number> }).profiles = {
+        Silent: 10,
+        Balanced: 18,
+        Performance: 40,
+      };
+      const result = await backend.applyProfile("Balanced");
+      expect(result.success).toBe(true);
+      expect(await readSavedTdp("tdp-control")).toBe(18);
+    });
+
+    it("automatic applyTdp does NOT overwrite the saved value", async () => {
+      const b = configure();
+      await backend.setTdp(28);
+      expect(await readSavedTdp("tdp-control")).toBe(28);
+      // Simulate an automatic re-apply (per-game profile / AC / resume).
+      await b.applyTdp(12);
+      expect(await readSavedTdp("tdp-control")).toBe(28);
+    });
+
+    it("setTdp does NOT overwrite the saved value while a per-game profile governs TDP", async () => {
+      const b = configure();
+      // Establish the manual "no game" value (no engine → nothing governs).
+      await backend.setTdp(35);
+      expect(await readSavedTdp("tdp-control")).toBe(35);
+
+      // Now a per-game profile is actively governing TDP: the frontend routes
+      // the slider to setGameProfile, and the parallel setTdp must NOT clobber
+      // the manual no-game value with the in-game watts.
+      (b as unknown as { profileEngine: unknown }).profileEngine = {
+        getCurrentState: () => ({
+          activeProfile: null,
+          currentTdp: 35,
+          isGameRunning: true,
+          perGameEnabled: true,
+        }),
+      };
+      const result = await backend.setTdp(20);
+      expect(result.success).toBe(true); // still applied to hardware
+      expect(await readSavedTdp("tdp-control")).toBe(35); // saved value intact
+    });
+
+    it("setTdp DOES persist when a game runs but per-game is disabled", async () => {
+      const b = configure();
+      // Per-game off → setTdp is the only TDP control, so it must persist even
+      // if a game happens to be tracked as running.
+      (b as unknown as { profileEngine: unknown }).profileEngine = {
+        getCurrentState: () => ({
+          activeProfile: null,
+          currentTdp: 15,
+          isGameRunning: true,
+          perGameEnabled: false,
+        }),
+      };
+      await backend.setTdp(22);
+      expect(await readSavedTdp("tdp-control")).toBe(22);
+    });
+  });
+
+  // ── CPU boost policy ──────────────────────────────────────────────
+  //
+  // With boost on, the CPU races to max clocks under any sustained load and
+  // consumes the whole TDP envelope — draw pins at the limit instead of
+  // tracking the workload, regardless of governor/EPP. The backend therefore
+  // re-asserts a boost policy (the user's persisted preference, default OFF)
+  // alongside every TDP apply, the way SimpleDeckyTDP applies its CPU
+  // profile with every TDP profile.
+
+  describe("CPU boost policy", () => {
+    let dir: string;
+    let prevXdg: string | undefined;
+
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "tdp-boost-test-"));
+      prevXdg = process.env.XDG_CONFIG_HOME;
+      process.env.XDG_CONFIG_HOME = dir;
+    });
+
+    afterEach(() => {
+      if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevXdg;
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    function configure() {
+      const boostWrites: boolean[] = [];
+      const b = backend as unknown as {
+        method: string;
+        minWatts: number;
+        maxWatts: number;
+        batteryMaxWatts: number;
+        acPowerOnline: boolean | null;
+        supportsCpuBoost: boolean;
+        cpuBoostPath: string | null;
+        setTdpViaRyzenadj: (w: number) => Promise<void>;
+        writeCpuBoost: (enable: boolean) => Promise<void>;
+      };
+      b.method = "ryzenadj";
+      b.minWatts = 5;
+      b.maxWatts = 80;
+      b.batteryMaxWatts = 55;
+      b.acPowerOnline = true;
+      b.supportsCpuBoost = true;
+      b.cpuBoostPath = "/sys/devices/system/cpu/cpufreq/boost";
+      b.setTdpViaRyzenadj = async () => {}; // stub the SMU write
+      b.writeCpuBoost = async (enable: boolean) => {
+        boostWrites.push(enable);
+      };
+      return { b, boostWrites };
+    }
+
+    it("disables boost alongside a TDP apply by default", async () => {
+      const { boostWrites } = configure();
+      const result = await backend.setTdp(30);
+      expect(result.success).toBe(true);
+      expect(boostWrites).toEqual([false]);
+    });
+
+    it("setCpuBoost persists the opt-out and TDP applies re-assert it", async () => {
+      const { boostWrites } = configure();
+      const result = await backend.setCpuBoost(true);
+      expect(result.success).toBe(true);
+      expect(await readCpuBoostPref("tdp-control")).toBe(true);
+      await backend.setTdp(30);
+      expect(boostWrites).toEqual([true, true]);
+    });
+
+    it("getTdpInfo reports the enforced setting", async () => {
+      configure();
+      expect((await backend.getTdpInfo()).cpuBoostSetting).toBe(false);
+      await backend.setCpuBoost(true);
+      expect((await backend.getTdpInfo()).cpuBoostSetting).toBe(true);
+    });
+
+    it("a failed boost write does not fail the TDP apply", async () => {
+      const { b } = configure();
+      b.writeCpuBoost = async () => {
+        throw new Error("EIO");
+      };
+      const result = await backend.setTdp(30);
+      expect(result.success).toBe(true);
+    });
+
+    it("skips the boost write when boost is unsupported", async () => {
+      const { b, boostWrites } = configure();
+      b.supportsCpuBoost = false;
+      b.cpuBoostPath = null;
+      const result = await backend.setTdp(30);
+      expect(result.success).toBe(true);
+      expect(boostWrites).toEqual([]);
+    });
+
+    /**
+     * Stub onLoad's hardware probes so it runs hermetically — detection
+     * would otherwise hit real sysfs (or nothing at all in CI) and
+     * overwrite the state `configure()` set up.
+     */
+    function stubDetection() {
+      const t = backend as unknown as Record<string, unknown>;
+      for (const m of [
+        "detectDevice",
+        "detectCpuInfo",
+        "detectTdpMethod",
+        "detectScalingDriver",
+        "detectPlatformProfile",
+        "detectSmtSupport",
+        "detectCpuBoostSupport",
+        "detectGpu",
+        "detectAcPower",
+        "detectEppOptions",
+        "detectGovernorOptions",
+      ]) {
+        t[m] = async () => {};
+      }
+      t.readCurrentTdp = async () => null;
+    }
+
+    it("onLoad asserts the policy at startup, without any saved TDP", async () => {
+      const { boostWrites } = configure();
+      stubDetection();
+      await backend.onLoad();
+      await backend.onUnload();
+      expect(boostWrites).toEqual([false]);
+    });
+
+    it("onLoad leaves boost alone when there's no TDP control and no explicit preference", async () => {
+      const { b, boostWrites } = configure();
+      b.method = "none";
+      stubDetection();
+      await backend.onLoad();
+      await backend.onUnload();
+      expect(boostWrites).toEqual([]);
+    });
+
+    it("onLoad honors an explicit preference even without TDP control", async () => {
+      const { b, boostWrites } = configure();
+      b.method = "none";
+      await writeCpuBoostPref({ pluginId: "tdp-control", enabled: true });
+      stubDetection();
+      await backend.onLoad();
+      await backend.onUnload();
+      expect(boostWrites).toEqual([true]);
+    });
+
+    it("onResume re-asserts the policy even when no TDP was ever applied", async () => {
+      const { boostWrites } = configure();
+      // trackedTdp is null (nothing applied this session) — resume must
+      // still heal a firmware-reset boost knob.
+      const result = await backend.onResume();
+      expect(result.success).toBe(true);
+      expect(boostWrites).toEqual([false]);
     });
   });
 
@@ -385,7 +735,6 @@ describe("TdpControlBackend", () => {
       expect(info).toHaveProperty("smtEnabled");
       expect(info).toHaveProperty("cpuBoostEnabled");
       expect(info).toHaveProperty("acPowerOnline");
-      expect(info).toHaveProperty("chargeLimitPercent");
     });
 
     it("method is none when not initialized", async () => {
@@ -415,7 +764,6 @@ describe("TdpControlBackend", () => {
       expect(info).toHaveProperty("intelRaplAvailable");
       expect(info).toHaveProperty("gpuVendor");
       expect(info).toHaveProperty("supportsGpuControl");
-      expect(info).toHaveProperty("supportsChargeLimit");
     });
   });
 });

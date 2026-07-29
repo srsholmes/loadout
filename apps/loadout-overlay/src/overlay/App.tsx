@@ -1,6 +1,10 @@
 import { useRef, useState, useEffect, useCallback, useMemo, type CSSProperties } from "react";
 import { Toaster, toast } from "react-hot-toast";
-import { LoadoutProvider, TOAST_EVENT, type ToastEventDetail } from "@loadout/ui";
+import { LoadoutProvider, TOAST_EVENT, notify, type ToastEventDetail } from "@loadout/ui";
+import { versionsEqual, olderParseableVersion } from "@loadout/types";
+import { OVERLAY_VERSION } from "./version";
+import { checkForUpdate, restartApp } from "./lib/host";
+import { apiUrl, authHeaders } from "./lib/backend";
 import { Sidebar } from "./components/Sidebar";
 import { PluginHost } from "./components/PluginHost";
 import {
@@ -12,11 +16,11 @@ import {
 import { Settings } from "./components/Settings";
 import { Homepage } from "./components/Homepage";
 import { WelcomeScreen } from "./components/WelcomeScreen";
-import { usePlugins } from "./hooks/usePlugins";
+import { usePlugins, useInstalledPlugins } from "./hooks/usePlugins";
 import { useSidebarAutoCollapseSetting } from "./hooks/useSidebarCollapse";
 import { useStatusMetrics } from "./hooks/useStatusMetrics";
 import { useEnabledPlugins } from "./hooks/useEnabledPlugins";
-import { useConfigValue, getConfigValue, setConfigValue, whenUserConfigLoaded } from "./lib/userConfig";
+import { useConfigValue, getConfigValue, setConfigValue, setConfigValueFlushed, whenUserConfigLoaded } from "./lib/userConfig";
 import { GamepadNavProvider, useFocusable, Focusable, FocusContext, setFocus, getCurrentFocusKey } from "./components/GamepadNav";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { hideOverlay, isGamescopeMode, getControllerShortcuts, setControllerShortcuts, sendOverlayHeartbeat } from "./lib/host";
@@ -142,12 +146,105 @@ export function App() {
           ? toast.error
           : detail.kind === "loading"
             ? toast.loading
-            : toast.success;
+            : detail.kind === "info"
+              ? toast // neutral — no status icon
+              : toast.success;
       fn(detail.message, { id: detail.id, duration: detail.duration });
     };
     window.addEventListener(TOAST_EVENT, onToast);
     return () => window.removeEventListener(TOAST_EVENT, onToast);
   }, []);
+
+  // Release-update surface (issue #173). Two boot-time jobs, both
+  // gated on the persisted config being loaded (the skip marker and
+  // the pending-update marker live there):
+  //   1. If the last session kicked off an update, confirm or clear
+  //      it: `updatePendingTag` matching the now-running version means
+  //      the update landed — say so once, then drop the marker.
+  //   2. ~10s after boot, ask the Bun host whether a newer release is
+  //      published. Toast unless the user skipped that exact version
+  //      from Settings (a manual check there ignores the skip).
+  // Both toasts wait for the overlay to actually be VISIBLE before
+  // firing: the window boots hidden (minimize-on-close model) and the
+  // overlay unit starts at login, so a toast shown at boot lands in a
+  // window the user isn't looking at and is gone before they open it.
+  // Dev builds short-circuit inside checkForUpdate (unparsable
+  // version), so this never nags during development.
+  useEffect(() => {
+    let cancelled = false;
+    let visResolve: (() => void) | null = null;
+    const visReady = new Promise<void>((resolve) => {
+      visResolve = resolve;
+    });
+    const onVisible = (e: Event) => {
+      if ((e as CustomEvent<{ isOpen: boolean }>).detail?.isOpen) {
+        visResolve?.();
+        visResolve = null;
+      }
+    };
+    window.addEventListener("loadout:overlay-visibility", onVisible as EventListener);
+
+    (async () => {
+      await whenUserConfigLoaded();
+      if (cancelled) return;
+      const pending = getConfigValue<string | null>("updatePendingTag", null);
+      if (pending) {
+        if (versionsEqual(OVERLAY_VERSION, pending)) {
+          // Wait until the user is actually looking at the overlay, then
+          // toast and only THEN clear the marker — otherwise the
+          // confirmation is consumed while the window is hidden.
+          await visReady;
+          if (cancelled) return;
+          notify(`Loadout updated to ${pending}.`, {
+            kind: "success",
+            id: "loadout-update",
+            duration: 6000,
+          });
+        }
+        setConfigValue("updatePendingTag", null);
+      }
+      await new Promise((r) => setTimeout(r, 10_000));
+      if (cancelled) return;
+      // Compare against the OLDER of backend/overlay versions — same
+      // rule as Settings' UpdateSection. Using only OVERLAY_VERSION
+      // here meant a half-applied update (overlay landed, backend
+      // didn't) got no startup toast even though Settings offered the
+      // repair. Backend unreachable → fall back to the overlay's own.
+      let installedVersion = OVERLAY_VERSION;
+      try {
+        const statusRes = await fetch(apiUrl("/api/status"), { headers: authHeaders() });
+        const statusJson = (await statusRes.json()) as { version?: unknown };
+        if (typeof statusJson.version === "string") {
+          installedVersion =
+            olderParseableVersion(statusJson.version, OVERLAY_VERSION) ?? OVERLAY_VERSION;
+        }
+      } catch {
+        // backend down — the overlay bundle's version is the best we have
+      }
+      const res = await checkForUpdate(installedVersion);
+      if (cancelled || !res.available || !res.tag) return;
+      if (getConfigValue<string | null>("updateSkippedVersion", null) === res.tag) return;
+      await visReady;
+      if (cancelled) return;
+      // Re-check the skip marker: the user may have skipped it from
+      // Settings during the wait.
+      if (getConfigValue<string | null>("updateSkippedVersion", null) === res.tag) return;
+      notify(`Loadout ${res.tag} is available — update from Settings.`, {
+        id: "loadout-update",
+        duration: 8000,
+      });
+    })();
+    return () => {
+      cancelled = true;
+      window.removeEventListener("loadout:overlay-visibility", onVisible as EventListener);
+    };
+  }, []);
+
+  // Toasts render here in the parent, OUTSIDE AppInner's zoomed wrapper, so the
+  // UI-scale `zoom` never reached them and they stayed tiny (issue #177). Read
+  // the same `uiScale` config value AppInner uses and scale the toast container
+  // to match, so toasts grow with the rest of the UI.
+  const [uiScale] = useConfigValue<number>("uiScale", loadScale(false));
 
   return (
     <LoadoutProvider>
@@ -155,15 +252,17 @@ export function App() {
         <AppInner />
         <Toaster
           position="top-right"
+          containerStyle={{ zoom: uiScale }}
           toastOptions={{
             duration: 3000,
             style: {
               background: "var(--bg-inset)",
               color: "var(--fg-1)",
               border: "1px solid var(--line)",
-              borderRadius: "10px",
-              fontSize: "13px",
-              padding: "10px 14px",
+              borderRadius: "12px",
+              fontSize: "15px",
+              lineHeight: "1.35",
+              padding: "13px 18px",
               boxShadow: "0 8px 24px rgb(0 0 0 / 0.32)",
             },
             success: {
@@ -182,7 +281,10 @@ export function App() {
 /** Inner app component that can use GamepadNav hooks. */
 function AppInner() {
   const { plugins, loading } = usePlugins();
-  const { enabled: enabledList, isEnabled } = useEnabledPlugins();
+  // Every plugin on disk (incl. disabled ones the backend never loaded),
+  // so Settings + the welcome wizard can list and re-enable them.
+  const { plugins: installedPlugins, loading: installedLoading } = useInstalledPlugins();
+  const { disabled: disabledList, isEnabled } = useEnabledPlugins();
   const [welcomeCompleted] = useConfigValue<boolean>("welcomeCompleted", false);
   // Lets Settings re-open the welcome flow even after it's been dismissed.
   const [welcomeForceOpen, setWelcomeForceOpen] = useState(false);
@@ -193,6 +295,16 @@ function AppInner() {
   const visiblePlugins = useMemo(
     () => plugins.filter((p) => isEnabled(p.id)),
     [plugins, isEnabled],
+  );
+  // True when a plugin the backend currently has LOADED has been turned
+  // off — its code can't be unloaded in place, so an app restart is
+  // needed to actually clear it. Drives the "Restart Loadout" button in
+  // the footer "Restart required" button; goes away the moment the
+  // change is reverted.
+  // (Enabling never needs a restart — the loader loads it live.)
+  const pendingRestart = useMemo(
+    () => installedPlugins.some((p) => p.status === "loaded" && !isEnabled(p.id)),
+    [installedPlugins, isEnabled],
   );
   const [route, setRoute] = useState<Route>(() => parseHash(window.location.hash));
   const [scale, setScale] = useConfigValue<number>("uiScale", loadScale(false));
@@ -324,7 +436,11 @@ function AppInner() {
   const showSettings = route.view === "settings";
   const showHome = route.view === "home";
   const activePluginId = route.view === "plugin" ? route.pluginId : null;
-  const activePlugin = plugins.find((p) => p.id === activePluginId) ?? null;
+  // Resolve from visiblePlugins, not the full loaded list: a plugin the
+  // user just disabled is still loaded in the backend until the app
+  // restarts, but must not be reachable by `#/plugin/<id>` deep link or
+  // an OpenPlugin controller shortcut in the meantime.
+  const activePlugin = visiblePlugins.find((p) => p.id === activePluginId) ?? null;
 
   // The first time the user opens a keepAlive plugin, add it to the
   // mounted set so subsequent navigation away + back doesn't unmount.
@@ -338,7 +454,15 @@ function AppInner() {
     });
   }, [activePlugin]);
 
-  const keepAlivePluginsToRender = plugins.filter((p) => mountedKeepAlive.has(p.id));
+  // Only keep ENABLED keepAlive plugins mounted. A keepAlive plugin the
+  // user just disabled is still in the backend's loaded list (no unload
+  // until restart), but its `active` flag keys off the raw route id — so
+  // without this filter an OpenPlugin shortcut / #/plugin/<id> deep link /
+  // last-tab restore would render the disabled plugin full-screen even
+  // though the sidebar hides it. Filtering here unmounts its webview too.
+  const keepAlivePluginsToRender = plugins.filter(
+    (p) => mountedKeepAlive.has(p.id) && isEnabled(p.id),
+  );
 
   // Probe the active plugin for a `mountHeader` export so the topbar
   // can fall back to a name/subtitle line for plugins that don't ship
@@ -412,9 +536,9 @@ function AppInner() {
       <div style={wrapperStyle} className="bg-transparent text-base-content font-sans overflow-clip flex items-center justify-center p-3">
         <div className="flex flex-col flex-1 max-h-full h-full rounded-xl overflow-clip bg-base-100 border border-base-300 shadow-2xl">
           <WelcomeScreen
-            plugins={plugins}
-            initialEnabled={enabledList}
-            loading={loading}
+            plugins={installedPlugins}
+            initialDisabled={disabledList}
+            loading={installedLoading}
             onClose={() => {
               setWelcomeForceOpen(false);
               if (!getConfigValue<boolean>("welcomeCompleted", false)) {
@@ -669,9 +793,13 @@ function AppInner() {
             <span className="w-[7px] h-[7px] rounded-full bg-success shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-success)_25%,transparent)]" />
             <span className="font-medium text-base-content">Connected to Steam</span>
             <span className="w-px h-3.5 bg-base-300" />
-            <span className="mono text-base-content/60">
-              {plugins.length} plugins loaded
-            </span>
+            {pendingRestart ? (
+              <FooterRestart />
+            ) : (
+              <span className="mono text-base-content/60">
+                {plugins.length} plugins loaded
+              </span>
+            )}
             <div className="flex-1" />
             {metrics.cpuTemp != null && (
               <span className="mono">
@@ -713,6 +841,78 @@ function AppInner() {
       </div>
 
     </>
+  );
+}
+
+// Restart the whole app (backend + overlay) to apply pending plugin
+// changes. A loaded plugin can't be unloaded in place, so disabling one
+// needs this. Restarts the backend AND the overlay (restartApp) — a
+// backend-only restart would sever the overlay's WebSocket. The overlay
+// closes and reopens; the game keeps running.
+function useRestartLoadout() {
+  const [restarting, setRestarting] = useState(false);
+  const restart = useCallback(async () => {
+    if (restarting) return;
+    setRestarting(true);
+    // Durably persist the disabled set BEFORE bouncing the backend. The
+    // Settings toggle PATCHes fire-and-forget (setConfigValue only writes
+    // the in-memory cache + localStorage mirror synchronously); without
+    // this flush the restart can race that write, the backend re-reads
+    // the stale config.json and reloads the just-disabled plugin, and
+    // then loadUserConfig() overwrites the mirror — silently losing the
+    // change. We write the CURRENT full disabledPlugins array (toggles
+    // always persist the whole array) and await it, so the on-disk value
+    // is correct regardless of how it races the toggle's own
+    // fire-and-forget PATCH: last full-array write wins, and we've
+    // awaited ours before restarting.
+    const ok = await setConfigValueFlushed(
+      "disabledPlugins",
+      getConfigValue<string[]>("disabledPlugins", []),
+    );
+    if (!ok) {
+      setRestarting(false);
+      notify("Couldn't save your plugin changes — not restarting.", {
+        kind: "error",
+        id: "restart-loadout",
+      });
+      return;
+    }
+    const res = await restartApp();
+    if (!res.success) {
+      setRestarting(false);
+      notify(res.error ?? "Couldn't restart Loadout.", {
+        kind: "error",
+        id: "restart-loadout",
+      });
+    }
+    // On success the app is already bouncing — keep it disabled.
+  }, [restarting]);
+  return { restarting, restart };
+}
+
+// Footer affordance shown (in place of the "N plugins loaded" count)
+// whenever a loaded plugin has been disabled and an app restart is
+// needed to actually unload it. Lives in the always-visible status bar
+// so the reminder follows the user out of Settings — unlike a header
+// button, which would collide with each view's own header controls.
+function FooterRestart() {
+  const { restarting, restart } = useRestartLoadout();
+  return (
+    <Focusable focusKey="footer-restart" onActivate={restart}>
+      <button
+        type="button"
+        onClick={restart}
+        disabled={restarting}
+        tabIndex={-1}
+        title="Restart Loadout to apply your plugin changes"
+        className="flex items-center gap-1.5 rounded-md px-2 py-0.5 font-medium text-warning bg-warning/15 hover:bg-warning/25 transition-colors"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        {restarting ? "Restarting…" : "Restart required"}
+      </button>
+    </Focusable>
   );
 }
 

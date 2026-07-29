@@ -104,6 +104,29 @@ export function setConfigValue<T>(key: string, value: T): void {
 }
 
 /**
+ * Like setConfigValue, but resolves only after the backend PATCH has
+ * landed (true) or failed (false). Use before actions that immediately
+ * restart the backend — a fire-and-forget PATCH would race the restart
+ * and the write could be lost.
+ */
+export async function setConfigValueFlushed<T>(key: string, value: T): Promise<boolean> {
+  cache[key] = value;
+  writeMirror();
+  notify();
+  try {
+    const res = await fetch(apiUrl("/api/user-config"), {
+      method: "PATCH",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ [key]: value }),
+    });
+    return res.ok;
+  } catch (err) {
+    console.warn(`[userConfig] Failed to persist "${key}":`, err);
+    return false;
+  }
+}
+
+/**
  * React hook mirroring `useState` semantics but backed by the persisted
  * config file. Re-renders when other components update the same key.
  */

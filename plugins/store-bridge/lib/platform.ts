@@ -30,14 +30,6 @@ export function dataDir(): string {
   return join(xdgRoot("XDG_DATA_HOME", ".local/share"), "loadout", "store-bridge");
 }
 
-export function cacheDir(): string {
-  return join(xdgRoot("XDG_CACHE_HOME", ".cache"), "loadout", "store-bridge");
-}
-
-export function configDir(): string {
-  return join(xdgRoot("XDG_CONFIG_HOME", ".config"), "loadout", "store-bridge");
-}
-
 /** Where the plugin keeps tool binaries it self-installs (legendary, etc.). */
 export function binDir(): string {
   return join(dataDir(), "bin");

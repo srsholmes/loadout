@@ -218,11 +218,6 @@ export async function ensureCommunityPacks(): Promise<CommunityPackEntry[]> {
   return entries ?? [];
 }
 
-/** Synchronous accessor — returns whatever is in memory, or null. */
-export function getCommunityPacksSync(): CommunityPackEntry[] | null {
-  return entries;
-}
-
 export function getCommunityPacksStatus(): PacksStatus {
   let state: PacksState;
   // A successful sync that returns 0 entries is still "ready" — registry

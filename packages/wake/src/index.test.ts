@@ -5,7 +5,7 @@ import {
   DBUS_MONITOR_CMD,
   type WakeDeps,
   type WakeProc,
-} from "./wake-listener";
+} from "./index";
 
 /**
  * Wake-listener tests. The dbus-monitor subprocess is injected, so these
@@ -109,7 +109,7 @@ describe("startWakeListener", () => {
 
   it("stop() before the process spawns still kills it once it arrives", () => {
     // Defer onSpawn to model the async spawn racing behind a fast stop().
-    let deliver: (() => void) | null = null;
+    let deliver: () => void = () => {};
     let kills = 0;
     const deps: WakeDeps = {
       spawn: (args) => {
@@ -118,7 +118,7 @@ describe("startWakeListener", () => {
     };
     const handle = startWakeListener(deps, () => {});
     handle.stop(); // stop before the process is delivered
-    deliver?.(); // now the process arrives
+    deliver(); // now the process arrives
     expect(kills).toBe(1);
   });
 });

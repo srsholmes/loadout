@@ -12,16 +12,9 @@ import { parseArgs } from "node:util";
 import { startServer } from "./loader";
 import { log, LOG_PATH, startLogSession } from "./loader/logger";
 import { setTargetUser, chownToTarget } from "./loader/target-user";
-
-// Compile-time defines from scripts/build.sh (--define
-// __LOADOUT_VERSION__='"…"'). Fall back to "dev" when running
-// directly via `bun run` without the build wrapper.
-declare const __LOADOUT_VERSION__: string | undefined;
-declare const __LOADOUT_BUILD_DATE__: string | undefined;
-const LOADER_VERSION =
-  typeof __LOADOUT_VERSION__ !== "undefined" ? __LOADOUT_VERSION__ : "dev";
-const LOADER_BUILD_DATE =
-  typeof __LOADOUT_BUILD_DATE__ !== "undefined" ? __LOADOUT_BUILD_DATE__ : "";
+// Compile-time defines from scripts/build.sh live in ./version so the
+// HTTP routes can report the running version too.
+import { LOADER_VERSION, LOADER_BUILD_DATE } from "./version";
 
 const { values } = parseArgs({
   options: {

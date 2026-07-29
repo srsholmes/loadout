@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { maybeGiveUp } from "./injector";
+import { maybeGiveUp, resolveOverlayMainMenu } from "./injector";
 
 // The injectBPMBundles (A-019) and buildPanelMountScript (A-008) test
 // blocks were removed alongside their subjects — issue #60: the
@@ -47,5 +47,44 @@ describe("maybeGiveUp (A-021)", () => {
     expect(logs.length).toBe(1);
     expect(logs[0]).toContain("onGiveUp callback threw");
     expect(logs[0]).toContain("downstream broadcast blew up");
+  });
+});
+
+/**
+ * Issue #169: the main-menu entry setting was renamed from
+ * `steamOverlayButtonEnabled` to `steamOverlayButtonMainMenu`. The new key
+ * must win once present so toggling it *off* removes the item even for a
+ * config still carrying the legacy flag; the legacy flag is honoured only
+ * as a fallback when the new key was never written.
+ */
+describe("resolveOverlayMainMenu (#169 config precedence)", () => {
+  it("uses the new key when present (true)", () => {
+    expect(resolveOverlayMainMenu({ steamOverlayButtonMainMenu: true })).toBe(true);
+  });
+
+  it("new key wins over a truthy legacy flag when explicitly false", () => {
+    // The exact bug the reviewer caught: toggling off must remove the item
+    // even though the legacy `steamOverlayButtonEnabled` is still true.
+    expect(
+      resolveOverlayMainMenu({
+        steamOverlayButtonMainMenu: false,
+        steamOverlayButtonEnabled: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("falls back to the legacy flag only when the new key is absent", () => {
+    expect(resolveOverlayMainMenu({ steamOverlayButtonEnabled: true })).toBe(true);
+    expect(resolveOverlayMainMenu({ steamOverlayButtonEnabled: false })).toBe(false);
+  });
+
+  it("defaults to false for an empty / unrelated config", () => {
+    expect(resolveOverlayMainMenu({})).toBe(false);
+    expect(resolveOverlayMainMenu({ theme: "midnight" })).toBe(false);
+  });
+
+  it("treats non-boolean values as not-enabled (no type coercion)", () => {
+    expect(resolveOverlayMainMenu({ steamOverlayButtonMainMenu: "true" })).toBe(false);
+    expect(resolveOverlayMainMenu({ steamOverlayButtonMainMenu: 1 })).toBe(false);
   });
 });

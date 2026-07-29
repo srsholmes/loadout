@@ -7,6 +7,7 @@
  */
 
 import { authHeaders } from "../lib/backend";
+import { OVERLAY_VERSION } from "../version";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,7 +32,7 @@ export interface ErrorReport {
 // Constants
 // ---------------------------------------------------------------------------
 
-const VERSION = "0.1.0-alpha";
+const VERSION = OVERLAY_VERSION;
 
 // ---------------------------------------------------------------------------
 // Report creation
@@ -40,11 +41,7 @@ const VERSION = "0.1.0-alpha";
 /**
  * Build a structured error report from an Error and plugin metadata.
  */
-export function createErrorReport(
-  pluginId: string,
-  pluginName: string,
-  error: Error,
-): ErrorReport {
+export function createErrorReport(pluginId: string, pluginName: string, error: Error): ErrorReport {
   return {
     pluginName,
     pluginId,
@@ -142,67 +139,4 @@ export async function saveErrorToDownloads(report: ErrorReport): Promise<string 
     console.error("[loadout] Failed to save error report:", err);
     return null;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Global error capture
-// ---------------------------------------------------------------------------
-
-/** Registered listeners for global errors */
-type ErrorListener = (report: ErrorReport) => void;
-const listeners: Set<ErrorListener> = new Set();
-
-/**
- * Subscribe to global (uncaught) errors. Returns an unsubscribe function.
- */
-export function onGlobalError(listener: ErrorListener): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
-function notifyListeners(report: ErrorReport) {
-  for (const listener of listeners) {
-    try {
-      listener(report);
-    } catch {
-      // Don't let a listener error crash the error reporter
-    }
-  }
-}
-
-/**
- * Install global error handlers (window.onerror, unhandledrejection).
- * Call once at app startup. Returns a cleanup function.
- */
-export function installGlobalErrorHandlers(): () => void {
-  function handleError(event: ErrorEvent) {
-    const report = createErrorReport(
-      "global",
-      "Uncaught Error",
-      event.error instanceof Error
-        ? event.error
-        : new Error(event.message || "Unknown error"),
-    );
-    notifyListeners(report);
-  }
-
-  function handleRejection(event: PromiseRejectionEvent) {
-    const reason = event.reason;
-    const report = createErrorReport(
-      "global",
-      "Unhandled Promise Rejection",
-      reason instanceof Error
-        ? reason
-        : new Error(typeof reason === "string" ? reason : "Unknown rejection"),
-    );
-    notifyListeners(report);
-  }
-
-  window.addEventListener("error", handleError);
-  window.addEventListener("unhandledrejection", handleRejection);
-
-  return () => {
-    window.removeEventListener("error", handleError);
-    window.removeEventListener("unhandledrejection", handleRejection);
-  };
 }

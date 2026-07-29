@@ -51,7 +51,11 @@ import {
 
 import { trace } from "./native/trace";
 import { createOverlayState } from "./lib/overlay-state";
-import { routeWake } from "./lib/wake-routing";
+import { routeWake, isStartupWakePhantom } from "./lib/wake-routing";
+import { loadPersistedShortcuts } from "./lib/persisted-shortcuts";
+import { decideInputStrategy } from "./lib/input-strategy";
+import { isSteamDeck } from "@loadout/devices";
+import { isBindableDeckButton } from "@loadout/deck-hid";
 
 // ---- State ------------------------------------------------------------------
 // PendingFlags + the flag-lifecycle helpers live in lib/overlay-state.ts so
@@ -67,8 +71,10 @@ const DESKTOP_SMOKE_TEST = process.env.DECK_OVERLAY_DESKTOP_DEV === "1";
 
 const state = createOverlayState(DESKTOP_SMOKE_TEST);
 
-// TODO(stage-2): persist to disk (XDG config) like the Rust version does —
-// currently this resets on every process restart.
+// These are the fallback defaults. The persisted user config is loaded from
+// disk in the startup IIFE below (loadPersistedShortcuts) and overwrites
+// `current` before the input loop starts — so a saved binding survives a
+// process restart instead of reverting until the user re-edits it.
 //
 // Guide+A and Guide+Y are reserved by Steam / InputPlumber on Bazzite
 // (QAM and guide menu respectively). Even if a saved user config has them
@@ -113,6 +119,7 @@ function detectGamescopeMode(): boolean {
 // instance without an exported setter dance.
 import { buildRpcHandlers } from "./rpc-handlers";
 import { overlayManagementLoop, shutdown } from "./lifecycle";
+import { cleanupUpdateArtifacts, reapOldGeneration } from "./lib/updater";
 
 // ---- Singleton refs ---------------------------------------------------------
 // Mutable state index.ts owns, wrapped as `{ current: T }` refs so
@@ -143,6 +150,13 @@ const pendingResumeTimer: { current: ReturnType<typeof setTimeout> | null } = {
 // process is alive but the CEF renderer is wedged.)
 const lastHeartbeat: { current: number } = { current: 0 };
 
+// True once the webview has sent its FIRST real heartbeat this session.
+// Only the overlayHeartbeat RPC handler sets it — never the freeze
+// watchdog's "assume alive at open" seeding of lastHeartbeat above —
+// so it is proof of a rendering webview, not merely an opened window.
+// Gates the `.old` rollback-generation reap below.
+const webviewEverAlive: { current: boolean } = { current: false };
+
 // Input interceptor — opens every controller + keyboard + QAM device
 // up-front and toggles EVIOCGRAB on the controllers when the overlay
 // shows/hides. Also emits wake events (F16 / Guide+B / Ctrl+4) that
@@ -151,6 +165,15 @@ const lastHeartbeat: { current: number } = { current: 0 };
 // and to the close-path `intercept.current?.release()` inside
 // toggleOverlay.
 const intercept: { current: InputInterceptHandle | null } = { current: null };
+// Monotonic baseline for the startup phantom-wake guard (see onWake /
+// isStartupWakePhantom). Seeded at module load so the guard is armed even for
+// a wake that somehow arrives before the interceptors finish starting, then
+// RE-ANCHORED to the moment the evdev nodes actually open (the evdev
+// `onReady` below). The phantom F16 is observed ~1s after the nodes open, and
+// the async startup before that (persisted-config read + IP DBus discovery)
+// is variable — anchoring to node-open gives a deterministic 5s window that
+// matches the observed failure timing rather than eating into it.
+const inputStartedAt = { current: performance.now() };
 // InputPlumber intercept-mode path — runs alongside the evdev interceptor on
 // IP-managed handhelds (deck-uhid target, no grabbable evdev). On grab it sets
 // InterceptMode=2 so Steam BPM is starved and nav arrives over D-Bus; on hosts
@@ -197,6 +220,7 @@ const rpc = BrowserView.defineRPC({
     cachedSteamSoundsPath,
     steamPid,
     lastHeartbeat,
+    webviewEverAlive,
   }),
 });
 
@@ -332,22 +356,49 @@ function broadcastOverlayVisibility(): void {
 // the overlay: the Deck's built-in pad navigates via Steam Input's virtual pad
 // (read by CEF's Web Gamepad API), and a frozen Steam stops emitting on it.
 //
-// These two hosts need OPPOSITE behaviour, so the freeze is decided PER-HOST
-// (finalized after IP discovery below, since it keys off ipHandle.available):
+// These hosts need DIFFERENT behaviour, so the freeze is decided PER-HOST by
+// decideInputStrategy (lib/input-strategy.ts), finalized after IP + Deck-hidraw
+// discovery below. The rule: freeze wherever overlay nav does NOT depend on a
+// live Steam process —
 //   - External IP-managed pad (e.g. OXP APEX): nav arrives over IP's DBus
 //     stream, independent of Steam, so freezing Steam blocks its direct hidraw
 //     read (no double-capture) WITHOUT starving overlay nav → freeze ON.
-//   - Steam Deck alone (no IP composite): built-in nav reads Steam's virtual
-//     pad, which a frozen Steam stops emitting → freeze OFF.
+//   - Steam Deck with a working hidraw watcher: nav now arrives from OUR OWN
+//     hidraw read (deck-hidraw-watcher nav mode), also independent of Steam →
+//     freeze ON. This is what stops BPM / Steam-Input-fed games responding
+//     behind the overlay on the Deck — the historical "Deck must not freeze"
+//     rule only applied while the Deck's nav source was Steam's virtual pad.
+//   - Deck whose hidraw watcher failed (EACCES etc.): nav falls back to
+//     reading Steam's virtual pad, which a frozen Steam stops emitting →
+//     freeze OFF, exactly the legacy behavior.
 // #99 made freeze a single global opt-in to save the Deck, which regressed the
 // APEX (Steam captured the pad again behind the overlay). Coupling the decision
 // to host type fixes both. DECK_OVERLAY_SUSPEND_STEAM=1/0 force on/off and
-// override the auto policy.
+// override the auto policy; DECK_OVERLAY_DECK_CAPTURE=0 disables the whole
+// Deck strategy (nav + grabs + freeze) as a kill switch.
 const SUSPEND_STEAM_ENV = process.env.DECK_OVERLAY_SUSPEND_STEAM; // "1"=force on, "0"=force off, unset=auto
-// Provisional until finalized post-IP-discovery. A forced-on freeze applies
+const DECK_CAPTURE_ENV = process.env.DECK_OVERLAY_DECK_CAPTURE; // "0"=disable Deck strategy
+// Provisional until finalized post-discovery. A forced-on freeze applies
 // immediately; auto/off start false so an open during the brief discovery
 // window can't freeze the Deck.
 let suspendSteamEnabled = SUSPEND_STEAM_ENV === "1";
+// True once the Deck strategy is live: overlay nav comes from the hidraw
+// watcher while open (toggleOverlay flips its nav mode on show/hide).
+let deckNavActive = false;
+/** Controller id prefix for hidraw-injected nav events (see
+ *  externalNavSources in input-intercept). */
+const DECK_NAV_SOURCE = "deck-hidraw";
+// Deck resume-burst mitigation state (see the close path in toggleOverlay):
+// whether THIS open actually SIGSTOPped Steam, and the deferred evdev
+// release that stays grabbed across SIGCONT + drain so the game can't see
+// Steam's replayed hidraw backlog.
+let steamFrozenThisOpen = false;
+let pendingReleaseTimer: ReturnType<typeof setTimeout> | null = null;
+/** How long after SIGCONT the evdev grabs are held so Steam's buffered
+ *  hidraw backlog (≤64 reports) drains into a grabbed virtual pad instead
+ *  of the game. Chosen > TOGGLE_DEBOUNCE_MS - 250 so a reopen can overlap
+ *  it — the open path cancels + flushes the deferred release. */
+const DECK_RESUME_DRAIN_MS = 500;
 
 // Startup safety net for the frozen-Steam risk: a previous overlay instance
 // that crashed or was SIGKILLed *while open* could have left Steam SIGSTOPped
@@ -411,7 +462,14 @@ function startFreezeWatchdog(): void {
 // Emergency teardown when the watchdog fires: thaw Steam IMMEDIATELY, drop the
 // grabs/intercept, hide the window and mark closed. Mirrors the close path but
 // skips the debounce/deferred-resume so a wedged overlay self-heals.
-function forceCloseOverlay(reason: string): void {
+/** Returns once the gamescope atom writes have settled. Callers that are
+ *  about to kill the process MUST await this (see the onDeath handler):
+ *  atoms.hide() restores ROOT STEAM_TOUCH_CLICK_MODE and Steam's BPM
+ *  STEAM_OVERLAY / STEAM_INPUT_FOCUS, none of which die with our window.
+ *  Exiting before those writes land leaves gamescope routing touch at a
+ *  window that no longer exists — the same strand shutdown() in
+ *  lifecycle.ts already guards with an awaited, retried hide(). */
+function forceCloseOverlay(reason: string): Promise<void> {
   console.warn(`[freeze-watchdog] ${reason} — emergency close + thaw Steam`);
   trace(`[freeze-watchdog] ${reason} — emergency close`);
   stopFreezeWatchdog();
@@ -419,11 +477,21 @@ function forceCloseOverlay(reason: string): void {
     clearTimeout(pendingResumeTimer.current);
     pendingResumeTimer.current = null;
   }
+  if (pendingReleaseTimer !== null) {
+    clearTimeout(pendingReleaseTimer);
+    pendingReleaseTimer = null;
+  }
   if (steamPid.current === null) steamPid.current = findSteamPid();
   if (steamPid.current !== null) resumeSteam(steamPid.current);
+  // Emergency path: release immediately (no resume-burst drain — a wedged
+  // renderer is worse than a replayed edge) and thaw.
   intercept.current?.release();
   ipIntercept.current?.release();
-  atoms.hide().catch((e) => console.warn("[freeze-watchdog] atoms.hide:", e));
+  deckHidraw.current?.setNavActive(false);
+  steamFrozenThisOpen = false;
+  const hidden = atoms
+    .hide()
+    .catch((e) => console.warn("[freeze-watchdog] atoms.hide:", e));
   try {
     overlay.minimize();
   } catch (e) {
@@ -431,7 +499,13 @@ function forceCloseOverlay(reason: string): void {
   }
   state.isOpen = false;
   broadcastOverlayVisibility();
+  return hidden;
 }
+
+/** Cap on how long a process-killing path waits for forceCloseOverlay's atom
+ *  writes. Bounded because the writes shell out to xprop — if that wedges we
+ *  still have to exit, and systemd's ExecStopPost thaws Steam regardless. */
+const ATOM_CLEAR_TIMEOUT_MS = 1000;
 
 // Minimum gap between toggleOverlay() calls. On the OXP Apex, InputPlumber
 // emits F16 on several evdev nodes simultaneously when the user presses
@@ -468,8 +542,24 @@ function toggleOverlay(source: string) {
     stopFreezeWatchdog();
     overlay.minimize();
     atoms.hide().catch((e) => console.warn("[overlay] atoms.hide:", e));
-    intercept.current?.release();
+    // Deck strategy resume-burst mitigation: while Steam was SIGSTOPped its
+    // own hidraw fd kept buffering (the kernel ring keeps the FIRST ~64
+    // reports after the freeze — which contain the wake button's release
+    // edge and any early nav input — and drops the rest). On SIGCONT Steam
+    // drains that backlog and forwards it to the virtual pad; if our evdev
+    // grabs were already gone, the game would replay those stale edges on
+    // every overlay close. So on a frozen-Deck close the evdev release is
+    // DEFERRED until after SIGCONT + a drain window, keeping the virtual
+    // pad (and built-in nodes) grabbed while the burst flushes. Steam's own
+    // BPM reaction to the buffered wake release can't be blocked this way —
+    // paddle wake bindings (R4/L4/…) avoid it entirely since Steam ignores
+    // unmapped paddles. Non-Deck hosts keep the immediate release.
+    const deferRelease = deckNavActive && steamFrozenThisOpen;
+    if (!deferRelease) intercept.current?.release();
     ipIntercept.current?.release();
+    // Stop decoding Deck hidraw nav. The wake-bit path stays live so the
+    // wake button can re-open; the diff baseline resets on next open.
+    deckHidraw.current?.setNavActive(false);
     // Always SIGCONT Steam on close, even when suspendSteamEnabled is
     // off. Users have reported Steam appearing frozen after the overlay
     // closes (menu visible but inputs ignored) — if anything left Steam
@@ -486,8 +576,19 @@ function toggleOverlay(source: string) {
       pendingResumeTimer.current = setTimeout(() => {
         pendingResumeTimer.current = null;
         resumeSteam(pid);
+        if (deferRelease) {
+          if (pendingReleaseTimer !== null) clearTimeout(pendingReleaseTimer);
+          pendingReleaseTimer = setTimeout(() => {
+            pendingReleaseTimer = null;
+            intercept.current?.release();
+          }, DECK_RESUME_DRAIN_MS);
+        }
       }, 250);
+    } else if (deferRelease) {
+      // No Steam pid found — nothing to drain; release now rather than never.
+      intercept.current?.release();
     }
+    steamFrozenThisOpen = false;
     state.isOpen = false;
     broadcastOverlayVisibility();
     trace(`[toggle] ${source} → MINIMIZE`);
@@ -501,17 +602,47 @@ function toggleOverlay(source: string) {
     // so freezing it just wedges Steam — the bug this gate fixes. The evdev
     // grab below still runs in both modes, so the controller overlay keeps
     // working on the desktop without touching Steam.
+    // A rapid close→open can land while the close path's deferred SIGCONT /
+    // deferred release timers are still pending. Cancel them (this open owns
+    // the freeze again), and if the evdev release was still deferred (grabs
+    // held from last session), flush it synchronously so grab() below runs
+    // a fresh generation with clean NavController/combo state.
+    if (pendingResumeTimer.current !== null) {
+      clearTimeout(pendingResumeTimer.current);
+      pendingResumeTimer.current = null;
+    }
+    if (pendingReleaseTimer !== null) {
+      clearTimeout(pendingReleaseTimer);
+      pendingReleaseTimer = null;
+    }
+    // Release UNCONDITIONALLY, not just when a deferred release was pending.
+    // A reopen inside the close path's 250ms pre-SIGCONT window cancels the
+    // resume timer above while pendingReleaseTimer is still null (it's only
+    // armed inside the resume callback), so keying the flush off that handle
+    // would skip it — and doGrab() below would then early-return on
+    // `intercepting`, reusing the previous generation's NavController and
+    // combo state (stuck-held direction, or dead nav for the whole session).
+    // doRelease() no-ops when not intercepting, so this is free otherwise.
+    intercept.current?.release();
     if (suspendSteamEnabled && isGameModeActive()) {
       if (steamPid.current === null) steamPid.current = findSteamPid();
       if (steamPid.current !== null) {
-        suspendSteam(steamPid.current);
-        startFreezeWatchdog();
+        // Track what ACTUALLY happened: steamPid is cached for the session, so
+        // after Steam restarts the SIGSTOP can fail with ESRCH/EPERM. Assuming
+        // success made every later close take the deferred-release path and
+        // hold the grabs ~750ms for a drain that never happens.
+        steamFrozenThisOpen = suspendSteam(steamPid.current);
+        if (steamFrozenThisOpen) startFreezeWatchdog();
       }
     } else if (suspendSteamEnabled) {
       trace("[toggle] desktop mode (no gamescope) — skipping Steam freeze");
     }
     intercept.current?.grab();
     ipIntercept.current?.grab();
+    // Deck strategy: overlay nav comes from the hidraw stream while open.
+    // AFTER intercept.grab() so the first injected events land on the new
+    // grab generation, not the previous one.
+    if (deckNavActive) deckHidraw.current?.setNavActive(true);
     overlay.show();
     atoms.show().catch((e) => console.warn("[overlay] atoms.show:", e));
     // Desktop mode has no gamescope to composite us above Big Picture, so
@@ -548,6 +679,19 @@ function toggleOverlay(source: string) {
 // these were a hardcoded subset that ignored the config — Guide+X
 // did nothing despite defaulting to ToggleOverlay).
 function onWake(event: WakeEvent): void {
+  // Drop boot-time phantom wakes that would open the overlay before the
+  // graphical session is ready. On IP-managed handhelds the InputPlumber
+  // virtual keyboard sometimes emits a spurious F16 (→ QamToggle) ~1s into
+  // boot; acting on it opens the overlay invisibly and diverts the pad away
+  // from Steam (Steam looks dead until InputPlumber is restarted). See
+  // isStartupWakePhantom. Only opens are suppressed — a close always works.
+  const elapsed = performance.now() - inputStartedAt.current;
+  if (isStartupWakePhantom({ elapsedSinceStartMs: elapsed, isOpen: state.isOpen })) {
+    trace(
+      `[overlay] ignoring wake=${event} within startup grace (${Math.round(elapsed)}ms) — likely boot phantom`,
+    );
+    return;
+  }
   // The branch-table for "which wake event does what given the current
   // shortcut config" is pure — extracted into lib/wake-routing.ts so
   // the table is unit-tested without booting the full main process.
@@ -580,17 +724,29 @@ function onWake(event: WakeEvent): void {
   }
 }
 
-// Start the two input paths. ORDER MATTERS: the InputPlumber intercept-mode
-// path discovers IP composite devices first, then the evdev interceptor starts
-// with `readVirtualPadsForNav` set from whether any IP composites exist.
+// Start the input paths. ORDER MATTERS: the InputPlumber intercept-mode path
+// discovers IP composite devices first, then the Deck hidraw watcher starts,
+// and only then is the strategy decided (lib/input-strategy.ts) and the evdev
+// interceptor configured from it.
 //
-// Why: on the Steam Deck, when a game/app is running Steam Input exposes the
-// BUILT-IN controller only as the virtual Xbox 360 pad (28de:11ff). With no IP
-// composite to drive nav over DBus, that virtual pad is the Deck's sole nav
-// source, so the evdev path must READ it (not exclude/grab-only it). When an
-// external IP-managed pad IS present, IP's DBus stream drives nav and the
-// virtual pad is a mirror we only grab — so we DON'T read it (would double).
+// Why: nav sources differ per host. IP hosts get nav over IP's DBus stream
+// (virtual pads grab-only). A Deck with a working hidraw watcher gets nav from
+// OUR hidraw read (virtual pads + built-in nodes grab-only, Steam frozen while
+// open — see the freeze comment above). A Deck whose watcher failed falls back
+// to reading Steam's virtual X360 pad (28de:11ff) — the only evdev nav source
+// Steam Input leaves for the built-in controller, and only while a game runs.
 void (async () => {
+  // Seed the wake-routing engine from the persisted config BEFORE either
+  // intercept starts — no wake event can arrive until they do, so the ref
+  // is guaranteed populated before routeWake() first reads it. Falls back
+  // to the hardcoded default (already in `shortcuts.current`) when there's
+  // no saved config or it's malformed.
+  const persisted = await loadPersistedShortcuts();
+  if (persisted) {
+    shortcuts.current = persisted;
+    console.log("[overlay] seeded controller shortcuts from config", persisted);
+  }
+
   let ipHandle: IpInterceptHandle | null = null;
   try {
     ipHandle = await startIpIntercept({
@@ -614,27 +770,99 @@ void (async () => {
     console.error("[overlay] ip intercept failed to start:", err);
   }
 
-  // No IP composites (Deck alone, or no external IP-managed pad) → the virtual
-  // pad is the Deck's built-in controls; read it for nav.
-  const readVirtualPadsForNav = !ipHandle?.available;
+  // Deck hidraw watcher — started BEFORE the strategy decision because the
+  // Deck strategy (hidraw nav + Steam freeze) is only safe when the watcher
+  // actually opened; a Deck where it failed (EACCES) must keep the legacy
+  // virtual-pad-nav behavior or the user is stranded with zero nav. On
+  // non-Deck hosts findDeckHidrawPath() returns null and this is a no-op.
+  let isDeck = false;
+  try {
+    isDeck = await isSteamDeck();
+  } catch (err) {
+    console.warn("[overlay] isSteamDeck probe failed:", err);
+  }
+  try {
+    const initialButton = await readDeckWakeBinding();
+    const handle = await startDeckHidrawWatcher({
+      onWake,
+      initialButton,
+      // Nav events flow into the evdev interceptor's NavController. The
+      // optional chain covers the watcher-before-intercept startup window;
+      // nav mode can't be active before the first grab() anyway.
+      onNavEvents: (events) =>
+        intercept.current?.injectNavEvents(DECK_NAV_SOURCE, events),
+      // Mid-session stream death (driver rebind, controller re-enumeration
+      // around suspend/resume): under the Deck strategy the watcher is the
+      // ONLY nav source AND the wake button, while the baked-in strategy
+      // would still freeze Steam + grab everything on the next open — the
+      // exact stranded-with-zero-nav state the startup gate exists to
+      // prevent. The strategy can't be re-derived live (intercept options
+      // are fixed at startInputIntercept), so exit and let systemd restart
+      // us: startup re-probes and picks the right strategy (watcher back →
+      // full Deck strategy; still dead → legacy fallback). The startup
+      // unconditional SIGCONT covers a death while frozen.
+      onDeath: () => {
+        console.error(
+          "[overlay] Deck hidraw watcher died mid-session — " +
+            (deckNavActive
+              ? "restarting overlay to re-derive the input strategy"
+              : "Deck wake button lost until next overlay restart"),
+        );
+        if (deckNavActive) {
+          // Steam's SIGCONT and the evdev release inside forceCloseOverlay are
+          // synchronous, so they're already done when it returns. The atom
+          // writes are NOT — they shell out to xprop — and exiting before they
+          // land strands ROOT STEAM_TOUCH_CLICK_MODE at TOUCH_MODE_OVERLAY,
+          // i.e. gamescope routing touch to a window that no longer exists.
+          // Deferring the exit costs nothing: nothing else can use this
+          // process, and the timeout bounds a wedged xprop.
+          const settled = state.isOpen
+            ? forceCloseOverlay("deck hidraw watcher died")
+            : Promise.resolve();
+          void Promise.race([
+            settled,
+            new Promise((r) => setTimeout(r, ATOM_CLEAR_TIMEOUT_MS)),
+          ]).then(() => process.exit(1));
+        }
+      },
+    });
+    if (handle) {
+      deckHidraw.current = handle;
+      armDeckWakeBindingRefresh(handle);
+    }
+  } catch (err) {
+    console.error("[overlay] Deck hidraw watcher failed to start:", err);
+  }
 
-  // Finalize the Steam-freeze policy now that host type is known (see the
-  // SUSPEND_STEAM_ENV comment above). Auto = freeze iff an IP-managed external
-  // pad is present; that's the case (OXP APEX) where nav comes over IP's DBus
-  // stream and freezing Steam blocks its hidraw double-capture without starving
-  // overlay nav. On the Deck alone we must NOT freeze (it would kill the
-  // virtual-pad nav we just opted to read). env "1"/"0" override the auto rule.
-  if (SUSPEND_STEAM_ENV === "1") suspendSteamEnabled = true;
-  else if (SUSPEND_STEAM_ENV === "0") suspendSteamEnabled = false;
-  else suspendSteamEnabled = !!ipHandle?.available;
+  // Finalize the input strategy now that host type is known (see the
+  // SUSPEND_STEAM_ENV comment above and lib/input-strategy.ts for the row
+  // table). IP hosts keep their exact pre-Deck behavior.
+  const strategy = decideInputStrategy({
+    isDeck,
+    ipAvailable: !!ipHandle?.available,
+    // isAlive guards the (tiny) window where the stream died between open
+    // and this decision — a dead watcher must not enable the freeze.
+    deckHidrawOpened: deckHidraw.current?.isAlive() ?? false,
+    suspendEnv: SUSPEND_STEAM_ENV,
+    deckCaptureEnv: DECK_CAPTURE_ENV,
+  });
+  deckNavActive = strategy.deckNavActive;
+  suspendSteamEnabled = strategy.suspendSteamEnabled;
+  const readVirtualPadsForNav = strategy.readVirtualPadsForNav;
   console.log(
-    `[overlay] steam-freeze ${suspendSteamEnabled ? "ON" : "OFF"} ` +
-      `(env=${SUSPEND_STEAM_ENV ?? "auto"}, ipManaged=${!!ipHandle?.available})`,
+    `[overlay] input strategy: deckNav=${deckNavActive ? "ON" : "OFF"} ` +
+      `steam-freeze=${suspendSteamEnabled ? "ON" : "OFF"} ` +
+      `readVirtualPads=${readVirtualPadsForNav} ` +
+      `(isDeck=${isDeck}, ipManaged=${!!ipHandle?.available}, ` +
+      `hidraw=${deckHidraw.current !== null}, ` +
+      `env: suspend=${SUSPEND_STEAM_ENV ?? "auto"}, deckCapture=${DECK_CAPTURE_ENV ?? "auto"})`,
   );
 
   try {
     const handle = await startInputIntercept({
       readVirtualPadsForNav,
+      grabDeckBuiltinNodes: strategy.grabDeckBuiltinNodes,
+      externalNavSources: deckNavActive ? [DECK_NAV_SOURCE] : [],
       onWake,
       onAction: (action) => {
         // Bridge to the webview. onOverlayAction() in main.tsx turns these
@@ -647,10 +875,16 @@ void (async () => {
         // main content area with its own rAF + momentum loop.
         sendToWebview("overlay-scroll", { axis, value });
       },
-      onReady: (c) =>
+      onReady: (c) => {
+        // Re-anchor the phantom-wake grace window to the moment the evdev
+        // nodes are open (see inputStartedAt). onReady fires synchronously
+        // after the devices are opened and before the read loop polls, so no
+        // wake can be observed before this reset.
+        inputStartedAt.current = performance.now();
         console.log(
           `[overlay] input intercept ready — ${c.controllers} controller(s), ${c.keyboards} keyboard(s), ${c.qam} qam device(s) (readVirtualPadsForNav=${readVirtualPadsForNav})`,
-        ),
+        );
+      },
     });
     intercept.current = handle;
   } catch (err) {
@@ -658,12 +892,13 @@ void (async () => {
   }
 })();
 
-// Steam-Deck-native wake button: read /dev/hidrawN (the controller's
-// gamepad interface) in parallel with Steam Input. Open multiplexes
-// fine — the kernel hid-steam driver allows concurrent readers — and
-// the bound button fires onWake("QamToggle") just like F16 does over
-// evdev. On non-Deck hosts findDeckHidrawPath() returns null and this
-// is a no-op.
+// Steam-Deck-native wake button + nav source: read /dev/hidrawN (the
+// controller's gamepad interface) in parallel with Steam Input. Open
+// multiplexes fine — the kernel hid-steam driver allows concurrent
+// readers — and the bound button fires onWake("QamToggle") just like F16
+// does over evdev. Started from the startup IIFE above (the strategy
+// decision needs to know whether it opened); the binding-refresh plumbing
+// lives in armDeckWakeBindingRefresh below.
 const STORAGE_PATH = pluginStoragePath("input-plumber");
 const STORAGE_DIR = dirname(STORAGE_PATH);
 const STORAGE_FILENAME = basename(STORAGE_PATH);
@@ -683,67 +918,66 @@ async function readDeckWakeBinding(): Promise<string | null> {
   const raw = s.wake?.selectedRaw ?? null;
   // Raw is either a synthetic "deck:<Button>" string we wrote here, or an
   // InputPlumber capability string written on a non-Deck host. Only the
-  // deck:* form is meaningful for the watcher.
-  if (raw && raw.startsWith("deck:")) return raw.slice(5);
+  // deck:* form is meaningful for the watcher — and only bindable buttons:
+  // Steam/Qam are reserved system buttons (the picker no longer offers
+  // them, but a binding persisted before they were blocked must not arm
+  // the watcher either).
+  if (raw && raw.startsWith("deck:")) {
+    const name = raw.slice(5);
+    return isBindableDeckButton(name) ? name : null;
+  }
   return null;
 }
 
-readDeckWakeBinding()
-  .then(async (initialButton) => {
-    const handle = await startDeckHidrawWatcher({
-      onWake,
-      initialButton,
-    });
-    if (!handle) return;
-    deckHidraw.current = handle;
-
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-    const refresh = async (): Promise<void> => {
-      try {
-        const next = await readDeckWakeBinding();
-        if (next !== handle.getBinding()) handle.setBinding(next);
-      } catch {
-        // Storage read failure is transient — try again next tick / event.
-      }
-    };
-    const scheduleRefresh = (): void => {
-      if (debounceTimer) return;
-      debounceTimer = setTimeout(() => {
-        debounceTimer = null;
-        void refresh();
-      }, DECK_WAKE_DEBOUNCE_MS);
-    };
-
-    // fs.watch on the parent dir (not the file itself — atomic rename
-    // invalidates a file-scoped watcher). Filter for any filename that
-    // matches our storage or its `<storage>.<uuid>.tmp` siblings.
+/** Wire live wake-binding updates into a started watcher: fs.watch on the
+ *  plugin-storage dir (debounced across atomic write-tmp+rename) plus a slow
+ *  heartbeat for inotify-silent filesystems. Extracted from the startup IIFE
+ *  so it stays a readable wire-up. */
+function armDeckWakeBindingRefresh(handle: DeckHidrawWatcherHandle): void {
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  const refresh = async (): Promise<void> => {
     try {
-      deckWakeStorageWatcher.current = fsWatch(
-        STORAGE_DIR,
-        (_event, filename) => {
-          if (!filename) return;
-          if (filename === STORAGE_FILENAME || filename.startsWith(STORAGE_FILENAME + ".")) {
-            scheduleRefresh();
-          }
-        },
-      );
-    } catch (err) {
-      // Storage dir might not exist on first boot if no plugin has written
-      // yet — heartbeat picks it up. Log so the journal records why fs.watch
-      // didn't arm.
-      console.warn(
-        `[overlay] Deck wake-binding fs.watch failed (${err instanceof Error ? err.message : String(err)}); falling back to heartbeat only.`,
-      );
+      const next = await readDeckWakeBinding();
+      if (next !== handle.getBinding()) handle.setBinding(next);
+    } catch {
+      // Storage read failure is transient — try again next tick / event.
     }
+  };
+  const scheduleRefresh = (): void => {
+    if (debounceTimer) return;
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      void refresh();
+    }, DECK_WAKE_DEBOUNCE_MS);
+  };
 
-    // Heartbeat: covers inotify-silent filesystems (NFS, some container
-    // overlays). 30s is long enough that the cost is negligible and short
-    // enough that a stuck watcher self-heals within the typical session.
-    deckWakeRefreshTimer.current = setInterval(refresh, DECK_WAKE_HEARTBEAT_MS);
-  })
-  .catch((err) => {
-    console.error("[overlay] Deck hidraw watcher failed to start:", err);
-  });
+  // fs.watch on the parent dir (not the file itself — atomic rename
+  // invalidates a file-scoped watcher). Filter for any filename that
+  // matches our storage or its `<storage>.<uuid>.tmp` siblings.
+  try {
+    deckWakeStorageWatcher.current = fsWatch(
+      STORAGE_DIR,
+      (_event, filename) => {
+        if (!filename) return;
+        if (filename === STORAGE_FILENAME || filename.startsWith(STORAGE_FILENAME + ".")) {
+          scheduleRefresh();
+        }
+      },
+    );
+  } catch (err) {
+    // Storage dir might not exist on first boot if no plugin has written
+    // yet — heartbeat picks it up. Log so the journal records why fs.watch
+    // didn't arm.
+    console.warn(
+      `[overlay] Deck wake-binding fs.watch failed (${err instanceof Error ? err.message : String(err)}); falling back to heartbeat only.`,
+    );
+  }
+
+  // Heartbeat: covers inotify-silent filesystems (NFS, some container
+  // overlays). 30s is long enough that the cost is negligible and short
+  // enough that a stuck watcher self-heals within the typical session.
+  deckWakeRefreshTimer.current = setInterval(refresh, DECK_WAKE_HEARTBEAT_MS);
+}
 
 // Backup shortcut for desktop dev — works whether or not evdev picks up
 // the QAM button correctly. Useful when we're investigating why F16
@@ -768,6 +1002,28 @@ if (!shortcutRegistered) {
 // refs so the lifecycle helpers and the in-file toggleOverlay see the
 // same value without a setter dance.
 const managementLoopRunning: { current: boolean } = { current: true };
+
+// Reap self-update leftovers (abandoned `.staging`, downloaded
+// tarball) and restore from `.old` if a mid-swap crash left the live
+// tree missing. The `.old` rollback generation itself is deliberately
+// KEPT at this point: "the bun process started" doesn't prove the new
+// overlay works — CEF can still crash after this line. It's reaped
+// below only once the webview's first heartbeat arrives (a rendering
+// webview = a genuinely working overlay), which is the real end of
+// the one-generation rollback window. If the new overlay never gets
+// healthy, `.old` survives as the manual recovery copy.
+void cleanupUpdateArtifacts({ keepOldGeneration: true });
+const oldGenReaper = setInterval(() => {
+  // Gate on webviewEverAlive, NOT lastHeartbeat: the freeze watchdog
+  // seeds lastHeartbeat on every overlay OPEN ("assume alive"), so a
+  // Guide-press on a crash-looping post-update CEF would otherwise
+  // reap the rollback copy in the exact case it exists for.
+  if (webviewEverAlive.current) {
+    clearInterval(oldGenReaper);
+    void reapOldGeneration();
+  }
+}, 5000);
+(oldGenReaper as unknown as { unref?: () => void }).unref?.();
 
 overlayManagementLoop({
   state,

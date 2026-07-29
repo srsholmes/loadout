@@ -21,6 +21,8 @@ export { HeaderBackButton, useHeaderBack } from "./components/HeaderBackButton";
 export type { HeaderBackButtonProps } from "./components/HeaderBackButton";
 export { SearchField } from "./components/SearchField";
 export { Badge } from "./components/Badge";
+export { Collapse } from "./components/Collapse";
+export type { CollapseProps } from "./components/Collapse";
 export { GameCard, collectionBadgeVariant } from "./components/GameCard";
 export type { GameCardProps } from "./components/GameCard";
 export { GameCardGrid } from "./components/GameCardGrid";

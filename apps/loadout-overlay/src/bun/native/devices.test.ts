@@ -63,6 +63,32 @@ describe("parseDevices", () => {
     expect(pad.isSteamVirtual).toBe(true);
   });
 
+  it("flags Deck built-in nodes (28de:1205/1206) incl. mouse-only lizard nodes", () => {
+    // Mirrors a real Jupiter: hid-steam exposes a mouse emulation node and a
+    // keyboard emulation node under the controller's own vendor:product.
+    const deckFixture = `I: Bus=0003 Vendor=28de Product=1205 Version=0110
+N: Name="Valve Software Steam Controller"
+H: Handlers=event4 mouse1
+
+I: Bus=0003 Vendor=28de Product=1206 Version=0110
+N: Name="Valve Software Steam Controller"
+H: Handlers=sysrq kbd event10
+
+I: Bus=0003 Vendor=28de Product=11ff Version=0001
+N: Name="Microsoft X-Box 360 pad 0"
+H: Handlers=event12
+B: KEY=${CONTROLLER_KEY_LINE}
+`;
+    const [mouse, kbd, virt] = parseDevices(deckFixture);
+    expect(mouse.isDeckBuiltin).toBe(true); // LCD (1205), mouse-only node
+    expect(kbd.isDeckBuiltin).toBe(true); // OLED (1206), kbd node
+    expect(virt.isDeckBuiltin).toBe(false); // virtual pad is NOT built-in
+    expect(virt.isSteamVirtual).toBe(true);
+    // Non-Valve devices never flag.
+    const [xbox] = parseDevices(FIXTURE);
+    expect(xbox.isDeckBuiltin).toBe(false);
+  });
+
   it("populates a stable hash across reconnects", () => {
     const [a] = parseDevices(FIXTURE);
     const [b] = parseDevices(FIXTURE);

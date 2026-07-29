@@ -151,17 +151,19 @@ build() {
     # Run bun build --compile
     info "Compiling binary..."
 
-    DEFINE_FLAGS=""
-    DEFINE_FLAGS="$DEFINE_FLAGS --define __LOADOUT_VERSION__='\"$VERSION\"'"
-    DEFINE_FLAGS="$DEFINE_FLAGS --define __LOADOUT_BUILD_DATE__='\"$BUILD_DATE\"'"
-
     BUILD_START="$(date +%s)"
 
-    # shellcheck disable=SC2086
+    # NOTE: the defines are passed as directly-quoted args, NOT via an
+    # unquoted $DEFINE_FLAGS variable. Word-splitting an expansion does
+    # not re-process quotes, so the old variable form handed bun a
+    # value of literally '"0.6.0"' (single quotes included) and every
+    # binary reported `loadout "0.6.0"` — quote characters baked into
+    # the version string, which broke the self-update version compare.
     if ! (cd "$PROJECT_ROOT" && bun build "$ENTRY_POINT" \
         --compile \
         --outfile "$OUTPUT" \
-        $DEFINE_FLAGS \
+        --define __LOADOUT_VERSION__="\"$VERSION\"" \
+        --define __LOADOUT_BUILD_DATE__="\"$BUILD_DATE\"" \
         --minify); then
         error "Build failed!"
         exit 1

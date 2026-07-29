@@ -29,7 +29,7 @@ export function parseOpenRgbList(listOutput: string): ParsedOpenRgbZone[] {
     if (!headerMatch) continue;
 
     const deviceIndex = headerMatch[1];
-    const deviceName = headerMatch[2].trim();
+    const deviceName = (headerMatch[2] ?? "").trim(); // group 2 always present when header matches
 
     const zoneMatches = block.matchAll(/Zone\s+(\d+):\s+(.+)/g);
     let hasZones = false;
@@ -37,7 +37,7 @@ export function parseOpenRgbList(listOutput: string): ParsedOpenRgbZone[] {
       hasZones = true;
       zones.push({
         id: `openrgb:${deviceIndex}:${zm[1]}`,
-        name: `${deviceName} - ${zm[2].trim()}`,
+        name: `${deviceName} - ${(zm[2] ?? "").trim()}`, // group 2 always present per pattern
         color: { r: 0, g: 0, b: 0 },
         brightness: 100,
         mode: "static",

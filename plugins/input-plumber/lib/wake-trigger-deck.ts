@@ -32,12 +32,14 @@ import { runFull } from "@loadout/exec";
 import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
 import {
   DECK_BUTTONS,
+  BINDABLE_DECK_BUTTONS,
+  isBindableDeckButton,
   findButton,
   findDeckHidrawPath,
   splitReports,
-  REPORT_ID_INPUT,
   REPORT_LEN,
   type DeckButton,
+  isDeckStateReport,
 } from "@loadout/deck-hid";
 import {
   DECK_HIDRAW_UACCESS_RULE,
@@ -93,11 +95,12 @@ function rawToButton(raw: string | null | undefined): DeckButton | null {
   return findButton(raw.slice(DECK_RAW_PREFIX.length));
 }
 
-/** WakeButtonOption rows for the picker. All Deck candidates are
- *  recommended — the gameplay-buttons exclusion that exists for IP
- *  doesn't apply (DECK_BUTTONS already filters to safe choices). */
+/** WakeButtonOption rows for the picker. Only BINDABLE buttons are offered —
+ *  Steam/Qam are reserved system buttons (they drive Steam's own menus and
+ *  Steam sees their presses live via hidraw before any freeze). All
+ *  remaining candidates are recommended. */
 function deckButtonOptions(): WakeButtonOption[] {
-  return DECK_BUTTONS.map((b) => ({
+  return BINDABLE_DECK_BUTTONS.map((b) => ({
     raw: buttonToRaw(b),
     name: b.name,
     category: "deck",
@@ -113,6 +116,16 @@ export async function getWakeStatus(): Promise<WakeStatus> {
   const devices: WakeStatusDevice[] = [
     { name: DECK_DEVICE_NAME, buttons: deckButtonOptions() },
   ];
+  // Sanitize a stale reserved binding (Steam/Qam were bindable before they
+  // were blocked): report it as unbound so the picker shows "Set wake
+  // button" instead of a selection that no longer exists in the options.
+  // The overlay watcher applies the same filter, so the stored value is
+  // inert either way; we deliberately don't rewrite storage from a read.
+  const storedButton = rawToButton(wake?.selectedRaw);
+  const selectedRaw =
+    storedButton && !isBindableDeckButton(storedButton.name)
+      ? null
+      : (wake?.selectedRaw ?? null);
   // ipActive:true is a UI hint — it tells the picker that bind/capture are
   // immediately usable. There's no IP daemon involved; the field's contract
   // in shared.ts is "the picker can act", which is true here.
@@ -120,7 +133,7 @@ export async function getWakeStatus(): Promise<WakeStatus> {
     ipActive: true,
     isDeck: true,
     devices,
-    selectedRaw: wake?.selectedRaw ?? null,
+    selectedRaw,
     hasLegacyProfile: false,
   };
 }
@@ -194,6 +207,12 @@ export async function setWakeButton(raw: string): Promise<WakeOpResult> {
     return {
       ok: false,
       error: `Unknown Deck button identifier: ${raw}`,
+    };
+  }
+  if (!isBindableDeckButton(btn.name)) {
+    return {
+      ok: false,
+      error: `${btn.label} is reserved for Steam system functions and cannot be used as the wake button.`,
     };
   }
   await writeWake({ selectedRaw: buttonToRaw(btn), deviceName: DECK_DEVICE_NAME });
@@ -328,12 +347,20 @@ async function captureInner(timeoutMs: number): Promise<WakeCaptureResult> {
       let pressed: DeckButton | null = null;
       for (const report of splitReports(buf)) {
         // Only report id 0x01 carries button state; skip interleaved frames.
-        if (report[0] !== REPORT_ID_INPUT) continue;
+        if (!isDeckStateReport(report)) continue;
+        // Edge state is tracked for ALL buttons (a reserved press must still
+        // update its held memory), but only BINDABLE ones can be captured —
+        // pressing Steam/Qam mid-capture is ignored and the wait continues.
         for (const b of DECK_BUTTONS) {
-          const cur = (report[b.byte] & (1 << b.bit)) !== 0;
+          // splitReports only yields full REPORT_LEN (64-byte) frames and
+          // b.byte is always < 64, so this index is provably in-bounds;
+          // ?? 0 is behaviour-identical for the bitwise test and drops the `!`.
+          const cur = ((report[b.byte] ?? 0) & (1 << b.bit)) !== 0;
           const prevHeld = held.get(b.name) ?? false;
           held.set(b.name, cur);
-          if (cur && !prevHeld && !pressed) pressed = b;
+          if (cur && !prevHeld && !pressed && isBindableDeckButton(b.name)) {
+            pressed = b;
+          }
         }
         if (pressed) break;
       }

@@ -50,6 +50,18 @@ function createEngine() {
   });
 }
 
+// Engine wired with the backend's `getNoGameTdp` injection — mirrors
+// production, where the user's persisted manual TDP is the authoritative
+// "no game" value (ahead of the engine's stored `defaultTdp`).
+function createEngineWithNoGameTdp(getNoGameTdp: () => number | null) {
+  return createTdpProfileEngine({
+    configPath,
+    onApplyTdp,
+    onProfileChanged,
+    getNoGameTdp,
+  });
+}
+
 async function writeConfig(store: Partial<TdpProfileStore> & {
   defaultTdp: number;
   profiles: Array<TdpProfile>;
@@ -346,6 +358,117 @@ describe("TDP Profile Engine", () => {
   });
 
   // -------------------------------------------------------------------------
+  // getNoGameTdp — the manual "no game" TDP takes precedence over defaultTdp
+  // -------------------------------------------------------------------------
+
+  describe("getNoGameTdp (manual no-game TDP)", () => {
+    test("handleGameExit restores the manual TDP, not defaultTdp", async () => {
+      await writeConfig({
+        defaultTdp: 12,
+        profiles: [{ appId: 730, gameName: "CS2", tdpWatts: 25 }],
+      });
+      // User's persisted manual TDP is 35W; engine default is 12W.
+      const engine = createEngineWithNoGameTdp(() => 35);
+      await engine.loadProfiles();
+
+      await engine.handleGameLaunch(730, "CS2"); // 25W (profile)
+      appliedTdpValues = [];
+
+      await engine.handleGameExit(730);
+
+      expect(appliedTdpValues).toEqual([35]); // manual, not the 12W default
+    });
+
+    test("falls back to defaultTdp when getNoGameTdp returns null", async () => {
+      await writeConfig({
+        defaultTdp: 12,
+        profiles: [{ appId: 730, gameName: "CS2", tdpWatts: 25 }],
+      });
+      const engine = createEngineWithNoGameTdp(() => null);
+      await engine.loadProfiles();
+
+      await engine.handleGameLaunch(730, "CS2");
+      appliedTdpValues = [];
+
+      await engine.handleGameExit(730);
+
+      expect(appliedTdpValues).toEqual([12]);
+    });
+
+    test("falls back to defaultTdp when the callback is not provided", async () => {
+      await writeConfig({
+        defaultTdp: 12,
+        profiles: [{ appId: 730, gameName: "CS2", tdpWatts: 25 }],
+      });
+      const engine = createEngine(); // no getNoGameTdp injection
+      await engine.loadProfiles();
+
+      await engine.handleGameLaunch(730, "CS2");
+      appliedTdpValues = [];
+
+      await engine.handleGameExit(730);
+
+      expect(appliedTdpValues).toEqual([12]);
+    });
+
+    test("launching a game WITHOUT a profile applies the manual TDP", async () => {
+      await writeConfig({ defaultTdp: 12, profiles: [] });
+      const engine = createEngineWithNoGameTdp(() => 35);
+      await engine.loadProfiles();
+
+      await engine.handleGameLaunch(999, "Unprofiled Game");
+
+      expect(appliedTdpValues).toEqual([35]);
+    });
+
+    test("a recognized per-game profile still wins over the manual TDP", async () => {
+      await writeConfig({
+        defaultTdp: 12,
+        profiles: [{ appId: 730, gameName: "CS2", tdpWatts: 25 }],
+      });
+      const engine = createEngineWithNoGameTdp(() => 35);
+      await engine.loadProfiles();
+
+      await engine.handleGameLaunch(730, "CS2");
+
+      expect(appliedTdpValues).toEqual([25]); // profile precedence intact
+    });
+
+    test("removing the running game's profile falls back to the manual TDP", async () => {
+      await writeConfig({
+        defaultTdp: 12,
+        profiles: [{ appId: 730, gameName: "CS2", tdpWatts: 25 }],
+      });
+      const engine = createEngineWithNoGameTdp(() => 35);
+      await engine.loadProfiles();
+
+      await engine.handleGameLaunch(730, "CS2"); // 25W
+      appliedTdpValues = [];
+
+      await engine.removeProfile(730);
+
+      expect(appliedTdpValues).toEqual([35]); // manual, consistent with exit
+    });
+
+    test("enabling per-game while an unprofiled game runs applies the manual TDP", async () => {
+      await writeConfig({
+        defaultTdp: 12,
+        profiles: [],
+        perGameEnabled: false,
+      });
+      const engine = createEngineWithNoGameTdp(() => 35);
+      await engine.loadProfiles();
+
+      await engine.handleGameLaunch(999, "Unprofiled Game"); // no apply (off)
+      appliedTdpValues = [];
+
+      await engine.setPerGameEnabled(true);
+
+      expect(appliedTdpValues).toEqual([35]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // setProfile
   // -------------------------------------------------------------------------
 
@@ -526,20 +649,34 @@ describe("TDP Profile Engine", () => {
   // -------------------------------------------------------------------------
 
   describe("TDP clamping", () => {
-    test("clamps TDP below minimum (3W) to 3", async () => {
+    // These bounds are a SANITY guard against corrupt config, not the
+    // per-device limit — backend.applyTdp() applies the real, device- and
+    // power-state-aware ceiling. They used to be 3-80, which silently
+    // truncated saved profiles on OneXPlayer Super X (90 W) and GPD Win 5
+    // (85 W): both shipped devices, no custom device involved.
+    test("clamps TDP below the sanity minimum (1W) to 1", async () => {
       const engine = createEngine();
       await engine.loadProfiles();
 
-      await engine.setProfile(100, "Low Game", 1);
-      expect(engine.getProfile(100)?.tdpWatts).toBe(3);
+      await engine.setProfile(100, "Low Game", 0);
+      expect(engine.getProfile(100)?.tdpWatts).toBe(1);
     });
 
-    test("clamps TDP above maximum (80W) to 80", async () => {
+    test("preserves a profile above 80W for high-TDP devices", async () => {
       const engine = createEngine();
       await engine.loadProfiles();
 
-      await engine.setProfile(200, "High Game", 100);
-      expect(engine.getProfile(200)?.tdpWatts).toBe(80);
+      // OneXPlayer Super X ships maxTdp 90; this must round-trip intact.
+      await engine.setProfile(300, "Super X Game", 90);
+      expect(engine.getProfile(300)?.tdpWatts).toBe(90);
+    });
+
+    test("clamps TDP above the sanity maximum (200W) to 200", async () => {
+      const engine = createEngine();
+      await engine.loadProfiles();
+
+      await engine.setProfile(200, "High Game", 500);
+      expect(engine.getProfile(200)?.tdpWatts).toBe(200);
     });
 
     test("clamps default TDP to valid range", async () => {
@@ -547,10 +684,14 @@ describe("TDP Profile Engine", () => {
       await engine.loadProfiles();
 
       await engine.setDefaultTdp(0);
-      expect(engine.getDefaultTdp()).toBe(3);
+      expect(engine.getDefaultTdp()).toBe(1);
 
+      // 100 W is a legitimate value for a high-TDP device now, not clamped.
       await engine.setDefaultTdp(100);
-      expect(engine.getDefaultTdp()).toBe(80);
+      expect(engine.getDefaultTdp()).toBe(100);
+
+      await engine.setDefaultTdp(500);
+      expect(engine.getDefaultTdp()).toBe(200);
     });
 
     test("clamps values loaded from config file", async () => {
@@ -565,9 +706,11 @@ describe("TDP Profile Engine", () => {
       const engine = createEngine();
       await engine.loadProfiles();
 
-      expect(engine.getDefaultTdp()).toBe(80);
-      expect(engine.getProfile(1)?.tdpWatts).toBe(3);
-      expect(engine.getProfile(2)?.tdpWatts).toBe(80);
+      expect(engine.getDefaultTdp()).toBe(200);
+      expect(engine.getProfile(1)?.tdpWatts).toBe(1);
+      // 100 W survives now — it is a plausible value for a high-TDP handheld,
+      // and the device ceiling is applied at write time, not here.
+      expect(engine.getProfile(2)?.tdpWatts).toBe(100);
     });
   });
 

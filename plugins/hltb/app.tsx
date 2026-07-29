@@ -228,8 +228,9 @@ function HltbPlugin() {
     const idx = list.findIndex((g) => g.appId === runningAppId);
     if (idx <= 0) return list;
     const next = list.slice();
+    // idx > 0 (checked above) is in bounds, so splice removes one element.
     const [running] = next.splice(idx, 1);
-    next.unshift(running);
+    if (running !== undefined) next.unshift(running);
     return next;
   }, [installed, currentGame, searchQuery, libraryFilter]);
 
@@ -398,7 +399,7 @@ function HltbPlugin() {
             </div>
           ) : (
             <GameCardGrid>
-              {sortedGames!.map((game) => (
+              {(sortedGames ?? []).map((game) => (
                 <HltbGameCard
                   key={game.appId}
                   game={game}

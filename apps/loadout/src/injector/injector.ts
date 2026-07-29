@@ -9,6 +9,11 @@ import { CDPClient } from "@loadout/steam-cdp";
 import { findSharedJSContext, findBigPictureTab, type CEFTab, type GetTabsOptions } from "./tabs";
 import { buildComponentDiscoveryScript } from "./steam-components";
 import { buildMenuPatchScript, type MenuPluginEntry } from "./menu-patcher";
+import {
+  buildOverlayMenuInjectScript,
+  buildOverlayMenuRemoveScript,
+  OVERLAY_MENU_BINDING,
+} from "./overlay-menu";
 import { buildRoutePatchScript, type RouteEntry } from "./route-patcher";
 import { buildWebpackPatcherScript, type WebpackPatchEntry } from "./webpack-patcher";
 import { buildInspectorScript } from "./inspector";
@@ -45,6 +50,13 @@ export interface InjectorOptions {
    */
   onGameLaunch?: (appId: number, gameName: string) => void | Promise<void>;
   onGameExit?: (appId: number, gameName: string) => void | Promise<void>;
+  /**
+   * Fired when the injected Steam-menu overlay entry is activated
+   * (issue #169). The loader wires this to `broadcastShow()` so the
+   * overlay window pops. Dispatched from a CDP `Runtime.addBinding`
+   * callback because Steam's CEF blocks fetch() to localhost.
+   */
+  onOverlayOpen?: () => void;
   /**
    * Called once after the injector exhausts its crash-retry budget and
    * stops trying. Lets the host surface a `__system` event so UI
@@ -90,6 +102,27 @@ export function maybeGiveUp(
   return true;
 }
 
+/**
+ * Resolve whether the main-menu "Loadout" entry should be present from a
+ * raw user-config object (issue #169). The new `steamOverlayButtonMainMenu`
+ * key wins once it exists — so toggling it *off* removes the item even for
+ * a config that still carries the legacy `steamOverlayButtonEnabled` flag
+ * (used by the first build of this feature, pre key-rename). The legacy key
+ * is honoured only as a fallback when the new key was never written.
+ *
+ * Pure + exported so the back-compat precedence is unit-testable without a
+ * live CEF connection.
+ */
+export function resolveOverlayMainMenu(cfg: Record<string, unknown>): boolean {
+  const hasNew = Object.prototype.hasOwnProperty.call(
+    cfg,
+    "steamOverlayButtonMainMenu",
+  );
+  return hasNew
+    ? cfg.steamOverlayButtonMainMenu === true
+    : cfg.steamOverlayButtonEnabled === true;
+}
+
 /*
  * The plugin-bundle / panel-mount machinery (injectBPMBundles,
  * PANEL_CONTAINER_STYLE, PanelMountScriptOptions, buildPanelMountScript,
@@ -118,6 +151,9 @@ export class SteamInjector {
   private onGameLaunch?: InjectorOptions["onGameLaunch"];
   private onGameExit?: InjectorOptions["onGameExit"];
   private onGiveUp?: InjectorOptions["onGiveUp"];
+  private onOverlayOpen?: InjectorOptions["onOverlayOpen"];
+  /** Unsubscribe for the overlay-open CDP binding (issue #169). */
+  private overlayBindingUnsub: (() => void) | null = null;
   private isGameMode: () => boolean | Promise<boolean>;
 
   constructor(options: InjectorOptions = {}) {
@@ -129,6 +165,7 @@ export class SteamInjector {
     this.onGameLaunch = options.onGameLaunch;
     this.onGameExit = options.onGameExit;
     this.onGiveUp = options.onGiveUp;
+    this.onOverlayOpen = options.onOverlayOpen;
     this.log = options.log ?? console.log;
     this.cdpFactory = options.cdpFactory ?? null;
     this.isGameMode = options.isGameMode ?? isGamescopeRunning;
@@ -152,6 +189,21 @@ export class SteamInjector {
     } catch (err) {
       this.log(`[injector] Failed to acquire session token: ${err instanceof Error ? err.message : err}`);
     }
+  }
+
+  /**
+   * The SharedJSContext CDP client, guaranteed connected. `this.cdp` is
+   * set by connectAndInject() before any of the inject/patch steps run, so
+   * for real call flows this always returns it. If it were somehow null the
+   * previous `this.cdp!` would have thrown a TypeError here too — this
+   * throws an explicit error instead, which the surrounding retry/try-catch
+   * paths handle identically.
+   */
+  private requireCdp(): CDPClient {
+    if (!this.cdp) {
+      throw new Error("[injector] CDP client is not connected");
+    }
+    return this.cdp;
   }
 
   /** Fetch from the loader API with session token auth. */
@@ -203,7 +255,7 @@ export class SteamInjector {
       onRetry: (reason) => this.log(`[injector] ${reason}`),
     };
 
-    let tab: CEFTab;
+    let tab: CEFTab | undefined;
     while (this.running) {
       try {
         tab = await findSharedJSContext(tabOptions);
@@ -216,15 +268,18 @@ export class SteamInjector {
     }
 
     if (!this.running) return;
+    // The loop only breaks after assigning `tab`, so once we're still
+    // running it is set; the guard only satisfies the type checker.
+    if (!tab) return;
 
-    this.log(`[injector] Found SharedJSContext: "${tab!.title}" (${tab!.url})`);
+    this.log(`[injector] Found SharedJSContext: "${tab.title}" (${tab.url})`);
 
     // Step 2: Connect via CDP WebSocket (direct or through multiplexer)
     if (this.cdpFactory) {
-      this.cdp = await this.cdpFactory(tab!.webSocketDebuggerUrl);
+      this.cdp = await this.cdpFactory(tab.webSocketDebuggerUrl);
       this.log("[injector] Connected to CDP via multiplexer");
     } else {
-      this.cdp = new CDPClient(tab!.webSocketDebuggerUrl);
+      this.cdp = new CDPClient(tab.webSocketDebuggerUrl);
       await this.cdp.connect();
       this.log("[injector] Connected to CDP WebSocket");
     }
@@ -238,6 +293,10 @@ export class SteamInjector {
     // monitor below in desktop mode — only the plugin injection is skipped.
     const gameMode = await this.isGameMode();
     if (gameMode) {
+      // Step 3.5: Arm the overlay-open binding (issue #169) so the injected
+      // Steam-menu entry has a callback to hit the moment it's clicked.
+      await this.setupOverlayBinding();
+
       // Step 4: Inject if not already loaded
       const alreadyLoaded = await this.cdp.hasGlobalVar(GLOBAL_FLAG);
       if (!alreadyLoaded) {
@@ -300,11 +359,11 @@ export class SteamInjector {
     // Step 1: Discover Steam's React/ReactDOM from webpack and alias __VENDOR_* globals.
     // This MUST run before anything that references __VENDOR_REACT for its
     // hooks/createElement. Two React instances = crash.
-    await this.cdp!.evaluate(DISCOVER_STEAM_REACT);
+    await this.requireCdp().evaluate(DISCOVER_STEAM_REACT);
     this.log("[injector] Steam React discovered and aliased");
 
     // Step 2: Set the loaded flag
-    await this.cdp!.evaluate(`window.loadoutHasLoaded = true;`);
+    await this.requireCdp().evaluate(`window.loadoutHasLoaded = true;`);
   }
 
   /**
@@ -333,7 +392,7 @@ export class SteamInjector {
       }
 
       const script = buildWebpackPatcherScript(patchEntries);
-      await this.cdp!.evaluate(script, { awaitPromise: true });
+      await this.requireCdp().evaluate(script, { awaitPromise: true });
 
       if (patchEntries.length > 0) {
         this.log("[injector] Webpack patcher installed");
@@ -389,9 +448,9 @@ export class SteamInjector {
     try {
       this.log("[injector] Running Steam component discovery...");
       // Clear previous discovery flag to force re-discovery (code may have changed)
-      await this.cdp!.evaluate("delete window.__steamComponentsDiscovered");
+      await this.requireCdp().evaluate("delete window.__steamComponentsDiscovered");
       const script = buildComponentDiscoveryScript(this.loaderPort);
-      await this.cdp!.evaluate(script, { awaitPromise: true });
+      await this.requireCdp().evaluate(script, { awaitPromise: true });
       this.log("[injector] Steam component discovery complete");
     } catch (err) {
       this.log(`[injector] Component discovery failed (non-fatal): ${err instanceof Error ? err.message : err}`);
@@ -444,6 +503,126 @@ export class SteamInjector {
   }
 
   /**
+   * Add the `Runtime.addBinding` the injected overlay-menu entry calls
+   * (issue #169), and fan its invocations out to `onOverlayOpen`. Runs on
+   * `this.cdp` (SharedJSContext) where the menu patch + watcher live.
+   * Idempotent — re-adding an existing binding is a non-fatal no-op.
+   */
+  private async setupOverlayBinding(): Promise<void> {
+    const cdp = this.cdp;
+    if (!cdp?.connected) return;
+
+    // Attach the client-side listener exactly once — *synchronously*, before
+    // any await, so two concurrent callers (launch-time setup racing a
+    // Settings-toggle refresh) can't both pass the guard and double-add it,
+    // which would fire onOverlayOpen twice per activation. The listener
+    // survives page reloads (it lives on the CDP client, not the page).
+    if (!this.overlayBindingUnsub) {
+      this.overlayBindingUnsub = cdp.on(
+        "Runtime.bindingCalled",
+        (params: Record<string, unknown>) => {
+          if (params.name !== OVERLAY_MENU_BINDING) return;
+          this.log("[injector] Overlay-menu entry activated");
+          try {
+            this.onOverlayOpen?.();
+          } catch (err) {
+            this.log(`[injector] onOverlayOpen hook threw: ${err instanceof Error ? err.message : err}`);
+          }
+        },
+      );
+    }
+
+    try {
+      await cdp.send("Runtime.enable");
+    } catch {
+      // May already be enabled — non-fatal.
+    }
+    // Always (re)add the binding itself: CDP drops bindings on page
+    // navigation, so this must run again after a reload even though the
+    // listener above is attached only once.
+    try {
+      await cdp.send("Runtime.addBinding", { name: OVERLAY_MENU_BINDING });
+    } catch {
+      // Binding may already exist from a prior session — non-fatal.
+    }
+  }
+
+  /**
+   * Read the overlay-button user settings from the loader's config
+   * (issue #169). Server-side fetch — the injector runs in the loader
+   * process, so localhost is reachable here even though Steam's CEF
+   * blocks it. Missing / malformed config reads as "disabled".
+   *
+   * `steamOverlayButtonMainMenu` gates the main-menu "Loadout" entry;
+   * the legacy `steamOverlayButtonEnabled` key (pre-#169-split) is
+   * honoured as an alias so an existing opt-in isn't silently dropped.
+   */
+  private async readOverlayButtonConfig(): Promise<boolean | null> {
+    try {
+      const res = await this.fetchApi("/api/user-config");
+      if (!res.ok) return null;
+      const cfg = (await res.json()) as Record<string, unknown>;
+      return resolveOverlayMainMenu(cfg);
+    } catch {
+      // Distinguish "couldn't read" (null) from "read: disabled" (false) so
+      // callers don't tear down an enabled item on a transient blip.
+      return null;
+    }
+  }
+
+  /**
+   * (Re)apply the main-menu "Loadout" entry (issue #169). Injects when
+   * enabled, tears down when disabled. Returns a `{ ok, error }` result so
+   * the loader's refresh endpoint can surface a failure toast in the
+   * overlay.
+   *
+   * `opts.mainMenu` carries the *explicit* desired state from the Settings
+   * toggle so we act on it directly instead of re-reading `/api/user-config`
+   * — the config PATCH the toggle fires is async and could otherwise race
+   * this read. Omit it (launch / reinject) to fall back to the persisted
+   * config; a read failure there is surfaced as `ok: false` rather than
+   * silently removing an enabled item.
+   */
+  async refreshOverlayButton(
+    opts: { mainMenu?: boolean } = {},
+  ): Promise<{ ok: boolean; error?: string }> {
+    if (!this.cdp?.connected) {
+      return { ok: false, error: "Not connected to Steam — is Steam running?" };
+    }
+    if (!(await this.isGameMode())) {
+      return { ok: false, error: "The Steam overlay button is only available in Gaming Mode." };
+    }
+
+    let mainMenu: boolean;
+    if (typeof opts.mainMenu === "boolean") {
+      mainMenu = opts.mainMenu;
+    } else {
+      const read = await this.readOverlayButtonConfig();
+      if (read === null) {
+        return { ok: false, error: "Couldn't read Loadout settings." };
+      }
+      mainMenu = read;
+    }
+
+    try {
+      // Make sure the binding is live before the entry can be activated.
+      await this.setupOverlayBinding();
+      if (mainMenu) {
+        await this.cdp.evaluate(buildOverlayMenuInjectScript(), { awaitPromise: false });
+        this.log("[injector] Main-menu 'Loadout' entry injected");
+      } else {
+        await this.cdp.evaluate(buildOverlayMenuRemoveScript(), { awaitPromise: false });
+        this.log("[injector] Main-menu 'Loadout' entry removed (disabled)");
+      }
+      return { ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log(`[injector] Overlay-menu refresh failed: ${msg}`);
+      return { ok: false, error: `Failed to update Steam: ${msg}` };
+    }
+  }
+
+  /**
    * Fetch the plugin list and apply QAM tab injection + route patching
    * for plugins that declare targets or routes.
    */
@@ -481,7 +660,7 @@ export class SteamInjector {
             menuPlugins.push({
               pluginId: plugin.id,
               title: t.title ?? plugin.name,
-              route: t.route ?? (plugin.routes ? Object.keys(plugin.routes)[0] : ""),
+              route: t.route ?? (plugin.routes ? (Object.keys(plugin.routes)[0] ?? "") : ""),
               position: typeof t.position === "number" ? t.position : undefined,
               icon: t.icon,
             });
@@ -519,7 +698,7 @@ export class SteamInjector {
       if (routes.length > 0) {
         this.log(`[injector] Patching router with ${routes.length} route(s)...`);
         const routeScript = buildRoutePatchScript(routes);
-        await this.cdp!.evaluate(routeScript, { awaitPromise: true });
+        await this.requireCdp().evaluate(routeScript, { awaitPromise: true });
         this.log("[injector] Route patch applied");
       }
 
@@ -527,9 +706,13 @@ export class SteamInjector {
       if (menuPlugins.length > 0) {
         this.log(`[injector] Patching main menu with ${menuPlugins.length} item(s)...`);
         const menuScript = buildMenuPatchScript(menuPlugins);
-        await this.cdp!.evaluate(menuScript, { awaitPromise: true });
+        await this.requireCdp().evaluate(menuScript, { awaitPromise: true });
         this.log("[injector] Main menu patch applied");
       }
+
+      // Apply the optional "open overlay" menu entry (issue #169). Reads
+      // the toggle from user config; injects or removes accordingly.
+      await this.refreshOverlayButton();
 
     } catch (err) {
       this.log(`[injector] Target patches failed (non-fatal): ${err instanceof Error ? err.message : err}`);
@@ -600,18 +783,22 @@ export class SteamInjector {
   // never populated (no plugin ships a panel.tsx), so it always bailed.
 
   private async monitor(): Promise<void> {
-    if (!this.cdp) return;
+    // Capture the connected client once: within a single monitor lifetime
+    // this.cdp is only cleared by cleanup() (which also unsubscribes these
+    // listeners), so the local mirrors this.cdp without the assertion.
+    const cdp = this.cdp;
+    if (!cdp) return;
 
     return new Promise<void>((resolve) => {
       // Re-inject on page reload
-      const unsubDom = this.cdp!.on("Page.domContentEventFired", async () => {
+      const unsubDom = cdp.on("Page.domContentEventFired", async () => {
         this.log("[injector] Page reloaded, checking if re-injection needed...");
         try {
           // Re-injection is gated on Gaming Mode too (issue #111) — a reload
           // in the desktop client must not re-add plugin injection. The game
           // session monitor is re-armed in both modes.
           const gameMode = await this.isGameMode();
-          const loaded = await this.cdp!.hasGlobalVar(GLOBAL_FLAG);
+          const loaded = await cdp.hasGlobalVar(GLOBAL_FLAG);
           if (gameMode && !loaded) {
             await this.inject();
             await this.connectBPM();
@@ -624,7 +811,7 @@ export class SteamInjector {
       });
 
       // Handle detach (Steam restart, etc.)
-      const unsubDetach = this.cdp!.on("Inspector.detached", () => {
+      const unsubDetach = cdp.on("Inspector.detached", () => {
         this.log("[injector] CEF requested detach (Steam may be restarting)");
         cleanup();
         resolve();
@@ -645,6 +832,8 @@ export class SteamInjector {
         clearInterval(checkInterval);
         this.gameSessionMonitor?.cleanup().catch(() => {});
         this.gameSessionMonitor = null;
+        this.overlayBindingUnsub?.();
+        this.overlayBindingUnsub = null;
         this.cdp?.close();
         this.cdp = null;
         this.bpmCdp?.close();
@@ -748,6 +937,8 @@ export class SteamInjector {
     this.running = false;
     this.gameSessionMonitor?.cleanup().catch(() => {});
     this.gameSessionMonitor = null;
+    this.overlayBindingUnsub?.();
+    this.overlayBindingUnsub = null;
     this.cdp?.close();
     this.cdp = null;
     this.bpmCdp?.close();

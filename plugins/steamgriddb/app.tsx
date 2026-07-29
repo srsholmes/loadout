@@ -293,7 +293,12 @@ function SteamGridDB() {
       const idx = ranked.findIndex(
         (g) => String(g.appId) === String(currentAppId),
       );
-      if (idx > 0) ranked.unshift(ranked.splice(idx, 1)[0]);
+      // idx came from findIndex, so splice returns exactly one element;
+      // the guard only satisfies the type checker.
+      if (idx > 0) {
+        const [moved] = ranked.splice(idx, 1);
+        if (moved !== undefined) ranked.unshift(moved);
+      }
     }
     return ranked;
   }, [library, filter, searchQuery, currentAppId]);
@@ -343,8 +348,10 @@ function SteamGridDB() {
           types: string[];
           verified: boolean;
         }>;
-        if (results.length > 0) {
-          const top = results.find((r) => r.verified) ?? results[0];
+        // results.length > 0 guarantees results[0] is in-bounds; the extra
+        // `top` guard only satisfies the type checker.
+        const top = results.find((r) => r.verified) ?? results[0];
+        if (top) {
           await call("saveSgdbMatch", game.appId, top.id, top.name);
           return {
             appId: game.appId,
@@ -636,7 +643,11 @@ function SteamGridDB() {
 
   // --- Render ---
 
-  const activeTabConfig = TABS.find((t) => t.id === activeTab)!;
+  // activeTab is always one of the TABS ids, so this find never misses;
+  // the guard only satisfies the type checker (mirrors the `if (!tab)`
+  // pattern used for the same lookup elsewhere in this component).
+  const activeTabConfig = TABS.find((t) => t.id === activeTab);
+  if (!activeTabConfig) return null;
   const selectedAssetId = appliedIdByTab[activeTab];
 
   // Dynamic topbar header. Same React tree as the body — state and

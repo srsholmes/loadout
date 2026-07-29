@@ -57,6 +57,18 @@ if [ ! -d "$PROJECT_ROOT/plugins" ]; then
     exit 1
 fi
 
+# Staging reads each workspace package's name via `bun -e` (below). Without
+# bun on PATH those calls silently fail, every @loadout/* package is skipped,
+# and the install "succeeds" with an empty node_modules/@loadout — every
+# plugin backend then fails to bundle at runtime. Fail loudly up front instead.
+# (Common when the installer runs non-interactively, where ~/.bun/bin isn't
+# on PATH.)
+if ! command -v bun >/dev/null 2>&1; then
+    echo "ERROR: bun is not on PATH — cannot stage @loadout/* workspace packages." >&2
+    echo "       Add it (e.g. export PATH=\"\$HOME/.bun/bin:\$PATH\") and re-run." >&2
+    exit 1
+fi
+
 PLUGINS_DST="$TARGET/plugins"
 NM_DST="$TARGET/node_modules"
 
@@ -166,10 +178,21 @@ for pkg_dir in "$PROJECT_ROOT"/packages/*/; do
     hoist_deps_from "${pkg_dir%/}/package.json"
 done
 
+# Sanity-check that the @loadout/* workspace packages actually landed. Every
+# plugin backend imports at least one, so an empty scope means a broken install
+# (e.g. the `bun -e` name reads silently failed) — fail now, not at runtime.
+LOADOUT_PKG_COUNT=$(find "$NM_DST/@loadout" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) 2>/dev/null | wc -l)
+if [ "$LOADOUT_PKG_COUNT" -eq 0 ]; then
+    echo "ERROR: staged no @loadout/* packages into $NM_DST/@loadout." >&2
+    echo "       Plugin backends would all fail to bundle. Check that bun is on" >&2
+    echo "       PATH and $PROJECT_ROOT/packages/* are present, then re-run." >&2
+    exit 1
+fi
+
 PLUGIN_COUNT=$(find "$PLUGINS_DST" -mindepth 1 -maxdepth 1 -type d | wc -l)
 NM_COUNT=$(find "$NM_DST" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) | wc -l)
 # Only sum the two dirs we actually staged — $TARGET may already contain
 # runtime caches (sound-packs/, css-themes/, plugin storage JSON) and the
 # overlay tree from previous installs.
 STAGED_SIZE=$(du -ch "$PLUGINS_DST" "$NM_DST" 2>/dev/null | awk '/total$/ {print $1; exit}')
-echo "Staged $PLUGIN_COUNT plugins + $NM_COUNT hoisted modules into $TARGET ($STAGED_SIZE)"
+echo "Staged $PLUGIN_COUNT plugins + $NM_COUNT hoisted modules ($LOADOUT_PKG_COUNT @loadout/*) into $TARGET ($STAGED_SIZE)"

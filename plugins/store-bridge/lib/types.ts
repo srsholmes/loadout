@@ -10,14 +10,6 @@
 
 export type StoreId = "epic" | "gog" | "amazon" | "ubisoft" | "xcloud";
 export type AuthStatus = "unknown" | "authed" | "expired";
-export type GameStatus =
-  | "available"
-  | "installing"
-  | "installed"
-  | "update_available"
-  | "updating"
-  | "uninstalling"
-  | "not_owned";
 export type InstallSource = "installed" | "imported";
 
 /** A title in the user's library, as returned by the store driver. */

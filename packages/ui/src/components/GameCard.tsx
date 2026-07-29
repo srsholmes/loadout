@@ -110,7 +110,10 @@ export function collectionBadgeVariant(name: string): BadgeVariant {
   for (let i = 0; i < name.length; i++) {
     h = ((h << 5) - h + name.charCodeAt(i)) | 0;
   }
-  return COLLECTION_PALETTE[Math.abs(h) % COLLECTION_PALETTE.length];
+  // The index is a modulo of the non-empty const palette, so it is always
+  // in bounds; the fallback only satisfies the type and never runs.
+  const variant = COLLECTION_PALETTE[Math.abs(h) % COLLECTION_PALETTE.length];
+  return variant ?? "primary";
 }
 
 type Phase = "primary" | "fallback" | "placeholder";
@@ -258,7 +261,19 @@ export function GameCard({
         </div>
       )}
 
-      {action && <div className="flex items-center gap-1.5">{action}</div>}
+      {/* Stop clicks on the action button(s) from bubbling to the card's
+          own onClick (the interactive+action branch below wraps the whole
+          body in a <div onClick={onPick}>). Without this, clicking e.g.
+          "Remove" fires both the button handler AND onPick — a double
+          invocation. Gamepad A still reaches onPick via onEnterPress. */}
+      {action && (
+        <div
+          className="flex items-center gap-1.5"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {action}
+        </div>
+      )}
     </>
   );
 

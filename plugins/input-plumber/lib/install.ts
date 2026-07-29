@@ -21,7 +21,7 @@ import type { InstallRunResult, InstallStatus, ManagedBy } from "../shared";
 // Re-export so existing callers (backend.ts, tests) keep working without
 // caring whether the type lives here or in ../shared. The source of truth
 // is ../shared so the frontend can import it without dragging in fs/exec.
-export type { InstallRunResult, InstallStatus, ManagedBy };
+export type { InstallRunResult, InstallStatus };
 
 const PLUGIN_ROOT = join(import.meta.dir, "..");
 const INSTALL_SCRIPT = join(PLUGIN_ROOT, "scripts", "install-inputplumber.sh");
@@ -54,7 +54,9 @@ async function inputplumberVersion(binary: string): Promise<string | null> {
   const r = await runFull([binary, "--version"], { timeoutMs: 5_000 });
   if (r.exitCode !== 0) return null;
   const m = r.stdout.trim().match(/(\d+\.\d+\.\d+(?:-\S+)?)/);
-  return m ? m[1] : r.stdout.trim() || null;
+  // Capture group 1 is mandatory, so on a match it is always present; ?? ""
+  // only drops the `!` and is unreachable for a real match.
+  return m ? (m[1] ?? "") : r.stdout.trim() || null;
 }
 
 async function isUnitActive(unit: string): Promise<boolean> {

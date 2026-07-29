@@ -16,6 +16,11 @@ export interface SteamComponentPropMeta {
   source?: "destructuring" | "codeFinder" | "bodyAccess" | "propTypes" | "defaultProps";
 }
 
+/**
+ * @public — documents the JSON shape the discovery script (below) reports
+ * back from Steam's CEF context; nothing types against it statically because
+ * the payload crosses a CDP string boundary.
+ */
 export interface SteamComponentMeta {
   name: string;
   displayName?: string;

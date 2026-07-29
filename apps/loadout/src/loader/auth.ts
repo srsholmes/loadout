@@ -34,7 +34,7 @@ function extractToken(req: Request): string | null {
   if (authHeader) {
     const match = authHeader.match(/^Bearer\s+(.+)$/i);
     if (match) {
-      return match[1];
+      return match[1] ?? null;
     }
   }
 

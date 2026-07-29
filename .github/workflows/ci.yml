@@ -32,13 +32,34 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libarchive-tools
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
-      - name: Typecheck
+      # Primary typecheck: the Go-native compiler (tsgo,
+      # @typescript/native-preview, pinned exactly). ~9x faster than tsc and
+      # slightly stricter — it caught a generic-inference hole tsc missed.
+      # NOTE: tsgo's bin shim is `#!/usr/bin/env node`; always invoke it via
+      # `bun run` (bun runs it with no node installed) — a naked `tsgo` would
+      # need node on PATH.
+      - name: Typecheck (tsgo, Go-native — primary)
         run: bun run typecheck
+
+      # Safety net: stock tsc. tsgo is still a -dev preview and can have
+      # false negatives, so we keep tsc as a backstop until it GAs.
+      - name: Typecheck (tsc — safety net)
+        run: bun run typecheck:tsc
 
       - name: ESLint
         run: bun run lint
+
+      # Dead-code gate (knip): unused files, exports, types, and
+      # dependencies across every workspace. Entry points mirror the
+      # runtime-bundling architecture (plugin backend.ts/app.tsx, recomp
+      # setup modules, Electrobun bun+webview entries) — see knip.ts.
+      # NOTE: like tsgo above, knip's default bin shim is
+      # `#!/usr/bin/env node`; the script uses knip's `knip-bun` shim
+      # (`#!/usr/bin/env bun`) so no node install is needed.
+      - name: Dead code (knip)
+        run: bun run check:dead-code
 
       # Audit Q-011 / Q-012: enforce that every plugin entry point
       # ≥100 LOC has a sibling spec. Wave-5 closed the four outstanding

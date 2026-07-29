@@ -6,14 +6,18 @@ import {
   Button,
   Select,
   Toggle,
+  notify,
   useBackend,
   useTranslation,
   setLanguage,
   SUPPORTED_LANGUAGES,
   DEFAULT_LANGUAGE,
 } from "@loadout/ui";
+import { apiUrl, authHeaders } from "../lib/backend";
 import { useSidebarAutoCollapseSetting } from "../hooks/useSidebarCollapse";
+import { OVERLAY_VERSION } from "../version";
 import { useEnabledPlugins } from "../hooks/useEnabledPlugins";
+import { useInstalledPlugins } from "../hooks/usePlugins";
 import { useConfigValue, getConfigValue, setConfigValue } from "../lib/userConfig";
 import {
   getControllerShortcuts,
@@ -28,6 +32,7 @@ import {
   type ShortcutAction,
 } from "../lib/host";
 import { useFocusable } from "@loadout/ui";
+import { UpdateSection } from "./UpdateSection";
 
 interface PluginOption {
   id: string;
@@ -45,25 +50,90 @@ interface SettingsProps {
   onShowWelcome?: () => void;
 }
 
-const VERSION = "0.1.0-alpha";
+const VERSION = OVERLAY_VERSION;
 
 /** Loadout's four signature themes. Each swaps the full token set
  *  (surfaces, ink, accent, status colors) — there is no "dark vs light"
  *  toggle independent of theme. `colors` is a 3-dot preview swatch. */
 export const LOADOUT_THEMES = [
-  { id: "midnight", name: "Midnight",    desc: "Deep, quiet dark — default",   colors: ["#2d2a3e", "#7c5bff", "#f4f0ff"] },
-  { id: "paper",    name: "Paper",       desc: "Clean light theme",            colors: ["#ffffff", "#4c2ee8", "#1a1530"] },
-  { id: "synth",    name: "Synth",       desc: "Magenta + cyan retro",         colors: ["#221830", "#ff3de0", "#3df0ff"] },
-  { id: "terminal", name: "Terminal",    desc: "Green on black, mono-first",   colors: ["#0e1712", "#58ff80", "#c7ffd3"] },
-  { id: "nord",     name: "Nord",        desc: "Cool slate, muted pastels",    colors: ["#2e3440", "#88c0d0", "#eceff4"] },
-  { id: "dracula",  name: "Dracula",     desc: "Classic purple + pink",        colors: ["#282a36", "#bd93f9", "#ff79c6"] },
-  { id: "gruvbox",  name: "Gruvbox",     desc: "Warm retro tan + olive",       colors: ["#282828", "#fe8019", "#ebdbb2"] },
-  { id: "tokyo",    name: "Tokyo Night", desc: "Deep indigo + cyan",           colors: ["#1a1b26", "#7dcfff", "#bb9af7"] },
-  { id: "one-dark", name: "One Dark", desc: "Atom's iconic industry-standard dark", colors: ["#282c34", "#61afef", "#abb2bf"] },
-  { id: "monokai-pro", name: "Monokai Pro", desc: "Vibrant pink + lime — the classic", colors: ["#2d2a2e", "#ff6188", "#ffd866"] },
-  { id: "catppuccin-mocha", name: "Catppuccin Mocha", desc: "Pastel dark — community favorite", colors: ["#1e1e2e", "#cba6f7", "#cdd6f4"] },
-  { id: "rose-pine", name: "Rosé Pine", desc: "All-natural pine + faux-fur rose", colors: ["#191724", "#c4a7e7", "#e0def4"] },
-  { id: "solarized-dark", name: "Solarized Dark", desc: "Ethan Schoonover's classic muted", colors: ["#002b36", "#268bd2", "#839496"] },
+  {
+    id: "midnight",
+    name: "Midnight",
+    desc: "Deep, quiet dark — default",
+    colors: ["#2d2a3e", "#7c5bff", "#f4f0ff"],
+  },
+  {
+    id: "paper",
+    name: "Paper",
+    desc: "Clean light theme",
+    colors: ["#ffffff", "#4c2ee8", "#1a1530"],
+  },
+  {
+    id: "synth",
+    name: "Synth",
+    desc: "Magenta + cyan retro",
+    colors: ["#221830", "#ff3de0", "#3df0ff"],
+  },
+  {
+    id: "terminal",
+    name: "Terminal",
+    desc: "Green on black, mono-first",
+    colors: ["#0e1712", "#58ff80", "#c7ffd3"],
+  },
+  {
+    id: "nord",
+    name: "Nord",
+    desc: "Cool slate, muted pastels",
+    colors: ["#2e3440", "#88c0d0", "#eceff4"],
+  },
+  {
+    id: "dracula",
+    name: "Dracula",
+    desc: "Classic purple + pink",
+    colors: ["#282a36", "#bd93f9", "#ff79c6"],
+  },
+  {
+    id: "gruvbox",
+    name: "Gruvbox",
+    desc: "Warm retro tan + olive",
+    colors: ["#282828", "#fe8019", "#ebdbb2"],
+  },
+  {
+    id: "tokyo",
+    name: "Tokyo Night",
+    desc: "Deep indigo + cyan",
+    colors: ["#1a1b26", "#7dcfff", "#bb9af7"],
+  },
+  {
+    id: "one-dark",
+    name: "One Dark",
+    desc: "Atom's iconic industry-standard dark",
+    colors: ["#282c34", "#61afef", "#abb2bf"],
+  },
+  {
+    id: "monokai-pro",
+    name: "Monokai Pro",
+    desc: "Vibrant pink + lime — the classic",
+    colors: ["#2d2a2e", "#ff6188", "#ffd866"],
+  },
+  {
+    id: "catppuccin-mocha",
+    name: "Catppuccin Mocha",
+    desc: "Pastel dark — community favorite",
+    colors: ["#1e1e2e", "#cba6f7", "#cdd6f4"],
+  },
+  {
+    id: "rose-pine",
+    name: "Rosé Pine",
+    desc: "All-natural pine + faux-fur rose",
+    colors: ["#191724", "#c4a7e7", "#e0def4"],
+  },
+  {
+    id: "solarized-dark",
+    name: "Solarized Dark",
+    desc: "Ethan Schoonover's classic muted",
+    colors: ["#002b36", "#268bd2", "#839496"],
+  },
 ] as const;
 
 const THEME_IDS = LOADOUT_THEMES.map((t) => t.id) as readonly string[];
@@ -73,6 +143,8 @@ function normalizeTheme(theme: string | undefined): string {
   return theme && THEME_IDS.includes(theme) ? theme : "midnight";
 }
 
+/** Tab ids only — labels come from `settings.tab.<id>` at render time so a
+ *  language switch re-labels them without remounting. */
 const TAB_IDS = ["general", "plugins", "controller"] as const;
 
 type TabId = (typeof TAB_IDS)[number];
@@ -105,19 +177,25 @@ const BUTTON_LABELS: { key: keyof ControllerShortcuts; label: string }[] = [
 
 function actionToString(action: ShortcutAction): string {
   switch (action.type) {
-    case "None":           return "none";
-    case "ToggleOverlay":  return "toggle_overlay";
-    case "OpenPlugin":     return `plugin:${action.value ?? ""}`;
-    case "OpenSettings":   return "open_settings";
-    case "OpenHome":       return "open_home";
-    case "ToggleKeyboard": return "toggle_keyboard";
+    case "None":
+      return "none";
+    case "ToggleOverlay":
+      return "toggle_overlay";
+    case "OpenPlugin":
+      return `plugin:${action.value ?? ""}`;
+    case "OpenSettings":
+      return "open_settings";
+    case "OpenHome":
+      return "open_home";
+    case "ToggleKeyboard":
+      return "toggle_keyboard";
   }
 }
 
 function stringToAction(s: string): ShortcutAction {
-  if (s === "toggle_overlay")  return { type: "ToggleOverlay" };
-  if (s === "open_settings")   return { type: "OpenSettings" };
-  if (s === "open_home")       return { type: "OpenHome" };
+  if (s === "toggle_overlay") return { type: "ToggleOverlay" };
+  if (s === "open_settings") return { type: "OpenSettings" };
+  if (s === "open_home") return { type: "OpenHome" };
   if (s === "toggle_keyboard") return { type: "ToggleKeyboard" };
   if (s.startsWith("plugin:")) return { type: "OpenPlugin", value: s.slice(7) };
   return { type: "None" };
@@ -161,7 +239,15 @@ function ThemeSwatch({
         </div>
         {active && (
           <div className="w-5 h-5 rounded-full bg-primary text-primary-content flex items-center justify-center shrink-0 ml-2">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={3}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="w-3 h-3"
+            >
               <polyline points="20 6 9 17 4 12" />
             </svg>
           </div>
@@ -227,16 +313,22 @@ function MaintenanceActionRow({ action }: { action: MaintenanceAction }) {
   }
 
   const label =
-    status === "arming" ? t("settings.maintenance.arming")
-    : status === "running" ? t(`${action.i18nKey}.running`)
-    : status === "success" ? t(`${action.i18nKey}.success`)
-    : status === "error" ? t("settings.maintenance.failed")
-    : t(`${action.i18nKey}.idle`);
+    status === "arming"
+      ? t("settings.maintenance.arming")
+      : status === "running"
+        ? t(`${action.i18nKey}.running`)
+        : status === "success"
+          ? t(`${action.i18nKey}.success`)
+          : status === "error"
+            ? t("settings.maintenance.failed")
+            : t(`${action.i18nKey}.idle`);
 
   const variant =
-    status === "arming" || status === "error" ? "danger"
-    : status === "success" ? "primary"
-    : "default";
+    status === "arming" || status === "error"
+      ? "danger"
+      : status === "success"
+        ? "primary"
+        : "default";
 
   return (
     <div className="flex justify-between items-center min-h-[44px]">
@@ -249,11 +341,7 @@ function MaintenanceActionRow({ action }: { action: MaintenanceAction }) {
           )}
         </div>
       </div>
-      <Button
-        onClick={handleClick}
-        disabled={status === "running"}
-        variant={variant}
-      >
+      <Button onClick={handleClick} disabled={status === "running"} variant={variant}>
         {label}
       </Button>
     </div>
@@ -289,7 +377,6 @@ const REBOOT_ACTION: MaintenanceAction = {
   i18nKey: "settings.maintenance.reboot",
   invoke: systemReboot,
 };
-
 
 /**
  * "Clear all data caches" — fans `clearExternalCache` out via
@@ -389,16 +476,23 @@ function SettingsInner({
 }: Required<Omit<SettingsProps, "onShowWelcome">> & { onShowWelcome?: () => void }) {
   const { t } = useTranslation("app");
   const [tab, setTab] = useState<TabId>("general");
-  const [theme, setTheme] = useConfigValue<string>("theme", loadTheme());
   const [language, setLanguageConfig] = useConfigValue<string>("language", DEFAULT_LANGUAGE);
+  const [theme, setTheme] = useConfigValue<string>("theme", loadTheme());
   const [startupView, setStartupView] = useConfigValue<string>("startupView", "home");
   const [autoCollapseSidebar, setAutoCollapseSidebar] = useSidebarAutoCollapseSetting();
+  const [steamMainMenu, setSteamMainMenu] = useConfigValue<boolean>(
+    "steamOverlayButtonMainMenu",
+    false,
+  );
   const [shortcuts, setShortcuts] = useState<ControllerShortcuts | null>(null);
   const { isEnabled, toggle: togglePluginEnabled } = useEnabledPlugins();
-  const allPluginIds = useMemo(() => plugins.map((p) => p.id), [plugins]);
+  // Full on-disk plugin list incl. disabled ones (which the `plugins`
+  // prop — the loaded set used for shortcut targets — never contains),
+  // so the Plugins tab can list and re-enable them.
+  const { plugins: installedPlugins } = useInstalledPlugins();
   const sortedPlugins = useMemo(
-    () => [...plugins].sort((a, b) => a.name.localeCompare(b.name)),
-    [plugins],
+    () => [...installedPlugins].sort((a, b) => a.name.localeCompare(b.name)),
+    [installedPlugins],
   );
   const enabledCount = sortedPlugins.filter((p) => isEnabled(p.id)).length;
 
@@ -407,8 +501,49 @@ function SettingsInner({
   }, [theme]);
 
   useEffect(() => {
-    getControllerShortcuts().then(setShortcuts).catch(() => {});
+    getControllerShortcuts()
+      .then(setShortcuts)
+      .catch(() => {});
   }, []);
+
+  // Apply the Steam main-menu "Loadout" entry toggle to the running Steam
+  // client (issue #169). Config is already persisted optimistically by
+  // `setSteamMainMenu`; this re-applies the CEF patch and passes the desired
+  // state in the request body so the injector doesn't race the async config
+  // PATCH. Surfaces a toast only when *enabling* fails (a failed teardown —
+  // Steam closed, already gone — isn't worth nagging about).
+  async function applySteamMainMenu(enabled: boolean) {
+    try {
+      const res = await fetch(apiUrl("/api/overlay-button/refresh"), {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ mainMenu: enabled }),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { ok?: boolean; error?: string }
+        | null;
+      const ok = res.ok && data?.ok !== false;
+      if (!enabled) return;
+      if (ok) {
+        notify("Added the overlay button to Steam's menu.", {
+          kind: "success",
+          id: "steam-overlay-button",
+        });
+      } else {
+        notify(data?.error ?? "Couldn't add the button to Steam.", {
+          kind: "error",
+          id: "steam-overlay-button",
+        });
+      }
+    } catch {
+      if (enabled) {
+        notify("Couldn't reach the loader to update Steam.", {
+          kind: "error",
+          id: "steam-overlay-button",
+        });
+      }
+    }
+  }
 
   function handleLanguageChange(code: string) {
     // Persist the choice and switch the live i18next language — every
@@ -445,15 +580,11 @@ function SettingsInner({
               <div className="bg-base-200 rounded-2xl border border-base-300 p-5">
                 <div className="flex justify-between items-center mb-3">
                   <span className="text-sm text-base-content">{t("settings.ui_scale")}</span>
-                  <span className="text-sm font-mono text-primary font-bold">{scale.toFixed(2)}x</span>
+                  <span className="text-sm font-mono text-primary font-bold">
+                    {scale.toFixed(2)}x
+                  </span>
                 </div>
-                <Slider
-                  min={0.75}
-                  max={2}
-                  step={0.05}
-                  value={scale}
-                  onChange={onScaleChange}
-                />
+                <Slider min={0.75} max={2} step={0.05} value={scale} onChange={onScaleChange} />
                 <div className="flex justify-between text-xs text-base-content/30 mt-1.5">
                   <span>0.75x</span>
                   <span>1.0x</span>
@@ -495,8 +626,8 @@ function SettingsInner({
                   <Select
                     value={startupView}
                     options={[
-                      { value: "home", label: t("settings.startup.home") },
-                      { value: "last-tab", label: t("settings.startup.last_tab") },
+                      { value: "home", label: "Open homepage" },
+                      { value: "last-tab", label: "Resume last view" },
                     ]}
                     onChange={setStartupView}
                     className="w-48"
@@ -528,6 +659,30 @@ function SettingsInner({
                     </div>
                   </div>
                   <Toggle checked={autoCollapseSidebar} onChange={setAutoCollapseSidebar} />
+                </div>
+              </div>
+            </section>
+
+            {/* Steam menu button — an optional escape hatch into the overlay
+                that lives in Steam's own nav menu, reachable by D-pad even if
+                the controller wake chord fails (issue #169). */}
+            <section className="mb-6">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">{t("settings.section.steam_menu")}</h3>
+              <div className="bg-base-200 rounded-2xl border border-base-300 p-5">
+                <div className="flex justify-between items-center min-h-[44px]">
+                  <div className="pr-4">
+                    <div className="text-sm text-base-content">{t("settings.steam_menu.label")}</div>
+                    <div className="text-xs text-base-content/50 mt-0.5">
+                      {t("settings.steam_menu.desc")}
+                    </div>
+                  </div>
+                  <Toggle
+                    checked={steamMainMenu}
+                    onChange={(v) => {
+                      setSteamMainMenu(v);
+                      void applySteamMainMenu(v);
+                    }}
+                  />
                 </div>
               </div>
             </section>
@@ -569,11 +724,14 @@ function SettingsInner({
             {/* About */}
             <section>
               <h3 className="text-xs font-bold uppercase tracking-wider text-base-content/40 mb-4">{t("settings.section.about")}</h3>
-              <div className="bg-base-200 rounded-2xl border border-base-300 p-5">
+              <div className="bg-base-200 rounded-2xl border border-base-300 p-5 space-y-4 divide-y divide-base-300 [&>*]:pt-4 [&>*:first-child]:pt-0">
                 <div className="flex justify-between items-center min-h-[44px]">
                   <span className="text-sm text-base-content">{t("settings.version")}</span>
-                  <code className="text-sm text-primary bg-primary/10 px-3 py-1 rounded-lg font-mono">{VERSION}</code>
+                  <code className="text-sm text-primary bg-primary/10 px-3 py-1 rounded-lg font-mono">
+                    {VERSION}
+                  </code>
                 </div>
+                <UpdateSection />
               </div>
             </section>
           </>
@@ -613,7 +771,7 @@ function SettingsInner({
                           : "bg-base-300/70 text-base-content/50"
                       }`}
                     >
-                      {(plugin.icon ?? plugin.name)[0].toUpperCase()}
+                      {(plugin.icon ?? plugin.name).charAt(0).toUpperCase()}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-base-content truncate">
@@ -626,7 +784,20 @@ function SettingsInner({
                     <div className="shrink-0">
                       <Toggle
                         checked={on}
-                        onChange={() => togglePluginEnabled(plugin.id, allPluginIds)}
+                        onChange={() => {
+                          togglePluginEnabled(plugin.id);
+                          // Turning OFF a plugin the backend is running:
+                          // its code can't be unloaded in place, so it
+                          // keeps running until an app restart. Say so at
+                          // the moment of the action — the footer "Restart
+                          // required" button is the persistent affordance.
+                          if (on && plugin.status === "loaded") {
+                            notify(
+                              `${plugin.name} keeps running until you restart Loadout.`,
+                              { kind: "info", id: "plugin-disable", duration: 4000 },
+                            );
+                          }
+                        }}
                       />
                     </div>
                   </div>
@@ -656,9 +827,7 @@ function SettingsInner({
                     plugins={plugins}
                   />
                 ))}
-              {!shortcuts && (
-                <div className="text-sm text-base-content/40">{t("settings.loading")}</div>
-              )}
+              {!shortcuts && <div className="text-sm text-base-content/40">{t("settings.loading")}</div>}
             </div>
           </section>
         )}

@@ -14,7 +14,12 @@
  */
 import type { PluginInfo } from "../hooks/usePlugins";
 import { authHeaders, apiUrl, importPluginBundle } from "./backend";
+import { fetchTextNoCache, fixedDelays, retryAsync } from "./retry";
 import { call as wsCall, subscribe } from "@loadout/ui/ws-client";
+
+/** Same ladder as the bundle fetches — this call shares their page-load
+ *  window and therefore their failure mode. */
+const STARTUP_LIST_RETRY_DELAYS_MS = [150, 400, 1000, 2500];
 
 export interface PluginInitAPI {
   /** Call a method on this plugin's backend. */
@@ -43,12 +48,22 @@ function makeApi(pluginId: string): PluginInitAPI {
 export async function runStartupInits(): Promise<void> {
   let plugins: PluginInfo[];
   try {
-    const res = await fetch(apiUrl("/api/plugins"), { headers: authHeaders() });
-    if (!res.ok) {
-      console.warn(`[pluginInit] /api/plugins HTTP ${res.status}`);
-      return;
-    }
-    plugins = (await res.json()) as PluginInfo[];
+    // Retried on the same ladder as the bundle fetches, and for the same
+    // reason: this call runs in the same page-load window, so the socket-pool
+    // flush that killed those kills this too. It's worse when it happens here
+    // — a single dropped list fetch meant NO startup plugin ever initialised,
+    // silently, for the whole session.
+    const body = await retryAsync({
+      label: "[pluginInit] /api/plugins",
+      delays: fixedDelays(STARTUP_LIST_RETRY_DELAYS_MS),
+      run: () =>
+        fetchTextNoCache({
+          url: apiUrl("/api/plugins"),
+          what: "plugin list",
+          headers: authHeaders(),
+        }),
+    });
+    plugins = JSON.parse(body) as PluginInfo[];
   } catch (err) {
     console.warn("[pluginInit] Failed to fetch plugin list:", err);
     return;

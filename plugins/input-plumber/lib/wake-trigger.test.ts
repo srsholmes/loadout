@@ -16,6 +16,7 @@ import {
   clearWakeButton,
   captureWakeButton,
   reloadPersistedProfile,
+  reloadPersistedProfileWithRetry,
   restartInputPlumber,
 } from "./wake-trigger";
 import { PROFILE_PATH } from "./profile";
@@ -327,9 +328,11 @@ describe("wake-trigger orchestration", () => {
     expect(status.devices).toHaveLength(1);
     expect(status.devices[0].name).toBe("Steam Deck Controller");
     const names = status.devices[0].buttons.map((b) => b.name).sort();
-    expect(names).toContain("Steam");
-    expect(names).toContain("Qam");
+    // Steam/Qam are reserved system buttons — never offered as bindings.
+    expect(names).not.toContain("Steam");
+    expect(names).not.toContain("Qam");
     expect(names).toContain("L4");
+    expect(names).toContain("R4");
     // All buttons are flagged as recommended on Deck.
     expect(status.devices[0].buttons.every((b) => b.recommended)).toBe(true);
     // No busctl/systemctl/udevadm — the Deck path is pure.
@@ -342,13 +345,13 @@ describe("wake-trigger orchestration", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     spawnSpy = spyOn(Bun, "spawn").mockImplementation(stub as any);
 
-    const r = await setWakeButton("deck:Steam");
+    const r = await setWakeButton("deck:R4");
     expect(r.ok).toBe(true);
 
     const persisted = storage.get("input-plumber") as {
       wake?: { selectedRaw?: string; deviceName?: string };
     };
-    expect(persisted.wake?.selectedRaw).toBe("deck:Steam");
+    expect(persisted.wake?.selectedRaw).toBe("deck:R4");
     expect(persisted.wake?.deviceName).toBe("Steam Deck Controller");
     // No profile file written, no busctl/systemctl/udevadm.
     expect(writtenFiles.size).toBe(0);
@@ -382,5 +385,92 @@ describe("wake-trigger orchestration", () => {
     };
     expect(persisted.wake?.selectedRaw).toBeNull();
     expect(calls).toHaveLength(0);
+  });
+});
+
+// reloadPersistedProfileWithRetry drives the boot reload with retries. It
+// takes injectable `reload` + `wait` so we exercise the loop directly —
+// no DBus, no real 2s sleeps.
+describe("reloadPersistedProfileWithRetry", () => {
+  const noWait = async () => {};
+
+  it("calls reload once and returns when it succeeds first try", async () => {
+    let calls = 0;
+    const res = await reloadPersistedProfileWithRetry({
+      wait: noWait,
+      reload: async () => {
+        calls++;
+        return { ok: true };
+      },
+    });
+    expect(res.ok).toBe(true);
+    expect(calls).toBe(1);
+  });
+
+  it("does not wait when nothing is bound (immediate ok)", async () => {
+    let waitCount = 0;
+    const res = await reloadPersistedProfileWithRetry({
+      reload: async () => ({ ok: true }),
+      wait: async () => {
+        waitCount++;
+      },
+    });
+    expect(res.ok).toBe(true);
+    expect(waitCount).toBe(0);
+  });
+
+  it("retries a transient failure, then succeeds", async () => {
+    let calls = 0;
+    const waits: number[] = [];
+    const retries: Array<{ attempt: number; error: string }> = [];
+    const res = await reloadPersistedProfileWithRetry({
+      delayMs: 2000,
+      wait: async (ms) => {
+        waits.push(ms);
+      },
+      onRetry: (attempt, error) => retries.push({ attempt, error }),
+      reload: async () => {
+        calls++;
+        return calls < 3
+          ? { ok: false, error: "Bound device not connected; wake button not reloaded." }
+          : { ok: true };
+      },
+    });
+    expect(res.ok).toBe(true);
+    expect(calls).toBe(3); // failed twice, succeeded on the third
+    expect(waits).toEqual([2000, 2000]); // one wait after each failure
+    expect(retries.map((r) => r.attempt)).toEqual([1, 2]);
+  });
+
+  it("gives up after `attempts` and returns the last failure (no trailing wait)", async () => {
+    let calls = 0;
+    let waitCount = 0;
+    const res = await reloadPersistedProfileWithRetry({
+      attempts: 5,
+      wait: async () => {
+        waitCount++;
+      },
+      reload: async () => {
+        calls++;
+        return { ok: false, error: "still not ready" };
+      },
+    });
+    expect(res).toEqual({ ok: false, error: "still not ready" });
+    expect(calls).toBe(5); // exactly `attempts` tries
+    expect(waitCount).toBe(4); // no sleep after the final attempt
+  });
+
+  it("honors a custom attempts count", async () => {
+    let calls = 0;
+    const res = await reloadPersistedProfileWithRetry({
+      attempts: 2,
+      wait: noWait,
+      reload: async () => {
+        calls++;
+        return { ok: false, error: "nope" };
+      },
+    });
+    expect(res.ok).toBe(false);
+    expect(calls).toBe(2);
   });
 });

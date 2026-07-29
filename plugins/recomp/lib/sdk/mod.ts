@@ -99,6 +99,9 @@ export interface ModSDK {
  * `ctx` param is the same object the proxy reads from — convenient
  * for scripts that want both the SDK getters AND access to e.g.
  * `ctx.installed.steamAppId` without going through the proxy.
+ *
+ * @public — setup.ts modules are dynamic-imported via games.json
+ * `setupModule` (lib/mods.ts), so no static importer exists by design.
  */
 export interface ModSetupModule {
   install(ctx: ModSDK): Promise<void>;
@@ -148,5 +151,7 @@ export const modSdk: ModSDK = {
 export type { ModRuntime as InternalModRuntime };
 
 // Re-export the event type for consumers that want to plumb stages
-// through their own helpers.
+// through their own helpers (setup.ts modules are dynamic-imported, so
+// knip sees no static importer).
+/** @public */
 export type { PipelineEvent };

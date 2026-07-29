@@ -23,9 +23,38 @@ export interface LoadedPlugin {
   hasApp: boolean;
 }
 
+export type PluginStatus = "loaded" | "disabled" | "error";
+
+/**
+ * Manifest-level knowledge of a plugin on disk — everything that can be
+ * known WITHOUT importing its code. Discovery is deliberately separate
+ * from instantiation so a disabled plugin's backend is never bundled,
+ * imported, or run (its `onLoad` may touch hardware — TDP, fans, RGB —
+ * and conflict with other tools like Decky Loader).
+ */
+export interface DiscoveredPlugin {
+  meta: PluginMeta;
+  pluginDir: string;
+  hasBackend: boolean;
+  hasApp: boolean;
+}
+
+/** A discovered plugin plus its runtime status. `disabled` entries were
+ *  never imported; `error` entries failed to bundle/instantiate. */
+export interface PluginRegistryEntry extends DiscoveredPlugin {
+  status: PluginStatus;
+}
+
 export interface LoadPluginsArgs {
-  pluginsDir: string;
+  discovered: DiscoveredPlugin[];
   broadcast: (msg: RpcEvent) => void;
+  /** Plugin ids the user disabled — skipped entirely at load time. */
+  disabledIds?: ReadonlySet<string>;
+}
+
+export interface LoadPluginsResult {
+  loaded: Map<string, LoadedPlugin>;
+  registry: Map<string, PluginRegistryEntry>;
 }
 
 // AsyncLocalStorage for per-request fetch scoping (safe with concurrent requests)
@@ -87,18 +116,22 @@ export async function callPluginMethod(
     : inner();
 }
 
-export async function loadPlugins({
-  pluginsDir,
-  broadcast,
-}: LoadPluginsArgs): Promise<Map<string, LoadedPlugin>> {
-  const loaded = new Map<string, LoadedPlugin>();
+/**
+ * Scan the plugins directory and parse every manifest. Reads
+ * `plugin.json` or a `package.json` with a `"plugin"` field — never the
+ * plugin's code. Directories without a valid manifest are skipped.
+ */
+export async function discoverPlugins(
+  pluginsDir: string,
+): Promise<DiscoveredPlugin[]> {
+  const discovered: DiscoveredPlugin[] = [];
 
   let entries: string[];
   try {
     entries = await readdir(pluginsDir);
   } catch {
     log.warn(`Plugins directory not found: ${pluginsDir}`);
-    return loaded;
+    return discovered;
   }
   log.info(`Found ${entries.length} entries in plugins directory`);
 
@@ -143,80 +176,136 @@ export async function loadPlugins({
       continue;
     }
 
-    log.info(`Loading plugin: ${meta.name} (${meta.id}) v${meta.version}`);
-
-    // Create sandboxed fetch for this plugin based on its permissions
-    const sandboxedFetch = createSandboxedFetch(meta.id, meta.permissions);
-
-    // Create a scoped logger for this plugin and patch console for its context
-    const pluginLog = createPluginLogger(meta.id);
-
-    // Build the per-plugin command policy. Every subprocess the plugin
-    // launches through @loadout/exec is checked against this (deny-by-
-    // default) and logged via the plugin's own logger for an audit trail.
-    const commandPolicy: CommandPolicy = {
-      pluginId: meta.id,
-      allowed: meta.permissions?.commands ?? [],
-      log: (m) => pluginLog.info(m),
-    };
-
-    // Bundle and load backend (optional — CEF-only plugins may not have one).
-    // Compiled Bun binaries can't resolve node_modules from dynamically
-    // imported files. Bun.build() resolves all imports at bundle time,
-    // producing a self-contained .js file that import() can load.
-    const backendPath = join(pluginDir, "backend.ts");
-    let instance: PluginBackend = {} as PluginBackend;
-    const hasBackend = await Bun.file(backendPath).exists();
-
-    if (hasBackend) {
-      try {
-        const bundlePath = await bundleBackend(pluginDir, backendPath, meta.id);
-        const mod = await import(bundlePath);
-        const BackendClass = mod.default;
-        instance = new BackendClass();
-        log.debug(`Backend class instantiated for ${meta.id}`);
-      } catch (err) {
-        log.error(`Failed to load backend for ${meta.id}: ${err}`);
-        continue;
-      }
-
-      // Inject emit and logger
-      instance.emit = ({ event, data }) => {
-        broadcast({ type: "event", plugin: meta.id, event, data });
-      };
-      instance.log = pluginLog;
-
-      // Inject the cross-plugin call handle. Late-binds against `loaded`,
-      // so a plugin can call one that's registered later in this loop. The
-      // target method runs inside the *target's* command policy + sandboxed
-      // fetch (not this plugin's), mirroring the rpc-handler's dispatch.
-      instance.callPlugin = (targetId, method, ...args) =>
-        callPluginMethod(loaded, targetId, method, args);
-
-      // Call onLoad inside both gates: command policy (subprocess
-      // capability) wrapping the sandboxed fetch (network capability).
-      try {
-        await withCommandPolicy(commandPolicy, () =>
-          withSandboxedFetch(sandboxedFetch, () => instance.onLoad?.()),
-        );
-        log.info(`onLoad completed for ${meta.id}`);
-      } catch (err) {
-        log.error(`onLoad failed for ${meta.id}: ${err}`);
-      }
-    } else {
-      log.info(`No backend.ts for ${meta.id} — loading as frontend-only plugin`);
-    }
-
-    // Check if plugin has an app.tsx frontend for the overlay
-    const appPath = join(pluginDir, "app.tsx");
-    const hasApp = await Bun.file(appPath).exists();
-
-    // Frontend bundles are compiled on the fly when requested via HTTP
-    loaded.set(meta.id, { meta, instance, sandboxedFetch, commandPolicy, hasApp });
-    log.info(`Loaded plugin: ${meta.name} (${meta.id}) [backend=${hasBackend ? "yes" : "no"}, frontend=${hasApp ? "yes" : "no"}]`);
+    discovered.push({
+      meta,
+      pluginDir,
+      hasBackend: await Bun.file(join(pluginDir, "backend.ts")).exists(),
+      hasApp: await Bun.file(join(pluginDir, "app.tsx")).exists(),
+    });
   }
 
-  return loaded;
+  return discovered;
+}
+
+export interface LoadPluginArgs {
+  plugin: DiscoveredPlugin;
+  broadcast: (msg: RpcEvent) => void;
+  /** Live map of loaded plugins. The new instance is registered into it;
+   *  the injected `callPlugin` late-binds against it too, so a plugin can
+   *  call one that loads after it (startup loop or a runtime enable). */
+  loaded: Map<string, LoadedPlugin>;
+}
+
+/**
+ * Bundle, import, instantiate, and `onLoad` a single discovered plugin,
+ * then register it in `loaded`. Returns null when the backend fails to
+ * bundle or instantiate. Also the runtime enable path: a plugin flipped
+ * from disabled to enabled is loaded through here without a restart.
+ */
+export async function loadPlugin({
+  plugin,
+  broadcast,
+  loaded,
+}: LoadPluginArgs): Promise<LoadedPlugin | null> {
+  const { meta, pluginDir, hasBackend, hasApp } = plugin;
+  log.info(`Loading plugin: ${meta.name} (${meta.id}) v${meta.version}`);
+
+  // Create sandboxed fetch for this plugin based on its permissions
+  const sandboxedFetch = createSandboxedFetch(meta.id, meta.permissions);
+
+  // Create a scoped logger for this plugin and patch console for its context
+  const pluginLog = createPluginLogger(meta.id);
+
+  // Build the per-plugin command policy. Every subprocess the plugin
+  // launches through @loadout/exec is checked against this (deny-by-
+  // default) and logged via the plugin's own logger for an audit trail.
+  const commandPolicy: CommandPolicy = {
+    pluginId: meta.id,
+    allowed: meta.permissions?.commands ?? [],
+    log: (m) => pluginLog.info(m),
+  };
+
+  // Bundle and load backend (optional — CEF-only plugins may not have one).
+  // Compiled Bun binaries can't resolve node_modules from dynamically
+  // imported files. Bun.build() resolves all imports at bundle time,
+  // producing a self-contained .js file that import() can load.
+  const backendPath = join(pluginDir, "backend.ts");
+  let instance: PluginBackend = {} as PluginBackend;
+
+  if (hasBackend) {
+    try {
+      const bundlePath = await bundleBackend(pluginDir, backendPath, meta.id);
+      const mod = await import(bundlePath);
+      const BackendClass = mod.default;
+      instance = new BackendClass();
+      log.debug(`Backend class instantiated for ${meta.id}`);
+    } catch (err) {
+      log.error(`Failed to load backend for ${meta.id}: ${err}`);
+      return null;
+    }
+
+    // Inject emit and logger
+    instance.emit = ({ event, data }) => {
+      broadcast({ type: "event", plugin: meta.id, event, data });
+    };
+    instance.log = pluginLog;
+
+    // Inject the cross-plugin call handle. The target method runs inside
+    // the *target's* command policy + sandboxed fetch (not this plugin's),
+    // mirroring the rpc-handler's dispatch.
+    instance.callPlugin = (targetId, method, ...args) =>
+      callPluginMethod(loaded, targetId, method, args);
+
+    // Call onLoad inside both gates: command policy (subprocess
+    // capability) wrapping the sandboxed fetch (network capability).
+    try {
+      await withCommandPolicy(commandPolicy, () =>
+        withSandboxedFetch(sandboxedFetch, () => instance.onLoad?.()),
+      );
+      log.info(`onLoad completed for ${meta.id}`);
+    } catch (err) {
+      log.error(`onLoad failed for ${meta.id}: ${err}`);
+    }
+  } else {
+    log.info(`No backend.ts for ${meta.id} — loading as frontend-only plugin`);
+  }
+
+  // Frontend bundles are compiled on the fly when requested via HTTP
+  const entry: LoadedPlugin = { meta, instance, sandboxedFetch, commandPolicy, hasApp };
+  loaded.set(meta.id, entry);
+  log.info(`Loaded plugin: ${meta.name} (${meta.id}) [backend=${hasBackend ? "yes" : "no"}, frontend=${hasApp ? "yes" : "no"}]`);
+  return entry;
+}
+
+/**
+ * Instantiate every discovered plugin except the disabled ones. Disabled
+ * plugins get a registry entry (so the UI can list and re-enable them)
+ * but their code is never imported.
+ */
+export async function loadPlugins({
+  discovered,
+  broadcast,
+  disabledIds,
+}: LoadPluginsArgs): Promise<LoadPluginsResult> {
+  const loaded = new Map<string, LoadedPlugin>();
+  const registry = new Map<string, PluginRegistryEntry>();
+
+  for (const plugin of discovered) {
+    if (disabledIds?.has(plugin.meta.id)) {
+      log.info(
+        `Skipping disabled plugin: ${plugin.meta.name} (${plugin.meta.id}) — backend not loaded`,
+      );
+      registry.set(plugin.meta.id, { ...plugin, status: "disabled" });
+      continue;
+    }
+    const entry = await loadPlugin({ plugin, broadcast, loaded });
+    registry.set(plugin.meta.id, {
+      ...plugin,
+      status: entry ? "loaded" : "error",
+    });
+  }
+
+  return { loaded, registry };
 }
 
 /**

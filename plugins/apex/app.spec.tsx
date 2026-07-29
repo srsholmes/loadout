@@ -183,23 +183,44 @@ describe("apex plugin", () => {
     });
   });
 
-  it("shows the driver-blacklist control and toggles it", async () => {
+  it("hides the driver-blacklist card when nothing is blacklisted", async () => {
+    // The blacklist can no longer be added from the UI, so the card only
+    // exists to let users revert a blacklist they already applied. With a
+    // clean device (blacklisted: false) it shouldn't render at all.
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Gamepad recovery");
+    });
+    expect(container.textContent).not.toContain("Driver blacklist");
+  });
+
+  it("shows a remove-blacklist button and removes it when blacklisted", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus")
+        return Promise.resolve({
+          ...healthyStatus,
+          hidOxp: { blacklisted: true, moduleLoaded: false, rebootRequired: false },
+        });
+      return Promise.resolve({ success: true });
+    });
     const container = document.createElement("div");
     const { mount } = await import("./app");
     mount(container);
 
     await waitFor(() => {
       expect(container.textContent).toContain("Driver blacklist");
-      expect(container.textContent).toContain("Blacklist the hid-oxp driver");
+      expect(container.textContent).toContain("Remove blacklist");
     });
 
-    const toggles = [...container.querySelectorAll('input[type="checkbox"]')];
-    const blacklistToggle = toggles[toggles.length - 1] as HTMLInputElement;
-    expect(blacklistToggle.checked).toBe(false);
-
-    fireEvent.click(blacklistToggle);
+    const removeBtn = [...container.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Remove blacklist"),
+    ) as HTMLButtonElement;
+    fireEvent.click(removeBtn);
     await waitFor(() => {
-      expect(callMock).toHaveBeenCalledWith("setHidOxpBlacklist", true);
+      expect(callMock).toHaveBeenCalledWith("setHidOxpBlacklist", false);
     });
   });
 

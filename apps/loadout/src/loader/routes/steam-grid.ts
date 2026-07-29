@@ -200,6 +200,13 @@ export const steamGridRoute: RouteHandler = {
     const perUser = url.pathname.match(STEAM_GRID_PATTERN);
     if (perUser) {
       const [, idPart, userIdPart, type] = perUser;
+      if (
+        idPart === undefined ||
+        userIdPart === undefined ||
+        type === undefined
+      ) {
+        return new Response("not found", { status: 404 });
+      }
       const t = type as SteamGridType;
       const candidates = steamGridCandidates(idPart, t);
       const gridDir = join(
@@ -238,6 +245,9 @@ export const steamGridRoute: RouteHandler = {
     const auto = url.pathname.match(STEAM_GRID_AUTO_PATTERN);
     if (!auto) return new Response("not found", { status: 404 });
     const [, idPart, type] = auto;
+    if (idPart === undefined || type === undefined) {
+      return new Response("not found", { status: 404 });
+    }
     const t = type as SteamGridType;
     const candidates = steamGridCandidates(idPart, t);
     const userdata = getUserdataDir();

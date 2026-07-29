@@ -153,7 +153,7 @@ async function readUserCollections(
   const match = text.match(/"user-collections"\s*"((?:[^"\\]|\\.)*)"/);
   if (!match) return new Map();
 
-  const escaped = match[1];
+  const escaped = match[1] ?? "";
   const unescaped = escaped.replace(/\\\\/g, "\\").replace(/\\"/g, '"');
 
   let collections: Record<string, { id?: string; added?: number[] }>;
@@ -190,7 +190,7 @@ async function readUserCollections(
 function parseVdfValue(content: string, key: string): string | null {
   const regex = new RegExp(`"${key}"\\s+"([^"]*)"`, "i");
   const match = content.match(regex);
-  return match ? match[1] : null;
+  return match ? (match[1] ?? null) : null;
 }
 
 /**

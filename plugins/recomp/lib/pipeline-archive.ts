@@ -4,8 +4,7 @@ import { spawn } from "@loadout/exec";
 
 // Re-export from the shared github helpers so existing callers
 // (`installer-host.ts`, etc.) keep working without churn.
-// Optional gh auth token to raise GitHub's 60/hr unauthenticated rate limit.
-export { downloadFile, githubToken } from "./github";
+export { downloadFile } from "./github";
 
 /**
  * Inspect an archive's member list WITHOUT extracting and reject

@@ -16,7 +16,6 @@ import { useGamepadInput } from "../hooks/useGamepadInput";
 import { tryRunBackInterceptor } from "@loadout/ui";
 const sounds = () => window.__SL_SOUNDS__;
 
-export type { FocusableComponentLayout, FocusDetails } from "@noriginmedia/norigin-spatial-navigation";
 export { useFocusable, FocusContext, setFocus, getCurrentFocusKey };
 
 // Initialize the spatial navigation service.

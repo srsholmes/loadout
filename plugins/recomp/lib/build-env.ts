@@ -31,7 +31,10 @@ async function usernameForUid(uid: number): Promise<string | null> {
     const passwd = await readFile("/etc/passwd", "utf8");
     for (const line of passwd.split("\n")) {
       const f = line.split(":");
-      if (f.length >= 3 && Number(f[2]) === uid) return f[0];
+      if (f.length >= 3 && Number(f[2]) === uid) {
+        const name = f[0]; // length >= 3 ⇒ f[0] present
+        if (name !== undefined) return name;
+      }
     }
   } catch {
     /* unreadable — fall through */

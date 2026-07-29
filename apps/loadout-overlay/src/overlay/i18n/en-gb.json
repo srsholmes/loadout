@@ -12,7 +12,8 @@
       "sidebar": "Sidebar",
       "theme": "Theme",
       "maintenance": "Maintenance",
-      "about": "About"
+      "about": "About",
+      "steam_menu": "Steam menu"
     },
     "ui_scale": "UI Scale",
     "language_desc": "Choose the display language. Where a translation is missing, text falls back to English.",
@@ -86,6 +87,10 @@
       },
       "arming": "Click again to confirm",
       "failed": "Failed"
+    },
+    "steam_menu": {
+      "label": "Add \"Loadout\" to Steam's main menu",
+      "desc": "Adds a \"Loadout\" entry to Steam's main menu that opens the overlay — a backup way in if the controller shortcut ever stops working. Selecting it opens the overlay without navigating you anywhere."
     }
   }
 }

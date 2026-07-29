@@ -22,8 +22,6 @@ import { runFull } from "@loadout/exec";
 const SERVICE = "org.shadowblip.InputPlumber";
 const COMPOSITE_IFACE = "org.shadowblip.Input.CompositeDevice";
 const TARGET_IFACE = "org.shadowblip.Input.Target";
-const MANAGER_PATH = "/org/shadowblip/InputPlumber/Manager";
-const MANAGER_IFACE = "org.shadowblip.InputManager";
 
 // Match disable-controller-input's ceiling: busctl can block on the system
 // bus default timeout (~25s) while IP is mid-restart; 5s fails fast.
@@ -64,7 +62,9 @@ function busctl(args: string[]): Promise<ExecResult> {
 export function parseStringProp(stdout: string): string | null {
   const m = stdout.trim().match(/^s\s+"((?:\\.|[^"\\])*)"$/);
   if (!m) return null;
-  return m[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  // Capture group 1 is mandatory, so on a match it is always present; ?? ""
+  // only drops the `!` and is unreachable for a real match.
+  return (m[1] ?? "").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
 }
 
 /** Parse a `as N "a" "b" …` busctl string-array property line. Returns `[]`
@@ -73,12 +73,15 @@ export function parseStringArrayProp(stdout: string): string[] | null {
   const trimmed = stdout.trim();
   const m = trimmed.match(/^as\s+(\d+)((?:\s+"(?:\\.|[^"\\])*")*)$/);
   if (!m) return null;
-  if (parseInt(m[1], 10) === 0) return [];
+  // Both capture groups are mandatory, so on a match m[1] and m[2] are
+  // always present; each exec match's group 1 likewise. The ?? "" fallbacks
+  // only drop the `!` and are unreachable for a real match.
+  if (parseInt(m[1] ?? "", 10) === 0) return [];
   const out: string[] = [];
   const re = /"((?:\\.|[^"\\])*)"/g;
   let p: RegExpExecArray | null;
-  while ((p = re.exec(m[2])) !== null) {
-    out.push(p[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\"));
+  while ((p = re.exec(m[2] ?? "")) !== null) {
+    out.push((p[1] ?? "").replace(/\\"/g, '"').replace(/\\\\/g, "\\"));
   }
   return out;
 }
@@ -91,11 +94,14 @@ export function parseStringArrayProp(stdout: string): string[] | null {
 export function parseObjectPathArrayProp(stdout: string): string[] | null {
   const m = stdout.trim().match(/^a[os]\s+(\d+)((?:\s+"[^"]*")*)$/);
   if (!m) return null;
-  if (parseInt(m[1], 10) === 0) return [];
+  // Both capture groups are mandatory, so on a match m[1] and m[2] are
+  // always present; each exec match's group 1 likewise. The ?? "" fallbacks
+  // only drop the `!` and are unreachable for a real match.
+  if (parseInt(m[1] ?? "", 10) === 0) return [];
   const out: string[] = [];
   const re = /"([^"]*)"/g;
   let p: RegExpExecArray | null;
-  while ((p = re.exec(m[2])) !== null) out.push(p[1]);
+  while ((p = re.exec(m[2] ?? "")) !== null) out.push(p[1] ?? "");
   return out;
 }
 
@@ -175,25 +181,6 @@ export interface CompositeDevice {
   path: string;
   name: string;
   capabilities: string[];
-}
-
-/** Enable/disable IP management of ALL supported devices (not just configs with
- *  `auto_manage`). Enabling lets IP manage EXTERNAL controllers (Xbox/PS pads)
- *  so the overlay can intercept their input instead of Steam reading them via
- *  hidraw. Onboard-safe: the handheld config is `auto_manage`, so disabling only
- *  releases the external pads. Enable EARLY (backend onLoad — before Steam grabs
- *  external pads at boot) so IP wins the race and Steam never sees the physical
- *  pad (a late enable causes a physical+emulated duplicate). */
-export async function setManageAllDevices(enable: boolean): Promise<ExecResult> {
-  return busctl([
-    "set-property",
-    SERVICE,
-    MANAGER_PATH,
-    MANAGER_IFACE,
-    "ManageAllDevices",
-    "b",
-    enable ? "true" : "false",
-  ]);
 }
 
 /** Enumerate the connected composite devices with their names + capabilities. */

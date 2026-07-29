@@ -108,3 +108,50 @@ export function patchUserConfig(patch: UserConfig): Promise<UserConfig> {
     return next;
   });
 }
+
+/**
+ * Plugin enablement is a deny-list: `disabledPlugins: string[]` in the
+ * config file. Plugins absent from the list — including ones installed
+ * after the user last touched the setting — are enabled. The loader
+ * reads this at startup and never imports a disabled plugin's code.
+ */
+export const DISABLED_PLUGINS_KEY = "disabledPlugins";
+
+/** Pre-0.7 allow-list key ("enabledPlugins"), written by the old overlay
+ *  UI and never read by the backend. Migrated once at startup. */
+const LEGACY_ENABLED_KEY = "enabledPlugins";
+
+/** Extract the disabled-plugin id set from a config object. */
+export function disabledPluginsFrom(config: UserConfig): Set<string> {
+  const raw = config[DISABLED_PLUGINS_KEY];
+  return new Set(
+    Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [],
+  );
+}
+
+/**
+ * Read the disabled-plugin set, migrating the legacy `enabledPlugins`
+ * allow-list on first sight: disabled = discovered − enabled. The
+ * allow-list semantics silently hid any plugin installed after the list
+ * was written; the deny-list defaults new plugins to enabled.
+ * `allIds` is the set of plugin ids discovered on disk right now.
+ */
+export function resolveDisabledPlugins(allIds: string[]): Promise<Set<string>> {
+  return enqueue(async () => {
+    const config = await readRaw();
+    if (Array.isArray(config[DISABLED_PLUGINS_KEY])) {
+      return disabledPluginsFrom(config);
+    }
+    const legacy = config[LEGACY_ENABLED_KEY];
+    if (!Array.isArray(legacy)) return new Set<string>();
+    const enabled = new Set(legacy.filter((x) => typeof x === "string"));
+    const disabled = allIds.filter((id) => !enabled.has(id));
+    const next: UserConfig = { ...config, [DISABLED_PLUGINS_KEY]: disabled };
+    delete next[LEGACY_ENABLED_KEY];
+    await writeRaw(next);
+    log.info(
+      `[user-config] Migrated enabledPlugins → disabledPlugins (${disabled.length} disabled)`,
+    );
+    return new Set(disabled);
+  });
+}

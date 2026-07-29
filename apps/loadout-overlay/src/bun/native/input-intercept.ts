@@ -211,7 +211,11 @@ function buildBitmask(codes: readonly number[]): Uint8Array {
   if (byteLen < 8) byteLen = 8;
   const bits = new Uint8Array(byteLen);
   for (const code of codes) {
-    bits[code >> 3] |= 1 << (code & 7);
+    const idx = code >> 3;
+    // byteLen covers (maxCode >> 3) + 1 bytes and code <= maxCode, so idx is
+    // always in-bounds; the ?? 0 keeps the OR total for the type-checker
+    // without changing the value (an in-bounds Uint8Array read is a number).
+    bits[idx] = (bits[idx] ?? 0) | (1 << (code & 7));
   }
   return bits;
 }
@@ -411,7 +415,10 @@ function readModifierState(fd: number): { guide: boolean; select: boolean } {
   const buf = new Uint8Array(96);
   const rc = libc.symbols.ioctl(fd, eviocgkey(buf.length), ptr(buf));
   if (rc < 0) return { guide: false, select: false };
-  const bit = (code: number) => (buf[code >> 3] & (1 << (code & 7))) !== 0;
+  // The 96-byte buffer covers codes 0..767, past every code we query, so
+  // code >> 3 is always in-bounds; ?? 0 is behaviour-identical for the
+  // bitwise test (an in-bounds read is a number) and drops the non-null `!`.
+  const bit = (code: number) => ((buf[code >> 3] ?? 0) & (1 << (code & 7))) !== 0;
   return { guide: bit(BTN_MODE), select: bit(BTN_SELECT) };
 }
 
@@ -597,6 +604,19 @@ export interface InputInterceptOptions {
    *  mirror would double every input. index.ts sets this to "no IP composites".
    */
   readVirtualPadsForNav?: boolean;
+  /** Non-evdev nav sources (e.g. "deck-hidraw") that inject events via
+   *  injectNavEvents. Listed here so pollOnce pumps their NavController
+   *  state every active tick — key repeat then fires on our 25 ms cadence
+   *  instead of depending on the source's own report cadence. */
+  externalNavSources?: string[];
+  /** Deck strategy: treat every evdev node of the Deck's built-in controller
+   *  (28de:1205/1206 — raw gamepad + lizard-mode keyboard/mouse emulation)
+   *  as grab-only during intercept. Nav comes from the hidraw reader instead
+   *  (reading the raw gamepad node too would double every input), and
+   *  grabbing the emulation nodes stops lizard-mode kbd/mouse leaking to
+   *  desktop apps behind the overlay — the desktop-mode capture, where
+   *  Steam isn't frozen and consumers read evdev. Default false. */
+  grabDeckBuiltinNodes?: boolean;
 }
 
 export interface InputInterceptHandle {
@@ -605,6 +625,12 @@ export interface InputInterceptHandle {
   grab(): void;
   /** Stop intercept — release grabs, narrow masks back to idle. */
   release(): void;
+  /** Feed NavController-shaped events from an external (non-evdev) source,
+   *  e.g. the Deck hidraw watcher. No-op unless intercepting. The source id
+   *  is suffixed with the live grab generation, so state from a previous
+   *  overlay session can never leak into the next (nav.reset() on grab and
+   *  release covers the rest). */
+  injectNavEvents(sourceId: string, events: InputEvent[]): void;
   /** Close all FDs, release any outstanding grabs. Call from shutdown. */
   shutdown(): void;
   /** For diagnostic logs. */
@@ -628,12 +654,21 @@ export async function startInputIntercept(
   // it. index.ts sets readVirtualPadsForNav = "no IP composites present", i.e.
   // the Deck-alone case reads; the external-IP-pad case stays grab-only.
   const readVirtualPadsForNav = opts.readVirtualPadsForNav ?? true;
+  const externalNavSources = opts.externalNavSources ?? [];
+  const grabDeckBuiltinNodes = opts.grabDeckBuiltinNodes ?? false;
+
+  /** Devices we open at all. Deck built-in nodes include a mouse-only
+   *  emulation node with no controller/keyboard/qam caps — eligible only
+   *  when the Deck strategy wants it for grab-only capture. */
+  const isEligible = (d: InputDevice): boolean =>
+    d.flags.isController ||
+    d.flags.isKeyboard ||
+    d.flags.isQam ||
+    (grabDeckBuiltinNodes && d.isDeckBuiltin);
 
   // Track controllers including the virtual pad; isSteamVirtual only decides
   // read-for-nav vs grab-only below (via `grabOnly` in openAndTrack).
-  const devices = (await enumerateDevices()).filter(
-    (d) => d.flags.isController || d.flags.isKeyboard || d.flags.isQam,
-  );
+  const devices = (await enumerateDevices()).filter(isEligible);
 
   const tracked: TrackedDevice[] = [];
 
@@ -648,7 +683,12 @@ export async function startInputIntercept(
     }
     // A virtual pad is read for nav (grabOnly=false) on the Deck-alone case,
     // or grab-only when an external IP-managed pad drives nav over DBus.
-    const grabOnly = dev.isSteamVirtual && !readVirtualPadsForNav;
+    // On the Deck hidraw-nav strategy, every built-in-controller node (raw
+    // gamepad + lizard kbd/mouse emulation) is also grab-only: hidraw drives
+    // nav, evdev grabs just silence what's underneath.
+    const grabOnly =
+      (dev.isSteamVirtual && !readVirtualPadsForNav) ||
+      (grabDeckBuiltinNodes && dev.isDeckBuiltin);
     // Grab-only virtual pads are never read for nav, so masks + axis
     // calibration are irrelevant — skip them.
     if (!grabOnly) applyIdleMasks(fd, dev);
@@ -667,7 +707,9 @@ export async function startInputIntercept(
     tracked.push(t);
     const kinds = [
       grabOnly
-        ? "virtual(grab-only)"
+        ? dev.isSteamVirtual
+          ? "virtual(grab-only)"
+          : "deck-builtin(grab-only)"
         : dev.flags.isController
           ? "controller"
           : null,
@@ -747,9 +789,31 @@ export async function startInputIntercept(
       // EVIOCGRAB so the game underneath gets nothing. We never feed their
       // events to NavController (the physical pads already drive overlay nav;
       // this mirrors them, so processing both would double every input) and
-      // never run wake detection on them. readRawEvents above already drained
-      // the fd so its buffer can't back up — just skip the rest.
-      if (t.grabOnly) continue;
+      // — on IP hosts — never run wake detection on them either (the physical
+      // pad already drives wake; processing the mirror would double-toggle).
+      // readRawEvents above already drained the fd so its buffer can't back up.
+      //
+      // Deck strategy exception: there the virtual pad (or the raw built-in
+      // gamepad node when Steam isn't running) is the ONLY evdev view of the
+      // built-in controller — no other device mirrors it — so combo wake
+      // detection (Guide+B etc.) must keep running or a Deck with no
+      // configured hidraw wake binding has no controller wake at all. Nav
+      // stays off (hidraw drives it; reading both would double).
+      if (t.grabOnly) {
+        if (grabDeckBuiltinNodes && t.dev.flags.isController && !pendingGrabs.has(t)) {
+          for (const e of events) {
+            if (e.type !== EV_KEY) continue;
+            const wake = processCombo(t.combo, e.code, e.value, now);
+            if (wake) {
+              trace(
+                `[input-intercept] wake=${wake} from grab-only '${t.dev.name}' (${t.path})`,
+              );
+              opts.onWake(wake);
+            }
+          }
+        }
+        continue;
+      }
 
       // A device with a still-deferred grab isn't ours yet — the app
       // underneath is reading it (that's the whole point of deferring, so it
@@ -797,6 +861,16 @@ export async function startInputIntercept(
         nav.processEvents(cid, input);
       }
     }
+
+    // Pump external nav sources (Deck hidraw) with an empty batch each
+    // active tick so their held buttons key-repeat on our cadence — the
+    // source only pushes events on state CHANGES, which would otherwise
+    // leave repeat at the mercy of its report timing.
+    if (intercepting) {
+      for (const id of externalNavSources) {
+        nav.processEvents(`${id}_${generation}`, []);
+      }
+    }
   }
 
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -836,9 +910,12 @@ export async function startInputIntercept(
       const rc = libc.symbols.ioctl(t.fd, EVIOCGRAB, ptr(intBuf));
       if (rc === 0) {
         t.grabbed = true;
-        console.log(
-          `[input-intercept] grabbed ${t.path} '${t.dev.name}'${t.grabOnly ? " (virtual, grab-only)" : ""}`,
-        );
+        const label = !t.grabOnly
+          ? ""
+          : t.dev.isSteamVirtual
+            ? " (virtual, grab-only)"
+            : " (deck-builtin, grab-only)";
+        console.log(`[input-intercept] grabbed ${t.path} '${t.dev.name}'${label}`);
       } else {
         // EBUSY is normal if another app (old overlay instance,
         // steamcompmgr) has it — log and move on.
@@ -889,7 +966,9 @@ export async function startInputIntercept(
     nav.reset();
     pendingGrabs.clear();
     for (const t of tracked) {
-      if (!t.dev.flags.isController) continue;
+      // Controllers, plus grab-only non-controllers (Deck lizard kbd/mouse
+      // emulation nodes) — keyboards/qam otherwise stay passive.
+      if (!t.dev.flags.isController && !t.grabOnly) continue;
       // Fresh modifier state each cycle: a guide/select/ctrl release missed
       // last session must not leave guideHeld stuck (→ every B reads as
       // Guide+B → re-toggles the overlay). resyncDeviceState (in grabOrDefer)
@@ -909,7 +988,7 @@ export async function startInputIntercept(
     // Those devices were never grabbed, so the loop below leaves them be.
     pendingGrabs.clear();
     for (const t of tracked) {
-      if (!t.dev.flags.isController) continue;
+      if (!t.dev.flags.isController && !t.grabOnly) continue;
       if (t.grabbed) {
         // Kernel semantics (drivers/input/evdev.c): EVIOCGRAB treats the
         // ioctl arg as a pointer and only checks null-vs-non-null — any
@@ -929,7 +1008,7 @@ export async function startInputIntercept(
     }
     nav.reset();
     console.log(
-      `[input-intercept] released ${tracked.filter((t) => t.dev.flags.isController).length} controller(s)`,
+      `[input-intercept] released ${tracked.filter((t) => t.dev.flags.isController || t.grabOnly).length} device(s)`,
     );
     startTimer();
   }
@@ -957,11 +1036,7 @@ export async function startInputIntercept(
       return;
     }
     if (!fresh) return;
-    const eligible =
-      fresh.flags.isController ||
-      fresh.flags.isKeyboard ||
-      fresh.flags.isQam;
-    if (!eligible) return;
+    if (!isEligible(fresh)) return;
     const t = openAndTrack(fresh);
     if (!t) return;
     // If the overlay is open, the new controller has to participate in
@@ -969,7 +1044,7 @@ export async function startInputIntercept(
     // broaden masks + EVIOCGRAB (grab-only virtual pads just get the grab,
     // so a pad's Steam Input virtual node created on connect is silenced too).
     // Keyboards / qam don't get grabbed.
-    if (intercepting && t.dev.flags.isController) {
+    if (intercepting && (t.dev.flags.isController || t.grabOnly)) {
       if (!t.grabOnly) applyInterceptMasks(t.fd);
       grabOrDefer(t);
     }
@@ -979,6 +1054,7 @@ export async function startInputIntercept(
     const idx = tracked.findIndex((t) => t.path === eventPath);
     if (idx < 0) return;
     const [t] = tracked.splice(idx, 1);
+    if (!t) return;
     // Drop any deferred-grab entry before closing the fd: a stale entry would
     // make pollOnce ioctl a closed (possibly OS-reused) fd next tick.
     pendingGrabs.delete(t);
@@ -1030,16 +1106,12 @@ export async function startInputIntercept(
     const trackedPaths = new Set(tracked.map((t) => t.path));
     for (const dev of all) {
       if (trackedPaths.has(dev.eventPath)) continue;
-      const eligible =
-        dev.flags.isController ||
-        dev.flags.isKeyboard ||
-        dev.flags.isQam;
-      if (!eligible) continue;
+      if (!isEligible(dev)) continue;
       console.log(
         `[input-intercept] reconcile: ${dev.eventPath} '${dev.name}' new — opening`,
       );
       const t = openAndTrack(dev);
-      if (t && intercepting && t.dev.flags.isController) {
+      if (t && intercepting && (t.dev.flags.isController || t.grabOnly)) {
         if (!t.grabOnly) applyInterceptMasks(t.fd);
         grabOrDefer(t);
       }
@@ -1054,6 +1126,13 @@ export async function startInputIntercept(
   return {
     grab: doGrab,
     release: doRelease,
+    injectNavEvents: (sourceId: string, events: InputEvent[]): void => {
+      // Closed-overlay events are dropped, not queued: the source keeps its
+      // own state and re-baselines on the next open, so a stale press here
+      // would only ever produce a phantom action.
+      if (!intercepting) return;
+      nav.processEvents(`${sourceId}_${generation}`, events);
+    },
     shutdown: () => {
       if (timer) clearInterval(timer);
       timer = null;

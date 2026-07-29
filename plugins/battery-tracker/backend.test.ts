@@ -1,6 +1,9 @@
 import { describe, it, expect, spyOn, beforeEach, afterEach } from "bun:test";
 import type { EmitPayload } from "@loadout/types";
 import * as fsPromises from "node:fs/promises";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // ---------------------------------------------------------------------------
 // NOTE: We use spyOn (not mock.module) for node:fs/promises because
@@ -416,6 +419,312 @@ describe("BatteryTrackerBackend", () => {
 
       const result = await internals(backend)._findBatteryPath();
       expect(result).toBe("/sys/class/power_supply/hid-ABCD-battery");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Charge control (charge limit + bypass charging)
+  //
+  // These go through onLoad() so detection, restore, and the RPCs are
+  // exercised together. Bun.write is spied (sysfs writes would need root);
+  // plugin storage is redirected to a temp dir via XDG_CONFIG_HOME so
+  // persistence uses the real read/write path.
+  // -------------------------------------------------------------------------
+
+  describe("charge control", () => {
+    const base = "/sys/class/power_supply/BATT";
+    let bunWriteSpy: ReturnType<typeof spyOn>;
+    let tmpDir: string;
+    let prevXdg: string | undefined;
+
+    beforeEach(() => {
+      bunWriteSpy = spyOn(Bun, "write").mockImplementation(
+        () => Promise.resolve(1) as ReturnType<typeof Bun.write>,
+      );
+      tmpDir = mkdtempSync(join(tmpdir(), "battery-charge-test-"));
+      prevXdg = process.env.XDG_CONFIG_HOME;
+      process.env.XDG_CONFIG_HOME = tmpDir;
+    });
+
+    afterEach(() => {
+      bunWriteSpy.mockRestore();
+      if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevXdg;
+      rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    /** Mock a system battery at BATT plus any extra sysfs entries. */
+    function setupBattery(
+      extra: Record<string, string>,
+      absolute: Record<string, string> = {},
+    ) {
+      readdirSpy.mockImplementation(() => Promise.resolve(["BATT"] as unknown as string[]));
+      const map = makeSysfsMap(base, {
+        type: "Battery",
+        capacity: "62",
+        status: "Full",
+        ...extra,
+      });
+      for (const [path, value] of Object.entries(absolute)) {
+        map.set(path, value);
+      }
+      mockSysfs(map);
+    }
+
+    const storagePath = () => join(tmpDir, "loadout", "plugins", "battery-tracker.json");
+    const readStorage = () => JSON.parse(readFileSync(storagePath(), "utf8"));
+
+    it("detects charge limit and charge_behaviour support", async () => {
+      setupBattery({
+        charge_control_end_threshold: "62",
+        charge_behaviour: "[auto] inhibit-charge inhibit-charge-awake",
+      });
+      await backend.onLoad();
+
+      const info = await backend.getChargeControl();
+      expect(info.supportsChargeLimit).toBe(true);
+      expect(info.chargeLimitPercent).toBe(62);
+      expect(info.supportsBypass).toBe(true);
+      expect(info.supportsBypassAwake).toBe(true);
+      expect(info.bypassMode).toBe("disabled");
+    });
+
+    it("reports an active bypass mode from charge_behaviour", async () => {
+      setupBattery({
+        charge_behaviour: "auto [inhibit-charge] inhibit-charge-awake",
+      });
+      await backend.onLoad();
+
+      const info = await backend.getChargeControl();
+      expect(info.bypassMode).toBe("always");
+    });
+
+    it("reports no support when the attrs are absent", async () => {
+      setupBattery({});
+      await backend.onLoad();
+
+      const info = await backend.getChargeControl();
+      expect(info.supportsChargeLimit).toBe(false);
+      expect(info.supportsBypass).toBe(false);
+      expect(info.chargeLimitPercent).toBeNull();
+      expect(info.bypassMode).toBe("disabled");
+    });
+
+    it("does not claim bypass when charge_behaviour offers no inhibit variant", async () => {
+      // A driver that only supports force-discharge is not a bypass control;
+      // advertising it would show a control whose writes always fail.
+      setupBattery({ charge_behaviour: "[auto] force-discharge" });
+      await backend.onLoad();
+
+      const info = await backend.getChargeControl();
+      expect(info.supportsBypass).toBe(false);
+      expect(info.supportsBypassAwake).toBe(false);
+    });
+
+    it("treats a threshold of 100 as no limit", async () => {
+      setupBattery({ charge_control_end_threshold: "100" });
+      await backend.onLoad();
+
+      const info = await backend.getChargeControl();
+      expect(info.supportsChargeLimit).toBe(true);
+      expect(info.chargeLimitPercent).toBeNull();
+    });
+
+    /**
+     * Mock a BATT whose charge_control_end_threshold READ is rejected with
+     * `code` (the file is present, but the driver refuses reads — e.g. the
+     * APEX's oxpec returns EINVAL). Battery files resolve normally; other
+     * sysfs paths are ENOENT; non-sysfs paths (plugin storage) delegate to the
+     * real fs so persistence round-trips through the temp XDG_CONFIG_HOME dir.
+     */
+    function mockThresholdReadError(code: string) {
+      const map = makeSysfsMap(base, { type: "Battery", capacity: "62", status: "Full" });
+      const limitPath = `${base}/charge_control_end_threshold`;
+      (fsPromises.readFile as ReturnType<typeof spyOn>).mockImplementation(
+        (path: unknown): Promise<string> => {
+          const p = path as string;
+          if (p === limitPath) {
+            return Promise.reject(Object.assign(new Error(code), { code }));
+          }
+          if (p.startsWith("/sys/")) {
+            if (map.has(p)) return Promise.resolve(map.get(p)!);
+            return Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+          }
+          try {
+            return Promise.resolve(readFileSync(p, "utf8"));
+          } catch (e) {
+            return Promise.reject(e);
+          }
+        },
+      );
+      readdirSpy.mockImplementation(() => Promise.resolve(["BATT"] as unknown as string[]));
+    }
+
+    // Regression: the OneXPlayer APEX (oxpec) exposes
+    // charge_control_end_threshold as write-only — the file exists and accepts
+    // writes, but read() returns EINVAL. Detecting support via a successful
+    // read hid the charge-limit UI on that device while bypass stayed visible.
+    // Support must be recognised from PRESENCE, not readability.
+    it("detects charge-limit support when the attr exists but read() returns EINVAL", async () => {
+      mockThresholdReadError("EINVAL");
+      await backend.onLoad();
+
+      const info = await backend.getChargeControl();
+      expect(info.supportsChargeLimit).toBe(true);
+      // Read fails, no persisted value yet → reported as unknown (null), but
+      // the control is advertised as supported so the UI renders.
+      expect(info.chargeLimitPercent).toBeNull();
+    });
+
+    // Companion to the above: on a write-only EC the current threshold can't be
+    // read back, so getChargeControl falls back to the persisted intent — the
+    // slider must show the applied limit, not snap back to "unlimited".
+    it("reports the persisted limit when the attr is write-only (read → EINVAL)", async () => {
+      mockThresholdReadError("EINVAL");
+      await backend.onLoad();
+      // Apply a limit (write succeeds); it persists to plugin storage.
+      const set = await backend.setChargeLimit(80);
+      expect(set.success).toBe(true);
+
+      const info = await backend.getChargeControl();
+      expect(info.supportsChargeLimit).toBe(true);
+      expect(info.chargeLimitPercent).toBe(80);
+    });
+
+    // Lock the ENOENT/ENODEV allowlist: a present-but-unreadable node (EACCES
+    // here) is supported, but ENODEV (parent device gone) is genuinely absent.
+    it("treats EACCES on the threshold as present but ENODEV as absent", async () => {
+      mockThresholdReadError("EACCES");
+      await backend.onLoad();
+      expect((await backend.getChargeControl()).supportsChargeLimit).toBe(true);
+
+      // Fresh backend for the ENODEV case (detection runs once in onLoad).
+      backend = new BatteryTrackerBackend();
+      backend.emit = () => {};
+      mockThresholdReadError("ENODEV");
+      await backend.onLoad();
+      expect((await backend.getChargeControl()).supportsChargeLimit).toBe(false);
+    });
+
+    it("accepts legacy charge_type bypass on OneXPlayer hardware only", async () => {
+      setupBattery(
+        { charge_type: "Standard" },
+        { "/sys/devices/virtual/dmi/id/sys_vendor": "ONE-NETBOOK Technology Co., Ltd." },
+      );
+      await backend.onLoad();
+      const info = await backend.getChargeControl();
+      expect(info.supportsBypass).toBe(true);
+      expect(info.supportsBypassAwake).toBe(true);
+    });
+
+    it("refuses charge_type bypass on non-OneXPlayer hardware", async () => {
+      // Other vendors use charge_type for Fast/Trickle, not bypass.
+      setupBattery(
+        { charge_type: "Fast" },
+        { "/sys/devices/virtual/dmi/id/sys_vendor": "ASUSTeK COMPUTER INC." },
+      );
+      await backend.onLoad();
+      const info = await backend.getChargeControl();
+      expect(info.supportsBypass).toBe(false);
+    });
+
+    it("setChargeLimit writes sysfs and persists the value", async () => {
+      setupBattery({ charge_control_end_threshold: "100" });
+      await backend.onLoad();
+
+      const result = await backend.setChargeLimit(80);
+      expect(result.success).toBe(true);
+      expect(bunWriteSpy).toHaveBeenCalledWith(`${base}/charge_control_end_threshold`, "80");
+      expect(readStorage().chargeLimitPercent).toBe(80);
+    });
+
+    it("setChargeLimit(null) clears the limit by writing 100", async () => {
+      setupBattery({ charge_control_end_threshold: "80" });
+      await backend.onLoad();
+
+      const result = await backend.setChargeLimit(null);
+      expect(result.success).toBe(true);
+      expect(bunWriteSpy).toHaveBeenCalledWith(`${base}/charge_control_end_threshold`, "100");
+      expect(readStorage().chargeLimitPercent).toBeNull();
+    });
+
+    it("setChargeLimit rejects out-of-range and non-integer values", async () => {
+      setupBattery({ charge_control_end_threshold: "100" });
+      await backend.onLoad();
+
+      expect((await backend.setChargeLimit(45)).success).toBe(false);
+      expect((await backend.setChargeLimit(110)).success).toBe(false);
+      expect((await backend.setChargeLimit(72.5)).success).toBe(false);
+      expect(bunWriteSpy).not.toHaveBeenCalled();
+    });
+
+    it("setChargeLimit fails cleanly when unsupported", async () => {
+      setupBattery({});
+      await backend.onLoad();
+
+      const result = await backend.setChargeLimit(80);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("not supported");
+    });
+
+    it("setBypassMode maps modes to charge_behaviour values and persists", async () => {
+      setupBattery({
+        charge_behaviour: "[auto] inhibit-charge inhibit-charge-awake",
+      });
+      await backend.onLoad();
+
+      const result = await backend.setBypassMode("awake");
+      expect(result.success).toBe(true);
+      expect(bunWriteSpy).toHaveBeenCalledWith(`${base}/charge_behaviour`, "inhibit-charge-awake");
+      expect(readStorage().bypassMode).toBe("awake");
+    });
+
+    it("setBypassMode rejects the awake mode when the kernel lacks it", async () => {
+      setupBattery({ charge_behaviour: "[auto] inhibit-charge" });
+      await backend.onLoad();
+
+      const result = await backend.setBypassMode("awake");
+      expect(result.success).toBe(false);
+      expect((await backend.setBypassMode("always")).success).toBe(true);
+    });
+
+    it("restores saved settings at load", async () => {
+      setupBattery(
+        {
+          charge_control_end_threshold: "100",
+          charge_behaviour: "[auto] inhibit-charge inhibit-charge-awake",
+        },
+        {
+          [join(tmpDir, "loadout", "plugins", "battery-tracker.json")]: JSON.stringify({
+            chargeLimitPercent: 85,
+            bypassMode: "always",
+          }),
+        },
+      );
+      await backend.onLoad();
+
+      expect(bunWriteSpy).toHaveBeenCalledWith(`${base}/charge_control_end_threshold`, "85");
+      expect(bunWriteSpy).toHaveBeenCalledWith(`${base}/charge_behaviour`, "inhibit-charge");
+    });
+
+    it("writes nothing at load when saved settings are disabled", async () => {
+      // Don't-clobber rule: a user managing charging with another tool
+      // must not have their setting overwritten at our startup.
+      setupBattery(
+        {
+          charge_control_end_threshold: "77",
+          charge_behaviour: "[inhibit-charge] auto",
+        },
+        {
+          [join(tmpDir, "loadout", "plugins", "battery-tracker.json")]: JSON.stringify({
+            chargeLimitPercent: null,
+            bypassMode: "disabled",
+          }),
+        },
+      );
+      await backend.onLoad();
+
+      expect(bunWriteSpy).not.toHaveBeenCalled();
     });
   });
 });

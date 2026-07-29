@@ -174,7 +174,6 @@ export const XCB_PROPERTY_NOTIFY = 28;
 //   uint8_t pad1[15];        // 17..31
 export const XCB_PROPERTY_NOTIFY_WINDOW_OFF = 4;
 export const XCB_PROPERTY_NOTIFY_ATOM_OFF = 8;
-export const XCB_GENERIC_EVENT_SIZE = 32;
 
 // ---- ioctl numbers (linux/input.h) -----------------------------------------
 // Lifted verbatim from src-tauri/src/input_interceptor.rs. These are the

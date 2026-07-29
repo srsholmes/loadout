@@ -20,11 +20,24 @@ export const pluginsListRoute: RouteHandler = {
   name: "plugins.list",
   match: (_req, url) => url.pathname === "/api/plugins",
   async handle(_req, url, ctx) {
-    // ?all=1 returns all plugins (used by injector for targets/routes).
-    // Default returns only plugins with an app.tsx frontend (used by
-    // overlay sidebar). Core services (`__core:*`) are always excluded —
-    // they have no UI and no targets/routes, and aren't installable
-    // plugins.
+    // ?installed=1 returns every plugin discovered on disk — including
+    // disabled ones, which have no loaded instance — each tagged with
+    // its `status`. Used by Settings/Welcome so disabled plugins can be
+    // re-enabled.
+    // ?all=1 returns all LOADED plugins (used by injector for
+    // targets/routes — disabled plugins must not be injected).
+    // Default returns only loaded plugins with an app.tsx frontend
+    // (used by overlay sidebar). Core services (`__core:*`) are always
+    // excluded — they have no UI and no targets/routes, and aren't
+    // installable plugins.
+    if (url.searchParams.get("installed") === "1") {
+      const metas = [...ctx.registry.values()].map((p) => ({
+        ...p.meta,
+        status: p.status,
+        hasApp: p.hasApp,
+      }));
+      return jsonResponse(metas);
+    }
     const all = url.searchParams.get("all") === "1";
     const metas = [...ctx.plugins.values()]
       .filter((p) => !p.meta.id.startsWith("__core:"))
@@ -50,8 +63,18 @@ export const pluginAppBundleRoute: RouteHandler = {
   name: "plugins.app-bundle",
   match: (_req, url) => APP_BUNDLE_PATTERN.test(url.pathname),
   async handle(_req, url, ctx) {
-    const match = url.pathname.match(APP_BUNDLE_PATTERN)!;
-    const pluginId = match[1];
+    const match = url.pathname.match(APP_BUNDLE_PATTERN);
+    if (!match) {
+      return new Response("Not Found", { status: 404 });
+    }
+    // Group 1 is a required capture in APP_BUNDLE_PATTERN, so it is always
+    // present; `?? ""` only satisfies the type checker.
+    const pluginId = match[1] ?? "";
+    // Only loaded plugins get their frontend compiled/served — a
+    // disabled plugin's UI must not be reachable by deep link.
+    if (!ctx.plugins.has(pluginId)) {
+      return new Response("Not Found", { status: 404 });
+    }
     let code = ctx.bundleCache.get(pluginId);
     if (!code) {
       const appPath = join(ctx.pluginsDir, pluginId, "app.tsx");
@@ -66,9 +89,14 @@ export const pluginAssetRoute: RouteHandler = {
   name: "plugins.asset",
   match: (_req, url) => ASSET_PATTERN.test(url.pathname),
   async handle(_req, url, ctx) {
-    const match = url.pathname.match(ASSET_PATTERN)!;
-    const pluginId = match[1];
-    const relPath = decodeURIComponent(match[2]);
+    const match = url.pathname.match(ASSET_PATTERN);
+    if (!match) {
+      return new Response("Not Found", { status: 404 });
+    }
+    // Groups 1 and 2 are required captures in ASSET_PATTERN, so they are
+    // always present; `?? ""` only satisfies the type checker.
+    const pluginId = match[1] ?? "";
+    const relPath = decodeURIComponent(match[2] ?? "");
     if (!ctx.plugins.has(pluginId)) {
       return new Response("Not Found", { status: 404 });
     }
@@ -119,7 +147,13 @@ export const pluginI18nRoute: RouteHandler = {
   name: "plugins.i18n",
   match: (_req, url) => I18N_PATTERN.test(url.pathname),
   async handle(_req, url, ctx) {
-    const match = url.pathname.match(I18N_PATTERN)!;
+    const match = url.pathname.match(I18N_PATTERN);
+    // Both groups are non-optional in I18N_PATTERN, but under
+    // noUncheckedIndexedAccess they're `string | undefined` — narrow rather
+    // than assert, so a future pattern edit fails loudly here.
+    if (!match?.[1] || !match[2]) {
+      return new Response("Not Found", { status: 404 });
+    }
     const pluginId = match[1];
     const fileName = decodeURIComponent(match[2]);
     if (!ctx.plugins.has(pluginId)) {

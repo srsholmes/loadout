@@ -95,8 +95,3 @@ export function getCapturedLogs(): string {
     .map((e) => `${new Date(e.ts).toISOString()} [${e.level}] ${e.text}`)
     .join("\n");
 }
-
-/** Test seam — drop everything captured so far. */
-export function clearCapturedLogs(): void {
-  buffer.length = 0;
-}

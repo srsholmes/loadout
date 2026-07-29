@@ -34,6 +34,8 @@ import { applyArtwork, getCatalogArtUrl, getDetailHeroUrl } from "./lib/artwork"
 import { getEffectivePlatformValue } from "./lib/platform";
 import { pickRomFile } from "./lib/file-picker";
 import { suggestRomsForTitle, type RomSuggestion } from "./lib/rom-suggest";
+import { resolveWithinDir } from "./lib/path-confine";
+import { existsSync } from "node:fs";
 
 /**
  * Fallback ROM extensions used by `suggestRomFiles` when a catalog
@@ -743,6 +745,31 @@ export default class RecompBackend implements PluginBackend {
 
     const installed = this.state.games[id];
     if (!installed) throw new Error(`Game '${id}' is not installed`);
+
+    // Launch guard for structured-dump games: without its anchor file
+    // the engine exits instantly with a cryptic "game_data_root does
+    // not exist" log line the user never sees (today's field report:
+    // "castlevania crashes on launch"). Refuse with an actionable
+    // message instead — reinstalling with the dump repopulates it.
+    const romInfo = entry.romInfo;
+    if (
+      romInfo?.anchorFile &&
+      romInfo.sourceFormat &&
+      romInfo.sourceFormat !== "raw"
+    ) {
+      const anchor = resolveWithinDir(
+        installed.installDir,
+        `${romInfo.extractTo ?? "assets"}/${romInfo.anchorFile}`,
+        "romInfo anchor",
+      );
+      if (!existsSync(anchor)) {
+        throw new Error(
+          `${entry.name} is missing its game data (${romInfo.extractTo ?? "assets"}/` +
+            `${romInfo.anchorFile}). Reinstall the game and provide your ` +
+            `game dump when prompted.`,
+        );
+      }
+    }
 
     await launchGame(entry, installed);
   }

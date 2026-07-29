@@ -6,7 +6,3 @@
  */
 
 export const BACKEND_URL = import.meta.env.DEV ? "" : "http://localhost:33820";
-export const BACKEND_WS = import.meta.env.DEV
-  ? `ws://${window.location.host}`
-  : "ws://localhost:33820";
-export const BACKEND_PORT = 33820;

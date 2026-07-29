@@ -12,7 +12,13 @@ import { join, sep } from "node:path";
 import type { RpcEvent } from "@loadout/types";
 import { resolveMethod } from "@loadout/types";
 import { withCommandPolicy } from "@loadout/exec";
-import { loadPlugins, withSandboxedFetch } from "./plugin-manager";
+import {
+  discoverPlugins,
+  loadPlugin,
+  loadPlugins,
+  withSandboxedFetch,
+} from "./plugin-manager";
+import { resolveDisabledPlugins, DISABLED_PLUGINS_KEY } from "./user-config";
 import { createRpcHandler } from "./rpc-handler";
 import { log } from "./logger";
 import { generateSessionToken, validateRequest } from "./auth";
@@ -32,6 +38,7 @@ import {
 } from "./inject-builder";
 import { SteamInjector } from "../injector";
 import { dispatchRoute, type RouteContext } from "./routes";
+import { cleanupStaleSelfUpdateArtifacts } from "./self-update";
 
 // Global error handlers — prevent plugin crashes from killing the server.
 // The real fix is process isolation (P1 TODO), but this keeps the server alive
@@ -174,8 +181,9 @@ async function compileTsx(
       },
     });
 
-    if (result.success && result.outputs.length > 0) {
-      const code = await result.outputs[0].text();
+    const output = result.success ? result.outputs[0] : undefined;
+    if (output) {
+      const code = await output.text();
       return { code, ok: true };
     }
 
@@ -222,11 +230,32 @@ export async function startServer(options: ServerOptions = {}) {
     }
   }
 
+  // Reap leftovers from a self-update that died mid-flight (staged
+  // plugins tree, downloaded archives, .old generations). AWAITED, not
+  // fire-and-forget: after a mid-swap crash this is what renames
+  // `plugins.old` back into place, and `loadPlugins` below readdirs
+  // the plugins dir immediately — losing that race means booting a
+  // pluginless server, the exact outcome the restore exists to
+  // prevent. Every target is individually best-effort, so this never
+  // throws; it just must FINISH first.
+  await cleanupStaleSelfUpdateArtifacts(pluginsDir);
+
   // --- Load plugins ---
+  // Discovery (manifest scan) is separate from instantiation: plugins the
+  // user disabled get a registry entry so the UI can list and re-enable
+  // them, but their backend code is never bundled, imported, or run.
+  // `resolveDisabledPlugins` also migrates the legacy `enabledPlugins`
+  // allow-list the overlay used to write.
   log.info("Loading plugins...");
   log.info(`Plugins directory: ${pluginsDir}`);
-  const plugins = await loadPlugins({ pluginsDir, broadcast });
-  log.info(`Loaded ${plugins.size} plugin(s)`);
+  const discovered = await discoverPlugins(pluginsDir);
+  const disabledIds = await resolveDisabledPlugins(discovered.map((d) => d.meta.id));
+  const { loaded: plugins, registry } = await loadPlugins({
+    discovered,
+    broadcast,
+    disabledIds,
+  });
+  log.info(`Loaded ${plugins.size} plugin(s) (${disabledIds.size} disabled)`);
 
   // --- Build inject bundles for CEF injection ---
   let injectBundles: InjectBundles = { vendor: "", sdk: "" };
@@ -282,18 +311,12 @@ export async function startServer(options: ServerOptions = {}) {
   });
   log.info(`Registered core service: ${GAME_LIBRARY_SERVICE_ID}`);
 
-  const rpcHandler = createRpcHandler(
-    new Map(
-      [...plugins].map(([id, p]) => [
-        id,
-        {
-          instance: p.instance,
-          sandboxedFetch: p.sandboxedFetch,
-          commandPolicy: p.commandPolicy,
-        },
-      ]),
-    ),
-  );
+  // The live `plugins` map is passed by reference (LoadedPlugin satisfies
+  // RpcPluginEntry structurally): a plugin enabled at runtime becomes
+  // RPC-reachable the moment it's loaded, with no handler rebuild.
+  const rpcHandler = createRpcHandler(plugins, {
+    isDisabled: (id) => registry.get(id)?.status === "disabled",
+  });
 
   // Fan a method call out to every plugin (including __core:* services) that
   // implements it. Used by the HTTP /api/rpc __broadcast handler AND by the
@@ -327,6 +350,67 @@ export async function startServer(options: ServerOptions = {}) {
   // --- Plugin bundle cache (compiled on demand for the overlay) ---
   const bundleCache = new Map<string, string>();
 
+  // --- Runtime plugin enablement ---
+  // Reacts to `disabledPlugins` changes arriving through /api/user-config.
+  // Enabling loads the plugin live — loading is additive and safe.
+  // Disabling can't unload code that already ran (there is no teardown
+  // path), so the plugin stays in the registry as "loaded"; the overlay
+  // hides it immediately and prompts for an app restart to unload it.
+  // Assigned a real implementation in the hot-reload section below; only
+  // ever invoked from HTTP handlers, which run after startup completes.
+  let addPluginWatcher: (id: string) => void = () => {};
+  // Serialized so two racing PATCHes can't double-load the same plugin.
+  let enableQueue: Promise<void> = Promise.resolve();
+  // The LIVE disabled set — updated synchronously on every change so a
+  // queued enable task re-checks the latest membership instead of a
+  // per-callback snapshot. This is a BEST-EFFORT guard, not a guarantee:
+  // it prevents a stale enable only when that task is still queued behind
+  // earlier work by the time the later disable lands. In the empty-queue
+  // case the enable task's microtask can reach `loadPlugin` before the
+  // disable PATCH has even been persisted (its onUserConfigChanged runs
+  // only after the awaited disk write), so a rapid enable→disable of a
+  // startup-disabled plugin still loads it once — its onLoad runs, then it
+  // sits in the normal pending-disable state (loaded + "Restart required")
+  // until the next restart unloads it. A hard guarantee isn't possible
+  // without a plugin unload path (Audit A-009). Seeded from the startup set.
+  let currentDisabled = new Set(disabledIds);
+  // Config PATCHes fire on every UI gesture (favorites, theme, layout
+  // bursts); only re-scan the registry when the disabled set actually
+  // changes.
+  let lastDisabledKey = [...disabledIds].sort().join("|");
+  function onUserConfigChanged(next: Record<string, unknown>): void {
+    const raw = next[DISABLED_PLUGINS_KEY];
+    if (!Array.isArray(raw)) return;
+    const ids = raw.filter((x): x is string => typeof x === "string");
+    const key = [...ids].sort().join("|");
+    if (key === lastDisabledKey) return;
+    lastDisabledKey = key;
+    currentDisabled = new Set(ids);
+    enableQueue = enableQueue
+      .then(async () => {
+        for (const [id, entry] of registry) {
+          // Re-check against the LIVE set at execution time: a later
+          // PATCH may have re-disabled this plugin after this task was
+          // queued. Loading is the only direction here — disabling never
+          // unloads (restart-gated) — so a stale load is the only risk.
+          if (entry.status !== "disabled" || currentDisabled.has(id)) continue;
+          log.info(`[plugins] Enabling ${id} at runtime`);
+          const lp = await loadPlugin({ plugin: entry, broadcast, loaded: plugins });
+          entry.status = lp ? "loaded" : "error";
+          if (lp) addPluginWatcher(id);
+          broadcast({
+            type: "event",
+            plugin: "__system",
+            event: "plugins-changed",
+            data: { plugin: id, status: entry.status },
+          });
+        }
+      })
+      .catch((err) => {
+        log.error(`[plugins] Runtime enable failed: ${err}`);
+      });
+  }
+
   // --- Route-module dispatch context (issue #87 / audit A-001).
   // Every service the inlined routes consume is bundled here so each
   // route module receives them by reference instead of reaching into
@@ -334,8 +418,16 @@ export async function startServer(options: ServerOptions = {}) {
   // `dispatchRoute(req, url, ctx)` first; routes that match return
   // a Response, anything that falls through hits the inlined blocks
   // (currently every route) and ultimately the 404.
+  // The CEF injector is constructed further down (it needs broadcast
+  // helpers defined above), but the overlay-button route needs to reach it.
+  // Hold it in a ref the ctx closure reads lazily — until it's assigned,
+  // callers get a not-ready error rather than a crash.
+  const injectorRef: { current: SteamInjector | null } = { current: null };
+
   const ctx: RouteContext = {
     plugins,
+    registry,
+    onUserConfigChanged,
     token,
     wsClients,
     bundleCache,
@@ -345,6 +437,10 @@ export async function startServer(options: ServerOptions = {}) {
     broadcastToPlugins,
     compileTsx,
     bunPlugins: [vendorGlobalsPlugin(), sdkGlobalPlugin()],
+    refreshOverlayButton: (mainMenu) =>
+      injectorRef.current
+        ? injectorRef.current.refreshOverlayButton({ mainMenu })
+        : Promise.resolve({ ok: false, error: "Injector not ready yet." }),
   };
 
   // --- HTTP Server ---
@@ -469,6 +565,14 @@ export async function startServer(options: ServerOptions = {}) {
       const called = await broadcastToPlugins("handleGameExit", [appId]);
       log.info(`[broadcast] handleGameExit fanned out to ${called} plugin(s)`);
     },
+    // Issue #169: the injected Steam-menu "open overlay" entry can't reach
+    // the overlay's Bun main process directly, so it calls back here and we
+    // reuse the same /show broadcast path (→ webview → show() RPC).
+    onOverlayOpen: () => {
+      log.info("[overlay-button] Steam-menu entry activated — showing overlay");
+      if (wsClients.size > 0) broadcastShow();
+      else pendingShow = true;
+    },
     // Audit A-021: when the injector exhausts its crash-retry budget, fan
     // a __system event out so UI subscribers can surface "injector stopped"
     // instead of the previous silent failure.
@@ -477,6 +581,9 @@ export async function startServer(options: ServerOptions = {}) {
       broadcast({ type: "event", plugin: "__system", event: "inject-failed", data: info });
     },
   });
+  // Expose the injector to the overlay-button route (see ctx above).
+  injectorRef.current = injector;
+
   injector.start().catch((err) => {
     log.error(`[injector] Fatal error: ${err}`);
   });
@@ -492,10 +599,10 @@ export async function startServer(options: ServerOptions = {}) {
     debounceTimers.set(key, setTimeout(fn, ms));
   }
 
-  // Watch each plugin directory for changes
-  for (const [id] of plugins) {
-    // Skip synthetic core services — they're code-resident, not on disk.
-    if (id.startsWith("__core:")) continue;
+  // Watch each plugin directory for changes. Also invoked from the
+  // runtime-enable path (onUserConfigChanged) when a disabled plugin is
+  // loaded live, so it gets the same hot-reload behavior.
+  addPluginWatcher = (id: string) => {
     const pluginDir = join(pluginsDir, id);
     const watcher = watch(pluginDir, { recursive: true }, (_eventType, filename) => {
       if (shouldIgnoreReloadFilename(filename)) return;
@@ -506,6 +613,11 @@ export async function startServer(options: ServerOptions = {}) {
       });
     });
     watchers.push(watcher);
+  };
+  for (const [id] of plugins) {
+    // Skip synthetic core services — they're code-resident, not on disk.
+    if (id.startsWith("__core:")) continue;
+    addPluginWatcher(id);
   }
 
   // Watch packages/ui/ for SDK changes. Dev-only: in an installed layout

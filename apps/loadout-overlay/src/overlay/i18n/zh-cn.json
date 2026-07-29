@@ -12,7 +12,8 @@
       "sidebar": "侧边栏",
       "theme": "主题",
       "maintenance": "维护",
-      "about": "关于"
+      "about": "关于",
+      "steam_menu": "Steam 菜单"
     },
     "ui_scale": "界面缩放",
     "language_desc": "选择显示语言。缺少翻译时将回退为英文。",
@@ -34,6 +35,10 @@
         "description": "重新加载所有插件后端 — 无需重启系统即可修复卡住的插件。",
         "idle": "重启服务"
       }
+    },
+    "steam_menu": {
+      "label": "在 Steam 主菜单中添加“Loadout”",
+      "desc": "在 Steam 主菜单中添加“Loadout”条目以打开叠加层 —— 当手柄快捷键失效时的备用入口。选择它会直接打开叠加层，不会跳转到其他页面。"
     }
   }
 }

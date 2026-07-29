@@ -390,6 +390,7 @@ export default class DisableControllerInputBackend implements PluginBackend {
       const idx = this.state.devices.findIndex((d) => d.hash === hash);
       if (idx === -1) return { ok: false, error: "Unknown device" };
       const dev = this.state.devices[idx];
+      if (!dev) return { ok: false, error: "Unknown device" };
 
       // Don't strand a silenced target on the bus. Re-enable first if
       // the device is reachable. If the re-enable busctl call itself
@@ -435,7 +436,10 @@ export default class DisableControllerInputBackend implements PluginBackend {
    */
   private async _serialize<T>(fn: () => Promise<T>): Promise<T> {
     const prev = this.opLock;
-    let release!: () => void;
+    // Initialised to a no-op so `release` is never possibly-undefined; the
+    // Promise executor runs synchronously and always overwrites it with the
+    // real resolver before we await, so the no-op is never actually called.
+    let release: () => void = () => {};
     this.opLock = new Promise<void>((r) => (release = r));
     await prev;
     try {

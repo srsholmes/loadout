@@ -5,31 +5,46 @@
  * and provides authenticated fetch/WebSocket helpers.
  */
 
-import { BACKEND_URL, BACKEND_WS } from "./config";
+import { BACKEND_URL } from "./config";
+import {
+  HttpError,
+  exponentialDelays,
+  fetchTextNoCache,
+  fixedDelays,
+  retryAsync,
+} from "./retry";
 
 let sessionToken: string | null = null;
 
 /**
  * Fetch the session token from the Bun server.
- * Retries with exponential backoff until the server is reachable.
+ *
+ * Unbounded backoff on purpose: there is no meaningful failure path here.
+ * Without a token the overlay can't talk to the backend at all, so the only
+ * sane behaviour is to keep waiting for the server to come up. Every status
+ * is retried, including 4xx — a not-yet-ready server can answer oddly during
+ * startup, and giving up would strand the session.
  */
 export async function initBackend(): Promise<void> {
-  for (let attempt = 0; ; attempt++) {
-    try {
+  await retryAsync({
+    label: "[backend] token",
+    delays: exponentialDelays({ base: 1000, cap: 10000 }),
+    isRetriable: () => true,
+    run: async () => {
       const res = await fetch(`${BACKEND_URL}/api/token`);
-      if (res.ok) {
-        const data = await res.json();
-        sessionToken = data.token;
-        // Backward compat for ws-client.ts which reads from window
-        window.__LOADOUT_TOKEN__ = sessionToken ?? undefined;
-        console.log("[backend] Token acquired");
-        return;
+      if (!res.ok) {
+        throw new HttpError({
+          status: res.status,
+          message: `HTTP ${res.status} fetching session token`,
+        });
       }
-    } catch {}
-    const delay = Math.min(1000 * 2 ** attempt, 10000);
-    console.warn(`[backend] Server not ready, retrying in ${delay}ms...`);
-    await new Promise((r) => setTimeout(r, delay));
-  }
+      const data = await res.json();
+      sessionToken = data.token;
+      // Backward compat for ws-client.ts which reads from window
+      window.__LOADOUT_TOKEN__ = sessionToken ?? undefined;
+      console.log("[backend] Token acquired");
+    },
+  });
 }
 
 /** Get the current auth token. */
@@ -41,12 +56,6 @@ export function getAuthToken(): string {
 export function authHeaders(): HeadersInit {
   const token = getAuthToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
-/** Get the WebSocket URL with auth token. */
-export function wsUrl(): string {
-  const token = getAuthToken();
-  return `${BACKEND_WS}/ws?token=${encodeURIComponent(token)}`;
 }
 
 /** Get the full URL for a backend API path. */
@@ -78,6 +87,52 @@ export function pluginBundleUrl(pluginId: string): string {
  */
 const bundleCache = new Map<string, Promise<Record<string, unknown>>>();
 
+/** Backoff before each retry of a transient bundle fetch, in ms.
+ *
+ *  This is a ~4 s wall-clock budget, not "4 chances": a flushed request fails
+ *  instantly, so each attempt is exposed for only a single-digit-ms loopback
+ *  round trip. Surviving a flush needs a few ms of calm, which the first rung
+ *  already buys. The later rungs are there because NetworkChangeNotifierLinux
+ *  fires per netlink RTM_NEWADDR — v4 lease, v6 link-local, v6 SLAAC, and on a
+ *  host bringing up both eth0 and wlan0 those can spread over seconds. Nobody
+ *  is blocked on the outcome (a failure just renders a widget placeholder), so
+ *  the extra rungs cost nothing on the success path.
+ *
+ *  Note the ladder does NOT key off backend reachability: the server is on
+ *  loopback and answers with no network at all, so initBackend succeeding says
+ *  nothing about whether an interface is about to come up and flush the pool. */
+const BUNDLE_RETRY_DELAYS_MS = [150, 400, 1000, 2500];
+
+/** Fetch the bundle source, retrying transient failures.
+ *
+ *  Why this exists: the overlay fires every plugin's bundle fetch in
+ *  parallel ~3 ms into page load. On a handheld that boots straight into
+ *  gaming mode, Wi-Fi is often still associating at that moment — when the
+ *  interface activates, Chromium's network-change notifier flushes the
+ *  socket pool and every in-flight request dies with ERR_NETWORK_CHANGED
+ *  (surfaced to JS as a bare `TypeError: Failed to fetch`). Whichever
+ *  bundles had already landed were fine; the rest failed, and since nothing
+ *  re-requested them, their widgets and icons stayed broken for the whole
+ *  session — until someone restarted the overlay by hand. */
+export async function fetchBundleSource({
+  pluginId,
+  delays = BUNDLE_RETRY_DELAYS_MS,
+}: {
+  pluginId: string;
+  /** Overridable so tests don't pay the real backoff. */
+  delays?: readonly number[];
+}): Promise<string> {
+  return retryAsync({
+    label: `[bundle] ${pluginId}`,
+    delays: fixedDelays(delays),
+    run: () =>
+      fetchTextNoCache({
+        url: pluginBundleUrl(pluginId),
+        what: `${pluginId} bundle`,
+      }),
+  });
+}
+
 export async function importPluginBundle(pluginId: string): Promise<Record<string, unknown>> {
   const cached = bundleCache.get(pluginId);
   if (cached) {
@@ -88,10 +143,10 @@ export async function importPluginBundle(pluginId: string): Promise<Record<strin
   console.log(`[bundle] fetching: ${pluginId}`);
   const t0 = performance.now();
   const promise = (async () => {
-    const url = `${pluginBundleUrl(pluginId)}?t=${Date.now()}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status} loading ${pluginId} bundle`);
-    const text = await res.text();
+    // Only the fetch is retried. A bundle that downloads but fails to
+    // evaluate is a build error, not a blip — re-importing it would fail
+    // identically, so that error propagates on the first attempt.
+    const text = await fetchBundleSource({ pluginId });
     const blob = new Blob([text], { type: "application/javascript" });
     const blobUrl = URL.createObjectURL(blob);
     try {

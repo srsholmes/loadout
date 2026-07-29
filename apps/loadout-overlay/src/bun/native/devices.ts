@@ -51,6 +51,15 @@ const KEYBOARD_REQUIRED_KEYS = [KEY_LEFTCTRL, KEY_3, KEY_4] as const;
 const STEAM_VENDOR = 0x28de;
 const STEAM_PRODUCT = 0x11ff;
 
+/** Products of the Steam Deck's BUILT-IN controller (hid-steam): Jupiter
+ *  (LCD) and Galileo (OLED). The driver exposes several evdev nodes under
+ *  these ids — the raw gamepad node (controller caps; only present while
+ *  Steam Input hasn't claimed the hidraw) plus lizard-mode keyboard/mouse
+ *  emulation nodes. On the Deck overlay strategy all of them are grab-only:
+ *  nav comes from our own hidraw reader, and grabbing blocks lizard-mode
+ *  input leaking to desktop apps behind the overlay. */
+const DECK_BUILTIN_PRODUCTS = [0x1205, 0x1206];
+
 // ---- Types -----------------------------------------------------------------
 
 /** Deprecated — single-class view kept for callers that haven't moved to
@@ -80,10 +89,18 @@ export interface InputDevice {
   /** Parsed EV_KEY capability bitmask. Empty if the B: KEY= line is absent
    *  (non-input devices). */
   keyCaps: Uint8Array;
-  /** True for Steam Input's virtual Xbox 360 pad. Interception MUST skip
-   *  it — grabbing it would mean our overlay's own CEF Gamepad API and
-   *  Steam's BPM nav both lose input. */
+  /** True for Steam Input's virtual Xbox 360 pad (28de:11ff). Decides
+   *  read-for-nav vs grab-only in input-intercept (never plain "skip"):
+   *  grabbing it silences the game underneath while Steam BPM keeps reading
+   *  the physical pad via hidraw. NOTE: the grab/release loops assume every
+   *  11ff node has controller caps (true in the field — it's always the
+   *  virtual X360 pad); a hypothetical 11ff keyboard-only node would now be
+   *  grabbed too. */
   isSteamVirtual: boolean;
+  /** True for any evdev node of the Deck's built-in controller (28de:1205 /
+   *  28de:1206) — the raw gamepad node and the lizard-mode keyboard/mouse
+   *  emulation nodes. See DECK_BUILTIN_PRODUCTS. */
+  isDeckBuiltin: boolean;
 }
 
 // ---- Enumeration -----------------------------------------------------------
@@ -108,9 +125,12 @@ export function parseDevices(raw: string): InputDevice[] {
     const keyLine = matchLine(block, /^B:\s+KEY=(.*)$/m) ?? "";
     const keyCaps = parseKeyBitmask(keyLine);
     const flags = classifyByCaps(name, keyCaps);
+    const vendorNum = parseInt(vendor, 16);
+    const productNum = parseInt(product, 16);
     const isSteamVirtual =
-      parseInt(vendor, 16) === STEAM_VENDOR &&
-      parseInt(product, 16) === STEAM_PRODUCT;
+      vendorNum === STEAM_VENDOR && productNum === STEAM_PRODUCT;
+    const isDeckBuiltin =
+      vendorNum === STEAM_VENDOR && DECK_BUILTIN_PRODUCTS.includes(productNum);
     devices.push({
       eventPath: `/dev/input/${eventName}`,
       name,
@@ -121,6 +141,7 @@ export function parseDevices(raw: string): InputDevice[] {
       hash: djb2(`${name}|${vendor}|${product}`),
       keyCaps,
       isSteamVirtual,
+      isDeckBuiltin,
     });
   }
   return devices;
@@ -164,7 +185,9 @@ export function hasCapability(caps: Uint8Array, code: number): boolean {
   const byteIdx = code >> 3;
   const bitIdx = code & 0x07;
   if (byteIdx >= caps.length) return false;
-  return (caps[byteIdx] & (1 << bitIdx)) !== 0;
+  // Guarded above: byteIdx < caps.length, so this index is in-bounds; ?? 0
+  // is behaviour-identical for the bitwise test and drops the non-null `!`.
+  return ((caps[byteIdx] ?? 0) & (1 << bitIdx)) !== 0;
 }
 
 /**

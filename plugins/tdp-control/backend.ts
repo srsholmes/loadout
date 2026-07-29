@@ -14,7 +14,20 @@ import {
   matchProfileName,
   PLATFORM_PROFILE_TDP_MAP,
   type CpuVendor,
+  BATTERY_SAFE_MAX_WATTS,
+  effectiveMaxWatts,
+  isBatteryLimited,
 } from "@loadout/devices";
+import {
+  readCustomDevice,
+  migrateSeededBatteryMax,
+  writeCustomDevice,
+  clearCustomDevice,
+  validateCustomDevice,
+  type CustomDevice,
+} from "./lib/custom-device";
+import { readSavedTdp, writeSavedTdp } from "./lib/saved-tdp";
+import { readCpuBoostPref, writeCpuBoostPref } from "./lib/cpu-boost-pref";
 
 // ---------------------------------------------------------------------------
 // Constants: sysfs paths
@@ -54,9 +67,6 @@ const LEGION_GO_WMI_PATHS = {
   sppt: "/sys/class/firmware-attributes/lenovo-wmi-other-0/attributes/ppt_pl2_sppt/current_value",
   spl: "/sys/class/firmware-attributes/lenovo-wmi-other-0/attributes/ppt_pl1_spl/current_value",
 };
-
-const CHARGE_LIMIT_PATH =
-  "/sys/class/power_supply/BAT0/charge_control_end_threshold";
 
 // ---------------------------------------------------------------------------
 // Enums (the device database + matching live in @loadout/devices)
@@ -170,6 +180,7 @@ async function getOnlineCpus(): Promise<number[]> {
   for (const part of text.split(",")) {
     if (part.includes("-")) {
       const [start, end] = part.split("-").map(Number);
+      if (start === undefined || end === undefined) continue;
       for (let i = start; i <= end; i++) result.push(i);
     } else {
       result.push(Number(part));
@@ -193,6 +204,11 @@ interface TdpInfo {
   pluggedMaxWatts: number;
   /** Ceiling when on battery (<= pluggedMaxWatts). */
   batteryMaxWatts: number;
+  /** Global on-battery ceiling applied to every device. */
+  batterySafeMaxWatts: number;
+  /** True when being on battery lowers the ceiling right now (device figure
+   *  or global cap). Drives the UI's informational notice. */
+  batteryLimited: boolean;
   platform: string;
   deviceName: string;
   method: TdpMethod;
@@ -209,11 +225,18 @@ interface TdpInfo {
   currentGovernor: string | null;
   supportsSmt: boolean;
   supportsCpuBoost: boolean;
+  /** Whether the active device is a user-defined custom device (vs auto-detected). */
+  usingCustomDevice: boolean;
   gpuInfo: GpuInfo | null;
   smtEnabled: boolean | null;
   cpuBoostEnabled: boolean | null;
+  /**
+   * The boost state the plugin enforces alongside every TDP apply (the
+   * user's persisted preference, defaulting to off). `cpuBoostEnabled` above
+   * is the live hardware reading; this is the setting the toggle reflects.
+   */
+  cpuBoostSetting: boolean;
   acPowerOnline: boolean | null;
-  chargeLimitPercent: number | null;
 }
 
 interface SystemInfo {
@@ -234,7 +257,6 @@ interface SystemInfo {
   ryzenadjCanRead: boolean;
   gpuVendor: "AMD" | "Intel" | "Unknown";
   supportsGpuControl: boolean;
-  supportsChargeLimit: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +271,13 @@ export default class TdpControlBackend implements PluginBackend {
   private deviceName = "Unknown";
   private cpuVendor: CpuVendor = "Unknown";
   private cpuModel = "Unknown";
+  /**
+   * User-defined device override. When set it takes precedence over DMI
+   * auto-detection for the TDP range + presets. Loaded on startup and
+   * mutated by the setCustomDevice/clearCustomDevice RPCs. Only one is ever
+   * stored — this is a single override, not a profiles feature.
+   */
+  private customDevice: CustomDevice | null = null;
 
   // TDP method & state
   private method: TdpMethod = "none";
@@ -270,6 +299,24 @@ export default class TdpControlBackend implements PluginBackend {
    * battery, spring back up on AC) without ever mutating saved profiles.
    */
   private desiredTdp: number | null = null;
+  /**
+   * The last user-requested wattage persisted to disk, loaded on startup.
+   * Restored to hardware in onLoad() so the user's TDP choice survives a
+   * shutdown (hardware limits reset to firmware defaults on reboot). Only
+   * user-initiated setTdp()/applyProfile() calls update this — automatic
+   * applies (per-game profiles, AC transitions, resume) do not.
+   */
+  private savedTdp: number | null = null;
+  /**
+   * The user's persisted CPU boost preference; `null` (never set) means the
+   * policy default applies: boost OFF. Whatever this resolves to is
+   * re-asserted alongside every TDP apply (manual, per-game, AC transition,
+   * resume) and at startup. Two reasons: the sysfs knob resets to boost-on
+   * at every boot, and with boost on the CPU races to max clocks under any
+   * sustained load — regardless of governor/EPP — so package draw pins at
+   * the TDP limit instead of tracking the workload. See lib/cpu-boost-pref.ts.
+   */
+  private savedCpuBoost: boolean | null = null;
   private tdpReadSource: TdpReadSource = "estimated";
   private activeProfile: string | null = null;
   private trackedTdp: number | null = null;
@@ -307,6 +354,10 @@ export default class TdpControlBackend implements PluginBackend {
 
   // AC power monitoring
   private acPowerOnline: boolean | null = null;
+  /** Re-entrancy guard for refreshAcPower (poll timer + onResume can overlap). */
+  private refreshingAcPower = false;
+  /** So the no-Mains warning is logged once, not every 5s poll forever. */
+  private warnedNoMains = false;
   private acPowerPath: string | null = null;
 
   // Per-game TDP profile engine
@@ -324,7 +375,42 @@ export default class TdpControlBackend implements PluginBackend {
       this.detectCpuInfo(),
     ]);
 
-    // Apply device-specific ranges
+    // One-time repair of the issue-#230 seed, BEFORE the device is read so
+    // the corrected record is what loads. Runs at most once ever (persisted
+    // flag), so a battery max the user sets afterwards is never second-guessed.
+    // Safe here: detectDevice/detectCpuInfo above have populated the DMI
+    // fields matchDevice needs.
+    try {
+      const detected = matchDevice(this.dmiProductName, this.cpuVendor);
+      const migratedFrom = await migrateSeededBatteryMax({
+        pluginId: "tdp-control",
+        detectedBatteryMaxTdp: detected.batteryMaxTdp,
+      });
+      if (migratedFrom !== null) {
+        console.log(
+          `[tdp-control] custom device: battery max ${migratedFrom}W matched the auto-detected ` +
+            `${detected.name} default and sat below your own max, so it has been cleared ` +
+            `(issue #230). On battery you now get your Max TDP, capped at ${BATTERY_SAFE_MAX_WATTS}W. ` +
+            `Re-enter a battery max in the custom-device form if you did want ${migratedFrom}W — ` +
+            `it will be kept.`,
+        );
+      }
+    } catch (e) {
+      console.warn("[tdp-control] battery-max migration skipped:", e);
+    }
+
+    // Load the user's custom device (if any) BEFORE applying defaults so it
+    // takes precedence over DMI auto-detection.
+    this.customDevice = await readCustomDevice("tdp-control");
+
+    // Load the user's persisted manual TDP (restored to hardware below) and
+    // CPU boost preference (asserted below and with every TDP apply).
+    [this.savedTdp, this.savedCpuBoost] = await Promise.all([
+      readSavedTdp("tdp-control"),
+      readCpuBoostPref("tdp-control"),
+    ]);
+
+    // Apply device-specific ranges (custom device wins when present)
     this.applyDeviceDefaults();
 
     // Detect capabilities in parallel
@@ -351,7 +437,7 @@ export default class TdpControlBackend implements PluginBackend {
       this.tdpReadSource = initialReading.source;
     } else {
       // Fall back to silent profile value (conservative default)
-      this.currentTdp = this.profiles["Silent"];
+      this.currentTdp = this.profiles["Silent"] ?? 10;
       this.tdpReadSource = "estimated";
     }
     this.activeProfile = this.matchProfile(this.currentTdp);
@@ -366,7 +452,9 @@ export default class TdpControlBackend implements PluginBackend {
     this.profileEngine = createTdpProfileEngine({
       pluginId: "tdp-control",
       onApplyTdp: async (watts: number) => {
-        await this.setTdp(watts);
+        // Per-game applies are automatic — don't clobber the user's saved
+        // manual TDP with a game's profile value.
+        await this.applyTdp(watts);
       },
       onProfileChanged: (profile: TdpProfile | null, gameName: string) => {
         this.emit?.({
@@ -378,23 +466,48 @@ export default class TdpControlBackend implements PluginBackend {
           },
         });
       },
+      // The user's saved manual TDP is the authoritative "no game" value —
+      // the engine applies it on game exit / for games without a profile,
+      // ahead of its own stored default.
+      getNoGameTdp: () => this.savedTdp,
     });
     await this.profileEngine.loadProfiles();
     console.log("[tdp-control] Per-game TDP profile engine initialized");
 
-    // Apply the profile engine's default TDP on startup when we can't
-    // directly read the hardware (estimated/fallback) AND per-game
-    // profiles is enabled. Otherwise leave the user's manual TDP alone.
-    if (
-      this.tdpReadSource === "estimated" &&
-      this.method !== "none" &&
-      this.profileEngine.getPerGameEnabled()
-    ) {
-      const defaultTdp = this.profileEngine.getDefaultTdp();
-      console.log(
-        `[tdp-control] Applying default TDP ${defaultTdp}W (source was estimated, per-game enabled)`,
-      );
-      await this.setTdp(defaultTdp);
+    // Restore TDP on startup. Hardware limits reset to firmware defaults on
+    // reboot, so re-apply what the user left. Precedence:
+    //   - Per-game profiles enabled → the engine owns TDP; apply its default
+    //     when we can't read the hardware directly (existing behavior).
+    //   - Otherwise → restore the user's persisted manual TDP, if any.
+    if (this.method !== "none") {
+      // No game is running at startup, so the value to restore is the user's
+      // "no game" TDP. The saved manual TDP (set from the slider / home
+      // widget) is authoritative — it applies whether or not per-game
+      // profiles are enabled. A per-game profile still takes over later, when
+      // its game actually launches. The engine's stored default TDP is only a
+      // fallback for users who never set a manual value.
+      if (this.savedTdp !== null) {
+        console.log(
+          `[tdp-control] Restoring saved manual TDP ${this.savedTdp}W`,
+        );
+        await this.applyTdp(this.savedTdp);
+      } else if (
+        this.profileEngine.getPerGameEnabled() &&
+        this.tdpReadSource === "estimated"
+      ) {
+        const defaultTdp = this.profileEngine.getDefaultTdp();
+        console.log(
+          `[tdp-control] Applying default TDP ${defaultTdp}W (source was estimated, per-game enabled, no saved manual TDP)`,
+        );
+        await this.applyTdp(defaultTdp);
+      }
+    }
+
+    // Assert the CPU boost policy at startup even when no TDP restore ran
+    // above — the sysfs knob resets to boost-on at every boot, and with
+    // boost on, draw pins at the TDP limit instead of tracking the workload.
+    if (this.boostPolicyApplies()) {
+      await this.applyCpuBoostPolicy();
     }
 
     console.log(
@@ -426,13 +539,11 @@ export default class TdpControlBackend implements PluginBackend {
     const currentGovernor = await this.readCurrentGovernor();
 
     // Read additional state for new fields
-    const [gpuInfo, smtEnabled, cpuBoostEnabled, chargeLimitPercent] =
-      await Promise.all([
-        this.readGpuInfo(),
-        this.readSmtEnabled(),
-        this.readCpuBoostEnabled(),
-        this.readChargeLimit(),
-      ]);
+    const [gpuInfo, smtEnabled, cpuBoostEnabled] = await Promise.all([
+      this.readGpuInfo(),
+      this.readSmtEnabled(),
+      this.readCpuBoostEnabled(),
+    ]);
 
     return {
       currentTdp: this.currentTdp,
@@ -444,6 +555,10 @@ export default class TdpControlBackend implements PluginBackend {
       maxWatts: this.effectiveMaxWatts(),
       pluggedMaxWatts: this.maxWatts,
       batteryMaxWatts: this.batteryMaxWatts,
+      /** Global on-battery ceiling; see BATTERY_SAFE_MAX_WATTS. */
+      batterySafeMaxWatts: BATTERY_SAFE_MAX_WATTS,
+      /** True when being on battery lowers the ceiling right now. */
+      batteryLimited: this.batteryLimited(),
       platform: this.dmiProductName,
       deviceName: this.deviceName,
       method: this.method,
@@ -460,11 +575,12 @@ export default class TdpControlBackend implements PluginBackend {
       currentGovernor,
       supportsSmt: this.supportsSmt,
       supportsCpuBoost: this.supportsCpuBoost,
+      usingCustomDevice: this.customDevice !== null,
       gpuInfo,
       smtEnabled,
       cpuBoostEnabled,
+      cpuBoostSetting: this.desiredCpuBoost(),
       acPowerOnline: this.acPowerOnline,
-      chargeLimitPercent,
     };
   }
 
@@ -473,6 +589,42 @@ export default class TdpControlBackend implements PluginBackend {
   // -----------------------------------------------------------------------
 
   async setTdp(
+    watts: number,
+  ): Promise<{ success: boolean; error?: string }> {
+    const result = await this.applyTdp(watts);
+    // Persist the user's choice as the manual "no game" TDP so it survives a
+    // shutdown. Only this RPC path (the slider + power presets via
+    // applyProfile) persists; automatic applies go straight to applyTdp() and
+    // leave the saved value untouched.
+    //
+    // BUT don't overwrite it while a per-game profile is actively governing
+    // TDP (per-game enabled + a game running): in that state the slider is
+    // tuning THAT game's profile (the frontend routes it to setGameProfile),
+    // so persisting here would let an in-game tweak silently redefine the
+    // menu/default TDP that gets restored on game exit and reboot.
+    const state = this.profileEngine?.getCurrentState();
+    const gameGoverning =
+      (state?.perGameEnabled ?? false) && (state?.isGameRunning ?? false);
+    if (result.success && this.desiredTdp !== null && !gameGoverning) {
+      this.savedTdp = this.desiredTdp;
+      try {
+        await writeSavedTdp("tdp-control", this.desiredTdp);
+      } catch (e) {
+        // Persistence is best-effort — a failed disk write must not fail the
+        // TDP apply the user just requested (it's already on hardware).
+        console.error(`[tdp-control] Failed to persist TDP: ${e}`);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Apply a TDP to hardware WITHOUT persisting it as the user's saved value.
+   * This is the shared implementation behind the setTdp RPC and every
+   * automatic re-apply (per-game profiles, AC transitions, resume, device
+   * changes). The public setTdp() wraps this and persists on success.
+   */
+  private async applyTdp(
     watts: number,
   ): Promise<{ success: boolean; error?: string }> {
     watts = Math.round(watts);
@@ -510,6 +662,12 @@ export default class TdpControlBackend implements PluginBackend {
         await writeSysfs(PLATFORM_PROFILE_PATH, profileName);
         await this.detectPlatformProfile();
       }
+
+      // Re-assert the CPU boost policy with every TDP write, the way
+      // SimpleDeckyTDP applies its CPU profile with every TDP profile. The
+      // limit alone doesn't govern draw: with boost on, the CPU races to max
+      // clocks under any sustained load and consumes the whole envelope.
+      await this.applyCpuBoostPolicy();
 
       // Track the value we actually applied (clamped), not the raw request.
       this.trackedTdp = applied;
@@ -563,8 +721,6 @@ export default class TdpControlBackend implements PluginBackend {
 
   async getSystemInfo(): Promise<SystemInfo> {
     await this.detectPlatformProfile();
-    const supportsChargeLimit =
-      (await readFileText(CHARGE_LIMIT_PATH)) !== null;
     return {
       deviceName: this.deviceName,
       dmiProductName: this.dmiProductName,
@@ -583,8 +739,92 @@ export default class TdpControlBackend implements PluginBackend {
       ryzenadjCanRead: this.ryzenadjCanRead,
       gpuVendor: this.gpuVendor,
       supportsGpuControl: this.gpuCardPath !== null,
-      supportsChargeLimit,
     };
+  }
+
+  // -----------------------------------------------------------------------
+  // RPC: Custom device
+  // -----------------------------------------------------------------------
+
+  /** The user's custom device override, or null when auto-detecting. */
+  async getCustomDevice(): Promise<CustomDevice | null> {
+    return this.customDevice;
+  }
+
+  /**
+   * Save a user-defined device. Once saved it becomes the DEFAULT device the
+   * plugin uses (its TDP range + presets), overriding auto-detection. Only a
+   * single custom device is stored — saving again replaces it. To remove it,
+   * the user clears it via clearCustomDevice().
+   */
+  async setCustomDevice(
+    device: unknown,
+  ): Promise<{ success: boolean; error?: string }> {
+    const result = validateCustomDevice(device);
+    if (!result.ok) {
+      return { success: false, error: result.error };
+    }
+    try {
+      await writeCustomDevice("tdp-control", result.device);
+      this.customDevice = result.device;
+      this.applyDeviceDefaults();
+      await this.onDeviceConfigChanged();
+      console.log(
+        `[tdp-control] Custom device saved: ${result.device.name} (${result.device.minTdp}-${result.device.maxTdp}W)`,
+      );
+      return { success: true };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { success: false, error: msg };
+    }
+  }
+
+  /** Remove the custom device, reverting to auto-detection. */
+  async clearCustomDevice(): Promise<{ success: boolean; error?: string }> {
+    try {
+      await clearCustomDevice("tdp-control");
+      this.customDevice = null;
+      this.applyDeviceDefaults();
+      await this.onDeviceConfigChanged();
+      console.log("[tdp-control] Custom device cleared; reverting to auto-detection");
+      return { success: true };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { success: false, error: msg };
+    }
+  }
+
+  /**
+   * Re-apply state after the active device changed (custom saved or cleared):
+   * refresh the active-profile match, tell the UI the new range + presets,
+   * and re-clamp the standing TDP into the new range on hardware.
+   */
+  private async onDeviceConfigChanged(): Promise<void> {
+    this.activeProfile = this.matchProfile(this.currentTdp);
+    this.emit?.({
+      event: "deviceChanged",
+      data: {
+        deviceName: this.deviceName,
+        minWatts: this.minWatts,
+        maxWatts: this.effectiveMaxWatts(),
+        // Ship the ceiling trio TOGETHER. Sending maxWatts alone left the UI
+        // holding a mount-time pluggedMaxWatts/batteryLimited, which produced
+        // impossible copy after a device edit ("maximum is 45 W, plug in for
+        // up to 30 W") and could show the notice when nothing was limited.
+        pluggedMaxWatts: this.maxWatts,
+        batteryMaxWatts: this.batteryMaxWatts,
+        batteryLimited: this.batteryLimited(),
+        profiles: { ...this.profiles },
+        usingCustomDevice: this.customDevice !== null,
+      },
+    });
+    // Re-apply the standing intent through the new clamp so a value now out of
+    // range is corrected on hardware (applyTdp emits its own tdpChanged). This
+    // is an automatic re-clamp, not a fresh user choice, so it doesn't persist.
+    const intent = this.desiredTdp ?? this.currentTdp;
+    if (intent !== null && this.method !== "none") {
+      await this.applyTdp(intent);
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -811,6 +1051,16 @@ export default class TdpControlBackend implements PluginBackend {
       await writeSysfs(PLATFORM_PROFILE_PATH, profile);
       this.platformProfile = profile;
       console.log(`[tdp-control] Platform profile set to ${profile}`);
+      // The ACPI profile is a firmware power envelope set behind our back —
+      // this RPC is exposed on ANY device advertising platform_profile, not
+      // just those using it as the TDP method. Selecting "performance" on
+      // battery would otherwise re-open the envelope with the battery ceiling
+      // never consulted. Re-assert the standing intent through applyTdp so
+      // the clamp wins. No-op when method === "none".
+      const intent = this.desiredTdp ?? this.currentTdp;
+      if (intent !== null && this.method !== "none" && this.method !== "platform_profile") {
+        await this.applyTdp(intent);
+      }
       return { success: true };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -833,6 +1083,12 @@ export default class TdpControlBackend implements PluginBackend {
     }
     try {
       await writeSysfs(SMT_PATH, enable ? "on" : "off");
+      // SMT siblings re-onlined by an enable come back with fresh cpufreq
+      // policies at the kernel's default boost state (on) — re-assert the
+      // policy so half the cores don't run boosted until the next TDP apply.
+      if (this.boostPolicyApplies()) {
+        await this.applyCpuBoostPolicy();
+      }
       console.log(`[tdp-control] SMT set to ${enable ? "on" : "off"}`);
       return { success: true };
     } catch (e) {
@@ -855,25 +1111,77 @@ export default class TdpControlBackend implements PluginBackend {
       };
     }
     try {
-      // Intel no_turbo is inverted: 0 = turbo ON, 1 = turbo OFF
-      if (this.cpuBoostPath === INTEL_CPU_BOOST_PATH) {
-        await writeSysfs(this.cpuBoostPath, enable ? "0" : "1");
-      } else if (this.cpuBoostPath.includes("/policy")) {
-        // AMD per-CPU boost: write to each online CPU's policy
-        const cpus = await getOnlineCpus();
-        for (const cpu of cpus) {
-          const path = `/sys/devices/system/cpu/cpufreq/policy${cpu}/boost`;
-          await writeSysfs(path, enable ? "1" : "0");
-        }
-      } else {
-        // AMD legacy path
-        await writeSysfs(this.cpuBoostPath, enable ? "1" : "0");
+      await this.writeCpuBoost(enable);
+      // This RPC is the user's choice (the plugin's CPU Boost toggle), so it
+      // becomes the standing preference that every TDP apply re-asserts.
+      this.savedCpuBoost = enable;
+      try {
+        await writeCpuBoostPref({ pluginId: "tdp-control", enabled: enable });
+      } catch (e) {
+        // Persistence is best-effort — the state is already on hardware.
+        console.error(
+          `[tdp-control] Failed to persist CPU boost preference: ${e}`,
+        );
       }
       console.log(`[tdp-control] CPU boost set to ${enable ? "enabled" : "disabled"}`);
       return { success: true };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return { success: false, error: msg };
+    }
+  }
+
+  /** Write a boost state to hardware (path shape varies by driver). */
+  private async writeCpuBoost(enable: boolean): Promise<void> {
+    if (!this.cpuBoostPath) {
+      throw new Error("CPU boost path not available");
+    }
+    // Intel no_turbo is inverted: 0 = turbo ON, 1 = turbo OFF
+    if (this.cpuBoostPath === INTEL_CPU_BOOST_PATH) {
+      await writeSysfs(this.cpuBoostPath, enable ? "0" : "1");
+    } else if (this.cpuBoostPath.includes("/policy")) {
+      // AMD per-CPU boost: write to each online CPU's policy
+      const cpus = await getOnlineCpus();
+      for (const cpu of cpus) {
+        const path = `/sys/devices/system/cpu/cpufreq/policy${cpu}/boost`;
+        await writeSysfs(path, enable ? "1" : "0");
+      }
+    } else {
+      // AMD legacy path
+      await writeSysfs(this.cpuBoostPath, enable ? "1" : "0");
+    }
+  }
+
+  /**
+   * The boost state the plugin enforces: the user's persisted choice,
+   * defaulting to OFF (see savedCpuBoost / lib/cpu-boost-pref.ts).
+   */
+  private desiredCpuBoost(): boolean {
+    return this.savedCpuBoost ?? false;
+  }
+
+  /**
+   * Whether to assert the boost policy outside an explicit setCpuBoost
+   * call: always when this plugin actually controls TDP; on devices with
+   * no TDP control only when the user explicitly chose a boost state. The
+   * default boost-off exists to keep draw tracking the workload under a
+   * TDP limit — silently capping a device we can't otherwise manage would
+   * be all cost, no benefit.
+   */
+  private boostPolicyApplies(): boolean {
+    return this.method !== "none" || this.savedCpuBoost !== null;
+  }
+
+  /**
+   * Re-assert the desired boost state on hardware. Best-effort: a failed
+   * boost write must never fail the TDP apply it rides along with.
+   */
+  private async applyCpuBoostPolicy(): Promise<void> {
+    if (!this.supportsCpuBoost || !this.cpuBoostPath) return;
+    try {
+      await this.writeCpuBoost(this.desiredCpuBoost());
+    } catch (e) {
+      console.error(`[tdp-control] Failed to apply CPU boost policy: ${e}`);
     }
   }
 
@@ -953,41 +1261,6 @@ export default class TdpControlBackend implements PluginBackend {
   }
 
   // -----------------------------------------------------------------------
-  // RPC: Battery charge limit
-  // -----------------------------------------------------------------------
-
-  async getChargeLimit(): Promise<{ percent: number | null }> {
-    const val = await this.readChargeLimit();
-    return { percent: val };
-  }
-
-  async setChargeLimit(
-    percent: number,
-  ): Promise<{ success: boolean; error?: string }> {
-    if (percent < 20 || percent > 100) {
-      return {
-        success: false,
-        error: "Charge limit must be between 20 and 100 percent",
-      };
-    }
-    const exists = (await readFileText(CHARGE_LIMIT_PATH)) !== null;
-    if (!exists) {
-      return {
-        success: false,
-        error: "Charge limit control is not supported on this system",
-      };
-    }
-    try {
-      await writeSysfs(CHARGE_LIMIT_PATH, String(percent));
-      console.log(`[tdp-control] Charge limit set to ${percent}%`);
-      return { success: true };
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return { success: false, error: msg };
-    }
-  }
-
-  // -----------------------------------------------------------------------
   // RPC: Suspend/Resume handlers
   // -----------------------------------------------------------------------
 
@@ -1014,10 +1287,27 @@ export default class TdpControlBackend implements PluginBackend {
       // Wait for WMI paths to become writable (Legion Go needs ~2s)
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
-      // Re-apply current TDP profile
-      if (this.trackedTdp !== null) {
-        await this.setTdp(this.trackedTdp);
-        console.log(`[tdp-control] Resume: re-applied TDP ${this.trackedTdp}W`);
+      // Re-read AC BEFORE re-applying. The user can unplug while suspended;
+      // applying with the pre-suspend state would write the plugged ceiling
+      // (e.g. 80W) onto a device now running on battery, uncorrected until the
+      // next 5s poll.
+      const reappliedByAcChange = await this.refreshAcPower();
+
+      // Re-apply the standing INTENT, not trackedTdp. trackedTdp is the
+      // already-clamped figure, and applyTdp rewrites desiredTdp from what it
+      // is given — so resuming with it collapsed an 80W intent to the 55W
+      // battery clamp permanently, and plugging back in never sprang up
+      // again. Skip entirely when refreshAcPower already re-applied on a
+      // transition: two SMU writes for one resume, and the second would undo
+      // the first's intent.
+      const resumeIntent = this.desiredTdp ?? this.trackedTdp;
+      if (!reappliedByAcChange && resumeIntent !== null) {
+        await this.applyTdp(resumeIntent);
+        console.log(`[tdp-control] Resume: re-applied TDP ${resumeIntent}W`);
+      } else if (resumeIntent === null && this.boostPolicyApplies()) {
+        // No TDP to restore, but firmware may still reset the boost knob
+        // across suspend — re-assert the policy on its own.
+        await this.applyCpuBoostPolicy();
       }
       return { success: true };
     } catch (e) {
@@ -1049,12 +1339,23 @@ export default class TdpControlBackend implements PluginBackend {
 
     // Model name
     const modelMatch = cpuinfo.match(/model name\s*:\s*(.*)/);
-    if (modelMatch) {
+    if (modelMatch?.[1]) {
       this.cpuModel = modelMatch[1].trim();
     }
   }
 
   private applyDeviceDefaults(): void {
+    // A user-defined custom device is the default when present — it overrides
+    // whatever DMI matching would have picked.
+    if (this.customDevice) {
+      const d = this.customDevice;
+      this.deviceName = d.name;
+      this.minWatts = d.minTdp;
+      this.maxWatts = d.maxTdp;
+      this.batteryMaxWatts = d.batteryMaxTdp;
+      this.profiles = { ...d.profiles };
+      return;
+    }
     const device = matchDevice(this.dmiProductName, this.cpuVendor);
     this.deviceName = device.name;
     this.minWatts = device.minTdp;
@@ -1065,11 +1366,39 @@ export default class TdpControlBackend implements PluginBackend {
 
   /**
    * The TDP ceiling that currently applies, given power state. On battery we
-   * cap lower to protect runtime/thermals; plugged in (or when AC state is
-   * unknown — don't over-restrict) we allow the device's full max.
+   * cap lower to protect runtime/thermals — and never above
+   * BATTERY_SAFE_MAX_WATTS, whatever the device data or a user override says.
+   * Plugged in (or when AC state is unknown — don't over-restrict) we allow
+   * the device's full max.
+   *
+   * applyTdp() clamps the hardware write to this, so the ceiling is enforced
+   * for every path that sets a wattage (slider, per-game profiles, AC
+   * transitions, resume), not just the slider's max attribute.
+   *
+   * CAVEAT — `platform_profile` devices: that method has no wattage, only
+   * low-power/balanced/performance. wattsToPlatformProfile() maps the clamped
+   * value to a name, so a clamped 55 W on an 80 W device still selects
+   * "performance", i.e. the firmware's full envelope. The ceiling is
+   * arithmetically applied but physically coarse there. Inherent to the
+   * method, not something this clamp can fix.
    */
   private effectiveMaxWatts(): number {
-    return this.acPowerOnline === false ? this.batteryMaxWatts : this.maxWatts;
+    return effectiveMaxWatts({
+      acOnline: this.acPowerOnline,
+      maxTdp: this.maxWatts,
+      batteryMaxTdp: this.batteryMaxWatts,
+    });
+  }
+
+  /** True when being on battery lowers the ceiling at all — device figure or
+   *  global cap, we don't distinguish. The UI shows an informational notice
+   *  so a slider stopping short of the user's own Max TDP is never a mystery. */
+  private batteryLimited(): boolean {
+    return isBatteryLimited({
+      acOnline: this.acPowerOnline,
+      maxTdp: this.maxWatts,
+      batteryMaxTdp: this.batteryMaxWatts,
+    });
   }
 
   private async detectTdpMethod(): Promise<void> {
@@ -1323,6 +1652,16 @@ export default class TdpControlBackend implements PluginBackend {
     }
     this.acPowerPath = null;
     this.acPowerOnline = null;
+    // Safety-relevant: with no Mains node we can never know we're on battery,
+    // so the on-battery ceiling never applies. Say so rather than failing open
+    // in silence — but ONCE. Discovery is retried every 5s poll, so an
+    // unconditional warn here is ~17k journal lines a day on an affected host.
+    if (!this.warnedNoMains) {
+      this.warnedNoMains = true;
+      console.warn(
+        "[tdp-control] no Mains power supply found — on-battery TDP ceiling cannot be applied (retrying quietly)",
+      );
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -1366,7 +1705,7 @@ export default class TdpControlBackend implements PluginBackend {
           const rangeMatch = odText.match(
             /OD_RANGE:\s*\n\s*SCLK:\s*(\d+)Mhz\s+(\d+)Mhz/,
           );
-          if (rangeMatch) {
+          if (rangeMatch?.[1] && rangeMatch[2]) {
             minFreq = parseInt(rangeMatch[1], 10);
             maxFreq = parseInt(rangeMatch[2], 10);
           }
@@ -1399,13 +1738,6 @@ export default class TdpControlBackend implements PluginBackend {
       // GPU read failed
     }
     return null;
-  }
-
-  private async readChargeLimit(): Promise<number | null> {
-    const text = await readFileText(CHARGE_LIMIT_PATH);
-    if (text === null) return null;
-    const val = parseInt(text, 10);
-    return isNaN(val) ? null : val;
   }
 
   // -----------------------------------------------------------------------
@@ -1463,7 +1795,7 @@ export default class TdpControlBackend implements PluginBackend {
   private async readTdpViaRyzenadj(): Promise<number | null> {
     try {
       const { exitCode, stdout } = await runCommand([
-        "ryzenadj",
+        this.ryzenadjPath || "ryzenadj",
         "--info",
       ]);
       if (exitCode !== 0) return null;
@@ -1471,7 +1803,7 @@ export default class TdpControlBackend implements PluginBackend {
       for (const line of stdout.split("\n")) {
         if (line.includes("STAPM LIMIT")) {
           const match = line.match(/([\d.]+)/);
-          if (match) return Math.round(parseFloat(match[1]));
+          if (match?.[1]) return Math.round(parseFloat(match[1]));
         }
       }
     } catch {
@@ -1562,8 +1894,78 @@ export default class TdpControlBackend implements PluginBackend {
   // Polling
   // -----------------------------------------------------------------------
 
+  /**
+   * Re-read AC state and, on a transition, re-clamp the standing TDP intent.
+   *
+   * Split out of pollTdp so it can run BEFORE the null-reading early return —
+   * the on-battery ceiling is a safety control and must not depend on whether
+   * the TDP read path happens to work on this device. Also retries Mains
+   * discovery, since a null acPowerPath at boot would otherwise disable the
+   * ceiling permanently.
+   */
+  private async refreshAcPower(): Promise<boolean> {
+    // Re-entrancy guard: pollTdp's interval doesn't await its callback, and
+    // onResume calls this alongside a live timer. Two overlapping calls could
+    // both capture a stale prevAcPower and each emit + re-apply.
+    if (this.refreshingAcPower) return false;
+    this.refreshingAcPower = true;
+    try {
+      return await this.refreshAcPowerInner();
+    } finally {
+      this.refreshingAcPower = false;
+    }
+  }
+
+  /** @returns true if a transition was detected AND the TDP was re-applied. */
+  private async refreshAcPowerInner(): Promise<boolean> {
+    if (this.acPowerPath === null) await this.detectAcPower();
+    if (!this.acPowerPath) return false;
+
+    const prevAcPower = this.acPowerOnline;
+    const text = await readFileText(this.acPowerPath);
+    if (text === null) {
+      // The node vanished (hot-unplugged dock). Force re-discovery next tick
+      // rather than holding a dead path forever.
+      this.acPowerPath = null;
+      return false;
+    }
+
+    this.acPowerOnline = text.trim() === "1";
+    if (this.acPowerOnline === prevAcPower) return false;
+
+    // Re-apply the standing intent through the (now power-state-aware) clamp:
+    // unplugging throttles a 70W request down to the battery cap; plugging
+    // back in springs it up to 70W again. applyTdp emits its own tdpChanged.
+    const intent = this.desiredTdp ?? this.currentTdp;
+    let reapplied = false;
+    if (intent !== null && this.method !== "none") {
+      await this.applyTdp(intent);
+      reapplied = true;
+    }
+    this.emit?.({
+      event: "acPowerChanged",
+      data: {
+        online: this.acPowerOnline,
+        maxWatts: this.effectiveMaxWatts(),
+        pluggedMaxWatts: this.maxWatts,
+        batteryLimited: this.batteryLimited(),
+      },
+    });
+    console.log(
+      `[tdp-control] AC power changed: ${this.acPowerOnline ? "online" : "offline"}`,
+    );
+    return reapplied;
+  }
+
   private async pollTdp(): Promise<void> {
     try {
+      // AC state FIRST. It used to be refreshed further down, after an early
+      // return on a null TDP reading — so on any device where readCurrentTdp()
+      // can't read (method "none", or ryzenadj-can't-read with no
+      // platform_profile), the on-battery ceiling froze at its boot value
+      // forever. A safety refresh must not be gated on an unrelated read.
+      await this.refreshAcPower();
+
       const reading = await this.readCurrentTdp();
       if (reading === null) return;
 
@@ -1595,34 +1997,6 @@ export default class TdpControlBackend implements PluginBackend {
         });
       }
 
-      // Check AC power status change
-      if (this.acPowerPath) {
-        const prevAcPower = this.acPowerOnline;
-        const text = await readFileText(this.acPowerPath);
-        if (text !== null) {
-          this.acPowerOnline = text.trim() === "1";
-          if (this.acPowerOnline !== prevAcPower) {
-            // Re-apply the standing intent through the (now power-state-aware)
-            // clamp: unplugging throttles a 70W request down to the battery
-            // cap; plugging back in springs it up to 70W again. setTdp emits
-            // its own tdpChanged with the applied value.
-            const intent = this.desiredTdp ?? this.currentTdp;
-            if (intent !== null && this.method !== "none") {
-              await this.setTdp(intent);
-            }
-            this.emit?.({
-              event: "acPowerChanged",
-              data: {
-                online: this.acPowerOnline,
-                maxWatts: this.effectiveMaxWatts(),
-              },
-            });
-            console.log(
-              `[tdp-control] AC power changed: ${this.acPowerOnline ? "online" : "offline"}`,
-            );
-          }
-        }
-      }
     } catch (e) {
       console.error(`[tdp-control] Poll error: ${e}`);
     }

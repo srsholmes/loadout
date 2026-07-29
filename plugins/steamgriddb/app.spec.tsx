@@ -176,7 +176,7 @@ describe("steamgriddb plugin", () => {
     );
     await waitFor(() => {
       const opt = Array.from(
-        headerSlot.querySelectorAll('[role="option"]'),
+        document.querySelectorAll('[role="option"]'),
       ).find((o) => o.textContent?.includes("All games"));
       expect(opt).toBeTruthy();
       fireEvent.click(opt as HTMLElement);

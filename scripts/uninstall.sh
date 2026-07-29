@@ -64,14 +64,26 @@ error() {
     printf "${RED}[ERROR]${NC} %s\n" "$1"
 }
 
+# Where prompts read from. Under the documented `curl … | sh` uninstall,
+# stdin is the script text itself, so `[ -t 0 ]` is false and a bare
+# `read` would eat the script rather than the user's answer — the
+# plugin-data and config prompts below could never be answered. Read the
+# controlling terminal instead. Empty only when there's genuinely no
+# terminal (CI, systemd), where prompts fall back to the default (no).
+PROMPT_TTY=""
+if { true < /dev/tty; } 2>/dev/null; then
+    PROMPT_TTY=/dev/tty
+fi
+
 # Prompt user for yes/no (defaults to no)
 prompt_yn() {
-    if [ ! -t 0 ]; then
-        # Non-interactive: use default (no)
+    if [ -z "$PROMPT_TTY" ]; then
+        # No terminal to ask on: use default (no)
         return 1
     fi
-    printf "%s " "$1"
-    read -r answer
+    printf "%s " "$1" > "$PROMPT_TTY"
+    # EOF on the terminal is treated as the default rather than hanging.
+    read -r answer < "$PROMPT_TTY" || answer=""
     case "$answer" in
         [Yy]*) return 0 ;;
         *) return 1 ;;

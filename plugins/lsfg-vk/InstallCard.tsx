@@ -109,7 +109,7 @@ export function InstallCard({
             Layer version
           </div>
           <div style={{ minWidth: 180 }}>
-            <Select
+            <Select<LayerVersion>
               value={install.layerVersion}
               options={LAYER_VERSION_OPTIONS.map((o) => ({
                 value: o.value,
