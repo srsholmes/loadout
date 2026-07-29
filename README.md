@@ -366,7 +366,9 @@ may depend on it.
 If you uninstalled with an older version and your wake button is still bound
 (on an OXP Apex, the keyboard button stops opening the on-screen keyboard),
 re-run the command above — it's safe to run with Loadout already gone, and it
-will clean up the leftover mapping.
+will clean up the leftover mapping. If it reports nothing to revert and the
+button is still wrong, reboot: the mapping only lives in InputPlumber's running
+state, so it can't survive one.
 
 ## Thanks & acknowledgements
 
