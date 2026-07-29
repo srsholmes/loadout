@@ -20,6 +20,41 @@ CEF's DevTools live on `http://localhost:9222` in dev (baked in via
 `electrobun.config.ts` → `build.linux.chromiumFlags`). Attach Chromium
 or use CDP directly.
 
+## Internationalization (i18n)
+
+Runtime-switchable translations are driven by a single shared i18next
+instance that lives in `@loadout/ui` (`packages/ui/src/i18n.ts`). Because
+plugin bundles resolve `@loadout/ui` to the shell's `__LOADOUT_SDK`
+global, the shell and every plugin share that one instance — calling
+`setLanguage(code)` re-renders the whole tree, no reload.
+
+- **Language codes** are lowercase BCP-47-ish (`en-gb`, `zh-cn`) and match
+  the translation filenames. English (`en-gb`) is the source + fallback.
+  Supported languages: `SUPPORTED_LANGUAGES` in `packages/ui/src/i18n.ts`.
+- **Shell strings** live under the `app` namespace in
+  `apps/loadout-overlay/src/overlay/i18n/<code>.json` (statically bundled).
+  Use `const { t } = useTranslation("app")`.
+- **Plugin strings**: each plugin ships an `i18n/` folder with one
+  `<code>.json` per language (flat `key: "value"` pairs — same schema for
+  every plugin). The plugin id is its i18next namespace. In `app.tsx`:
+
+  ```tsx
+  import { usePluginTranslation } from "@loadout/ui";
+  const { t } = usePluginTranslation("my-plugin-id");
+  <span>{t("some_key")}</span>
+  ```
+
+  Files are served by the loader at `/plugins/<id>/i18n/<code>.json` and
+  lazy-loaded on first use; missing keys fall back to English.
+- **Detection / override**: the active language is persisted in user
+  config under `language`. It's detected once at first run (host OS locale
+  → `navigator.language` → English) in
+  `apps/loadout-overlay/src/overlay/lib/i18n-setup.ts`, and the user can
+  override it in Settings → General → Language.
+
+When adding a new plugin, ship at least `i18n/en-gb.json` and wrap visible
+strings in `t()`. `battery-tracker` is the reference implementation.
+
 ## Skill routing
 
 When the user's request matches an available skill, ALWAYS invoke it using the Skill

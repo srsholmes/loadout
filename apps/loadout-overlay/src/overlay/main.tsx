@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { applyTheme } from "./components/Settings";
 import { getConfigValue, loadUserConfig } from "./lib/userConfig";
+import { seedOverlayI18n, initOverlayI18n } from "./lib/i18n-setup";
 import { initBackend } from "./lib/backend";
 import { runStartupInits } from "./lib/pluginInit";
 import { ensureConnected, subscribe } from "@loadout/ui/ws-client";
@@ -14,6 +15,11 @@ import { ensureConnected, subscribe } from "@loadout/ui/ws-client";
 // localStorage mirror at module load — so this is instant on any boot
 // after the first.
 applyTheme(getConfigValue<string>("theme", "dark"));
+
+// Seed i18n from the persisted language (mirror-cached) before first
+// render so the UI doesn't flash untranslated keys. Reconciled with the
+// authoritative on-disk config + first-run detection in boot().
+seedOverlayI18n();
 
 const root = createRoot(document.getElementById("root")!);
 
@@ -33,7 +39,12 @@ async function boot() {
     // Pull user config off disk once the backend is reachable and
     // re-apply the theme in case it changed since the last boot.
     loadUserConfig()
-      .then(() => applyTheme(getConfigValue<string>("theme", "dark")))
+      .then(() => {
+        applyTheme(getConfigValue<string>("theme", "dark"));
+        // Reconcile language with the on-disk config and run first-run
+        // OS-locale detection (persists the default if unset).
+        return initOverlayI18n();
+      })
       .catch((err) => console.warn("[main] loadUserConfig failed:", err));
     subscribe({
       plugin: "__system",
