@@ -284,6 +284,23 @@ main() {
     # without a session (SSH without a pty, a wrapper, `sudo sh`) — under
     # `set -e` a bare daemon-reload would abort the whole uninstall there.
     systemctl --user daemon-reload || true
+
+    # Fallback for when the unit could not be stopped through systemd — no user
+    # bus to talk to (SSH without a pty, `sudo sh`), so the `is-active` check
+    # above fails and the stop branch is skipped entirely. A surviving overlay
+    # process keeps its exclusive EVIOCGRAB on external controllers, so pads
+    # look dead in Steam until the user logs out, and the tree gets deleted from
+    # under it further down. Matching on the absolute install directory keeps
+    # this narrow — nothing else has that path in its command line.
+    if command -v pgrep >/dev/null 2>&1 && pgrep -f "$OVERLAY_INSTALL_DIR" >/dev/null 2>&1; then
+        info "An overlay process is still running — stopping it so it releases the controller..."
+        pkill -TERM -f "$OVERLAY_INSTALL_DIR" 2>/dev/null || true
+        # A moment to release the grab and exit cleanly, then insist.
+        sleep 1
+        if pgrep -f "$OVERLAY_INSTALL_DIR" >/dev/null 2>&1; then
+            pkill -KILL -f "$OVERLAY_INSTALL_DIR" 2>/dev/null || true
+        fi
+    fi
     success "Overlay user service removed."
 
     # --- Backend (root system service): stop, disable, remove (needs sudo) ---
