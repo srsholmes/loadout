@@ -136,11 +136,20 @@ as_root() {
 revert_inputplumber() {
     ip_found=0
     ip_had_mapping=0
+    # Whether any of what we found actually involves InputPlumber. The Deck
+    # hidraw rule does NOT: since #87 the Deck wake button is a native hidraw
+    # watcher and SteamOS ships InputPlumber disabled or absent, so finding
+    # only that rule must not make us talk about InputPlumber at all.
+    ip_uses_ip=0
     if [ -e "$IP_ETC_DIR" ]; then
         ip_found=1
         ip_had_mapping=1
+        ip_uses_ip=1
     fi
-    if [ -f "$IP_UACCESS_RULE" ]; then ip_found=1; fi
+    if [ -f "$IP_UACCESS_RULE" ]; then
+        ip_found=1
+        ip_uses_ip=1
+    fi
     if [ -f "$IP_DECK_HIDRAW_RULE" ]; then ip_found=1; fi
     # Only claim the Deck override if it's ours — the path is a general
     # InputPlumber override location the user may have authored themselves.
@@ -148,18 +157,27 @@ revert_inputplumber() {
     if [ -f "$IP_DECK_OVERRIDE" ] && grep -q "$IP_MARKER" "$IP_DECK_OVERRIDE" 2>/dev/null; then
         ip_found=1
         ip_had_mapping=1
+        ip_uses_ip=1
         ip_deck_override=1
     fi
 
     if [ "$ip_found" -eq 0 ]; then
-        info "No InputPlumber changes to revert."
+        info "No wake-button changes to revert."
         return 0
     fi
 
-    info "Reverting the InputPlumber wake-button mapping (needs sudo)..."
-    info "InputPlumber itself is left installed and enabled."
+    info "Reverting Loadout's wake-button setup (needs sudo)..."
+    if [ "$ip_uses_ip" -eq 1 ]; then
+        info "InputPlumber itself is left installed and enabled."
+    fi
 
-    ip_removed_rule=0
+    # Tracked separately because the two rules need different udev triggers to
+    # take effect without a replug — mirroring the install side
+    # (wake-trigger.ts ensureUaccessRule / wake-trigger-deck.ts
+    # ensureDeckHidrawUaccess). Without the trigger the ACLs Loadout granted
+    # stay granted until the next reboot.
+    ip_removed_input_rule=0
+    ip_removed_hidraw_rule=0
     if [ -e "$IP_ETC_DIR" ]; then
         as_root rm -rf "$IP_ETC_DIR" || warn "Could not remove $IP_ETC_DIR"
         # Drop the parent only when empty — never blind-delete /etc/loadout,
@@ -167,19 +185,25 @@ revert_inputplumber() {
         as_root rmdir "$IP_ETC_PARENT" 2>/dev/null || true
     fi
     if [ -f "$IP_UACCESS_RULE" ]; then
-        as_root rm -f "$IP_UACCESS_RULE" && ip_removed_rule=1 \
+        as_root rm -f "$IP_UACCESS_RULE" && ip_removed_input_rule=1 \
             || warn "Could not remove $IP_UACCESS_RULE"
     fi
     if [ -f "$IP_DECK_HIDRAW_RULE" ]; then
-        as_root rm -f "$IP_DECK_HIDRAW_RULE" && ip_removed_rule=1 \
+        as_root rm -f "$IP_DECK_HIDRAW_RULE" && ip_removed_hidraw_rule=1 \
             || warn "Could not remove $IP_DECK_HIDRAW_RULE"
     fi
     if [ "$ip_deck_override" -eq 1 ]; then
         as_root rm -f "$IP_DECK_OVERRIDE" \
             || warn "Could not remove $IP_DECK_OVERRIDE"
     fi
-    if [ "$ip_removed_rule" -eq 1 ]; then
+    if [ "$ip_removed_input_rule" -eq 1 ] || [ "$ip_removed_hidraw_rule" -eq 1 ]; then
         as_root udevadm control --reload 2>/dev/null || true
+    fi
+    if [ "$ip_removed_input_rule" -eq 1 ]; then
+        as_root udevadm trigger --subsystem-match=input 2>/dev/null || true
+    fi
+    if [ "$ip_removed_hidraw_rule" -eq 1 ]; then
+        as_root udevadm trigger --subsystem-match=hidraw --action=change 2>/dev/null || true
     fi
 
     # The profile lives in InputPlumber's runtime state, loaded over DBus —
@@ -196,7 +220,7 @@ revert_inputplumber() {
             warn "Could not restart InputPlumber — reboot to finish reverting the button."
         fi
     else
-        success "InputPlumber wake-button files removed."
+        success "Wake-button files removed."
     fi
 }
 
@@ -216,16 +240,26 @@ main() {
     rm -f "$OVERLAY_SERVICE_FILE"
     # Drop the obsolete per-user backend unit if a prior install left one.
     rm -f "$SERVICE_FILE"
-    systemctl --user daemon-reload
+    # `|| true` because there's no user bus to talk to when the script runs
+    # without a session (SSH without a pty, a wrapper, `sudo sh`) — under
+    # `set -e` a bare daemon-reload would abort the whole uninstall there.
+    systemctl --user daemon-reload || true
     success "Overlay user service removed."
 
     # --- Backend (root system service): stop, disable, remove (needs sudo) ---
+    # Both privileged steps warn instead of aborting: a declined or mistyped
+    # sudo password must not kill the script, because everything below —
+    # including the wake-button revert, which is the whole point of #234 —
+    # would silently never run.
     if systemctl is-active loadout >/dev/null 2>&1 || [ -f "$SYSTEM_SERVICE_FILE" ]; then
         info "Removing the loadout system service (needs sudo)..."
         sudo systemctl disable --now loadout 2>/dev/null || true
-        sudo rm -f "$SYSTEM_SERVICE_FILE"
-        sudo systemctl daemon-reload
-        success "Backend system service removed."
+        if sudo rm -f "$SYSTEM_SERVICE_FILE"; then
+            sudo systemctl daemon-reload || warn "systemctl daemon-reload failed."
+            success "Backend system service removed."
+        else
+            warn "Could not remove $SYSTEM_SERVICE_FILE — re-run with sudo available."
+        fi
     else
         info "Backend system service not installed."
     fi
