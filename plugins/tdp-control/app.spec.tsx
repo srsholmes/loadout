@@ -310,13 +310,17 @@ describe("on-battery TDP notice", () => {
     return container;
   }
 
-  it("shows the notice, naming both the battery and plugged ceilings", async () => {
+  it("names the battery ceiling first and the plugged one second", async () => {
     const container = await mountWith(onBattery);
     await waitFor(() => {
       expect(container.textContent).toContain("On battery");
     });
-    expect(container.textContent).toContain("25 W");
-    expect(container.textContent).toContain("30 W");
+    // Assert against the ALERT, not the container: the System card also
+    // renders "25 W" in its TDP-range row, so a container-wide toContain
+    // passed even with the two numbers swapped.
+    const alertText = container.querySelector('[role="alert"]')?.textContent ?? "";
+    expect(alertText).toContain("maximum is 25 W");
+    expect(alertText).toContain("up to 30 W");
   });
 
   it("is informational, not a warning", async () => {
@@ -361,13 +365,94 @@ describe("on-battery TDP notice", () => {
   });
 
   it("does not show when the battery ceiling equals the plugged one", async () => {
-    // Steam Deck case: nothing is reduced, so claiming otherwise would be wrong.
-    const container = await mountWith({ ...onBattery, batteryLimited: false });
+    // Steam Deck case: 15 W either way, so nothing is reduced and claiming
+    // otherwise would be wrong. Fixture must actually have equal ceilings —
+    // it previously reused the 25/30 fixture, so it tested nothing the
+    // "does not show on AC" case didn't already cover.
+    const container = await mountWith({
+      ...onBattery,
+      maxWatts: 15,
+      pluggedMaxWatts: 15,
+      batteryMaxWatts: 15,
+      batteryLimited: false,
+    });
     expect(container.textContent).not.toContain("On battery");
   });
 
   it("does not show on AC", async () => {
     const container = await mountWith({ ...mockTdpInfo, batteryLimited: false });
     expect(container.textContent).not.toContain("On battery");
+  });
+
+  it("stays dismissed when the ceilings are unchanged", async () => {
+    const container = await mountWith(onBattery);
+    await waitFor(() => expect(container.textContent).toContain("On battery"));
+    fireEvent.click(
+      container.querySelector(
+        '[aria-label="Dismiss battery TDP notice"]',
+      ) as HTMLElement,
+    );
+    await waitFor(() =>
+      expect(container.textContent).not.toContain("On battery"),
+    );
+    // Same ceilings => same token => the dismissal still applies. Re-emitting
+    // must not nag.
+    eventHandlers.get("acPowerChanged")?.({
+      online: false,
+      maxWatts: 25,
+      batteryLimited: true,
+    });
+    await waitFor(() => expect(container.textContent).toContain("25W"));
+    expect(container.textContent).not.toContain("On battery");
+  });
+
+  it("returns after dismissal once the ceilings actually change", async () => {
+    const container = await mountWith(onBattery);
+    await waitFor(() => expect(container.textContent).toContain("On battery"));
+    fireEvent.click(
+      container.querySelector(
+        '[aria-label="Dismiss battery TDP notice"]',
+      ) as HTMLElement,
+    );
+    await waitFor(() =>
+      expect(container.textContent).not.toContain("On battery"),
+    );
+    // A device edit mints a new token, which no dismissal covers.
+    eventHandlers.get("deviceChanged")?.({
+      deviceName: "Custom",
+      minWatts: 5,
+      maxWatts: 55,
+      pluggedMaxWatts: 80,
+      batteryMaxWatts: 80,
+      batteryLimited: true,
+      profiles: { silent: 10, balanced: 30, performance: 55 },
+      usingCustomDevice: true,
+    });
+    await waitFor(() => expect(container.textContent).toContain("On battery"));
+    const alertText =
+      container.querySelector('[role="alert"]')?.textContent ?? "";
+    expect(alertText).toContain("maximum is 55 W");
+    expect(alertText).toContain("up to 80 W");
+  });
+
+  it("keeps the plugged ceiling in step on deviceChanged", async () => {
+    // Regression: deviceChanged used to carry only maxWatts, so the notice
+    // rendered a mount-time pluggedMaxWatts and could claim a battery ceiling
+    // ABOVE the plugged one ("maximum is 45 W. Plug in for up to 30 W").
+    const container = await mountWith(onBattery);
+    await waitFor(() => expect(container.textContent).toContain("On battery"));
+    eventHandlers.get("deviceChanged")?.({
+      deviceName: "Custom",
+      minWatts: 5,
+      maxWatts: 45,
+      pluggedMaxWatts: 45,
+      batteryMaxWatts: 45,
+      batteryLimited: false,
+      profiles: { silent: 10, balanced: 25, performance: 45 },
+      usingCustomDevice: true,
+    });
+    await waitFor(() =>
+      expect(container.textContent).not.toContain("On battery"),
+    );
   });
 });

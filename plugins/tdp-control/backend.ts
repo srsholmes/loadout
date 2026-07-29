@@ -778,6 +778,13 @@ export default class TdpControlBackend implements PluginBackend {
         deviceName: this.deviceName,
         minWatts: this.minWatts,
         maxWatts: this.effectiveMaxWatts(),
+        // Ship the ceiling trio TOGETHER. Sending maxWatts alone left the UI
+        // holding a mount-time pluggedMaxWatts/batteryLimited, which produced
+        // impossible copy after a device edit ("maximum is 45 W, plug in for
+        // up to 30 W") and could show the notice when nothing was limited.
+        pluggedMaxWatts: this.maxWatts,
+        batteryMaxWatts: this.batteryMaxWatts,
+        batteryLimited: this.batteryLimited(),
         profiles: { ...this.profiles },
         usingCustomDevice: this.customDevice !== null,
       },
@@ -1015,6 +1022,16 @@ export default class TdpControlBackend implements PluginBackend {
       await writeSysfs(PLATFORM_PROFILE_PATH, profile);
       this.platformProfile = profile;
       console.log(`[tdp-control] Platform profile set to ${profile}`);
+      // The ACPI profile is a firmware power envelope set behind our back —
+      // this RPC is exposed on ANY device advertising platform_profile, not
+      // just those using it as the TDP method. Selecting "performance" on
+      // battery would otherwise re-open the envelope with the battery ceiling
+      // never consulted. Re-assert the standing intent through applyTdp so
+      // the clamp wins. No-op when method === "none".
+      const intent = this.desiredTdp ?? this.currentTdp;
+      if (intent !== null && this.method !== "none" && this.method !== "platform_profile") {
+        await this.applyTdp(intent);
+      }
       return { success: true };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -1241,6 +1258,12 @@ export default class TdpControlBackend implements PluginBackend {
       // Wait for WMI paths to become writable (Legion Go needs ~2s)
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
+      // Re-read AC BEFORE re-applying. The user can unplug while suspended;
+      // applying with the pre-suspend state would write the plugged ceiling
+      // (e.g. 80W) onto a device now running on battery, uncorrected until the
+      // next 5s poll.
+      await this.refreshAcPower();
+
       // Re-apply current TDP profile
       if (this.trackedTdp !== null) {
         await this.applyTdp(this.trackedTdp);
@@ -1285,6 +1308,37 @@ export default class TdpControlBackend implements PluginBackend {
     }
   }
 
+  /**
+   * Heal a custom device carrying the issue-#230 seed.
+   *
+   * Making the field optional only helps devices saved AFTER this change: the
+   * field was required from the first release of custom devices, and the form
+   * pre-filled it from the AUTO-DETECTED device — so every existing custom
+   * device on disk has an explicit value, and any user who raised Max TDP
+   * without noticing that field is still capped by it.
+   *
+   * The fingerprint of the bug is exact: the stored battery figure is BELOW
+   * the user's own Max TDP, and equals the detected device's battery figure
+   * to the watt. Someone deliberately choosing a battery limit that happens to
+   * match their detected device's to the watt AND sits below their own max is
+   * vanishingly unlikely — and the cost if we're wrong is that they get
+   * min(maxTdp, 55 W) on battery instead, which the notice explains. Anything
+   * else (a value they clearly picked, or one already equal to maxTdp) is left
+   * alone. In-memory only: storage is untouched, so re-saving the form is what
+   * makes it permanent.
+   */
+  private migrateSeededBatteryMax(d: CustomDevice): number {
+    if (d.batteryMaxTdp >= d.maxTdp) return d.batteryMaxTdp;
+    const detected = matchDevice(this.dmiProductName, this.cpuVendor);
+    if (d.batteryMaxTdp !== detected.batteryMaxTdp) return d.batteryMaxTdp;
+    console.log(
+      `[tdp-control] custom device "${d.name}": battery max ${d.batteryMaxTdp}W matches the auto-detected ` +
+        `${detected.name} default and is below your ${d.maxTdp}W max — treating it as unset (issue #230). ` +
+        `Set an explicit battery max in the custom-device form if you did want ${d.batteryMaxTdp}W.`,
+    );
+    return d.maxTdp;
+  }
+
   private applyDeviceDefaults(): void {
     // A user-defined custom device is the default when present — it overrides
     // whatever DMI matching would have picked.
@@ -1293,7 +1347,7 @@ export default class TdpControlBackend implements PluginBackend {
       this.deviceName = d.name;
       this.minWatts = d.minTdp;
       this.maxWatts = d.maxTdp;
-      this.batteryMaxWatts = d.batteryMaxTdp;
+      this.batteryMaxWatts = this.migrateSeededBatteryMax(d);
       this.profiles = { ...d.profiles };
       return;
     }
@@ -1313,8 +1367,15 @@ export default class TdpControlBackend implements PluginBackend {
    * the device's full max.
    *
    * applyTdp() clamps the hardware write to this, so the ceiling is enforced
-   * for every path (slider, per-game profiles, AC transitions), not just the
-   * slider's max attribute.
+   * for every path that sets a wattage (slider, per-game profiles, AC
+   * transitions, resume), not just the slider's max attribute.
+   *
+   * CAVEAT — `platform_profile` devices: that method has no wattage, only
+   * low-power/balanced/performance. wattsToPlatformProfile() maps the clamped
+   * value to a name, so a clamped 55 W on an 80 W device still selects
+   * "performance", i.e. the firmware's full envelope. The ceiling is
+   * arithmetically applied but physically coarse there. Inherent to the
+   * method, not something this clamp can fix.
    */
   private effectiveMaxWatts(): number {
     return effectiveMaxWatts({
@@ -1586,6 +1647,12 @@ export default class TdpControlBackend implements PluginBackend {
     }
     this.acPowerPath = null;
     this.acPowerOnline = null;
+    // Safety-relevant: with no Mains node we can never know we're on battery,
+    // so the on-battery ceiling never applies. Say so rather than failing
+    // open in silence. pollTdp retries discovery each tick.
+    console.warn(
+      "[tdp-control] no Mains power supply found — on-battery TDP ceiling cannot be applied",
+    );
   }
 
   // -----------------------------------------------------------------------
@@ -1818,8 +1885,56 @@ export default class TdpControlBackend implements PluginBackend {
   // Polling
   // -----------------------------------------------------------------------
 
+  /**
+   * Re-read AC state and, on a transition, re-clamp the standing TDP intent.
+   *
+   * Split out of pollTdp so it can run BEFORE the null-reading early return —
+   * the on-battery ceiling is a safety control and must not depend on whether
+   * the TDP read path happens to work on this device. Also retries Mains
+   * discovery, since a null acPowerPath at boot would otherwise disable the
+   * ceiling permanently.
+   */
+  private async refreshAcPower(): Promise<void> {
+    if (this.acPowerPath === null) await this.detectAcPower();
+    if (!this.acPowerPath) return;
+
+    const prevAcPower = this.acPowerOnline;
+    const text = await readFileText(this.acPowerPath);
+    if (text === null) return;
+
+    this.acPowerOnline = text.trim() === "1";
+    if (this.acPowerOnline === prevAcPower) return;
+
+    // Re-apply the standing intent through the (now power-state-aware) clamp:
+    // unplugging throttles a 70W request down to the battery cap; plugging
+    // back in springs it up to 70W again. applyTdp emits its own tdpChanged.
+    const intent = this.desiredTdp ?? this.currentTdp;
+    if (intent !== null && this.method !== "none") {
+      await this.applyTdp(intent);
+    }
+    this.emit?.({
+      event: "acPowerChanged",
+      data: {
+        online: this.acPowerOnline,
+        maxWatts: this.effectiveMaxWatts(),
+        pluggedMaxWatts: this.maxWatts,
+        batteryLimited: this.batteryLimited(),
+      },
+    });
+    console.log(
+      `[tdp-control] AC power changed: ${this.acPowerOnline ? "online" : "offline"}`,
+    );
+  }
+
   private async pollTdp(): Promise<void> {
     try {
+      // AC state FIRST. It used to be refreshed further down, after an early
+      // return on a null TDP reading — so on any device where readCurrentTdp()
+      // can't read (method "none", or ryzenadj-can't-read with no
+      // platform_profile), the on-battery ceiling froze at its boot value
+      // forever. A safety refresh must not be gated on an unrelated read.
+      await this.refreshAcPower();
+
       const reading = await this.readCurrentTdp();
       if (reading === null) return;
 
@@ -1851,35 +1966,6 @@ export default class TdpControlBackend implements PluginBackend {
         });
       }
 
-      // Check AC power status change
-      if (this.acPowerPath) {
-        const prevAcPower = this.acPowerOnline;
-        const text = await readFileText(this.acPowerPath);
-        if (text !== null) {
-          this.acPowerOnline = text.trim() === "1";
-          if (this.acPowerOnline !== prevAcPower) {
-            // Re-apply the standing intent through the (now power-state-aware)
-            // clamp: unplugging throttles a 70W request down to the battery
-            // cap; plugging back in springs it up to 70W again. setTdp emits
-            // its own tdpChanged with the applied value.
-            const intent = this.desiredTdp ?? this.currentTdp;
-            if (intent !== null && this.method !== "none") {
-              await this.applyTdp(intent);
-            }
-            this.emit?.({
-              event: "acPowerChanged",
-              data: {
-                online: this.acPowerOnline,
-                maxWatts: this.effectiveMaxWatts(),
-                batteryLimited: this.batteryLimited(),
-              },
-            });
-            console.log(
-              `[tdp-control] AC power changed: ${this.acPowerOnline ? "online" : "offline"}`,
-            );
-          }
-        }
-      }
     } catch (e) {
       console.error(`[tdp-control] Poll error: ${e}`);
     }

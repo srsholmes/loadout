@@ -98,9 +98,11 @@ function TdpControl() {
    * dismissed rather than a plain boolean.
    *
    * Re-show policy — the notice comes back when any of these happen:
-   *  1. The situation changes. The token is the ceiling pair, so unplugging,
-   *     replugging, or editing the device's limits all produce a new token
-   *     that no dismissal covers.
+   *  1. The ceilings change. The token is the ceiling pair, so unplugging
+   *     from a state with a different pair, or editing the device's limits,
+   *     mints a token no dismissal covers. Note a plug/unplug ROUND TRIP
+   *     restores the identical pair, so a dismissal survives it — deliberate:
+   *     nothing about the situation actually changed.
    *  2. The user returns to the plugin. This is local state and tdp-control
    *     isn't `keepAlive`, so navigating away unmounts and clears it.
    *  3. The user drags the slider back up to the ceiling (see
@@ -192,6 +194,9 @@ function TdpControl() {
         deviceName: string;
         minWatts: number;
         maxWatts: number;
+        pluggedMaxWatts?: number;
+        batteryMaxWatts?: number;
+        batteryLimited?: boolean;
         profiles: Record<string, number>;
         usingCustomDevice: boolean;
       };
@@ -202,6 +207,18 @@ function TdpControl() {
               deviceName: d.deviceName,
               minWatts: d.minWatts,
               maxWatts: d.maxWatts,
+              // Keep the ceiling trio in lockstep with maxWatts. Updating one
+              // without the others is what made the notice claim a battery
+              // ceiling above the plugged one after a device edit.
+              ...(typeof d.pluggedMaxWatts === "number"
+                ? { pluggedMaxWatts: d.pluggedMaxWatts }
+                : {}),
+              ...(typeof d.batteryMaxWatts === "number"
+                ? { batteryMaxWatts: d.batteryMaxWatts }
+                : {}),
+              ...(typeof d.batteryLimited === "boolean"
+                ? { batteryLimited: d.batteryLimited }
+                : {}),
               profiles: d.profiles,
               usingCustomDevice: d.usingCustomDevice,
             }

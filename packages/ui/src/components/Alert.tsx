@@ -1,4 +1,5 @@
 import { type ReactNode } from "react";
+import { IconButton } from "./IconButton";
 
 export type AlertVariant = "info" | "success" | "warning" | "error";
 
@@ -56,14 +57,15 @@ export function Alert({
         <div className="text-xs opacity-90">{children}</div>
       </div>
       {onDismiss && (
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs btn-circle"
-          aria-label={dismissLabel}
-          onClick={onDismiss}
-        >
+        // IconButton, not a bare <button>: spatial nav in this overlay is
+        // registration-based (useFocusable), with no DOM scan or tabindex
+        // fallback. A plain button can never take d-pad focus, which would
+        // make "dismissable" true only for mouse/touch — useless on the
+        // handheld this runs on. It also gets a 28px hit target instead of
+        // btn-xs's 24px.
+        <IconButton onClick={onDismiss} ariaLabel={dismissLabel} size={28}>
           ✕
-        </button>
+        </IconButton>
       )}
     </div>
   );
