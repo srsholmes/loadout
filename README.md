@@ -357,6 +357,16 @@ to hear from you.
 curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/uninstall.sh | sh
 ```
 
+This also unbinds the overlay wake button, so the physical button you picked
+goes back to whatever your handheld normally does with it. InputPlumber is left
+installed and enabled — Loadout doesn't remove it, since your device's controller
+support may depend on it.
+
+If you uninstalled with an older version and your wake button is still bound
+(on an OXP Apex, the keyboard button stops opening the on-screen keyboard),
+re-run the command above — it's safe to run with Loadout already gone, and it
+will clean up the leftover mapping.
+
 ## Thanks & acknowledgements
 
 Loadout stands on the shoulders of giants — the people and projects below made
