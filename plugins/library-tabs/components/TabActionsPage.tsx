@@ -29,6 +29,9 @@ export interface TabActionsPageProps {
   onMove: (delta: number) => void;
   onEditRules: () => void;
   onDelete: () => void;
+  onToggleMirror: () => void;
+  /** Opens the sync screen. Absent when there is nothing to sync yet. */
+  onOpenMirror?: () => void;
 }
 
 export function TabActionsPage({
@@ -41,6 +44,8 @@ export function TabActionsPage({
   onMove,
   onEditRules,
   onDelete,
+  onToggleMirror,
+  onOpenMirror,
 }: TabActionsPageProps) {
   const [label, setLabel] = useState(tab.label);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -94,6 +99,30 @@ export function TabActionsPage({
               Edit rules
             </Button>
           )}
+        </section>
+
+        <section className="flex flex-col gap-2">
+          <Text variant="secondary">Show in Steam</Text>
+          <Text variant="secondary">
+            {tab.mirror.enabled
+              ? `This tab is kept in a Steam collection called “${
+                  tab.mirror.collectionName.trim() || tab.label
+                }”, so it shows up in Steam's own library too.`
+              : "Copy this tab into a Steam collection, so it shows up in Steam's own library as well as here."}
+          </Text>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="neutral" onClick={onToggleMirror}>
+              {tab.mirror.enabled ? "Stop showing in Steam" : "Show in Steam"}
+            </Button>
+            {/* Nothing is written until the user looks at the plan and says
+                so — these are writes to their Steam library, and some of them
+                delete collections. */}
+            {tab.mirror.enabled && onOpenMirror ? (
+              <Button variant="primary" onClick={onOpenMirror}>
+                Review &amp; sync
+              </Button>
+            ) : null}
+          </div>
         </section>
 
         <section className="flex flex-col gap-2">

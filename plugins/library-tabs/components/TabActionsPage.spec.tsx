@@ -22,6 +22,8 @@ function renderPage(tab: Tab, overrides: Partial<Parameters<typeof TabActionsPag
     onMove: mock((_: number) => {}),
     onEditRules: mock(() => {}),
     onDelete: mock(() => {}),
+    onToggleMirror: mock(() => {}),
+    onOpenMirror: mock(() => {}),
   };
   render(
     <TabActionsPage tab={tab} index={1} tabCount={4} {...handlers} {...overrides} />,
@@ -98,6 +100,46 @@ describe("TabActionsPage — a custom tab", () => {
     expect(
       screen.getByRole("button", { name: "Move left" }).hasAttribute("disabled"),
     ).toBe(true);
+  });
+});
+
+describe("TabActionsPage — the Steam mirror", () => {
+  it("offers to mirror a tab that isn't mirrored", () => {
+    const h = renderPage(custom());
+    // No sync button yet: there is nothing in Steam to sync to, and offering
+    // one would imply the tab is already over there.
+    expect(screen.queryByRole("button", { name: /Review/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show in Steam" }));
+    expect(h.onToggleMirror).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the collection a mirrored tab writes to", () => {
+    // Which collection this lands in is the user's whole mental model of the
+    // feature; leaving it implicit is how a tab quietly overwrites the wrong one.
+    const tab = { ...custom(), mirror: { enabled: true, collectionName: "My Shelf" } };
+    renderPage(tab);
+    expect(screen.getByText(/“My Shelf”/)).toBeTruthy();
+  });
+
+  it("falls back to the tab's own name when no collection name is set", () => {
+    const tab = { ...custom(), mirror: { enabled: true, collectionName: "" } };
+    renderPage(tab);
+    expect(screen.getByText(new RegExp(`“${tab.label}”`))).toBeTruthy();
+  });
+
+  it("routes to the dry run rather than syncing from here", () => {
+    // Nothing writes to the user's Steam library without them seeing the plan.
+    const tab = { ...custom(), mirror: { enabled: true, collectionName: "X" } };
+    const h = renderPage(tab);
+    fireEvent.click(screen.getByRole("button", { name: /Review/ }));
+    expect(h.onOpenMirror).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a built-in tab be mirrored too", () => {
+    // The rules are ours; where the tab shows up is the user's call.
+    const h = renderPage(builtin());
+    fireEvent.click(screen.getByRole("button", { name: "Show in Steam" }));
+    expect(h.onToggleMirror).toHaveBeenCalledTimes(1);
   });
 });
 

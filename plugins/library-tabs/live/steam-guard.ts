@@ -143,7 +143,41 @@ export async function acquireLiveLock(timeoutMs = 60_000): Promise<() => Promise
   }
 }
 
-// The write-side helpers — throwaway `XDG_CONFIG_HOME`, the
-// `zzz-loadout-livetest-` collection-name prefix, and the collateral-damage
-// snapshot — land with the Tier C mirror round-trip that needs them. Adding
-// them now would be dead code, and `check:dead-code` is right to say so.
+// ── Tier C: the write gate ─────────────────────────────────────────────
+
+/** Set to `1` to allow the live suite to write to the user's Steam. */
+const ALLOW_WRITES = "LOADOUT_LIVE_WRITES";
+
+/**
+ * The prefix every collection this suite creates must carry.
+ *
+ * `zzz-` so it sorts to the bottom of the user's collection list if a run is
+ * ever interrupted between create and cleanup, and so it is obviously not
+ * theirs at a glance. The random suffix is per-run: two interrupted runs must
+ * not produce the same name, or the second would adopt the first's leftovers
+ * and the cleanup assertion would pass while a real collection stayed behind.
+ */
+export const LIVE_TEST_PREFIX = "zzz-loadout-livetest-";
+
+/**
+ * Assert the operator has opted into writes.
+ *
+ * Read the destructive-risk register in the plan before setting this. It
+ * creates and deletes real Steam collections on the account that is signed in,
+ * and Steam Cloud will sync them to every other machine before cleanup runs.
+ */
+export function requireWrites(): void {
+  if (process.env[ALLOW_WRITES] === "1") return;
+  throw new Error(
+    "This spec writes to your real Steam collections.\n" +
+      `Set ${ALLOW_WRITES}=1 (or run: bun run test:live:write) to allow it.`,
+  );
+}
+
+/** A per-run collection name that cannot collide with anything real. */
+export function liveTestCollectionName(suffix: string): string {
+  const hex = Math.floor(Math.random() * 0xffffff)
+    .toString(16)
+    .padStart(6, "0");
+  return `${LIVE_TEST_PREFIX}${hex}-${suffix}`;
+}

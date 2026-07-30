@@ -41,3 +41,13 @@ export {
   type SteamLibraryEntry,
   type SteamLibrarySnapshot,
 } from "./library-overview";
+
+export {
+  listCollections,
+  createCollection,
+  setCollectionApps,
+  renameCollection,
+  deleteCollection,
+  collectionsForApp,
+  type SteamCollectionInfo,
+} from "./collections";

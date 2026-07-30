@@ -1,0 +1,554 @@
+import { describe, expect, it } from "bun:test";
+import {
+  applyToLedger,
+  collectionNameFor,
+  planIsEmpty,
+  planMirror,
+  summarizePlan,
+} from "./mirror";
+import type { SteamCollection } from "./mirror";
+import type { MirrorLedger, Tab } from "./types";
+
+const NOW = 1_800_000_000_000;
+
+function tab(overrides: Partial<Tab> = {}): Tab {
+  return {
+    id: "t1",
+    label: "Backlog",
+    visible: true,
+    autoHide: false,
+    root: { kind: "group", id: "g", combinator: "and", rules: [] },
+    sort: [],
+    limit: null,
+    group: { by: "none" },
+    display: { tileWidth: 150, showLabels: true, badges: [] },
+    mirror: { enabled: true, collectionName: "Backlog" },
+    ...overrides,
+  } as Tab;
+}
+
+function collection(overrides: Partial<SteamCollection> = {}): SteamCollection {
+  return {
+    id: "uc-1",
+    name: "Backlog",
+    appIds: [],
+    isDynamic: false,
+    isEditable: true,
+    ...overrides,
+  };
+}
+
+function ledger(...entries: MirrorLedger["entries"]): MirrorLedger {
+  return { version: 1, entries };
+}
+
+function entry(overrides: Partial<MirrorLedger["entries"][number]> = {}) {
+  return {
+    tabId: "t1",
+    collectionId: "uc-1",
+    collectionName: "Backlog",
+    appIds: [] as string[],
+    lastSyncedAt: NOW - 1000,
+    ...overrides,
+  };
+}
+
+function evaluated(pairs: Record<string, string[]>): Map<string, string[]> {
+  return new Map(Object.entries(pairs));
+}
+
+describe("planMirror — first sync", () => {
+  it("creates a collection for a tab that has never been mirrored", () => {
+    const plan = planMirror({
+      tabs: [tab()],
+      evaluated: evaluated({ t1: ["10", "20"] }),
+      ledger: ledger(),
+      steamCollections: [],
+    });
+    expect(plan.creates).toEqual([{ tabId: "t1", name: "Backlog", appIds: ["10", "20"] }]);
+    expect(plan.updates).toHaveLength(0);
+  });
+
+  it("ignores tabs that don't want mirroring", () => {
+    const plan = planMirror({
+      tabs: [tab({ mirror: { enabled: false, collectionName: "Backlog" } })],
+      evaluated: evaluated({ t1: ["10"] }),
+      ledger: ledger(),
+      steamCollections: [],
+    });
+    expect(planIsEmpty(plan)).toBe(true);
+  });
+
+  it("creates an empty collection rather than skipping a tab that matched nothing", () => {
+    // Skipping would leave the user staring at a tab marked "mirrored" with no
+    // collection in Steam, and no way to tell whether sync ran.
+    const plan = planMirror({
+      tabs: [tab()],
+      evaluated: evaluated({}),
+      ledger: ledger(),
+      steamCollections: [],
+    });
+    expect(plan.creates).toEqual([{ tabId: "t1", name: "Backlog", appIds: [] }]);
+  });
+
+  it("refuses to adopt a same-named collection it did not create", () => {
+    // The destructive case. A user's hand-curated "Backlog" must not be
+    // silently replaced by whatever our rules happen to match.
+    const existing = collection({ id: "uc-99", name: "Backlog", appIds: ["1", "2", "3"] });
+    const plan = planMirror({
+      tabs: [tab()],
+      evaluated: evaluated({ t1: ["10"] }),
+      ledger: ledger(),
+      steamCollections: [existing],
+    });
+    expect(plan.creates).toHaveLength(0);
+    expect(plan.updates).toHaveLength(0);
+    expect(plan.conflicts).toEqual([
+      { tabId: "t1", name: "Backlog", existingCollectionId: "uc-99", existingCount: 3 },
+    ]);
+  });
+});
+
+describe("planMirror — steady state", () => {
+  it("does nothing when the collection already matches", () => {
+    const plan = planMirror({
+      tabs: [tab()],
+      evaluated: evaluated({ t1: ["10", "20"] }),
+      ledger: ledger(entry({ appIds: ["10", "20"] })),
+      steamCollections: [collection({ appIds: ["10", "20"] })],
+    });
+    expect(planIsEmpty(plan)).toBe(true);
+    expect(plan.noops).toEqual(["t1"]);
+  });
+
+  it("treats membership as a set, not a sequence", () => {
+    // Steam does not preserve our insertion order; a reordered collection is
+    // not a change and must not cause a write every single sync.
+    const plan = planMirror({
+      tabs: [tab()],
+      evaluated: evaluated({ t1: ["10", "20", "30"] }),
+      ledger: ledger(entry({ appIds: ["30", "10", "20"] })),
+      steamCollections: [collection({ appIds: ["20", "30", "10"] })],
+    });
+    expect(planIsEmpty(plan)).toBe(true);
+  });
+
+  it("computes the minimal add/remove for a changed rule", () => {
+    const plan = planMirror({
+      tabs: [tab()],
+      evaluated: evaluated({ t1: ["10", "30"] }),
+      ledger: ledger(entry({ appIds: ["10", "20"] })),
+      steamCollections: [collection({ appIds: ["10", "20"] })],
+    });
+    expect(plan.updates).toEqual([
+      {
+        tabId: "t1",
+        collectionId: "uc-1",
+        name: "Backlog",
+        appIds: ["10", "30"],
+        add: ["30"],
+        remove: ["20"],
+      },
+    ]);
+  });
+});
+
+describe("planMirror — renames", () => {
+  it("renames the collection when the tab is renamed", () => {
+    const plan = planMirror({
+      tabs: [tab({ label: "Shelf", mirror: { enabled: true, collectionName: "Shelf" } })],
+      evaluated: evaluated({ t1: ["10"] }),
+      ledger: ledger(entry({ appIds: ["10"] })),
+      steamCollections: [collection({ name: "Backlog", appIds: ["10"] })],
+    });
+    expect(plan.renames).toEqual([
+      { tabId: "t1", collectionId: "uc-1", from: "Backlog", to: "Shelf" },
+    ]);
+    // A rename is not a re-create — the collection keeps its id and contents.
+    expect(plan.creates).toHaveLength(0);
+    expect(plan.noops).toHaveLength(0);
+  });
+
+  it("falls back to the tab label when no collection name is set", () => {
+    expect(collectionNameFor(tab({ mirror: { enabled: true, collectionName: "  " } }))).toBe(
+      "Backlog",
+    );
+  });
+
+  it("applies the configured prefix", () => {
+    const plan = planMirror({
+      tabs: [tab()],
+      evaluated: evaluated({ t1: [] }),
+      ledger: ledger(),
+      steamCollections: [],
+      namePrefix: "▸ ",
+    });
+    expect(plan.creates[0]?.name).toBe("▸ Backlog");
+  });
+
+  it("lets a new tab claim a name this same sync is renaming away from", () => {
+    // Tab `a` moves from "Backlog" to "Shelf"; new tab `b` wants "Backlog".
+    // Reported as a conflict, this never resolves — the name is only ever
+    // freed by the rename that the conflict is blocking.
+    const plan = planMirror({
+      tabs: [
+        tab({ id: "a", label: "Shelf", mirror: { enabled: true, collectionName: "Shelf" } }),
+        tab({ id: "b", label: "Backlog", mirror: { enabled: true, collectionName: "Backlog" } }),
+      ],
+      evaluated: evaluated({ a: ["1"], b: ["2"] }),
+      ledger: ledger(
+        entry({ tabId: "a", collectionId: "uc-a", collectionName: "Backlog", appIds: ["1"] }),
+      ),
+      steamCollections: [collection({ id: "uc-a", name: "Backlog", appIds: ["1"] })],
+    });
+    expect(plan.conflicts).toHaveLength(0);
+    expect(plan.renames).toHaveLength(1);
+    expect(plan.creates).toEqual([{ tabId: "b", name: "Backlog", appIds: ["2"] }]);
+  });
+
+  it("lets a new tab claim a name this same sync is deleting", () => {
+    const plan = planMirror({
+      tabs: [tab({ id: "b", label: "Backlog", mirror: { enabled: true, collectionName: "Backlog" } })],
+      evaluated: evaluated({ b: ["2"] }),
+      ledger: ledger(entry({ tabId: "gone", collectionId: "uc-a", collectionName: "Backlog" })),
+      steamCollections: [collection({ id: "uc-a", name: "Backlog" })],
+    });
+    expect(plan.conflicts).toHaveLength(0);
+    expect(plan.deletes).toHaveLength(1);
+    expect(plan.creates).toHaveLength(1);
+  });
+
+  it("reports two new tabs asking for the same name as a conflict", () => {
+    // Not a free pass for whichever is second — that would create two
+    // identically-named collections and the ledger could never tell them apart.
+    const plan = planMirror({
+      tabs: [
+        tab({ id: "a", mirror: { enabled: true, collectionName: "Same" } }),
+        tab({ id: "b", mirror: { enabled: true, collectionName: "Same" } }),
+      ],
+      evaluated: evaluated({ a: ["1"], b: ["2"] }),
+      ledger: ledger(),
+      steamCollections: [],
+    });
+    expect(plan.creates.map((c) => c.tabId)).toEqual(["a"]);
+    expect(plan.conflicts.map((c) => c.tabId)).toEqual(["b"]);
+  });
+
+  it("checks the conflict against the prefixed name", () => {
+    // Prefixing exists precisely so our collections don't collide with the
+    // user's; checking the unprefixed name would report phantom conflicts.
+    const plan = planMirror({
+      tabs: [tab()],
+      evaluated: evaluated({ t1: [] }),
+      ledger: ledger(),
+      steamCollections: [collection({ id: "uc-9", name: "Backlog" })],
+      namePrefix: "▸ ",
+    });
+    expect(plan.conflicts).toHaveLength(0);
+    expect(plan.creates).toHaveLength(1);
+  });
+});
+
+describe("planMirror — deletion", () => {
+  it("deletes the collection when the tab is gone", () => {
+    const plan = planMirror({
+      tabs: [],
+      evaluated: evaluated({}),
+      ledger: ledger(entry({ appIds: ["10"] })),
+      steamCollections: [collection({ appIds: ["10"] })],
+    });
+    expect(plan.deletes).toEqual([
+      { tabId: "t1", collectionId: "uc-1", name: "Backlog", reason: "tab-deleted" },
+    ]);
+  });
+
+  it("deletes the collection when mirroring is switched off", () => {
+    const plan = planMirror({
+      tabs: [tab({ mirror: { enabled: false, collectionName: "Backlog" } })],
+      evaluated: evaluated({ t1: ["10"] }),
+      ledger: ledger(entry({ appIds: ["10"] })),
+      steamCollections: [collection({ appIds: ["10"] })],
+    });
+    expect(plan.deletes[0]?.reason).toBe("mirror-disabled");
+  });
+
+  it("never deletes a collection whose id we did not record", () => {
+    // The single most dangerous operation in the plugin. If the ledger and
+    // Steam disagree, doing nothing is always correct.
+    const plan = planMirror({
+      tabs: [],
+      evaluated: evaluated({}),
+      ledger: ledger(entry({ collectionId: "uc-gone" })),
+      steamCollections: [collection({ id: "uc-other", name: "Backlog", appIds: ["1"] })],
+    });
+    expect(plan.deletes).toHaveLength(0);
+  });
+
+  it("only ever names ids, never names, in a delete", () => {
+    // Regression guard for the whole "match by name" family of bugs: two
+    // collections share a name, and the id is what disambiguates them.
+    const plan = planMirror({
+      tabs: [],
+      evaluated: evaluated({}),
+      ledger: ledger(entry({ collectionId: "uc-1" })),
+      steamCollections: [
+        collection({ id: "uc-1", name: "Backlog" }),
+        collection({ id: "uc-2", name: "Backlog" }),
+      ],
+    });
+    expect(plan.deletes.map((d) => d.collectionId)).toEqual(["uc-1"]);
+  });
+});
+
+describe("planMirror — the world changed underneath us", () => {
+  it("re-creates when Steam no longer has the collection", () => {
+    const plan = planMirror({
+      tabs: [tab()],
+      evaluated: evaluated({ t1: ["10"] }),
+      ledger: ledger(entry({ collectionId: "uc-vanished", appIds: ["10"] })),
+      steamCollections: [],
+    });
+    expect(plan.orphaned).toEqual([{ tabId: "t1", collectionId: "uc-vanished" }]);
+    expect(plan.creates).toEqual([{ tabId: "t1", name: "Backlog", appIds: ["10"] }]);
+  });
+
+  it("reports apps the user added to our collection by hand", () => {
+    const plan = planMirror({
+      tabs: [tab()],
+      evaluated: evaluated({ t1: ["10"] }),
+      ledger: ledger(entry({ appIds: ["10"] })),
+      steamCollections: [collection({ appIds: ["10", "99"] })],
+    });
+    expect(plan.drifted).toEqual([
+      { tabId: "t1", collectionId: "uc-1", unexpectedAdds: ["99"], unexpectedRemoves: [] },
+    ]);
+    // Drift is reported, not tolerated: the sync still converges on the rules.
+    expect(plan.updates[0]?.remove).toEqual(["99"]);
+  });
+
+  it("reports apps the user removed from our collection by hand", () => {
+    const plan = planMirror({
+      tabs: [tab()],
+      evaluated: evaluated({ t1: ["10", "20"] }),
+      ledger: ledger(entry({ appIds: ["10", "20"] })),
+      steamCollections: [collection({ appIds: ["10"] })],
+    });
+    expect(plan.drifted[0]?.unexpectedRemoves).toEqual(["20"]);
+  });
+
+  it("does not call a rule change drift", () => {
+    // Drift compares against what WE last wrote. Comparing against what the
+    // tab now matches would flag every rule edit as user interference and
+    // bury the real signal.
+    const plan = planMirror({
+      tabs: [tab()],
+      evaluated: evaluated({ t1: ["10", "20", "30"] }),
+      ledger: ledger(entry({ appIds: ["10"] })),
+      steamCollections: [collection({ appIds: ["10"] })],
+    });
+    expect(plan.drifted).toHaveLength(0);
+    expect(plan.updates[0]?.add).toEqual(["20", "30"]);
+  });
+
+  it("refuses to write to a dynamic Steam collection", () => {
+    const plan = planMirror({
+      tabs: [tab()],
+      evaluated: evaluated({ t1: ["10"] }),
+      ledger: ledger(entry({ collectionId: "type-games" })),
+      steamCollections: [
+        collection({ id: "type-games", name: "Backlog", isDynamic: true, appIds: ["1", "2"] }),
+      ],
+    });
+    expect(planIsEmpty(plan)).toBe(true);
+    expect(plan.skipped[0]?.tabId).toBe("t1");
+    expect(plan.skipped[0]?.reason).toMatch(/dynamic/);
+  });
+
+  it("refuses to write to a non-editable collection", () => {
+    const plan = planMirror({
+      tabs: [tab()],
+      evaluated: evaluated({ t1: ["10"] }),
+      ledger: ledger(entry()),
+      steamCollections: [collection({ isEditable: false })],
+    });
+    expect(planIsEmpty(plan)).toBe(true);
+    expect(plan.skipped).toHaveLength(1);
+  });
+});
+
+describe("planMirror — several tabs at once", () => {
+  it("plans each tab independently", () => {
+    const plan = planMirror({
+      tabs: [
+        tab({ id: "a", label: "A", mirror: { enabled: true, collectionName: "A" } }),
+        tab({ id: "b", label: "B", mirror: { enabled: true, collectionName: "B" } }),
+        tab({ id: "c", label: "C", mirror: { enabled: false, collectionName: "C" } }),
+      ],
+      evaluated: evaluated({ a: ["1"], b: ["2", "3"], c: ["4"] }),
+      ledger: ledger(entry({ tabId: "b", collectionId: "uc-b", collectionName: "B", appIds: ["2"] })),
+      steamCollections: [collection({ id: "uc-b", name: "B", appIds: ["2"] })],
+    });
+    expect(plan.creates.map((c) => c.tabId)).toEqual(["a"]);
+    expect(plan.updates.map((u) => u.tabId)).toEqual(["b"]);
+    expect(plan.deletes).toHaveLength(0);
+  });
+
+  it("lets two tabs mirror overlapping games", () => {
+    // Collections are not partitions — the same game legitimately belongs to
+    // "Deck Verified" and "Backlog" at once.
+    const plan = planMirror({
+      tabs: [
+        tab({ id: "a", mirror: { enabled: true, collectionName: "A" } }),
+        tab({ id: "b", mirror: { enabled: true, collectionName: "B" } }),
+      ],
+      evaluated: evaluated({ a: ["1", "2"], b: ["2", "3"] }),
+      ledger: ledger(),
+      steamCollections: [],
+    });
+    expect(plan.creates.map((c) => c.appIds)).toEqual([
+      ["1", "2"],
+      ["2", "3"],
+    ]);
+  });
+});
+
+describe("summarizePlan", () => {
+  it("says nothing needs doing when nothing does", () => {
+    const plan = planMirror({
+      tabs: [],
+      evaluated: evaluated({}),
+      ledger: ledger(),
+      steamCollections: [],
+    });
+    expect(summarizePlan(plan)).toBe("Everything is already in sync");
+  });
+
+  it("counts each kind of write", () => {
+    const plan = planMirror({
+      tabs: [
+        tab({ id: "a", mirror: { enabled: true, collectionName: "A" } }),
+        tab({ id: "b", label: "B2", mirror: { enabled: true, collectionName: "B2" } }),
+      ],
+      evaluated: evaluated({ a: ["1"], b: ["2"] }),
+      ledger: ledger(
+        entry({ tabId: "b", collectionId: "uc-b", collectionName: "B", appIds: ["2"] }),
+        entry({ tabId: "z", collectionId: "uc-z", collectionName: "Z" }),
+      ),
+      steamCollections: [collection({ id: "uc-b", name: "B", appIds: ["2"] }), collection({ id: "uc-z", name: "Z" })],
+    });
+    expect(summarizePlan(plan)).toBe("Sync will create 1, rename 1, delete 1");
+  });
+});
+
+describe("applyToLedger", () => {
+  it("records a newly created collection", () => {
+    const plan = planMirror({
+      tabs: [tab()],
+      evaluated: evaluated({ t1: ["10"] }),
+      ledger: ledger(),
+      steamCollections: [],
+    });
+    const next = applyToLedger({
+      ledger: ledger(),
+      plan,
+      written: new Map([["t1", { collectionId: "uc-new", name: "Backlog", appIds: ["10"] }]]),
+      now: NOW,
+    });
+    expect(next.entries).toEqual([
+      {
+        tabId: "t1",
+        collectionId: "uc-new",
+        collectionName: "Backlog",
+        appIds: ["10"],
+        lastSyncedAt: NOW,
+      },
+    ]);
+  });
+
+  it("drops entries for collections that were deleted", () => {
+    const before = ledger(entry());
+    const plan = planMirror({
+      tabs: [],
+      evaluated: evaluated({}),
+      ledger: before,
+      steamCollections: [collection()],
+    });
+    const next = applyToLedger({ ledger: before, plan, written: new Map(), now: NOW });
+    expect(next.entries).toHaveLength(0);
+  });
+
+  it("leaves untouched tabs alone", () => {
+    // A partial sync — one collection written, another failing — must not
+    // rewrite the timestamp of an entry nothing happened to, or the next
+    // drift check compares against the wrong snapshot.
+    const before = ledger(
+      entry({ tabId: "a", collectionId: "uc-a", appIds: ["1"] }),
+      entry({ tabId: "b", collectionId: "uc-b", appIds: ["2"] }),
+    );
+    const plan = planMirror({
+      tabs: [tab({ id: "a" }), tab({ id: "b" })],
+      evaluated: evaluated({ a: ["1"], b: ["2"] }),
+      ledger: before,
+      steamCollections: [
+        collection({ id: "uc-a", appIds: ["1"] }),
+        collection({ id: "uc-b", appIds: ["2"] }),
+      ],
+    });
+    const next = applyToLedger({
+      ledger: before,
+      plan,
+      written: new Map([["a", { collectionId: "uc-a", name: "Backlog", appIds: ["1", "9"] }]]),
+      now: NOW,
+    });
+    expect(next.entries.find((e) => e.tabId === "b")).toEqual(before.entries[1]!);
+    expect(next.entries.find((e) => e.tabId === "a")?.appIds).toEqual(["1", "9"]);
+  });
+
+  it("re-points an entry when the collection was re-created", () => {
+    const before = ledger(entry({ collectionId: "uc-vanished" }));
+    const plan = planMirror({
+      tabs: [tab()],
+      evaluated: evaluated({ t1: ["10"] }),
+      ledger: before,
+      steamCollections: [],
+    });
+    const next = applyToLedger({
+      ledger: before,
+      plan,
+      written: new Map([["t1", { collectionId: "uc-fresh", name: "Backlog", appIds: ["10"] }]]),
+      now: NOW,
+    });
+    expect(next.entries).toHaveLength(1);
+    expect(next.entries[0]!.collectionId).toBe("uc-fresh");
+  });
+});
+
+describe("planMirror — settling", () => {
+  it("reaches a fixed point after one sync", () => {
+    // The property that matters most in the field: sync twice with nothing
+    // else changing and the second run must be a no-op. Without it, every
+    // periodic sync writes to Steam Cloud forever.
+    const tabs = [tab()];
+    const ev = evaluated({ t1: ["10", "20"] });
+    const first = planMirror({ tabs, evaluated: ev, ledger: ledger(), steamCollections: [] });
+    expect(first.creates).toHaveLength(1);
+
+    const afterLedger = applyToLedger({
+      ledger: ledger(),
+      plan: first,
+      written: new Map([["t1", { collectionId: "uc-new", name: "Backlog", appIds: ["10", "20"] }]]),
+      now: NOW,
+    });
+    const afterSteam = [collection({ id: "uc-new", name: "Backlog", appIds: ["20", "10"] })];
+
+    const second = planMirror({
+      tabs,
+      evaluated: ev,
+      ledger: afterLedger,
+      steamCollections: afterSteam,
+    });
+    expect(planIsEmpty(second)).toBe(true);
+    expect(second.drifted).toHaveLength(0);
+    expect(second.noops).toEqual(["t1"]);
+  });
+});

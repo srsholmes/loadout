@@ -36,6 +36,8 @@ import { TabDiagnostics } from "./components/TabDiagnostics";
 import { RuleBuilder } from "./components/RuleBuilder";
 import { LibraryTabsHeader } from "./components/LibraryTabsHeader";
 import { TabActionsPage } from "./components/TabActionsPage";
+import { MirrorPage } from "./components/MirrorPage";
+import type { MirrorPlan } from "./lib/mirror";
 import { BuilderPage } from "./components/BuilderPage";
 import type { ParamOption } from "./lib/rule-params";
 import type { LibraryTabsConfig } from "./lib/config";
@@ -73,6 +75,14 @@ function LibraryTabs() {
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
   /** Tab whose rename/move/delete page is open. */
   const [managingTabId, setManagingTabId] = useState<string | null>(null);
+  const [showMirror, setShowMirror] = useState(false);
+  const [mirror, setMirror] = useState<{
+    plan: MirrorPlan;
+    summary: string;
+    tabLabels: Record<string, string>;
+  } | null>(null);
+  const [mirrorBusy, setMirrorBusy] = useState(false);
+  const [mirrorError, setMirrorError] = useState<string | null>(null);
   /** The scrolling page, and the wrapper around the tile grid — both measured
    *  by `useVisibleRows` so only the rows in view are mounted. */
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -339,6 +349,71 @@ function LibraryTabs() {
     [call],
   );
 
+  // ── Steam collection mirror ────────────────────────────────────────
+  //
+  // The plan is fetched, shown, and only then acted on. It is deliberately
+  // not fetched on mount: building it costs a full library evaluation plus a
+  // round trip to Steam, and most sessions never open this screen.
+  const refreshMirrorPlan = useCallback(async () => {
+    setMirrorBusy(true);
+    setMirrorError(null);
+    try {
+      const preview = (await call("previewMirror")) as {
+        plan: MirrorPlan;
+        summary: string;
+        tabLabels: Record<string, string>;
+      };
+      setMirror(preview);
+    } catch (err) {
+      setMirror(null);
+      setMirrorError(err instanceof Error ? err.message : "Couldn't reach Steam.");
+    } finally {
+      setMirrorBusy(false);
+    }
+  }, [call]);
+
+  const syncMirror = useCallback(async () => {
+    setMirrorBusy(true);
+    setMirrorError(null);
+    try {
+      const result = (await call("syncMirror")) as {
+        created: number;
+        updated: number;
+        renamed: number;
+        deleted: number;
+        failures: Array<{ tabId: string; step: string; message: string }>;
+      };
+      const wrote =
+        result.created + result.updated + result.renamed + result.deleted;
+      if (result.failures.length > 0) {
+        // Partial success is the common outcome when Steam is mid-restart, and
+        // reporting it as a flat failure would send the user to re-sync work
+        // that already landed.
+        notify(
+          `Synced ${wrote}, but ${result.failures.length} didn't work: ${result.failures[0]!.message}`,
+          { kind: "error" },
+        );
+      } else {
+        notify(wrote === 0 ? "Already up to date" : `Synced ${wrote} collections`, {
+          kind: "success",
+        });
+      }
+    } catch (err) {
+      setMirrorError(err instanceof Error ? err.message : "Couldn't reach Steam.");
+    } finally {
+      setMirrorBusy(false);
+      // Re-read rather than assuming the plan is now empty: the sync may have
+      // been partial, and the screen must show what is actually left.
+      void refreshMirrorPlan();
+    }
+  }, [call, refreshMirrorPlan]);
+
+  const openMirror = useCallback(() => {
+    setShowMirror(true);
+    setManagingTabId(null);
+    void refreshMirrorPlan();
+  }, [refreshMirrorPlan]);
+
   const deleteTab = useCallback(
     async (tabId: string) => {
       try {
@@ -453,6 +528,24 @@ function LibraryTabs() {
     );
   }
 
+  if (showMirror) {
+    return (
+      <div className="p-7 h-full overflow-y-auto" style={{ overflowX: "hidden" }}>
+        {header}
+        <MirrorPage
+          plan={mirror?.plan ?? null}
+          summary={mirror?.summary ?? ""}
+          tabLabels={mirror?.tabLabels ?? {}}
+          busy={mirrorBusy}
+          error={mirrorError}
+          onBack={() => setShowMirror(false)}
+          onRefresh={() => void refreshMirrorPlan()}
+          onSync={() => void syncMirror()}
+        />
+      </div>
+    );
+  }
+
   if (managingTab) {
     const order = config ? orderedTabs(config) : [];
     return (
@@ -485,6 +578,26 @@ function LibraryTabs() {
           }}
           onMove={(delta) => void moveTab(managingTab.id, delta)}
           onDelete={() => void deleteTab(managingTab.id)}
+          onToggleMirror={() => {
+            void applyTabs(
+              (config?.tabs ?? []).map((t) =>
+                t.id === managingTab.id
+                  ? {
+                      ...t,
+                      mirror: {
+                        enabled: !t.mirror.enabled,
+                        // Seed the collection name from the label the first
+                        // time, so turning this on doesn't create a collection
+                        // called after whatever the tab used to be named.
+                        collectionName: t.mirror.collectionName.trim() || t.label,
+                      },
+                    }
+                  : t,
+              ),
+              "Couldn't change that tab",
+            );
+          }}
+          onOpenMirror={openMirror}
         />
       </div>
     );

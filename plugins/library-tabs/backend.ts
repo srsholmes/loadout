@@ -24,8 +24,14 @@ import type {
   PluginLogger,
 } from "@loadout/types";
 import {
+  createCollection,
+  deleteCollection,
+  listCollections,
   readSteamLibrary,
+  renameCollection,
+  setCollectionApps,
   withSteamClient,
+  type SteamClient,
   type SteamLibrarySnapshot,
 } from "@loadout/steam-cdp";
 import { shortcutGameId64 } from "@loadout/vdf";
@@ -49,6 +55,10 @@ import {
 } from "./lib/storage";
 import { exportTabs, encodeShareString, importTabs } from "./lib/share";
 import { findTemplate } from "./lib/templates";
+import { buildEvalGames } from "./lib/facts";
+import { evaluateTab } from "./lib/evaluate";
+import { planMirror, summarizePlan, type MirrorPlan } from "./lib/mirror";
+import { applyMirrorPlan, type MirrorOps, type MirrorSyncResult } from "./lib/mirror-apply";
 
 const GAME_LIBRARY_SERVICE = "__core:game-library";
 const PLAYTIME_PLUGIN = "playtime";
@@ -284,6 +294,108 @@ export default class LibraryTabsBackend implements PluginBackend {
     }
   }
 
+  // ── Steam collection mirror ──────────────────────────────────────────
+
+  /**
+   * What a sync would do, without doing any of it.
+   *
+   * The UI shows this before the user commits, because the writes are to
+   * *their* Steam library and some of them delete things. Evaluation happens
+   * here rather than in the webview so the plan can never be built from a tab
+   * definition the backend hasn't got.
+   */
+  async previewMirror(): Promise<{
+    plan: MirrorPlan;
+    summary: string;
+    tabLabels: Record<string, string>;
+  }> {
+    const plan = await this._buildMirrorPlan();
+    return {
+      plan,
+      summary: summarizePlan(plan),
+      // The plan speaks in tab ids; the UI needs names, and a tab named in a
+      // `delete` no longer exists to look up.
+      tabLabels: Object.fromEntries([
+        ...this.config.tabs.map((t) => [t.id, t.label] as const),
+        ...this.config.mirror.ledger.entries.map((e) => [e.tabId, e.collectionName] as const),
+      ]),
+    };
+  }
+
+  /**
+   * Perform the sync and persist the resulting ledger.
+   *
+   * The ledger is saved even when some collections failed — it records what
+   * actually landed, and losing that record is worse than an incomplete sync.
+   */
+  async syncMirror(): Promise<{
+    summary: string;
+    created: number;
+    updated: number;
+    renamed: number;
+    deleted: number;
+    failures: MirrorSyncResult["failures"];
+  }> {
+    this._assertWritable();
+    const plan = await this._buildMirrorPlan();
+
+    const result = await withSteamClient(async (client) => {
+      return applyMirrorPlan({
+        plan,
+        ledger: this.config.mirror.ledger,
+        ops: mirrorOps(client),
+        now: Date.now(),
+      });
+    });
+
+    await this.setConfig({
+      ...this.config,
+      mirror: { ...this.config.mirror, ledger: result.ledger, pendingSync: false },
+    });
+
+    const { created, updated, renamed, deleted, failures } = result;
+    if (failures.length > 0) {
+      this.log?.warn(
+        `[library-tabs] Mirror sync had ${failures.length} failure(s): ` +
+          failures.map((f) => `${f.tabId}/${f.step}: ${f.message}`).join("; "),
+      );
+    }
+    return { summary: summarizePlan(plan), created, updated, renamed, deleted, failures };
+  }
+
+  /**
+   * Evaluate every mirrored tab and diff against Steam.
+   *
+   * Deliberately uses the same `evaluateTab` the webview renders from — a
+   * second implementation here is how a tab comes to mean one thing on screen
+   * and another in Steam.
+   */
+  private async _buildMirrorPlan(): Promise<MirrorPlan> {
+    const snapshot = await this.getSnapshot();
+    const evalGames = buildEvalGames(snapshot.games);
+    const now = Date.now();
+
+    const evaluated = new Map<string, string[]>();
+    for (const tab of this.config.tabs) {
+      if (!tab.mirror.enabled) continue;
+      const result = evaluateTab(tab, evalGames, { now });
+      evaluated.set(
+        tab.id,
+        result.matched.map((g) => g.appId),
+      );
+    }
+
+    const steamCollections = await withSteamClient((client) => listCollections(client));
+
+    return planMirror({
+      tabs: this.config.tabs,
+      evaluated,
+      ledger: this.config.mirror.ledger,
+      steamCollections,
+      namePrefix: this.config.settings.mirrorPrefix,
+    });
+  }
+
   // ── Backups ──────────────────────────────────────────────────────────
 
   async listBackups(): Promise<BackupInfo[]> {
@@ -360,4 +472,29 @@ export default class LibraryTabsBackend implements PluginBackend {
   private _broadcast(): void {
     this.emit?.({ event: "configChanged", data: this.config });
   }
+}
+
+/**
+ * The CDP-backed effects, bound to one Steam session.
+ *
+ * Separate from the class so `applyMirrorPlan`'s sequencing can be tested
+ * against a recording double — the ordering rules are what protect the user's
+ * collections, and they should not need a running Steam to verify.
+ */
+function mirrorOps(client: SteamClient): MirrorOps {
+  return {
+    async create({ name, appIds }) {
+      const made = await createCollection(client, { name, appIds });
+      return { collectionId: made.id, name: made.name };
+    },
+    async setApps({ collectionId, appIds }) {
+      await setCollectionApps(client, { collectionId, appIds });
+    },
+    async rename({ collectionId, name }) {
+      await renameCollection(client, { collectionId, name });
+    },
+    async remove({ collectionId }) {
+      await deleteCollection(client, { collectionId });
+    },
+  };
 }
