@@ -14,17 +14,16 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Button,
   GameCard,
   GameCardGrid,
   PluginProvider,
-  SearchField,
   Spinner,
   Text,
   collectionSearchTokens,
   fuzzySearchGames,
   friendlyCollectionName,
   mountComponent,
+  mountHeaderStub,
   notify,
   useBackend,
   useFocusable,
@@ -34,6 +33,7 @@ import type { GameMetadata, GameMetadataSnapshot } from "@loadout/types";
 import { TabStrip, type TabStripEntry } from "./components/TabStrip";
 import { TabDiagnostics } from "./components/TabDiagnostics";
 import { RuleBuilder } from "./components/RuleBuilder";
+import { LibraryTabsHeader } from "./components/LibraryTabsHeader";
 import type { ParamOption } from "./lib/rule-params";
 import type { LibraryTabsConfig } from "./lib/config";
 import { orderedTabs, resolveDefaultTab } from "./lib/config";
@@ -303,23 +303,54 @@ function LibraryTabs() {
     );
   }
 
+  const header = (
+    <LibraryTabsHeader
+      subtitle={
+        editingTab
+          ? `Editing “${editingTab.label}”`
+          : activeTab
+            ? summarizeTab(activeTab)
+            : "Custom, filter-driven tabs for your library"
+      }
+      search={search}
+      onSearchChange={setSearch}
+      showBrowseActions={!editingTab}
+      searchPlaceholder={
+        activeTab ? `Search ${activeTab.label}…` : "Search your library…"
+      }
+      addTabLabel={showTemplates ? "Close" : "Add tab"}
+      onAddTab={
+        readOnly ? undefined : () => setShowTemplates((open) => !open)
+      }
+      onEditRules={
+        !readOnly && activeTab && activeTab.builtin === undefined
+          ? () => setEditingTabId(activeTab.id)
+          : undefined
+      }
+    />
+  );
+
   // The builder takes over the page rather than opening beside it: the rule
   // tree, its counts and the palette all need the width, and a gamepad user
   // should never have two focus regions competing for the D-pad.
   if (editingTab) {
     return (
-      <RuleBuilder
-        tab={editingTab}
-        games={evalGames}
-        pickerOptions={pickerOptions}
-        onCancel={() => setEditingTabId(null)}
-        onSave={(next) => void saveTab(next)}
-      />
+      <div className="p-7 h-full overflow-y-auto">
+        {header}
+        <RuleBuilder
+          tab={editingTab}
+          games={evalGames}
+          pickerOptions={pickerOptions}
+          onCancel={() => setEditingTabId(null)}
+          onSave={(next) => void saveTab(next)}
+        />
+      </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="p-7 h-full overflow-y-auto flex flex-col gap-3">
+      {header}
       {readOnly ? (
         <Text variant="secondary">
           These settings were written by a newer version of Loadout, so they
@@ -334,43 +365,11 @@ function LibraryTabs() {
         showCounts={config.settings.showCounts}
       />
 
-      <div className="flex items-center gap-2">
-        <SearchField
-          value={search}
-          onChange={setSearch}
-          placeholder={
-            activeTab ? `Search ${activeTab.label}…` : "Search your library…"
-          }
-        />
-        {!readOnly ? (
-          <Button
-            variant="neutral"
-            onClick={() => setShowTemplates((open) => !open)}
-          >
-            {showTemplates ? "Close" : "Add tab"}
-          </Button>
-        ) : null}
-      </div>
-
       {showTemplates ? (
         <TemplateGallery
           snapshot={snapshot}
           onPick={addTemplate}
         />
-      ) : null}
-
-      {activeTab ? (
-        <div className="flex items-center justify-between gap-2">
-          <Text variant="secondary">{summarizeTab(activeTab)}</Text>
-          {!readOnly && activeTab.builtin === undefined ? (
-            <Button
-              variant="neutral"
-              onClick={() => setEditingTabId(activeTab.id)}
-            >
-              Edit rules
-            </Button>
-          ) : null}
-        </div>
       ) : null}
 
       {diagnosis && diagnosis.kind !== "ok" ? (
@@ -532,10 +531,11 @@ function TemplateCard({
 
 export const mount = mountComponent(LibraryTabs);
 
-export function mountHeader(): () => void {
-  // Presence of this export reserves the 60px topbar slot; global search
-  // lands here in a later phase.
-  return () => {};
-}
+/**
+ * Reserves the shell's 60px topbar slot. The header's actual content is
+ * portaled up from inside `mount()` by `LibraryTabsHeader`, so it shares
+ * state with the body instead of running as a second React tree.
+ */
+export const mountHeader = mountHeaderStub;
 
 export { PluginProvider };

@@ -74,6 +74,11 @@ const callMock = mock((method: string, ...args: unknown[]) => {
 mock.module("@loadout/ui", () => ({
   ...actualUi,
   PluginProvider: ({ children }: { children: unknown }) => children,
+  // The real `PluginHeader` portals into a slot the shell reserves, which
+  // doesn't exist here — it would render nothing and the header's search box
+  // and buttons would silently vanish from every assertion below. Render it
+  // inline so the specs exercise the layout the device actually shows.
+  PluginHeader: ({ children }: { children: unknown }) => children,
   useBackend: () => ({
     call: callMock,
     useEvent: ({ event, handler }: { event: string; handler: (d: unknown) => void }) => {
