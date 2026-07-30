@@ -1,9 +1,11 @@
 import { describe, it, expect } from "bun:test";
 import {
+  applyMode,
   createOverlayState,
   requestShow,
   requestHide,
   requestToggle,
+  setAmbientDesired,
   sweepPendingFlags,
   isActiveTick,
   type OverlayState,
@@ -209,6 +211,132 @@ describe("sweepPendingFlags", () => {
   });
 });
 
+describe("ambient mode", () => {
+  it("createOverlayState starts closed with no ambient desire", () => {
+    const s = createOverlayState();
+    expect(s.mode).toBe("closed");
+    expect(s.ambientDesired).toBe(false);
+  });
+
+  it("createOverlayState(true) starts in open mode, isOpen invariant holds", () => {
+    const s = createOverlayState(true);
+    expect(s.mode).toBe("open");
+    expect(s.isOpen).toBe(true);
+  });
+
+  it("applyMode keeps isOpen === (mode === 'open') for every mode", () => {
+    const s = createOverlayState();
+    applyMode(s, "open");
+    expect(s.isOpen).toBe(true);
+    applyMode(s, "ambient");
+    expect(s.isOpen).toBe(false);
+    expect(s.mode).toBe("ambient");
+    applyMode(s, "closed");
+    expect(s.isOpen).toBe(false);
+    expect(s.mode).toBe("closed");
+  });
+
+  it("closed + ambientDesired sweeps to 'enter-ambient'", () => {
+    const s = createOverlayState();
+    setAmbientDesired(s, true);
+    expect(sweepPendingFlags(s)).toBe("enter-ambient");
+  });
+
+  it("enter-ambient is level-triggered: repeats until the caller applies the mode", () => {
+    // Unlike the one-shot pending* flags, a failed enter side-effect
+    // must be retried on the next tick — the desire isn't consumed.
+    const s = createOverlayState();
+    setAmbientDesired(s, true);
+    expect(sweepPendingFlags(s)).toBe("enter-ambient");
+    expect(sweepPendingFlags(s)).toBe("enter-ambient");
+    applyMode(s, "ambient");
+    expect(sweepPendingFlags(s)).toBe("none");
+  });
+
+  it("ambient + desire dropped sweeps to 'exit-ambient'", () => {
+    const s = createOverlayState();
+    setAmbientDesired(s, true);
+    applyMode(s, "ambient");
+    setAmbientDesired(s, false);
+    expect(sweepPendingFlags(s)).toBe("exit-ambient");
+    applyMode(s, "closed");
+    expect(sweepPendingFlags(s)).toBe("none");
+  });
+
+  it("no ambient action while the overlay is open, even with desire set", () => {
+    // "open" outranks ambient: the interactive overlay must never be
+    // demoted underneath the user by a background desire flip.
+    const s = createOverlayState(true);
+    setAmbientDesired(s, true);
+    expect(sweepPendingFlags(s)).toBe("none");
+    expect(s.mode).toBe("open");
+  });
+
+  it("'show' wins over enter-ambient on the same tick", () => {
+    const s = createOverlayState();
+    setAmbientDesired(s, true);
+    requestShow(s);
+    expect(sweepPendingFlags(s)).toBe("show");
+  });
+
+  it("'show' fires from ambient (pendingToggle beats exit-ambient)", () => {
+    // Opening the interactive overlay straight from the ambient HUD:
+    // the open path re-writes the full atom set, so the sweep just
+    // reports "show" and lets applyMode("open") absorb the mode.
+    const s = createOverlayState();
+    setAmbientDesired(s, true);
+    applyMode(s, "ambient");
+    requestToggle(s);
+    expect(sweepPendingFlags(s)).toBe("show");
+    applyMode(s, "open");
+    expect(sweepPendingFlags(s)).toBe("none");
+  });
+
+  it("pendingClose while ambient is cleared as stale, ambient untouched", () => {
+    // hide targets the *interactive* overlay; ambient teardown goes
+    // through setAmbientDesired(false), never through pendingClose.
+    const s = createOverlayState();
+    setAmbientDesired(s, true);
+    applyMode(s, "ambient");
+    requestHide(s);
+    expect(sweepPendingFlags(s)).toBe("none");
+    expect(s.pendingClose).toBe(false);
+    expect(s.mode).toBe("ambient");
+  });
+
+  it("close from open lands on closed, then promotes to ambient next tick", () => {
+    // The one-tick detour documented on sweepPendingFlags: hide →
+    // applyMode("closed") → the still-standing desire re-enters ambient.
+    const s = createOverlayState();
+    setAmbientDesired(s, true);
+    applyMode(s, "ambient");
+    requestToggle(s);
+    expect(sweepPendingFlags(s)).toBe("show");
+    applyMode(s, "open");
+
+    requestToggle(s);
+    expect(sweepPendingFlags(s)).toBe("hide");
+    applyMode(s, "closed");
+    expect(sweepPendingFlags(s)).toBe("enter-ambient");
+    applyMode(s, "ambient");
+    expect(sweepPendingFlags(s)).toBe("none");
+  });
+
+  it("sweep does not mutate mode — caller applies after the side-effect", () => {
+    const s = createOverlayState();
+    setAmbientDesired(s, true);
+    sweepPendingFlags(s);
+    expect(s.mode).toBe("closed");
+  });
+
+  it("desire flip-flop before any side-effect settles back to 'none'", () => {
+    const s = createOverlayState();
+    setAmbientDesired(s, true);
+    setAmbientDesired(s, false);
+    expect(sweepPendingFlags(s)).toBe("none");
+  });
+});
+
 describe("isActiveTick", () => {
   it("idle when overlay is closed and no pending flags", () => {
     expect(isActiveTick(createOverlayState())).toBe(false);
@@ -231,5 +359,26 @@ describe("isActiveTick", () => {
     const s = createOverlayState(false);
     s.pendingClose = true;
     expect(isActiveTick(s)).toBe(true);
+  });
+
+  it("active while an ambient enter is pending (desire set, still closed)", () => {
+    const s = createOverlayState();
+    setAmbientDesired(s, true);
+    expect(isActiveTick(s)).toBe(true);
+  });
+
+  it("active while an ambient exit is pending (desire dropped, still ambient)", () => {
+    const s = createOverlayState();
+    setAmbientDesired(s, true);
+    applyMode(s, "ambient");
+    setAmbientDesired(s, false);
+    expect(isActiveTick(s)).toBe(true);
+  });
+
+  it("idle in steady ambient — a passive HUD must not hold the 50ms cadence", () => {
+    const s = createOverlayState();
+    setAmbientDesired(s, true);
+    applyMode(s, "ambient");
+    expect(isActiveTick(s)).toBe(false);
   });
 });
