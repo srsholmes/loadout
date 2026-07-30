@@ -160,6 +160,106 @@ describe("webpack patcher — surviving a bad patch", () => {
   });
 });
 
+describe("webpack patcher — re-injection", () => {
+  it("adopts a new patch set instead of bailing out", () => {
+    // Steam's page outlives the daemon, so this script gets injected into the
+    // same page again on every daemon restart. The old guard returned early,
+    // which meant a just-fixed patch appeared to do nothing at all.
+    const factory = new Function(
+      "module",
+      "var MARKER_FIND = 1; var TABS = ['a']; var EXTRA = ['b']; return TABS;",
+    ) as (...a: unknown[]) => unknown;
+
+    const chunk = [["c"], { m: factory }] as unknown as FakeChunk;
+    const chunks: FakeChunk[] = [chunk];
+    const win: Record<string, unknown> = { webpackChunksteamui: chunks };
+    const console_ = { log() {}, warn() {}, error() {} };
+
+    // First injection: a patch that matches nothing.
+    new Function("window", "globalThis", "console", buildWebpackPatcherScript([patch({ find: "NOPE" })]))(
+      win,
+      win,
+      console_,
+    );
+    expect(chunk[1].m).toBe(factory);
+
+    // Second injection, same page, with a patch that does match.
+    new Function("window", "globalThis", "console", buildWebpackPatcherScript([patch()]))(
+      win,
+      win,
+      console_,
+    );
+    expect(chunk[1].m).not.toBe(factory);
+    expect((chunk[1].m as () => unknown)()).toEqual(["a", "b"]);
+  });
+
+  it("does not double-wrap push across injections", () => {
+    // Two layers of interception would scan every chunk twice forever.
+    const win: Record<string, unknown> = { webpackChunksteamui: [] as FakeChunk[] };
+    const console_ = { log() {}, warn() {}, error() {} };
+    const script = buildWebpackPatcherScript([patch()]);
+
+    new Function("window", "globalThis", "console", script)(win, win, console_);
+    const afterFirst = (win.webpackChunksteamui as FakeChunk[]).push;
+    new Function("window", "globalThis", "console", script)(win, win, console_);
+    expect((win.webpackChunksteamui as FakeChunk[]).push).toBe(afterFirst);
+  });
+});
+
+describe("webpack patcher — $self", () => {
+  it("resolves for a kebab-case plugin id", () => {
+    // Dot notation made `globalThis.__LOADOUT_PLUGIN_library-tabs` a
+    // subtraction, so every hyphenated plugin got a patch that compiled and
+    // then threw. Nearly every plugin id in this repo is hyphenated.
+    const factory = new Function(
+      "module",
+      "var MARKER_FIND = 1; var TABS = ['a']; return TABS;",
+    ) as (...a: unknown[]) => unknown;
+
+    const { modules } = runPatcher({
+      patches: [
+        patch({ replacement: { match: "return TABS", replace: "return $self.extend(TABS)" } }),
+      ],
+      modules: { m: factory },
+    });
+
+    // The rebuilt factory is created by `new Function` inside the patcher, so
+    // it resolves the real global scope — as it does in Steam.
+    const key = "__LOADOUT_PLUGIN_library-tabs";
+    (globalThis as Record<string, unknown>)[key] = {
+      extend: (t: string[]) => [...t, "injected"],
+    };
+    try {
+      expect((modules.m as () => unknown)()).toEqual(["a", "injected"]);
+    } finally {
+      delete (globalThis as Record<string, unknown>)[key];
+    }
+  });
+
+  it("degrades to an empty object when the plugin global is absent", () => {
+    // The bundle-eval loop that populated these was removed as dead code, so
+    // a missing global is the normal case, not an exceptional one. It must
+    // not take Steam's library down.
+    const factory = new Function(
+      "module",
+      "var MARKER_FIND = 1; var TABS = ['a']; return TABS;",
+    ) as (...a: unknown[]) => unknown;
+
+    const { modules } = runPatcher({
+      patches: [
+        patch({
+          replacement: {
+            match: "return TABS",
+            replace: "return ($self.extend || function(t){return t})(TABS)",
+          },
+        }),
+      ],
+      modules: { m: factory },
+    });
+    expect((modules.m as () => unknown)()).toEqual(["a"]);
+  });
+});
+
 describe("webpack patcher — no patches", () => {
   it("does not hook webpack at all when nothing needs patching", () => {
     // Most sessions register no patches. Wrapping `push` regardless would put

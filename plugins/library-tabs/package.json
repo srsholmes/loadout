@@ -16,7 +16,7 @@
   "plugin": {
     "id": "library-tabs",
     "name": "Library Tabs",
-    "description": "Custom, filter-driven tabs for your game library — with live match counts, nested rules, and optional mirroring into real Steam collections",
+    "description": "Custom, filter-driven tabs for your game library — shown in Steam's own library as real tabs, with live match counts, nested rules, and optional mirroring into Steam collections",
     "category": "Steam",
     "subtitle": "Organise your library",
     "target": {
@@ -31,6 +31,15 @@
         "localhost",
         "127.0.0.1"
       ]
-    }
+    },
+    "patches": [
+      {
+        "find": "return[p.filter(e=>e),k!=F]",
+        "replacement": {
+          "match": "return[p.filter(e=>e),k!=F]",
+          "replace": "return[(globalThis.__LOADOUT_LT?globalThis.__LOADOUT_LT.extend(p,i,Gc,d):p).filter(e=>e),k!=F]"
+        }
+      }
+    ]
   }
 }

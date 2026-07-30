@@ -56,11 +56,16 @@ export function buildWebpackPatcherScript(patches: WebpackPatchEntry[]): string 
 
   var MAX_MODULE_SOURCE = ${MAX_MODULE_SOURCE};
 
-  if (window.__LOADOUT_WEBPACK_PATCHER) {
-    console.log("[loadout:wp] Webpack patcher already installed");
-    return;
+  // Re-injection must update the patch set, not bail.
+  //
+  // Steam's page outlives the Loadout daemon: restart the daemon, enable a
+  // plugin, or edit a patch, and this script is injected again into the same
+  // page. The old guard returned early, so the running client kept the patch
+  // set it booted with — and a freshly-fixed patch appeared to do nothing,
+  // which is a genuinely baffling thing to debug.
+  if (window.__LOADOUT_WEBPACK_PATCHER && window.__LOADOUT_WEBPACK_PATCHER.reload) {
+    return window.__LOADOUT_WEBPACK_PATCHER.reload(${patchesJson});
   }
-  window.__LOADOUT_WEBPACK_PATCHER = true;
 
   var PATCHES = ${patchesJson};
   var appliedPatches = {};
@@ -95,9 +100,14 @@ export function buildWebpackPatcherScript(patches: WebpackPatchEntry[]): string 
       var matchPattern = rep.match;
       var replaceStr = rep.replace;
 
-      // Support $self — reference to the plugin's global module
+      // Support $self — reference to the plugin's global module.
+      //
+      // Bracket notation, not dot: plugin ids are kebab-case, so
+      // \`globalThis.__LOADOUT_PLUGIN_library-tabs\` parses as a subtraction
+      // and every hyphenated plugin — which is most of them — got a patch that
+      // compiled and then threw at runtime. \`route-patcher.ts\` had this right.
       replaceStr = replaceStr.split("$self").join(
-        "(globalThis.__LOADOUT_PLUGIN_" + pluginId + " || {})"
+        '(globalThis[' + JSON.stringify("__LOADOUT_PLUGIN_" + pluginId) + '] || {})'
       );
 
       // Try as regex first (if it looks like /pattern/flags)
@@ -307,11 +317,47 @@ export function buildWebpackPatcherScript(patches: WebpackPatchEntry[]): string 
   window.__LOADOUT_PATCH_LOG = patchLog;
   window.__LOADOUT_APPLIED_PATCHES = appliedPatches;
 
-  if (PATCHES.length > 0) {
-    console.log("[loadout:wp] Installing webpack patcher with " + PATCHES.length + " patch(es)...");
+  var hooked = false;
+
+  function ensureHooked() {
+    if (hooked) return;
+    hooked = true;
     installHook();
     // Check for unmatched patches after Steam finishes loading
     setTimeout(checkUnmatchedPatches, 15000);
+  }
+
+  window.__LOADOUT_WEBPACK_PATCHER = {
+    /**
+     * Swap in a new patch set and re-scan the chunks already loaded.
+     *
+     * Modules webpack has already *executed* keep running their original
+     * factory — replacing it only affects the next require — so a patch that
+     * lands this way generally shows up after Steam restarts. Applying it
+     * anyway is still right: it costs one scan, and it means the patch is in
+     * place the moment anything re-requires the module.
+     */
+    reload: function (nextPatches) {
+      PATCHES = nextPatches || [];
+      // Clear the applied set: the same key may now mean a different patch.
+      for (var key in appliedPatches) delete appliedPatches[key];
+      patchLog.length = 0;
+      if (PATCHES.length === 0) return "no-patches";
+      ensureHooked();
+      var chunkArray = window.webpackChunksteamui;
+      if (chunkArray) {
+        for (var i = 0; i < chunkArray.length; i++) {
+          var chunk = chunkArray[i];
+          if (Array.isArray(chunk) && chunk.length >= 2) processChunkModules(chunk[1]);
+        }
+      }
+      return "reloaded:" + PATCHES.length;
+    },
+  };
+
+  if (PATCHES.length > 0) {
+    console.log("[loadout:wp] Installing webpack patcher with " + PATCHES.length + " patch(es)...");
+    ensureHooked();
   } else {
     console.log("[loadout:wp] No patches registered, skipping webpack patcher");
   }
