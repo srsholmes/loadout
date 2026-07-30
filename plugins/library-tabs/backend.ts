@@ -23,6 +23,8 @@ import type {
   PluginBackend,
   PluginLogger,
 } from "@loadout/types";
+import { withSteamClient } from "@loadout/steam-cdp";
+import { shortcutGameId64 } from "@loadout/vdf";
 import type { LibraryTabsConfig } from "./lib/config";
 import type { Tab } from "./lib/types";
 import { defaultConfig, uniqueTabId, validateConfig } from "./lib/config";
@@ -188,6 +190,50 @@ export default class LibraryTabsBackend implements PluginBackend {
     } catch {
       // Disabled or absent. Not worth a warning — it's an optional source.
       return null;
+    }
+  }
+
+  // ── Launching ────────────────────────────────────────────────────────
+
+  /**
+   * Ask Steam to launch a game.
+   *
+   * Dispatched through the running client's own URL handler rather than
+   * `Bun.spawn(["steam", …])`, which would start a second Steam process that
+   * often exits before delivering the URL.
+   *
+   * Non-Steam shortcuts are addressed by their 64-bit gameid, not the 32-bit
+   * appid — `steam://rungameid/<appid>` silently does nothing for a shortcut.
+   * `shortcutGameId64` derives it, so the snapshot doesn't have to carry it.
+   */
+  async launchGame(appId: string, source: "steam" | "shortcut"): Promise<void> {
+    const numeric = Number(appId);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      throw new Error("That game can't be launched — its Steam id looks wrong");
+    }
+    const target =
+      source === "shortcut" ? shortcutGameId64(numeric >>> 0) : appId;
+
+    try {
+      await withSteamClient((sc) =>
+        sc.url.executeSteamURL(`steam://rungameid/${target}`),
+      );
+    } catch (err) {
+      this.log?.warn(
+        `[library-tabs] Launch failed for ${appId}: ${err instanceof Error ? err.message : err}`,
+      );
+      throw new Error("Couldn't reach Steam to launch that game");
+    }
+  }
+
+  /** Open a game's page in Steam, for games we can't or shouldn't launch. */
+  async showGameInSteam(appId: string): Promise<void> {
+    try {
+      await withSteamClient((sc) =>
+        sc.url.executeSteamURL(`steam://nav/games/details/${appId}`),
+      );
+    } catch {
+      throw new Error("Couldn't reach Steam");
     }
   }
 
