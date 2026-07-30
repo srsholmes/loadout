@@ -135,9 +135,10 @@ describe("evaluateRule — inversion", () => {
     // turn it into a rule that matches everything.
     const unanswerable: Rule = {
       id: "a",
-      kind: "playtime",
-      minutes: { min: 60 },
+      kind: "protonTier",
+      tiers: ["platinum"],
     };
+    // No fact prefetched => the source hasn't answered.
     const target = buildEvalGames([game({ appId: "x", name: "X" })])[0]!;
 
     expect(evaluateRule(unanswerable, target)).toBe("indeterminate");
@@ -178,27 +179,49 @@ describe("evaluateRule — inversion", () => {
 });
 
 describe("evaluateTab — indeterminatePolicy", () => {
+  // The policy governs an unavailable *source*, not a game with missing
+  // metadata. A dead fact resolver is the canonical case.
+  const deadSource = buildEvalGames(LIBRARY, {
+    protonTier: new Map(
+      LIBRARY.map((g) => [
+        g.appId,
+        { state: "unavailable", reason: "ProtonDB is unreachable." } as const,
+      ]),
+    ),
+  });
   const unanswerable = group("all", [
-    { id: "a", kind: "metacritic", score: { min: 80 } },
+    { id: "a", kind: "protonTier", tiers: ["platinum"] },
   ]);
 
-  it('includes unknown-valued games under "pass"', () => {
+  it('keeps the tab populated under "pass" when a source is down', () => {
     const result = evaluateTab(
       tabWith(unanswerable, { indeterminatePolicy: "pass" }),
-      evalLibrary,
+      deadSource,
     );
-    // The obscure indie has metacritic -1; under `pass` it survives.
-    expect(ids(result.matched)).toContain(IDS.obscure);
+    expect(result.matched).toHaveLength(LIBRARY.length);
   });
 
-  it('excludes them under "fail"', () => {
+  it('empties the tab under "fail"', () => {
     const result = evaluateTab(
       tabWith(unanswerable, { indeterminatePolicy: "fail" }),
-      evalLibrary,
+      deadSource,
     );
-    expect(ids(result.matched)).not.toContain(IDS.obscure);
-    // The definite high scorers still match either way.
-    expect(ids(result.matched)).toContain(IDS.portal2);
+    expect(result.matched).toHaveLength(0);
+  });
+
+  it("does NOT govern games with merely-missing metadata", () => {
+    // Metacritic is plain metadata, not a fact. The obscure indie has none,
+    // so it fails the rule outright regardless of policy — otherwise a
+    // "Metacritic 80+" tab would list unrated games under the default.
+    const byScore = group("all", [{ id: "a", kind: "metacritic", score: { min: 80 } }]);
+    for (const policy of ["pass", "fail"] as const) {
+      const result = evaluateTab(
+        tabWith(byScore, { indeterminatePolicy: policy }),
+        evalLibrary,
+      );
+      expect(ids(result.matched)).not.toContain(IDS.obscure);
+      expect(ids(result.matched)).toContain(IDS.portal2);
+    }
   });
 });
 
@@ -271,9 +294,27 @@ describe("evaluateTab — trace", () => {
     expect(instNode!.failed).toBe(LIBRARY.length - installedCount);
     expect(instNode!.indeterminate).toBe(0);
 
-    // Unknown sizes are "couldn't check", not "too small".
-    const unknownSize = LIBRARY.filter((g) => g.sizeOnDisk === -1).length;
-    expect(bigNode!.indeterminate).toBe(unknownSize);
+    // Metadata rules never go indeterminate — an unknown size is a definite
+    // "not 10 GB or more", so every game lands in passed or failed.
+    expect(bigNode!.passed + bigNode!.failed).toBe(LIBRARY.length);
+    expect(bigNode!.indeterminate).toBe(0);
+  });
+
+  it("tallies indeterminate for a rule whose source is unavailable", () => {
+    const dead = buildEvalGames(LIBRARY, {
+      protonTier: new Map(
+        LIBRARY.map((g) => [
+          g.appId,
+          { state: "unavailable", reason: "ProtonDB is unreachable." } as const,
+        ]),
+      ),
+    });
+    const result = evaluateTab(
+      tabWith(group("all", [{ id: "p", kind: "protonTier", tiers: ["gold"] }])),
+      dead,
+      { trace: true },
+    );
+    expect(result.trace.children![0]!.indeterminate).toBe(LIBRARY.length);
   });
 
   it("computes withoutThis as the parent count with that child removed", () => {

@@ -9,16 +9,22 @@
  *
  * ## Why three-valued logic
  *
- * A rule does not return `boolean`, it returns
- * {@link import("./evaluate").Verdict} — `true | false | "indeterminate"`.
- * `"indeterminate"` means "this rule's data source could not answer",
- * which is a genuinely different thing from "no". TabMaster conflates
- * them: its achievements filter returns `false` when Steam's achievement
- * cache is cold, and its release-date filter returns `false` for any game
- * with no known date. The result is tabs that are mysteriously empty with
- * no way to tell a wrong rule from a missing data source. Here, the tab's
- * {@link Tab.indeterminatePolicy} decides what to do, and the UI can
- * always say *which* rules it couldn't check and why.
+ * A rule does not return `boolean`, it returns {@link Verdict} —
+ * `true | false | "indeterminate"`. `"indeterminate"` means *this rule's
+ * data source could not answer at all*: the HowLongToBeat plugin is
+ * disabled, ProtonDB hasn't been fetched, Steam isn't running.
+ *
+ * TabMaster has no such state, so a cold achievement cache makes its
+ * achievements filter return `false` and the games silently vanish — you
+ * cannot tell a wrong rule from a missing data source. Here the tab's
+ * {@link Tab.indeterminatePolicy} decides (defaulting to `"pass"`, so an
+ * outage degrades a tab rather than emptying it), and the UI can always
+ * name which rules it couldn't check and why.
+ *
+ * Note the deliberate boundary: *missing metadata for one game* — no known
+ * release date, no Metacritic score — is **not** indeterminate. That is
+ * endemic rather than exceptional, so it resolves to a definite `false`,
+ * overridable per rule via {@link NumericRange.includeUnknown}.
  */
 
 import type {
@@ -50,11 +56,14 @@ export interface NumericRange {
   max?: number;
   /**
    * When `true`, records holding the `-1` unknown sentinel **pass**.
-   * Defaults to `false`, and it is deliberately explicit rather than
-   * inferred: "released before 2015" silently swallowing every game with
-   * an unknown release date is exactly the bug class we are here to kill.
-   * With the default, unknowns yield `"indeterminate"` and the UI reports
-   * how many games it couldn't check.
+   * Defaults to `false`, i.e. a game with no known value for this field
+   * does not match.
+   *
+   * Missing metadata for an individual game is endemic — every real library
+   * has hundreds of titles with no Metacritic score — so it resolves to a
+   * definite `false` rather than to `"indeterminate"`. Reserve
+   * `"indeterminate"` for a whole data source being unavailable; see
+   * {@link Tab.indeterminatePolicy}.
    */
   includeUnknown?: boolean;
 }
@@ -384,10 +393,14 @@ export interface Tab {
     collectionName: string;
   };
   /**
-   * What to do with rules whose data source couldn't answer. Defaults to
-   * `"pass"` — a broken or cold data source must never silently empty a
-   * tab. `"fail"` is available for users who would rather a tab under-
-   * report than include a game it couldn't verify.
+   * What to do with rules whose **data source** couldn't answer — a
+   * disabled plugin, an unfetched cache, Steam not running. Defaults to
+   * `"pass"`, so an outage degrades a tab rather than emptying it.
+   * `"fail"` suits users who would rather a tab under-report than include
+   * a game it couldn't verify.
+   *
+   * This does *not* govern games with missing metadata; those resolve to a
+   * definite `false` at the rule level. See {@link NumericRange.includeUnknown}.
    */
   indeterminatePolicy: "pass" | "fail";
 }

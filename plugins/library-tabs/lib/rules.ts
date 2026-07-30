@@ -9,23 +9,34 @@
  *
  * Isomorphic: pure functions over {@link EvalGame}, no I/O, no `node:*`.
  *
- * ## The unknown-value convention
+ * ## Two kinds of "don't know", and why they differ
  *
- * `GameMetadata` uses `-1` for "we don't know" on every numeric field.
- * A range predicate over an unknown value returns `"indeterminate"`, not
- * `false`, unless the rule opts in via `includeUnknown`.
+ * There are two distinct failure modes here, and the whole design turns on
+ * keeping them apart:
  *
- * That choice has a visible consequence — with the default
- * `indeterminatePolicy: "pass"`, a rule like "released before 2015" will
- * include games whose release date we don't know. This is deliberate. The
- * alternative (silently dropping them) is precisely how TabMaster's
- * release-date and achievements filters produce tabs that look broken:
- * the games vanish and nothing tells you why. Here the count is always on
- * screen — a rule row reads `1204 match · 214 couldn't be checked` — and
- * the diagnostics offer a one-tap fix either way. Include-and-say-so beats
- * exclude-and-stay-quiet.
+ * 1. **Missing metadata for one game** — Steam never recorded a release
+ *    date for this title, or it has no Metacritic score. This is *endemic*:
+ *    every real library has hundreds of such gaps. Predicates treat it as a
+ *    definite `false`, overridable per rule via `NumericRange.includeUnknown`.
+ * 2. **A whole data source is unavailable** — the HowLongToBeat plugin is
+ *    disabled, ProtonDB hasn't been fetched, Steam isn't running. This is
+ *    *exceptional*. Predicates return `"indeterminate"`, and the tab's
+ *    `indeterminatePolicy` (default `"pass"`) decides, so a dead source
+ *    degrades a tab instead of emptying it.
  *
- * `lastPlayed` and `playtimeMinutes` distinguish a third state: `0` means
+ * An earlier version routed both through `"indeterminate"`. That was wrong:
+ * with the default pass policy, "released before 2015" would list every
+ * game whose date we didn't know — including 2024 releases — and virtually
+ * every builtin tab and template needed an explicit policy override to
+ * behave sanely. Needing to override a default everywhere is the signal
+ * that the default is wrong.
+ *
+ * So: `"indeterminate"` means *the source didn't answer at all*. `false`
+ * means *the source answered no, or has nothing for this game*. Empty
+ * selections also yield `"indeterminate"`, since a half-built rule is not
+ * yet an assertion about anything.
+ *
+ * `lastPlayed` and `playtimeMinutes` carry a third state: `0` means
  * *provably* never played, which is a real answer and matches normally.
  */
 
@@ -52,7 +63,10 @@ export const UNKNOWN = -1;
  * "60 minutes or more" and mean it.
  */
 export function matchRange(value: number, range: NumericRange): Verdict {
-  if (value === UNKNOWN) return range.includeUnknown === true ? true : "indeterminate";
+  // Missing metadata for one game is endemic, not exceptional — see the
+  // module header. A definite `false` here (rather than "indeterminate")
+  // keeps "released before 2015" from listing games with no known date.
+  if (value === UNKNOWN) return range.includeUnknown === true;
   if (range.min !== undefined && value < range.min) return false;
   if (range.max !== undefined && value > range.max) return false;
   return true;
@@ -266,11 +280,10 @@ const DEFS: { [K in Exclude<RuleKind, "group">]: RuleDef<K> } = {
     predicate: (r, g) => {
       const last = g.meta.lastPlayed;
       // `0` is a real answer from Steam ("never launched"), distinct from
-      // `-1` ("we couldn't find out").
-      if (r.neverPlayedOnly === true) {
-        if (last === UNKNOWN) return "indeterminate";
-        return last === 0;
-      }
+      // `-1` ("we couldn't find out"). An unknown last-played time is not
+      // evidence of never having played, so it must not match — this tab
+      // asserts something positive about the game.
+      if (r.neverPlayedOnly === true) return last === 0;
       if (last === 0) return false; // never played can't fall in a date window
       return matchRange(last, r.epochSec);
     },
@@ -438,10 +451,11 @@ const DEFS: { [K in Exclude<RuleKind, "group">]: RuleDef<K> } = {
     isComplete: (r) => r.paths.length > 0,
     predicate: (r, g) => {
       if (r.paths.length === 0) return "indeterminate";
+      // A game with no known install path isn't in any of the listed
+      // folders as far as we can tell, and an uninstalled game genuinely
+      // isn't. Both are a definite no.
       const path = g.meta.installPath;
-      // Not installed is a definite "no", not an unknown — an uninstalled
-      // game genuinely is not in any folder.
-      if (path === null) return g.meta.installed ? "indeterminate" : false;
+      if (path === null) return false;
       return r.paths.some((p) => path.startsWith(p));
     },
   },

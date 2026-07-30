@@ -52,18 +52,17 @@ describe("matchRange", () => {
     expect(matchRange(5, {})).toBe(true);
   });
 
-  it("returns indeterminate for the unknown sentinel by default", () => {
-    expect(matchRange(UNKNOWN, { min: 0 })).toBe("indeterminate");
-    // Note this is NOT the same as failing a `min: 0` test numerically —
-    // -1 < 0 would be `false`, which would silently drop every unknown.
-    expect(matchRange(UNKNOWN, { max: 100 })).toBe("indeterminate");
+  it("fails the unknown sentinel by default, rather than going indeterminate", () => {
+    // Missing metadata for one game is endemic, not an outage. Routing it
+    // through "indeterminate" (with the default pass policy) would make
+    // "released before 2015" list games with no known date at all.
+    expect(matchRange(UNKNOWN, { min: 0 })).toBe(false);
+    expect(matchRange(UNKNOWN, { max: 100 })).toBe(false);
   });
 
   it("passes unknowns when includeUnknown is explicitly set", () => {
     expect(matchRange(UNKNOWN, { min: 50, includeUnknown: true })).toBe(true);
-    expect(matchRange(UNKNOWN, { min: 50, includeUnknown: false })).toBe(
-      "indeterminate",
-    );
+    expect(matchRange(UNKNOWN, { min: 50, includeUnknown: false })).toBe(false);
   });
 });
 
@@ -257,8 +256,10 @@ describe("lastPlayed rule", () => {
     // indie and the soundtrack have -1 and must NOT be claimed as "never
     // played" — we simply don't know.
     expect(matching(neverOnly)).toEqual([IDS.cyberpunk, IDS.demo, IDS.silksong]);
-    expect(evaluateLeaf(neverOnly, one(IDS.obscure))).toBe("indeterminate");
-    expect(evaluateLeaf(neverOnly, one(IDS.soundtrack))).toBe("indeterminate");
+    // An unknown last-played time is not evidence of never having played,
+    // so it must not match a tab that asserts "never played".
+    expect(evaluateLeaf(neverOnly, one(IDS.obscure))).toBe(false);
+    expect(evaluateLeaf(neverOnly, one(IDS.soundtrack))).toBe(false);
   });
 
   it("excludes never-played games from a date window", () => {
@@ -278,13 +279,13 @@ describe("numeric rules", () => {
   it("playtime treats 0 as a real value, not unknown", () => {
     const zeroOnly: Rule = { id: "a", kind: "playtime", minutes: { max: 0 } };
     expect(matching(zeroOnly)).toEqual([IDS.cyberpunk, IDS.demo, IDS.silksong]);
-    expect(evaluateLeaf(zeroOnly, one(IDS.obscure))).toBe("indeterminate");
+    expect(evaluateLeaf(zeroOnly, one(IDS.obscure))).toBe(false);
   });
 
   it("sizeOnDisk reports unknown sizes as indeterminate", () => {
     const big: Rule = { id: "a", kind: "sizeOnDisk", bytes: { min: 10 * 1024 ** 3 } };
     expect(matching(big)).toEqual([IDS.portal2, IDS.cyberpunk]);
-    expect(evaluateLeaf(big, one(IDS.celeste))).toBe("indeterminate");
+    expect(evaluateLeaf(big, one(IDS.celeste))).toBe(false);
   });
 
   it("reviewScore and metacritic filter on their own scales", () => {
@@ -329,7 +330,7 @@ describe("storage rules", () => {
     ).toEqual([IDS.cyberpunk, IDS.stardew]);
   });
 
-  it("installFolder is a definite no for uninstalled games, not unknown", () => {
+  it("installFolder is a definite no for games with no known path", () => {
     // An uninstalled game genuinely is not in any folder.
     expect(
       evaluateLeaf(
