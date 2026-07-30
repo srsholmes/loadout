@@ -269,6 +269,16 @@ export type RuleMatcher = (rule: Rule, game: EvalGame) => boolean;
 export type FactValue =
   | { state: "ok"; value: number | string | boolean | string[] }
   | { state: "loading" }
+  /**
+   * The resolver ran and simply has nothing for this game — no ProtonDB
+   * report, no HowLongToBeat entry. Endemic, and a definite `false`.
+   *
+   * Distinct from `loading` (nobody has asked yet) and `unavailable` (the
+   * whole source is down), both of which are `indeterminate`. Collapsing
+   * this into `indeterminate` made every unanswered game *match* under the
+   * default `"pass"` policy, silently and with no diagnostic.
+   */
+  | { state: "missing" }
   | { state: "unavailable"; reason: string };
 
 /**

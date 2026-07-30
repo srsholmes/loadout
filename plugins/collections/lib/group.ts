@@ -26,6 +26,7 @@ import type {
   RuleMatcher,
 } from "./types";
 import { buildEvalGames } from "./facts";
+import type { EvalGame } from "./types";
 import { UNKNOWN } from "./rules";
 
 /** Label used when a field has no value for a game. */
@@ -139,6 +140,7 @@ function groupByRules(
   games: readonly GameMetadata[],
   spec: Extract<GroupSpec, { kind: "rules" }>,
   matches: RuleMatcher,
+  evalGames: readonly EvalGame[],
 ): EvalGroupResult[] {
   const buckets = spec.groups.map((g) => ({
     id: g.id,
@@ -147,14 +149,18 @@ function groupByRules(
   }));
   const residual: GameMetadata[] = [];
 
-  // Re-normalise for the evaluator. Sub-group rules see the same metadata
-  // but not the async facts — grouping runs on already-matched games, and
-  // fact-dependent sub-grouping is not a shape anyone has asked for. If it
-  // ever is, thread the fact bag through from `evaluateTab`.
-  const evalGames = buildEvalGames(games);
+  // Reuse the caller's `EvalGame`s rather than rebuilding from metadata.
+  //
+  // Rebuilding dropped the async facts, so every fact-backed sub-tab rule
+  // evaluated `indeterminate` — which the default `"pass"` policy counts as a
+  // match, so the first sub-group swallowed the entire grid. The games here
+  // are a subset of the caller's, so an appId lookup is all that is needed.
+  const byAppId = new Map(evalGames.map((g) => [g.meta.appId, g] as const));
+  const fallback = buildEvalGames(games.filter((g) => !byAppId.has(g.appId)));
+  for (const g of fallback) byAppId.set(g.meta.appId, g);
 
-  outer: for (let i = 0; i < evalGames.length; i++) {
-    const evalGame = evalGames[i]!;
+  outer: for (let i = 0; i < games.length; i++) {
+    const evalGame = byAppId.get(games[i]!.appId)!;
     for (let g = 0; g < spec.groups.length; g++) {
       if (matches(spec.groups[g]!.rule, evalGame)) {
         buckets[g]!.games.push(evalGame.meta);
@@ -183,10 +189,16 @@ export function groupGames(
   spec: GroupSpec,
   tabLabel: string,
   matches: RuleMatcher,
+  /**
+   * The caller's already-normalised games, carrying the async facts. Sub-tab
+   * rules are evaluated against these; without them a fact-backed rule is
+   * `indeterminate` for every game and the first sub-group takes everything.
+   */
+  evalGames: readonly EvalGame[] = [],
 ): EvalGroupResult[] {
   if (spec.kind === "none") {
     return [{ id: "all", label: tabLabel, games: [...games] }];
   }
   if (spec.kind === "field") return groupByField(games, spec);
-  return groupByRules(games, spec, matches);
+  return groupByRules(games, spec, matches, evalGames);
 }

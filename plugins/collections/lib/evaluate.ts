@@ -356,8 +356,12 @@ export function evaluateTab(
 
   return {
     matched: capped,
-    groups: groupGames(capped, tab.group, tab.label, (rule, game) =>
-      decide(evaluateRule(rule, game), policy),
+    groups: groupGames(
+      capped,
+      tab.group,
+      tab.label,
+      (rule, game) => decide(evaluateRule(rule, game), policy),
+      games,
     ),
     total,
     cappedOut: total - capped.length,

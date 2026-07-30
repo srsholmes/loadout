@@ -21,6 +21,7 @@ import { Field, TextInput, Toggle } from "@loadout/ui";
 import type { ParamOption, ParamSpec, RangeUnit } from "../lib/rule-params";
 import { formatBytes, formatMinutes } from "../lib/summarize";
 import type { NumericRange } from "../lib/types";
+import { FocusButton, FocusInput } from "./Focusable";
 
 export interface ParamEditorProps {
   spec: ParamSpec;
@@ -58,10 +59,9 @@ function Chip({
   role: "checkbox" | "radio";
 }) {
   return (
-    <button
-      type="button"
+    <FocusButton
       role={role}
-      aria-checked={selected}
+      ariaChecked={selected}
       onClick={onToggle}
       className={[
         "flex min-h-[44px] flex-col items-start justify-center gap-0.5 rounded-lg border px-3 py-1 text-left",
@@ -70,7 +70,7 @@ function Chip({
     >
       <span className="text-sm">{label}</span>
       {hint ? <span className="text-xs opacity-60">{hint}</span> : null}
-    </button>
+    </FocusButton>
   );
 }
 
@@ -166,13 +166,13 @@ function RangeEditor({
       <label className="flex flex-1 flex-col gap-1">
         <span className="text-xs text-base-content/60">{label}</span>
         <div className="flex items-center gap-2">
-          <input
-            type={unit.type}
-            inputMode={unit.type === "number" ? "decimal" : undefined}
+          <FocusInput
+            inputMode={unit.type === "number" ? "numeric" : "text"}
             value={stored === undefined ? "" : unit.toInput(stored)}
             placeholder="Any"
-            onChange={(event) => {
-              const next = unit.fromInput(event.target.value);
+            ariaLabel={label}
+            onChange={(raw) => {
+              const next = unit.fromInput(raw);
               // Delete the key rather than storing undefined, so a range with
               // no bounds is `{}` — which `rules.ts` reads as incomplete.
               const merged: NumericRange = { ...range };
@@ -266,23 +266,22 @@ function TokensEditor({
             add();
           }}
         />
-        <button
-          type="button"
+        <FocusButton
           onClick={add}
           disabled={draft.trim() === ""}
-          className={`${CONTROL} shrink-0 disabled:opacity-40`}
+          className={`${CONTROL} shrink-0`}
+          style={draft.trim() === "" ? { opacity: 0.4 } : undefined}
         >
           Add
-        </button>
+        </FocusButton>
       </div>
       {values.length > 0 ? (
         <ul className="flex flex-wrap gap-2">
           {values.map((value) => (
             <li key={value}>
-              <button
-                type="button"
+              <FocusButton
                 onClick={() => onChange(values.filter((v) => v !== value))}
-                aria-label={`Remove ${value}`}
+                ariaLabel={`Remove ${value}`}
                 className={[
                   "flex min-h-[44px] items-center gap-2 rounded-lg border px-3",
                   CHIP_ON,
@@ -292,7 +291,7 @@ function TokensEditor({
                 <span aria-hidden="true" className="opacity-60">
                   ×
                 </span>
-              </button>
+              </FocusButton>
             </li>
           ))}
         </ul>
@@ -448,17 +447,16 @@ export function ParamEditor({
 
       case "number":
         return (
-          <input
-            type="number"
+          <FocusInput
             inputMode="numeric"
-            min={spec.min}
-            max={spec.max}
             value={String((value as number | undefined) ?? "")}
-            onChange={(event) => {
-              const next = Number(event.target.value);
+            ariaLabel={spec.label}
+            onChange={(raw) => {
+              const next = Number(raw);
               onChange(Number.isNaN(next) ? 0 : next);
             }}
-            className={`${CONTROL} w-32`}
+            className={CONTROL}
+            style={{ width: "8rem" }}
           />
         );
 

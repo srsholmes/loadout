@@ -427,3 +427,44 @@ describe("countMatches", () => {
     expect(countMatches(tab, evalLibrary)).toBe(LIBRARY.length);
   });
 });
+
+describe("a resolver that answered for only some games", () => {
+  it("does not match every game it had no answer for", () => {
+    // The defect: `readFact` returned indeterminate for an absent per-game
+    // entry, and the default "pass" policy counts that as a match. A ProtonDB
+    // rule for "platinum" matched 9 of 10 games when the resolver had answered
+    // for one — and `blockedFacts` was empty, so nothing explained it.
+    const games = buildEvalGames(LIBRARY, {
+      protonTier: new Map([[LIBRARY[0]!.appId, { state: "ok", value: "gold" }]]),
+    });
+    const tab = tabWith({ kind: "protonTier", id: "r", tiers: ["platinum"] });
+    const result = evaluateTab(tab, games, { trace: true });
+
+    expect(result.total).toBe(0);
+    expect(result.trace.indeterminate).toBe(0);
+  });
+
+  it("still matches the games it did answer for", () => {
+    const games = buildEvalGames(LIBRARY, {
+      protonTier: new Map([[LIBRARY[0]!.appId, { state: "ok", value: "platinum" }]]),
+    });
+    const tab = tabWith({ kind: "protonTier", id: "r", tiers: ["platinum"] });
+    expect(evaluateTab(tab, games).total).toBe(1);
+  });
+
+  it("keeps a whole-source outage indeterminate, not a silent no", () => {
+    // The other direction: an outage must degrade the tab, not empty it.
+    const games = buildEvalGames(
+      LIBRARY,
+      {
+        protonTier: new Map(
+          LIBRARY.map((g) => [g.appId, { state: "unavailable", reason: "off" } as const]),
+        ),
+      },
+    );
+    const tab = tabWith({ kind: "protonTier", id: "r", tiers: ["platinum"] });
+    const result = evaluateTab(tab, games, { trace: true });
+    expect(result.trace.indeterminate).toBe(LIBRARY.length);
+    expect(result.total).toBe(LIBRARY.length); // "pass" policy
+  });
+});

@@ -17,7 +17,7 @@
  * Cancel is a real escape and an experiment costs nothing.
  */
 
-import { useCallback, useDeferredValue, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useMemo, useRef, useState } from "react";
 import { Button, Text } from "@loadout/ui";
 import { RuleGroupNode, TotalBadge, type CombinatorCounts, type RuleTreeContext } from "./RuleGroupNode";
 import { BuilderPage } from "./BuilderPage";
@@ -106,15 +106,24 @@ export function RuleBuilder({
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   /** Group the palette will insert into, or null when it's closed. */
   const [paletteParent, setPaletteParent] = useState<string | null>(null);
-  const [idCounter, setIdCounter] = useState(0);
+  /**
+   * A ref, not state, and that is the whole point.
+   *
+   * `cloneWithNewIds` calls this once per node, so duplicating a group calls
+   * it several times inside one handler. Read from state, every one of those
+   * calls saw the same pre-render value and only *queued* an increment — so a
+   * duplicated group came back with every rule sharing one id. React then
+   * warned about duplicate keys, editing one copy hit an arbitrary sibling,
+   * and the trace map collided so the copies showed each other's counts.
+   */
+  const idCounter = useRef(0);
 
   const newId = useCallback(() => {
     // Monotonic within an editing session and prefixed by the tab, so ids stay
     // stable and readable in an exported config.
-    const next = `${draft.id}-r${Date.now().toString(36)}-${idCounter}`;
-    setIdCounter((n) => n + 1);
-    return next;
-  }, [draft.id, idCounter]);
+    idCounter.current += 1;
+    return `${draft.id}-r${Date.now().toString(36)}-${idCounter.current}`;
+  }, [draft.id]);
 
   const setRoot = useCallback((next: Rule) => {
     setDraft((current) => ({

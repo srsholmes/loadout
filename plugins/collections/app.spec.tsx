@@ -394,6 +394,35 @@ describe("search", () => {
     });
     expect(screen.getByText("Portal 2")).toBeTruthy();
   });
+
+  it("says so when nothing matches, instead of rendering a blank page", async () => {
+    // The whole body below the tab strip used to disappear: no count, no
+    // message, no hint that the search caused it. The tab is fine — it is the
+    // query that is too narrow, and only this branch can say so.
+    mountApp();
+    await waitFor(() => {
+      expect(screen.getByText("Portal 2")).toBeTruthy();
+    });
+
+    fireEvent.change(document.querySelector("input")!, {
+      target: { value: "zzzzz-no-such-game" },
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Portal 2")).toBeNull();
+    });
+    expect(screen.getByText(/No games in .* match/)).toBeTruthy();
+  });
+
+  it("stays quiet when a tab is genuinely empty and no search is active", async () => {
+    // An empty tab is the diagnostics' job to explain; the search message
+    // must not appear and blame a query the user never typed.
+    mountApp();
+    await waitFor(() => {
+      expect(screen.getByText("Portal 2")).toBeTruthy();
+    });
+    expect(screen.queryByText(/No games in .* match/)).toBeNull();
+  });
 });
 
 describe("picking a game", () => {

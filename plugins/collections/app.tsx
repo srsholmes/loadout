@@ -506,7 +506,7 @@ function Collections() {
 
   if (!ready || !config) {
     return (
-      <div className="flex items-center justify-center py-16">
+      <div className="flex items-center justify-center" style={{ padding: "4rem 0" }}>
         <Spinner />
       </div>
     );
@@ -764,6 +764,14 @@ function Collections() {
           <div style={{ height: rowWindow.padBottom, flexShrink: 0 }} />
           </div>
         </>
+      ) : search.trim().length > 0 ? (
+        // A search that matches nothing used to render *nothing at all* — no
+        // count, no message, just the tab strip above an empty page. The tab
+        // itself is fine; it is the query that is too narrow, and only this
+        // branch can say so.
+        <Text variant="secondary">
+          No games in {activeTab?.label ?? "this tab"} match “{search.trim()}”.
+        </Text>
       ) : null}
     </div>
   );
@@ -874,7 +882,7 @@ function TemplateCard({
       className={[
         "flex flex-col items-start gap-1 rounded-lg border p-3 text-left min-h-[44px]",
         "bg-base-100 border-base-300 transition-colors",
-        disabled ? "opacity-50 cursor-not-allowed" : "hover:border-primary",
+        disabled ? "opacity-50" : "",
         focused ? "ring-2 ring-primary/60" : "",
       ]
         .filter(Boolean)

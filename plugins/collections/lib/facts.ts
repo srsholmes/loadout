@@ -49,8 +49,16 @@ export function buildEvalGames(
   return games.map((meta) => {
     const perGame: Partial<Record<FactKey, FactValue>> = {};
     for (const key of factKeys) {
-      const value = facts[key]?.get(meta.appId);
-      if (value) perGame[key] = value;
+      // A key present in the bag means its resolver has run. A game with no
+      // entry under that key is therefore answered-and-empty — `missing`, a
+      // definite `false` — not `loading`.
+      //
+      // Leaving it absent made a sparse map (the natural way to write a
+      // resolver: only emit what you found) turn every unanswered game into
+      // `indeterminate`, which the default `"pass"` policy counts as a match.
+      // A ProtonDB rule then matched the entire library while `blockedFacts`
+      // stayed empty, so the diagnostics said nothing.
+      perGame[key] = facts[key]?.get(meta.appId) ?? { state: "missing" };
     }
 
     return {

@@ -283,3 +283,51 @@ describe("RuleBuilder — diagnostics", () => {
     expect(stillBoth).toBe(false);
   });
 });
+
+describe("RuleBuilder — generated rule ids", () => {
+  /** Every rule id in the saved tab, flattened. */
+  function idsOf(rule: Rule): string[] {
+    return rule.kind === "group"
+      ? [rule.id, ...rule.children.flatMap(idsOf)]
+      : [rule.id];
+  }
+
+  it("gives every rule in a duplicated group its own id", () => {
+    // `newId` read a state counter through a closure, so the several calls
+    // `cloneWithNewIds` makes inside one handler all saw the same pre-render
+    // value and merely queued an increment. A duplicated group came back with
+    // every rule sharing one id: React warned about duplicate keys, editing
+    // one copy hit an arbitrary sibling, and the trace map collided so the
+    // copies showed each other's counts.
+    const { onSave } = renderBuilder(tab([{ id: "a", kind: "installed" }]));
+
+    // Wrap into a group so there is a group to duplicate, then duplicate it.
+    openRowMenu(/Actions for Installed/);
+    fireEvent.click(screen.getByRole("button", { name: "Wrap in group" }));
+    openRowMenu(/Actions for group/);
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save tab" }));
+
+    const saved = onSave.mock.calls[0]?.[0] as Tab;
+    const ids = idsOf(saved.root);
+    expect(ids.length).toBeGreaterThan(3);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("gives consecutive rules distinct ids within one tick", () => {
+    // The ids embed `Date.now()`, which is constant across a burst — so the
+    // counter is the only thing keeping them apart.
+    const { onSave } = renderBuilder(tab([{ id: "a", kind: "installed" }]));
+    for (let i = 0; i < 3; i++) {
+      // After the first duplicate several rows share a label, so address the
+      // first menu explicitly rather than by an ambiguous name lookup.
+      fireEvent.click(screen.getAllByRole("button", { name: /Actions for Installed/ })[0]!);
+      fireEvent.click(screen.getAllByRole("button", { name: "Duplicate" })[0]!);
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Save tab" }));
+
+    const saved = onSave.mock.calls[0]?.[0] as Tab;
+    const ids = idsOf(saved.root);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});

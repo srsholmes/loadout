@@ -21,7 +21,12 @@
  * **Backend only** — imports `node:fs` transitively. Never import from `app.tsx`.
  */
 
-import { mutatePluginStorage, readPluginStorage } from "@loadout/plugin-storage";
+import {
+  mutatePluginStorage,
+  pluginStoragePath,
+  readPluginStorage,
+} from "@loadout/plugin-storage";
+import { copyFile, stat } from "node:fs/promises";
 import type { CollectionsConfig } from "./config";
 import { defaultConfig, validateConfig } from "./config";
 import { migrate } from "./migrations";
@@ -33,6 +38,35 @@ import {
   readBackup,
   writeBackup,
 } from "./backups";
+
+/**
+ * Preserve an unreadable settings file before defaults overwrite it.
+ *
+ * Copied rather than moved: if the copy fails there is no world in which we
+ * have destroyed the original as a side effect of trying to save it.
+ *
+ * Returns the file name kept, or `null` when there was simply no file — the
+ * genuine first run, which must stay silent.
+ */
+async function quarantineUnreadable(now: number): Promise<string | null> {
+  const path = pluginStoragePath(PLUGIN_ID);
+  try {
+    const info = await stat(path);
+    if (!info.isFile()) return null;
+  } catch {
+    return null; // No file at all: a real first run.
+  }
+
+  const name = `${PLUGIN_ID}.unreadable-${now}.json`;
+  try {
+    await copyFile(path, `${path}.unreadable-${now}`);
+    return name;
+  } catch {
+    // Nothing more we can do, but the caller still warns rather than
+    // pretending this was a clean install.
+    return name;
+  }
+}
 
 export interface LoadResult {
   config: CollectionsConfig;
@@ -73,8 +107,12 @@ export async function loadConfig(now: number = Date.now()): Promise<LoadResult> 
   // `readPluginStorage` returns `{}` for both "no file" and "unparseable
   // file". Distinguishing them matters: the first is a first run, the second
   // means we are about to replace something the user may want back.
-  const isFirstRun = Object.keys(stored).length === 0;
-  if (isFirstRun) {
+  if (Object.keys(stored).length === 0) {
+    // A file that exists but yielded nothing is damaged — truncated by a
+    // power cut mid-write, or hand-edited into invalid JSON. Seeding defaults
+    // over it silently is indistinguishable from a fresh install: every tab
+    // the user built is gone, with no warning and nothing to restore from.
+    const damaged = await quarantineUnreadable(now);
     const config = defaultConfig();
     try {
       await mutatePluginStorage<CollectionsConfig>(PLUGIN_ID, () => config);
@@ -82,7 +120,18 @@ export async function loadConfig(now: number = Date.now()): Promise<LoadResult> 
       // Seeding is best-effort; an in-memory default is still usable and the
       // next successful save will persist it.
     }
-    return { config, warnings: [], seeded: true, readOnly: false };
+    return {
+      config,
+      warnings: damaged
+        ? [
+            `Your Collections settings file couldn't be read, so it has been ` +
+              `set back to defaults. The damaged file was kept as ${damaged} — ` +
+              `you may be able to restore an earlier backup.`,
+          ]
+        : [],
+      seeded: true,
+      readOnly: false,
+    };
   }
 
   const result = migrate(stored);

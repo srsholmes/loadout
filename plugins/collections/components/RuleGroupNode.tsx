@@ -18,6 +18,7 @@ import { RuleNodeRow, type RuleRowAction } from "./RuleNodeRow";
 import type { RuleNodeTrace } from "../lib/evaluate";
 import { isRuleComplete } from "../lib/rules";
 import type { GroupRule, Rule } from "../lib/types";
+import { FocusButton } from "./Focusable";
 
 /** Both outcomes for one group, so the header can show the road not taken. */
 export interface CombinatorCounts {
@@ -77,27 +78,25 @@ export function RuleGroupNode({ rule, depth, ctx, isRoot = false }: RuleGroupNod
           </span>
 
           <div className="ml-auto flex items-center gap-2">
-            <button
-              type="button"
+            <FocusButton
               onClick={() => ctx.onAddInside(rule.id)}
               className={[
                 "min-h-[44px] rounded-lg border border-base-300 bg-base-100 px-3 text-sm",
               ].join(" ")}
             >
               Add rule
-            </button>
+            </FocusButton>
             {!isRoot ? (
-              <button
-                type="button"
+              <FocusButton
                 onClick={() => ctx.onToggleMenu(rule.id)}
-                aria-label="Actions for group"
-                aria-expanded={menuOpen}
+                ariaLabel="Actions for group"
+                ariaExpanded={menuOpen}
                 className={[
                   "min-h-[44px] rounded-lg border border-base-300 bg-base-100 px-3",
                 ].join(" ")}
               >
                 ⋮
-              </button>
+              </FocusButton>
             ) : null}
           </div>
         </div>
@@ -122,15 +121,14 @@ export function RuleGroupNode({ rule, depth, ctx, isRoot = false }: RuleGroupNod
           <ul className="flex flex-wrap gap-2">
             {actions.map((action) => (
               <li key={action.id}>
-                <button
-                  type="button"
+                <FocusButton
                   onClick={action.run}
                   className={[
                     "min-h-[44px] rounded-lg border border-base-300 bg-base-100 px-3 text-sm",
                   ].join(" ")}
                 >
                   {action.label}
-                </button>
+                </FocusButton>
               </li>
             ))}
           </ul>

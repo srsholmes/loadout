@@ -21,6 +21,7 @@ import { useMemo, useState } from "react";
 import { Text, TextInput, useFocusable } from "@loadout/ui";
 import type { RuleCandidate } from "../lib/rule-params";
 import type { RuleCategory } from "../lib/rules";
+import { FocusButton } from "./Focusable";
 
 /** A candidate plus what it would do to the current tab. */
 export interface PricedCandidate extends RuleCandidate {
@@ -139,15 +140,14 @@ export function RulePalette({
       ))}
 
       <div className="flex justify-end">
-        <button
-          type="button"
+        <FocusButton
           onClick={onCancel}
           className={[
             "min-h-[44px] rounded-lg border border-base-300 bg-base-200 px-4",
           ].join(" ")}
         >
           Cancel
-        </button>
+        </FocusButton>
       </div>
     </div>
   );
@@ -180,7 +180,7 @@ function CandidateCard({
       onClick={onPick}
       className={[
         "flex w-full min-h-[44px] flex-col items-start gap-1 rounded-lg border p-3 text-left",
-        "border-base-300 bg-base-100 transition-colors hover:border-primary",
+        "border-base-300 bg-base-100 transition-colors",
         // Dimmed, never hidden: "0 games" is information.
         zero ? "opacity-50" : "",
         focused ? "ring-2 ring-primary/60" : "",

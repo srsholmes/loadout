@@ -109,7 +109,7 @@ export function TabDiagnostics({
   const token = variant(diagnosis);
 
   return (
-    <div className="flex flex-col gap-3 py-6">
+    <div className="flex flex-col gap-3" style={{ padding: "1.5rem 0" }}>
       <div
         role="alert"
         className="flex gap-3 rounded-lg p-3"

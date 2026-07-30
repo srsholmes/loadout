@@ -116,7 +116,7 @@ function TabButton({
         active
           ? "bg-base-300 border-primary text-base-content"
           : "bg-base-200 border-transparent text-base-content/70 hover:text-base-content",
-        focused ? "ring-2 ring-primary ring-offset-1 ring-offset-base-100" : "",
+        focused ? "ring-2 ring-primary" : "",
         entry.unavailable ? "opacity-50" : "",
       ]
         .filter(Boolean)
@@ -127,7 +127,13 @@ function TabButton({
           : undefined
       }
     >
-      <span className="truncate max-w-[14rem]">{entry.label}</span>
+      {/* Inline, not `max-w-[14rem]`: plugins ship as a separate release
+          asset from the overlay binary, so a utility only this plugin uses has
+          no rule in an older shell's CSS and silently does nothing — here that
+          means one long tab name eats the whole strip. */}
+      <span className="truncate" style={{ maxWidth: "14rem" }}>
+        {entry.label}
+      </span>
       {showCount && entry.count !== undefined ? (
         <Badge variant={entry.count === 0 ? "neutral" : "primary"}>
           {entry.count}

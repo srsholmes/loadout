@@ -16,6 +16,7 @@ import { Badge, useFocusable } from "@loadout/ui";
 import { summarizeRule } from "../lib/summarize";
 import { ruleDef } from "../lib/rules";
 import type { Rule } from "../lib/types";
+import { FocusButton } from "./Focusable";
 
 export interface RuleRowAction {
   id: string;
@@ -109,26 +110,24 @@ export function RuleNodeRow({
           <Badge variant={passed === 0 ? "neutral" : "primary"}>{passed}</Badge>
         ) : null}
 
-        <button
-          type="button"
+        <FocusButton
           onClick={onToggleMenu}
-          aria-label={`Actions for ${label}`}
-          aria-expanded={menuOpen}
+          ariaLabel={`Actions for ${label}`}
+          ariaExpanded={menuOpen}
           className={[
             "shrink-0 rounded-lg border border-base-300 bg-base-100 px-3 min-h-[44px]",
             "text-base-content/70 hover:text-base-content",
           ].join(" ")}
         >
           ⋮
-        </button>
+        </FocusButton>
       </div>
 
       {menuOpen ? (
         <ul className="flex flex-wrap gap-2 pl-3">
           {usable.map((action) => (
             <li key={action.id}>
-              <button
-                type="button"
+              <FocusButton
                 onClick={action.run}
                 className={[
                   "min-h-[44px] rounded-lg border border-base-300 bg-base-100 px-3 text-sm",
@@ -136,7 +135,7 @@ export function RuleNodeRow({
                 ].join(" ")}
               >
                 {action.label}
-              </button>
+              </FocusButton>
             </li>
           ))}
         </ul>

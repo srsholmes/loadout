@@ -109,6 +109,9 @@ function readFact(game: EvalGame, key: FactKey): Verdict | { value: unknown } {
   const fact = game.facts[key];
   if (!fact || fact.state === "loading") return "indeterminate";
   if (fact.state === "unavailable") return "indeterminate";
+  // The source answered and has nothing for this game: a definite no, per the
+  // two-kinds-of-absence rule in this module's header.
+  if (fact.state === "missing") return false;
   return { value: fact.value };
 }
 
