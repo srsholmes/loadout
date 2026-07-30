@@ -4,10 +4,6 @@ Custom, filter-driven tabs for your Steam library — a successor to the
 Decky plugin [TabMaster](https://github.com/Tormak9970/TabMaster), built on
 Loadout's overlay rather than by patching Steam's library UI.
 
-`PLAN.md` in this directory carries the full six-phase design, including the
-Phase 2–6 work that isn't built yet, with a preamble mapping each plan section
-to what actually exists today.
-
 ## Status
 
 **Phase 1 is functional.** You can browse tabs with live match counts,

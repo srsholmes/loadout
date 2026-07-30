@@ -1,13 +1,14 @@
 # Library Tabs — implementation plan
 
-The full design for `plugins/library-tabs`, a TabMaster successor. Committed
-so it can be picked up on a Linux device with the rest of the branch.
-
-> **Read this first.** The plan below is the *original* design and is
-> unedited, so it describes work that is not yet built as though it were
-> pending — which it is. The table in this preamble is the authoritative
-> statement of what exists today. `README.md` in this directory carries the
-> shorter version plus the conventions you need before editing.
+> **Scratch file — delete when the feature is complete.** This is working
+> context for whoever picks the branch up next, not shipped documentation. It
+> is deliberately not linked from `README.md`, which is the user-facing doc
+> and should survive.
+>
+> The plan body below is the *original* design, committed unedited, so it
+> describes unbuilt work as though it were pending — which it is. The table in
+> this preamble is the authoritative statement of what exists today. For the
+> conventions you need before editing code, read `README.md`.
 
 ## Where this actually stands (as of PR #236)
 
