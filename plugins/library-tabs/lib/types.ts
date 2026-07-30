@@ -211,6 +211,35 @@ export type GroupRule = Extract<Rule, { kind: "group" }>;
 /** Narrow a rule to a specific kind — saves a cast at every call site. */
 export type RuleOfKind<K extends RuleKind> = Extract<Rule, { kind: K }>;
 
+// ── Steam collection mirror ────────────────────────────────────────────
+
+/**
+ * One tab's mirrored Steam collection.
+ *
+ * Identity comes from this ledger, never from a name prefix, so the
+ * collections we create look native in Steam's own sidebar. The trade-off
+ * is that we must be able to prove a collection is ours before touching it,
+ * which is exactly what `collectionId` is for.
+ */
+export interface MirrorLedgerEntry {
+  tabId: string;
+  collectionId: string;
+  collectionName: string;
+  /**
+   * The exact app set we last wrote. This is the diff base, and it is what
+   * lets us tell "the tab's rules now match different games" from "the user
+   * hand-edited our collection in Steam" — the latter gets a warning rather
+   * than a silent overwrite.
+   */
+  appIds: string[];
+  lastSyncedAt: number;
+}
+
+export interface MirrorLedger {
+  version: 1;
+  entries: MirrorLedgerEntry[];
+}
+
 // ── Evaluation output ──────────────────────────────────────────────────
 
 /** One rendered group of matches — a sub-tab, or a titled grid section. */
