@@ -65,6 +65,15 @@ lib/rules.ts      the registry: one entry per rule kind, with its predicate
 lib/sort.ts       multi-key sort, unknown-last, stable total order
 lib/group.ts      GroupSpec -> sub-tabs / sections
 lib/evaluate.ts   Kleene tree walk, trace, leaf masks, cap
+lib/summarize.ts  rules -> plain English
+lib/diagnose.ts   why is this tab empty, and what one tap fixes it
+lib/templates.ts  builtin tabs + the template gallery
+lib/adapt.ts      Phase-1 sources -> GameMetadata (replaced in Phase 2)
+lib/config.ts     schema, defaults, validation, salvage
+lib/migrations.ts versioned upgrades (empty at v1, deliberately)
+lib/share.ts      export/import as a paste-anywhere code
+lib/backups.ts    [backend] timestamped history
+lib/storage.ts    [backend] load/save sequencing
 ```
 
 Three ideas carry the whole design.
@@ -144,14 +153,27 @@ bun test plugins/library-tabs --isolate     # this plugin
 bun run typecheck && sh scripts/check-plugin-specs.sh && bun run check:dead-code
 ```
 
-Note that `bun run test:backend` reports ~423 failures on macOS across the
-whole repo. Those are pre-existing and unrelated — Loadout targets Linux and
-many plugin specs touch sysfs, `/run/media` and systemd. Verify against that
-baseline rather than expecting zero.
+UI specs need the happy-dom preload, so use the repo scripts for those:
+
+```sh
+bun run test:backend    # *.test.ts
+bun run test:ui         # *.spec.tsx
+```
+
+Two pre-existing baselines to measure against rather than expecting zero:
+
+- `test:backend` reports ~423 failures on macOS repo-wide. Loadout targets
+  Linux and many plugin specs touch sysfs, `/run/media` and systemd.
+- `test:ui` reports ~113 failures repo-wide, including `@loadout/ui`'s *own*
+  `Text` and `hideOverlay` specs. This is the `mock.module` leakage described
+  in `docs/test-mock-contamination.md`: despite `--isolate`, one plugin's
+  `useBackend` mock reaches another file. Concretely, `lsfg-vk`'s mock leaks
+  into `components/TabStrip.spec.tsx`, which mocks nothing at all. Every spec
+  here passes in isolation.
 
 ## Hardware gate
 
-`scripts/probe-steam-metadata.ts` (Phase 1, not yet written) must be run on
+`scripts/probe-steam-metadata.ts` must be run on
 a real Steam Deck before Phases 2–4 begin. There is no Steam install on a
 macOS dev machine, so the `appStore` overview field names and
 `appinfo.vdf`'s byte layout are currently **inferred from TabMaster's
