@@ -94,11 +94,21 @@ EXEMPT_LIB=""
 # Scoped to the plugins whose lib/ trees have been ratcheted onto the
 # rule. recomp is back in scope — its lib modules now carry sibling
 # specs. store-bridge stays out until its lib coverage lands.
-SPEC_SCOPED_LIB_DIRS="plugins/recomp/lib"
+# library-tabs is in scope from its first commit: its lib/ tree is the
+# rule engine, and every module there is designed to be unit-testable in
+# isolation, so the gate should hold by construction rather than be
+# ratcheted on afterwards.
+SPEC_SCOPED_LIB_DIRS="plugins/recomp/lib plugins/library-tabs/lib"
 for dir in $SPEC_SCOPED_LIB_DIRS; do
   [ -d "$dir" ] || continue
   for lib in $(find "$dir" -type f -name '*.ts' 2>/dev/null); do
     case "$lib" in
+      # A spec is not itself subject to the spec rule. `*.test.ts` used to
+      # fall through here and pass only by accident — test files usually
+      # have no `export`, so `is_type_only_module` waved them through.
+      # Adding one exported helper to a spec would then have demanded
+      # `foo.test.test.ts`. Skip them explicitly.
+      *.test.ts) continue ;;
       *.spec.ts) continue ;;
       */types.ts) continue ;;
     esac
@@ -123,13 +133,19 @@ done
 
 # Shared workspace packages — same rule, scoped to a list of
 # package src/ trees the ratchet has been applied to.
-# Empty: sgdb-art/steam-shortcut/file-picker are removed from the minimal
-# PoC. Re-scope when those packages return with their plugins.
-SPEC_SCOPED_PACKAGES=""
+# sgdb-art/steam-shortcut/file-picker are removed from the minimal PoC;
+# re-scope when those packages return with their plugins.
+# steam-appinfo and game-metadata are scoped ahead of existing: both are
+# byte-level parsers / provider merges where an untested edge case is a
+# silently-wrong library rather than a crash. The `[ -d ]` guard below
+# makes listing them before they exist a no-op.
+SPEC_SCOPED_PACKAGES="packages/steam-appinfo/src packages/game-metadata/src"
 for dir in $SPEC_SCOPED_PACKAGES; do
   [ -d "$dir" ] || continue
   for src in $(find "$dir" -type f -name '*.ts' 2>/dev/null); do
     case "$src" in
+      # See the note in the lib/ loop above.
+      *.test.ts) continue ;;
       *.spec.ts) continue ;;
       */types.ts) continue ;;
     esac

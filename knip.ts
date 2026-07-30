@@ -111,6 +111,20 @@ const config: KnipConfig = {
       project: "**/*.{ts,tsx,css}",
     },
 
+    // library-tabs ships maintainer tooling on top of the standard plugin
+    // entries: scripts/probe-steam-metadata.ts is run ad hoc on real Deck
+    // hardware to dump Steam's appStore/collectionStore/appinfo.vdf shapes
+    // (see docs/steam-metadata-probe.md), so nothing imports it.
+    "plugins/library-tabs": {
+      entry: [
+        "app.tsx",
+        "backend.ts",
+        "**/*.{test,spec}.{ts,tsx}",
+        "scripts/*.ts",
+      ],
+      project: "**/*.{ts,tsx,css}",
+    },
+
     // recomp additionally ships dynamic-loaded game/mod setup modules and
     // operator scripts on top of the standard plugin entries.
     "plugins/recomp": {
