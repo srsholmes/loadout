@@ -5,7 +5,9 @@
   "private": true,
   "dependencies": {
     "@loadout/types": "workspace:*",
-    "@loadout/plugin-storage": "workspace:*"
+    "@loadout/plugin-storage": "workspace:*",
+    "@loadout/steam-paths": "workspace:*",
+    "@loadout/steam-cdp": "workspace:*"
   },
   "plugin": {
     "id": "library-tabs",
@@ -13,11 +15,17 @@
     "description": "Custom, filter-driven tabs for your game library — with live match counts, nested rules, and optional mirroring into real Steam collections",
     "category": "Steam",
     "subtitle": "Organise your library",
-    "target": { "type": "overlay" },
+    "target": {
+      "type": "overlay"
+    },
     "permissions": {
       "filesystem": [
         "read:~/.local/share/Steam",
         "write:~/.config/loadout/plugins"
+      ],
+      "network": [
+        "localhost",
+        "127.0.0.1"
       ]
     }
   }
