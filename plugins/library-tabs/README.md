@@ -6,28 +6,30 @@ Loadout's overlay rather than by patching Steam's library UI.
 
 ## Status
 
-**Phase 1 is functional.** You can browse tabs with live match counts,
-create tabs from templates, search, and launch games. What is *not* built yet
-is the in-app rule builder — tabs come from templates and can be repaired by
-the diagnostics, but there is no UI to author a rule tree by hand. The engine
-underneath it is complete and specced.
+**Phase 1 is functional.** You can browse tabs with live match counts, create
+tabs from templates, author rule trees by hand, search, and launch games. The
+rule builder is reached from "Edit rules" on any non-builtin tab: every group
+shows both combinator outcomes, every rule row shows its own match count, and
+the palette prices each candidate before you add it.
 
 | Phase | Scope | State |
 |---|---|---|
-| 1 | Tabbed browser, Phase-1 rules, config durability, hardware probe | **functional**; rule builder UI outstanding |
-| 2 | Ownership + `appStore` metadata over CDP | not started — gated on the probe |
-| 3 | `appinfo.vdf` offline metadata (`packages/steam-appinfo`) | not started — gated on the probe |
-| 4 | Steam Collection mirror | not started — gated on the probe |
+| 1 | Tabbed browser, Phase-1 rules, config durability, rule builder, hardware probe | **functional** |
+| 2 | Ownership + `appStore` metadata over CDP | not started — **probe has run**, no longer gated |
+| 3 | `appinfo.vdf` offline metadata (`packages/steam-appinfo`) | not started — **probe has run**; header is 68 bytes |
+| 4 | Steam Collection mirror | not started — **probe has run**; `RemoveApps` exists |
 | 5 | Sub-tabs, async facts, presentation | grouping + fact plumbing done; resolvers outstanding |
 | 6 | Profiles, sharing, home widget | share codes done; profiles/widget outstanding |
 
 Outstanding for Phase 1, in rough priority order:
 
-- `components/RuleBuilder.tsx` and friends — the rule-authoring UI. The
-  `ALL → 0 · ANY → 340` consequence line and the per-candidate palette counts
-  are the differentiating features and both are unbuilt. `lib/` already
-  supplies everything they need (`countMatches`, `EvalResult.trace`,
-  `summarizeRule`).
+- ~~`components/RuleBuilder.tsx` and friends.~~ **Built.** Reached from "Edit
+  rules" on a non-builtin tab. Both differentiating features ship: the
+  `ALL → 0 · ANY → 340` consequence line on every group, and a palette that
+  prices each candidate before you add it. Editing happens on a draft, so
+  Cancel reverts. Drag-to-reorder is still absent — the overflow menu's
+  Move up / Move down cover it, and always will, since drag is unusable with
+  a gamepad.
 - `components/BackupsPanel.tsx` — the backend surface exists
   (`listBackups`, `createBackup`, `restoreBackupFile`); nothing renders it.
 - Tab reorder / hide / rename UI. Backend methods exist.
@@ -62,6 +64,8 @@ collection** over CDP — native-looking organisation, still zero patching.
 lib/types.ts      the data model — Rule, Tab, EvalGame, Verdict (type-only)
 lib/facts.ts      GameMetadata[] + prefetched facts -> EvalGame[]
 lib/rules.ts      the registry: one entry per rule kind, with its predicate
+lib/rule-tree.ts  pure structural edits — insert, move, wrap, duplicate
+lib/rule-params.ts  per-kind defaults + the descriptors the editors render
 lib/sort.ts       multi-key sort, unknown-last, stable total order
 lib/group.ts      GroupSpec -> sub-tabs / sections
 lib/evaluate.ts   Kleene tree walk, trace, leaf masks, cap

@@ -23,22 +23,24 @@ templates, search, launch. 437 tests pass.
 | Config durability | **Built and specced.** `config.ts`, `migrations.ts`, `share.ts`, `backups.ts`, `storage.ts`. |
 | The metadata layer | **Not built.** `lib/adapt.ts` stands in for Phase 1, adapting `__core:game-library` + `playtime` up to the full `GameMetadata` shape. `packages/game-metadata` and `packages/steam-appinfo` do not exist. |
 | The Steam Collection mirror | **Not built.** `MirrorLedger` types exist in `lib/types.ts`; `lib/mirror.ts`, `mirror-ledger.ts` and `packages/steam-cdp/src/collections.ts` do not. |
-| The filter-builder UX | **Not built — the biggest gap.** `components/TabStrip.tsx`, `TabDiagnostics.tsx` and `app.tsx` exist. `RuleBuilder`, `RuleNodeRow`, `RuleEditorSheet`, `RulePalette`, `ParamEditors`, `Sheet`, `TabTemplates`, `MirrorPanel`, `BackupsPanel`, `SubTabStrip` do not. |
+| The filter-builder UX | **Built.** `Sheet`, `ParamEditors`, `RuleNodeRow`, `RuleGroupNode` (with the `ALL → n · ANY → m` line), `RulePalette` (priced candidates), `RuleEditorSheet`, `RuleBuilder`, plus `lib/rule-tree.ts` and `lib/rule-params.ts`. Reached from "Edit rules" on a non-builtin tab. `TabTemplates`, `MirrorPanel`, `BackupsPanel` and `SubTabStrip` still do not exist. |
 | Test strategy | Followed. `plugins/library-tabs/lib` is in `SPEC_SCOPED_LIB_DIRS`, so the gate is enforced. Shared fixture at `test/fixtures/library.ts`. |
 
 ### Next piece of work, in priority order
 
-1. **The rule builder.** The differentiating features are the
-   `ALL → 0 · ANY → 340` consequence line and the per-candidate palette
-   counts, and neither is built. Everything they need already exists:
-   `countMatches`, `EvalResult.trace` (with `withoutThis` and `leafMasks`),
-   `summarizeRule`, `diagnoseTab`.
+1. ~~**The rule builder.**~~ **Built.** Both differentiating features ship:
+   the `ALL → 0 · ANY → 340` consequence line on every group, and
+   per-candidate palette counts. Editing is a draft, so Cancel reverts.
 2. `BackupsPanel` — `listBackups` / `createBackup` / `restoreBackupFile` are
    on the backend already; nothing renders them.
 3. Tab reorder / hide / rename UI — backend methods exist.
 4. Row windowing (`hooks/useVisibleRows.ts`). Evaluation is fast (<25 ms for
-   2000 games x 8 rules); mounting 2000 `GameCard`s is not.
+   2000 games x 8 rules); mounting 2000 `GameCard`s is not. **Now the largest
+   remaining risk**, since the builder made long sessions on one tab likely.
 5. Phases 2–4 — no longer gated; the probe has run.
+
+Still unbuilt in the builder itself: drag-to-reorder (the menu path covers
+it), and `SubTabStrip` / grouping UI, which is Phase 5.
 
 ### The probe has run — Phases 2–4 are unblocked
 
