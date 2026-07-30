@@ -38,28 +38,62 @@ templates, search, launch. 437 tests pass.
 3. Tab reorder / hide / rename UI — backend methods exist.
 4. Row windowing (`hooks/useVisibleRows.ts`). Evaluation is fast (<25 ms for
    2000 games x 8 rules); mounting 2000 `GameCard`s is not.
-5. Phases 2–4, once the probe has run.
+5. Phases 2–4 — no longer gated; the probe has run.
 
-### Run the probe before starting Phases 2–4
+### The probe has run — Phases 2–4 are unblocked
+
+`docs/steam-metadata-probe.md`, measured 2026-07-30 on a Steam Deck (2497
+apps, CEF 126, `appinfo.vdf` v29). Re-run after a Steam client update with:
 
 ```sh
 bun plugins/library-tabs/scripts/probe-steam-metadata.ts > docs/steam-metadata-probe.md
 ```
 
 Read-only. Steam must be running with its library opened at least once.
-Every `appStore` field name and `appinfo.vdf` byte offset in the plan below is
-**inferred from reading TabMaster's source, not measured** — there is no Steam
-install on the machine this was written on. Three things to check in the
-output:
 
-- The **PRESENT/MISSING table** ending the `appStore` section. Each MISSING row
-  is a Phase-2 field whose name is wrong.
-- **Which appinfo header layout chains cleanly.** Exactly one of the two
-  should validate over the whole file; if neither does, the format has moved.
-- **Whether `RemoveApps` exists** on `collectionStore`. This one changes a
-  design decision rather than filling a blank: without it, the Phase-4 mirror
-  cannot do a replace-set and must create-then-delete, losing the user's
-  position in Steam's sidebar.
+**Everything below this preamble that calls an `appStore` field name or an
+`appinfo.vdf` offset "inferred, not measured" is now measured.** Four results
+change the plan, and the sections further down have *not* been rewritten — the
+list here wins:
+
+1. **The `appinfo.vdf` per-section header is 68 bytes**, and `sha1_binary`
+   *is* present in v29:
+   `appid u32 · size u32 · infoState u32 · lastUpdated u32 · picsToken u64 ·
+   sha1_text u8[20] · changeNumber u32 · sha1_binary u8[20]`, body at `+68`.
+   The plan's mitigation — chain-validate and retry the other layout — **does
+   not work**: the next section is at `offset + 8 + size` regardless of header
+   size, so the chain cannot fail on a wrong header. `sections.ts` must
+   validate **body framing** instead (a body opens `0x00`; a section ends
+   `0x08 0x08`). Measured: 68 frames 1247/1247 sections, the alternatives 8, 5
+   and 2.
+2. **`appStore` field names from TabMaster were right, but they are prototype
+   getters, not own keys** — invisible to `Object.keys`, which is why the plan
+   doubted them. 22 getters and 57 methods. Prefer
+   `steam_deck_compat_category` (decoded `1|2|3`) over the own key
+   `steam_hw_compat_category_packed` (bitfield `33|162|227`) and skip
+   unpacking. `steam_os_compat_category` exists, so `steamOsCompat` needs no
+   new source. Methods that collapse whole rules into one call: `BIsOwned`,
+   `BIsDemo`, `BIsBorrowed`/`BIsOwnedByAnotherUser` (familyShared),
+   `BIsUnreleased` (comingSoon), `BIsShortcut`, `BIsMusicAlbum`,
+   `BHasStoreCategory`, `BHasStoreTag`, `GetStoreTags`, `GetLastTimePlayed`,
+   `GetCanonicalReleaseDate`.
+3. **Presence is not population.** Over the whole library:
+   `size_on_disk` **3%**, `rt_original_release_date` 3%,
+   `rt_steam_release_date` 15%, `metacritic_score` 9%,
+   `minutes_playtime_forever` 9%, `rt_last_time_played` 10%,
+   `steam_deck_compat_category` 15%, `review_percentage` 17%,
+   `store_tag` 16%. Consequences: `sizeOnDisk` **cannot** be sourced from
+   `appStore` (use `appmanifest_*.acf`), and `releaseDate` should use
+   `GetCanonicalReleaseDate()` rather than either `rt_*` field. Also
+   **`store_tag` returns numeric tag IDs, not names** — the parity table's
+   "names, not opaque numeric ids" needs an ID→name map before a tag rule can
+   be authored or displayed.
+4. **`RemoveApps` exists.** `CollectionsApi.setApps` does a true replace-set;
+   the create-then-delete fallback that loses the user's sidebar position is
+   not needed. Phase 4's open question is closed.
+
+Still unverified on hardware: `pushBackInterceptor` from a plugin React root
+(gates the sheet-based editor UX).
 
 ### Two plan assumptions that turned out wrong
 
@@ -240,7 +274,8 @@ file, (c) `collectionStore` shapes including `Object.getOwnPropertyNames`
 on a collection and on `collectionStore` itself (to confirm whether
 `RemoveApps` exists), and which collections are dynamic/editable. Output
 committed as `docs/steam-metadata-probe.md`.
-**Phases 2, 3 and 4 do not start until this has run on hardware.**
+~~**Phases 2, 3 and 4 do not start until this has run on hardware.**~~ Ran
+2026-07-30; results in the preamble.
 
 ### Phase 2 — Ownership + rich online metadata (CDP).
 
@@ -251,6 +286,17 @@ New rules: `owned`, `appKind` (unlocks demo), `deckCompat`, `steamOsCompat`,
 `comingSoon`, `familyShared`, `streamable`, `installFolder`, `feature`.
 
 The `installed`/`owned` split is the backlog-suppression job-to-be-done.
+
+Measured corrections to this phase (see the preamble): read the **prototype
+getters**, not the own keys — `steam_deck_compat_category` and
+`steam_os_compat_category` come decoded, so `deckCompat`/`steamOsCompat` need
+no bitfield unpacking. `owned`, `appKind: ["demo"]`, `familyShared` and
+`comingSoon` are one method call each (`BIsOwned`, `BIsDemo`, `BIsBorrowed`,
+`BIsUnreleased`). `releaseDate` uses `GetCanonicalReleaseDate()` because both
+`rt_*` date fields are populated for under 15% of the library. `sizeOnDisk`
+moves to the `manifest` provider — `appStore` carries it for 3% of apps.
+`storeTags` needs an **ID→name map**; `store_tag` and `GetStoreTags()` both
+return numeric IDs.
 
 Provider health renders as a persistent chip: *"Ownership data from 3 days
 ago — Steam wasn't reachable."* Rules needing an unavailable provider are
@@ -301,7 +347,7 @@ All 25 TabMaster filters, and where each lands. Phase in brackets.
 | Installed | `installed` [1] | |
 | Regex | `title` [1] | `match: "contains"｜"startsWith"｜"regex"` — contains is the safe default TabMaster lacks |
 | Friends | `friendsOwn` [5] | async fact |
-| Community Tags | `storeTags` [2] | names, not opaque numeric ids |
+| Community Tags | `storeTags` [2] | names, not opaque numeric ids — **needs an ID→name map**; Steam returns IDs |
 | Whitelist / Blacklist | `whitelist` / `blacklist` [1] | non-invertible by design |
 | Merge | `group` [1] | first-class nesting, visible indentation, max depth 4 |
 | Platform | `source` + `appKind` [1/2] | `appKind` replaces the tools/videos exclusion hack |
@@ -1087,8 +1133,9 @@ not fatal.
   a blank grid; Escape and backdrop-click both close a sheet.
 - **On real hardware (Steam Deck, Gaming Mode)** — this is where the
   genuine unknowns are, and none of them can be checked on this dev machine:
-  1. Run `scripts/probe-steam-metadata.ts`, commit
-     `docs/steam-metadata-probe.md`. **Gate for Phases 2–4.**
+  1. ~~Run `scripts/probe-steam-metadata.ts`, commit
+     `docs/steam-metadata-probe.md`.~~ **Done 2026-07-30** — see the preamble
+     for the four results that change the plan.
   2. Verify `pushBackInterceptor` works from a plugin React root — B closes
      the sheet without popping the plugin page. **Gates the sheet-based
      editor UX.**
@@ -1104,7 +1151,20 @@ not fatal.
 **appinfo.vdf format variance — highest risk.** The trailing 20-byte
 `sha1Binary` in the per-section header is the field implementations most
 often disagree on across v28/v29, and getting it wrong shifts every
-subsequent section by 20 bytes. Mitigation: `sections.ts` **chain-validates**
+subsequent section by 20 bytes.
+
+> **Measured 2026-07-30 (v29): the header is 68 bytes and `sha1Binary` is
+> present.** And the mitigation described next **does not work** — chain
+> validation is blind to header size, because the next section sits at
+> `offset + 8 + size` however many header fields follow `size`. It passes
+> under every candidate layout, so it turns a format guess into false
+> confidence rather than a measurement. `sections.ts` must validate **body
+> framing**: the byte at `offset + headerSize` must be `0x00` (a nested object
+> opens every body) and the section's last two bytes must be `0x08 0x08`. That
+> distinguished 68 (1247/1247 sections) from 48, 60 and 40 (8, 5 and 2). Retry
+> the alternate layout on *that* mismatch, not on a chain mismatch.
+
+Original mitigation, retained for context: `sections.ts` **chain-validates**
 (`offset + size` must land exactly on the next section's first byte) and, on
 mismatch, retries with the alternate header layout — turning a format guess
 into a runtime measurement. v29's string table means a v29 file read with
@@ -1115,24 +1175,30 @@ provider loudly if not. A future v30 is inevitable: `framing.ts` returns
 `unavailable` with *"Your Steam client uses a newer appinfo format (0x…)
 that Loadout doesn't read yet."* Never crash, never guess.
 
-**`appStore` overview field names are unverified.** `getAllApps` only reads
-`appid`, `app_type`, `display_name`; the rest of the Phase-2 field list
-(`rt_last_time_played`, `minutes_playtime_forever`,
-`steam_deck_compat_category`, `size_on_disk`, `store_tag`,
-`per_client_data`, `sort_as`, `rt_purchased_time`, `display_status`,
-`steam_hw_compat_category_packed`) is inferred from TabMaster's source, not
-confirmed against this repo. The probe must dump the full key set. Until
-then treat the list as provisional and read every field through a
-`pick(obj, key, fallback)` helper that warns once per missing key per
-session rather than throwing.
+**~~`appStore` overview field names are unverified.~~ Verified 2026-07-30.**
+Every name in the Phase-2 list resolves. Four of them
+(`steam_deck_compat_category`, `review_percentage`, `store_tag`,
+`store_category`) are **prototype getters rather than own keys**, so they are
+absent from `Object.keys` while reading perfectly — that absence, not a wrong
+name, is what made them look unverified.
 
-**Collection-write reliability.** `collectionStore` is undocumented;
-`RemoveApps` may not exist under that name (only `AddApps` is confirmed, at
-`steam-client.ts:527`). If absent, `setApps` falls back to
-`create(name, appIds)` + `remove(oldId)`, which loses the user's Steam
-sidebar position — the probe must enumerate
-`Object.getOwnPropertyNames` on `collectionStore` and on a collection
-object. Steam collections also sync to Steam Cloud, so rewriting a 500-app
+Keep the `pick(obj, key, fallback)` helper: it still earns its place against a
+future Steam refactor, and `pick` must use `key in obj` / direct read rather
+than an own-key check, or it will report every getter missing.
+
+The live risk moved from *names* to **population**. `size_on_disk` carries a
+value on 3% of the library, `rt_original_release_date` 3%,
+`rt_steam_release_date` 15%. A field that reads without error and is unset for
+most games is more dangerous than a wrong name, because nothing looks broken.
+Source `sizeOnDisk` from `appmanifest_*.acf` and `releaseDate` from
+`GetCanonicalReleaseDate()`.
+
+**Collection-write reliability.** `collectionStore` is undocumented.
+**`RemoveApps` exists** (measured 2026-07-30, alongside `AddApps`, `SetApps`,
+`UpdateApps`, `Delete`), so `setApps` does a real replace-set and the
+create-then-delete fallback — which would have lost the user's Steam sidebar
+position — is not needed. Steam collections also sync to Steam Cloud, so
+rewriting a 500-app
 collection on every `libraryChanged` could hit rate limits or conflict
 across machines; the debounce, the add/remove diff, and the 60 s floor are
 the mitigation. Two machines mirroring the same tab will fight — the ledger
