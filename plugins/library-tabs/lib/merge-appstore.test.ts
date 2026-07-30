@@ -76,10 +76,19 @@ describe("mergeSteamLibrary — adding what the manifest cannot see", () => {
     expect(result.enriched).toBe(1);
   });
 
-  it("gives an added game CDN artwork, since no local art exists for it", () => {
+  it("gives an added Steam game CDN artwork, since no local art exists for it", () => {
     const [game] = mergeSteamLibrary([], [steam("999")]).games;
     expect(game!.headerUrl).toContain("/steam/apps/999/header.jpg");
     expect(game!.capsuleUrl).toContain("/steam/apps/999/library_600x900.jpg");
+  });
+
+  it("gives an added shortcut no artwork rather than a URL that 404s", () => {
+    // Steam's CDN has nothing for an appId Steam never issued, so a CDN URL
+    // for a ROM is a guaranteed broken tile. Empty lets GameCard show its own
+    // placeholder, which is the honest answer.
+    const [game] = mergeSteamLibrary([], [steam("999", { kind: "rom" })]).games;
+    expect(game!.headerUrl).toBe("");
+    expect(game!.capsuleUrl).toBe("");
   });
 
   it("marks an added game as sourced from the appstore alone", () => {

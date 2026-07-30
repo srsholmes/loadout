@@ -61,11 +61,21 @@ function kindFrom(value: string): AppKind {
 }
 
 /**
- * Artwork for a game the manifest has never seen. The loader's local route
- * only helps for apps with cached or custom art on this machine, which an
- * uninstalled game has neither of, so the public CDN is the honest source.
+ * Artwork for a game the manifest has never seen.
+ *
+ * For a real Steam app the public CDN is the honest source: an uninstalled game
+ * has no cached or custom art on this machine, so the loader's local route has
+ * nothing to serve.
+ *
+ * For a **non-Steam shortcut there is no source at all** — the CDN has no art
+ * for an appId Steam never issued, so building one of those URLs guarantees a
+ * 404 and a broken tile. Empty strings let `GameCard` fall back to its own
+ * placeholder, which is the truth: we have no picture for this.
  */
-function cdnArt(appId: string): { headerUrl: string; capsuleUrl: string } {
+function artFor(appId: string, kind: AppKind): { headerUrl: string; capsuleUrl: string } {
+  if (kind === "shortcut" || kind === "rom") {
+    return { headerUrl: "", capsuleUrl: "" };
+  }
   return {
     headerUrl: `https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/header.jpg`,
     capsuleUrl: `https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/library_600x900.jpg`,
@@ -155,7 +165,7 @@ export function mergeSteamLibrary(
       genres: [],
       features: emptyFeatures(),
       collections: entry.collections,
-      ...cdnArt(entry.appId),
+      ...artFor(entry.appId, fromSteam.kind),
       contributors: ["appstore"],
     });
   }

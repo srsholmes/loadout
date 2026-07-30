@@ -45,7 +45,7 @@ describe("LibraryTabsHeader", () => {
     renderHeader({
       showBrowseActions: false,
       onAddTab: () => {},
-      onEditRules: () => {},
+      onTabOptions: () => {},
     });
     expect(screen.queryByRole("button", { name: "Add tab" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Edit rules" })).toBeNull();
@@ -60,16 +60,18 @@ describe("LibraryTabsHeader", () => {
     expect(onSearchChange).toHaveBeenCalledWith("halo");
   });
 
-  it("omits Edit rules for a builtin tab, which has no editable root", () => {
-    renderHeader({ onAddTab: () => {} });
-    expect(screen.queryByRole("button", { name: "Edit rules" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Add tab" })).toBeTruthy();
+  it("offers Tab options for a builtin too — it can still be hidden or moved", () => {
+    // Hiding the control entirely for built-ins is what made tab management
+    // look absent: there was no visible way to rename, reorder or delete
+    // anything, because the one button only appeared on custom tabs.
+    renderHeader({ onTabOptions: () => {}, onAddTab: () => {} });
+    expect(screen.getByRole("button", { name: "Tab options" })).toBeTruthy();
   });
 
   it("omits Add tab when the config is read-only", () => {
-    renderHeader({ onEditRules: () => {} });
+    renderHeader({ onTabOptions: () => {} });
     expect(screen.queryByRole("button", { name: "Add tab" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Edit rules" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Tab options" })).toBeTruthy();
   });
 
   it("relabels the add button when the template gallery is open", () => {
@@ -79,11 +81,11 @@ describe("LibraryTabsHeader", () => {
 
   it("fires its callbacks", () => {
     const onAddTab = mock(() => {});
-    const onEditRules = mock(() => {});
-    renderHeader({ onAddTab, onEditRules });
+    const onTabOptions = mock(() => {});
+    renderHeader({ onAddTab, onTabOptions });
     fireEvent.click(screen.getByRole("button", { name: "Add tab" }));
-    fireEvent.click(screen.getByRole("button", { name: "Edit rules" }));
+    fireEvent.click(screen.getByRole("button", { name: "Tab options" }));
     expect(onAddTab).toHaveBeenCalledTimes(1);
-    expect(onEditRules).toHaveBeenCalledTimes(1);
+    expect(onTabOptions).toHaveBeenCalledTimes(1);
   });
 });

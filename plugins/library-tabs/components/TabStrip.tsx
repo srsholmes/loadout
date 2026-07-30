@@ -32,6 +32,15 @@ export interface TabStripProps {
   /** Opens the per-tab menu (Y on a controller, ⋯ button with a pointer). */
   onOpenMenu?: (id: string) => void;
   showCounts?: boolean;
+  /**
+   * Horizontal padding *inside* the scroll area, in px.
+   *
+   * The caller bleeds this strip out past the page's padding so it can scroll
+   * edge to edge; the inset has to live on the scrolling element itself or the
+   * first and last tab sit flush against the screen. Putting it on a wrapper
+   * instead just cancels the bleed.
+   */
+  edgePadding?: number;
 }
 
 interface TabButtonProps {
@@ -134,6 +143,7 @@ export function TabStrip({
   onSelect,
   onOpenMenu,
   showCounts = true,
+  edgePadding = 0,
 }: TabStripProps) {
   if (tabs.length === 0) return null;
 
@@ -144,6 +154,7 @@ export function TabStrip({
       // Horizontal scroll rather than wrapping: a wrapped strip reflows the
       // grid below it every time a count changes, which reads as jitter.
       className="flex gap-2 overflow-x-auto pb-1"
+      style={edgePadding ? { paddingInline: edgePadding } : undefined}
     >
       {tabs.map((entry) => (
         <TabButton

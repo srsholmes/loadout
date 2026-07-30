@@ -25,8 +25,12 @@ export interface LibraryTabsHeaderProps {
   onSearchChange: (next: string) => void;
   /** Hidden while editing — the builder owns the screen then. */
   showBrowseActions: boolean;
-  /** Absent for builtin tabs and read-only configs. */
-  onEditRules?: () => void;
+  /**
+   * Opens the tab's options page — rename, reorder, hide, edit rules, delete.
+   * Offered for built-ins too: they can still be hidden and moved, and hiding
+   * the control entirely is what made the whole surface look absent.
+   */
+  onTabOptions?: () => void;
   /** Absent when the config is read-only. */
   onAddTab?: () => void;
   /** Label for the add/close toggle, since it doubles as a close. */
@@ -39,7 +43,7 @@ export function LibraryTabsHeader({
   search,
   onSearchChange,
   showBrowseActions,
-  onEditRules,
+  onTabOptions,
   onAddTab,
   addTabLabel,
   searchPlaceholder,
@@ -65,9 +69,9 @@ export function LibraryTabsHeader({
               placeholder={searchPlaceholder}
               width={220}
             />
-            {onEditRules ? (
-              <Button variant="neutral" onClick={onEditRules}>
-                Edit rules
+            {onTabOptions ? (
+              <Button variant="neutral" onClick={onTabOptions}>
+                Tab options
               </Button>
             ) : null}
             {onAddTab ? (

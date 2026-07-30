@@ -8,7 +8,7 @@ This is what the Tier-B non-degeneracy floors are calibrated against. A field
 at 0% is a rule that cannot possibly discriminate; that is the point of
 capturing it.
 
-Captured: 2026-07-30T20:28:34.761Z
+Captured: 2026-07-30T20:47:51.486Z
 Apps: **4356**
 
 ## Provider states at capture

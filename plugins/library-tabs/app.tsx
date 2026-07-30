@@ -22,6 +22,7 @@ import {
   collectionSearchTokens,
   fuzzySearchGames,
   friendlyCollectionName,
+  hideOverlay,
   mountComponent,
   mountHeaderStub,
   notify,
@@ -34,6 +35,7 @@ import { TabStrip, type TabStripEntry } from "./components/TabStrip";
 import { TabDiagnostics } from "./components/TabDiagnostics";
 import { RuleBuilder } from "./components/RuleBuilder";
 import { LibraryTabsHeader } from "./components/LibraryTabsHeader";
+import { TabActionsPage } from "./components/TabActionsPage";
 import type { ParamOption } from "./lib/rule-params";
 import type { LibraryTabsConfig } from "./lib/config";
 import { orderedTabs, resolveDefaultTab } from "./lib/config";
@@ -46,6 +48,9 @@ import { templates } from "./lib/templates";
 import type { Tab } from "./lib/types";
 
 export { FaLayerGroup as icon };
+
+/** Matches the `p-7` on the page container, in px. */
+const PAGE_PADDING = 28;
 
 interface ConfigPayload {
   config: LibraryTabsConfig;
@@ -64,6 +69,8 @@ function LibraryTabs() {
   const [showTemplates, setShowTemplates] = useState(false);
   /** Tab whose rules are being edited, or null when browsing. */
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
+  /** Tab whose rename/move/delete page is open. */
+  const [managingTabId, setManagingTabId] = useState<string | null>(null);
 
   // ── Data ───────────────────────────────────────────────────────────
 
@@ -280,8 +287,64 @@ function LibraryTabs() {
     [call, config],
   );
 
+  const managingTab: Tab | null = useMemo(
+    () => config?.tabs.find((t) => t.id === managingTabId) ?? null,
+    [config, managingTabId],
+  );
+
+  /** Persist a whole-tab change and surface any rejection. */
+  const applyTabs = useCallback(
+    async (next: Tab[], failure: string) => {
+      try {
+        await call("setTabs", next);
+      } catch (err) {
+        notify(err instanceof Error ? err.message : failure, { kind: "error" });
+      }
+    },
+    [call],
+  );
+
+  const deleteTab = useCallback(
+    async (tabId: string) => {
+      try {
+        await call("deleteTab", tabId);
+        setManagingTabId(null);
+      } catch (err) {
+        notify(err instanceof Error ? err.message : "Couldn't delete that tab", {
+          kind: "error",
+        });
+      }
+    },
+    [call],
+  );
+
+  const moveTab = useCallback(
+    async (tabId: string, delta: number) => {
+      if (!config) return;
+      const order = orderedTabs(config).map((t) => t.id);
+      const at = order.indexOf(tabId);
+      const to = at + delta;
+      if (at === -1 || to < 0 || to >= order.length) return;
+      const [moved] = order.splice(at, 1);
+      if (!moved) return;
+      order.splice(to, 0, moved);
+      try {
+        await call("reorderTabs", order);
+      } catch (err) {
+        notify(err instanceof Error ? err.message : "Couldn't reorder the tabs", {
+          kind: "error",
+        });
+      }
+    },
+    [call, config],
+  );
+
   const launch = useCallback(
     async (game: GameMetadata) => {
+      // Hide first, then launch. The overlay is its own X11 window layered over
+      // Gamescope, so leaving it up means Steam starts the game behind it and
+      // the launch looks like it did nothing. Same ordering as protondb-badges.
+      void hideOverlay().catch(() => {});
       try {
         await call("launchGame", game.appId, game.source);
       } catch (err) {
@@ -322,13 +385,48 @@ function LibraryTabs() {
       onAddTab={
         readOnly ? undefined : () => setShowTemplates((open) => !open)
       }
-      onEditRules={
-        !readOnly && activeTab && activeTab.builtin === undefined
-          ? () => setEditingTabId(activeTab.id)
-          : undefined
+      onTabOptions={
+        !readOnly && activeTab ? () => setManagingTabId(activeTab.id) : undefined
       }
     />
   );
+
+  if (managingTab) {
+    const order = config ? orderedTabs(config) : [];
+    return (
+      <div className="p-7 h-full overflow-y-auto" style={{ overflowX: "hidden" }}>
+        {header}
+        <TabActionsPage
+          tab={managingTab}
+          index={order.findIndex((t) => t.id === managingTab.id)}
+          tabCount={order.length}
+          onBack={() => setManagingTabId(null)}
+          onEditRules={() => {
+            setEditingTabId(managingTab.id);
+            setManagingTabId(null);
+          }}
+          onRename={(label) => {
+            void applyTabs(
+              (config?.tabs ?? []).map((t) =>
+                t.id === managingTab.id ? { ...t, label } : t,
+              ),
+              "Couldn't rename that tab",
+            );
+          }}
+          onToggleVisible={() => {
+            void applyTabs(
+              (config?.tabs ?? []).map((t) =>
+                t.id === managingTab.id ? { ...t, visible: !t.visible } : t,
+              ),
+              "Couldn't change that tab",
+            );
+          }}
+          onMove={(delta) => void moveTab(managingTab.id, delta)}
+          onDelete={() => void deleteTab(managingTab.id)}
+        />
+      </div>
+    );
+  }
 
   // The builder takes over the page rather than opening beside it: the rule
   // tree, its counts and the palette all need the width, and a gamepad user
@@ -364,12 +462,20 @@ function LibraryTabs() {
         </Text>
       ) : null}
 
-      <TabStrip
-        tabs={stripTabs}
-        activeId={activeId}
-        onSelect={setActiveId}
-        showCounts={config.settings.showCounts}
-      />
+      {/* Full-bleed: cancel the page's padding so the strip scrolls edge to
+          edge, then re-apply it inside so the first and last tab still clear
+          the sides. Inline rather than `-mx-7`, which is not in the shell's
+          stylesheet (see README). */}
+      <div style={{ marginInline: -PAGE_PADDING }}>
+        <TabStrip
+          tabs={stripTabs}
+          activeId={activeId}
+          onSelect={setActiveId}
+          onOpenMenu={readOnly ? undefined : setManagingTabId}
+          showCounts={config.settings.showCounts}
+          edgePadding={PAGE_PADDING}
+        />
+      </div>
 
       {showTemplates ? (
         <TemplateGallery
