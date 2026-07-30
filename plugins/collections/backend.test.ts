@@ -18,6 +18,18 @@ import type { SteamLibraryEntry } from "@loadout/steam-cdp";
  */
 let steamEntries: SteamLibraryEntry[] | null = null;
 
+/** In-memory Steam collections, for the mirror tests. */
+let fakeCollections: Array<{
+  id: string;
+  name: string;
+  appIds: string[];
+  isDynamic: boolean;
+  isEditable: boolean;
+}> = [];
+let collectionSeq = 0;
+/** Resolves each `createCollection`, so two syncs can be interleaved by hand. */
+let createGate: (() => Promise<void>) | null = null;
+
 mock.module("@loadout/steam-cdp", () => ({
   withSteamClient: async (fn: (client: unknown) => unknown) => {
     if (steamEntries === null) throw new Error("Steam is not running (test stub)");
@@ -28,6 +40,34 @@ mock.module("@loadout/steam-cdp", () => ({
     installedCount: (steamEntries ?? []).filter((e) => e.installed).length,
     resolvedTagCount: 0,
   }),
+  listCollections: async () => fakeCollections.map((c) => ({ ...c, appIds: [...c.appIds] })),
+  createCollection: async (_c: unknown, a: { name: string; appIds: string[] }) => {
+    if (createGate) await createGate();
+    const made = {
+      id: `uc-${++collectionSeq}`,
+      name: a.name,
+      appIds: [...a.appIds],
+      isDynamic: false,
+      isEditable: true,
+    };
+    fakeCollections.push(made);
+    return made;
+  },
+  setCollectionApps: async (_c: unknown, a: { collectionId: string; appIds: string[] }) => {
+    const found = fakeCollections.find((c) => c.id === a.collectionId)!;
+    found.appIds = [...a.appIds];
+    return found;
+  },
+  renameCollection: async (_c: unknown, a: { collectionId: string; name: string }) => {
+    const found = fakeCollections.find((c) => c.id === a.collectionId)!;
+    found.name = a.name;
+    return found;
+  },
+  deleteCollection: async (_c: unknown, a: { collectionId: string }) => {
+    const before = fakeCollections.length;
+    fakeCollections = fakeCollections.filter((c) => c.id !== a.collectionId);
+    return fakeCollections.length !== before;
+  },
 }));
 
 const { default: CollectionsBackend } = await import("./backend");
@@ -41,6 +81,9 @@ let prevXdg: string | undefined;
 
 beforeEach(() => {
   steamEntries = null;
+  fakeCollections = [];
+  collectionSeq = 0;
+  createGate = null;
   prevXdg = process.env.XDG_CONFIG_HOME;
   tempDir = mkdtempSync(join(tmpdir(), "collections-backend-"));
   process.env.XDG_CONFIG_HOME = tempDir;
@@ -537,5 +580,127 @@ describe("read-only mode", () => {
       throw new Error("nope");
     }) as CollectionsBackend["callPlugin"];
     expect((await backend.getSnapshot()).games).toHaveLength(1);
+  });
+});
+
+// ── The mirror's ownership rules ───────────────────────────────────────
+//
+// Each of these encodes a way a user's Steam collections could be corrupted
+// or orphaned. All three were live defects; none was visible to the suite.
+
+describe("mirror — the ledger is backend-owned", () => {
+  /** A tab set to mirror, so a sync has something to do. */
+  async function mirroringBackend() {
+    const backend = new CollectionsBackend();
+    await backend.onLoad();
+    const { config } = await backend.getConfig();
+    const tabs = config.tabs.map((t) =>
+      t.id === "all" ? { ...t, mirror: { enabled: true, collectionName: "Everything" } } : t,
+    );
+    steamEntries = [];
+    await backend.setTabs(tabs);
+    return backend;
+  }
+
+  it("ignores a ledger supplied by the client", async () => {
+    // The UI posts a whole config from React state it captured before the
+    // last sync broadcast. Honouring its ledger loses collections that exist.
+    const backend = await mirroringBackend();
+    await backend.syncMirror();
+    const afterSync = (await backend.getConfig()).config;
+    expect(afterSync.mirror.ledger.entries).toHaveLength(1);
+
+    // A stale client echoes back the pre-sync (empty) ledger.
+    await backend.setConfig({
+      ...afterSync,
+      mirror: { ...afterSync.mirror, ledger: { version: 1, entries: [] }, autoSync: true },
+    });
+
+    const after = (await backend.getConfig()).config;
+    expect(after.mirror.ledger.entries).toHaveLength(1);
+    // The rest of the client's config still applies.
+    expect(after.mirror.autoSync).toBe(true);
+  });
+
+  it("keeps a forgotten collection deletable", async () => {
+    // The consequence of losing the ledger: deletion requires a ledger entry,
+    // so a forgotten collection can never be cleaned up, and its name then
+    // conflicts with the tab that created it — permanently.
+    const backend = await mirroringBackend();
+    await backend.syncMirror();
+    const synced = (await backend.getConfig()).config;
+
+    await backend.setConfig({
+      ...synced,
+      mirror: { ...synced.mirror, ledger: { version: 1, entries: [] } },
+      tabs: synced.tabs.map((t) =>
+        t.id === "all" ? { ...t, mirror: { enabled: false, collectionName: "Everything" } } : t,
+      ),
+    });
+    await backend.syncMirror();
+
+    expect(fakeCollections).toHaveLength(0);
+  });
+});
+
+describe("mirror — concurrent syncs", () => {
+  it("never creates two collections for one tab", async () => {
+    // Three callers can start a sync — the RPC, the debounce timer and the
+    // owed-sync retry — and none can see the others. Both plan against the
+    // same empty ledger, so both decide to create.
+    const backend = new CollectionsBackend();
+    await backend.onLoad();
+    const { config } = await backend.getConfig();
+    steamEntries = [];
+    await backend.setTabs(
+      config.tabs.map((t) =>
+        t.id === "all" ? { ...t, mirror: { enabled: true, collectionName: "Everything" } } : t,
+      ),
+    );
+
+    // Hold the first create open until the second sync has been started.
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let gated = false;
+    createGate = async () => {
+      if (gated) return;
+      gated = true;
+      await held;
+    };
+
+    const first = backend.syncMirror();
+    const second = backend.syncMirror();
+    release();
+    await Promise.all([first, second]);
+
+    expect(fakeCollections).toHaveLength(1);
+    const ledger = (await backend.getConfig()).config.mirror.ledger;
+    expect(ledger.entries).toHaveLength(1);
+    expect(ledger.entries[0]!.collectionId).toBe(fakeCollections[0]!.id);
+  });
+});
+
+describe("mirror — an owed sync is not forgotten", () => {
+  it("keeps pendingSync set when collections failed individually", async () => {
+    // Steam dying *after* the session connects makes every op fail on its own,
+    // which the executor collects rather than throws. Treating that as success
+    // cleared the retry flag and nothing ever synced again.
+    const backend = new CollectionsBackend();
+    await backend.onLoad();
+    const { config } = await backend.getConfig();
+    steamEntries = [];
+    await backend.setTabs(
+      config.tabs.map((t) =>
+        t.id === "all" ? { ...t, mirror: { enabled: true, collectionName: "Everything" } } : t,
+      ),
+    );
+
+    createGate = async () => {
+      throw new Error("Steam went away mid-sync");
+    };
+    const result = await backend.syncMirror();
+
+    expect(result.failures.length).toBeGreaterThan(0);
+    expect((await backend.getConfig()).config.mirror.pendingSync).toBe(true);
   });
 });

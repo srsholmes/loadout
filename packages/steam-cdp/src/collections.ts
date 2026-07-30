@@ -154,7 +154,7 @@ export async function setCollectionApps(
     ${HELPERS}
     try {
       const col = findById(cs, ${JSON.stringify(collectionId)});
-      if (!col) return { tag: "error", error: "no collection with id ${collectionId}" };
+      if (!col) return { tag: "error", error: "no collection with id " + ${JSON.stringify(collectionId)} };
       const info = infoOf(col);
       if (info.isDynamic || !info.isEditable) {
         return { tag: "error", error: "collection is dynamic or not editable" };
@@ -197,7 +197,7 @@ export async function renameCollection(
     ${HELPERS}
     try {
       const col = findById(cs, ${JSON.stringify(collectionId)});
-      if (!col) return { tag: "error", error: "no collection with id ${collectionId}" };
+      if (!col) return { tag: "error", error: "no collection with id " + ${JSON.stringify(collectionId)} };
       if (typeof col.SetDisplayName === "function") col.SetDisplayName(${JSON.stringify(name)});
       else col.m_strName = ${JSON.stringify(name)};
       await cs.SaveCollection(col);

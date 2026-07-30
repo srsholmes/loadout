@@ -85,6 +85,14 @@ export default class CollectionsBackend implements PluginBackend {
   private readOnly = false;
   /** Pending debounced auto-sync, if any. */
   private syncTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Serialises syncs. Three callers can start one — the manual RPC, the
+   * debounce timer and the owed-sync retry on load — and none can see the
+   * others. Two overlapping runs each create their own collection for the
+   * same tab, and only the last to finish is recorded, so every overlap
+   * leaks a collection that nothing can ever clean up.
+   */
+  private syncChain: Promise<unknown> = Promise.resolve();
 
   async onLoad(): Promise<void> {
     const result = await loadConfig();
@@ -136,11 +144,43 @@ export default class CollectionsBackend implements PluginBackend {
   async setConfig(next: CollectionsConfig): Promise<CollectionsConfig> {
     this._assertWritable();
     const before = this.config;
-    await saveConfig(next); // throws on invalid; never persists junk
+
+    // The mirror ledger is **backend-owned** and never taken from the caller.
+    //
+    // The UI posts a whole config built from React state, captured before
+    // whatever `configChanged` the last sync broadcast. Honouring the client's
+    // copy meant flipping the Settings switch mid-sync reverted the ledger to
+    // its pre-sync value while the collections it recorded still existed in
+    // Steam. A ledger that has forgotten a collection can never delete it —
+    // deletion requires a ledger entry — so the tab then conflicts with its
+    // own orphan, permanently, and the stray is unreachable.
+    const merged: CollectionsConfig = {
+      ...next,
+      mirror: {
+        ...next.mirror,
+        ledger: this.config.mirror.ledger,
+        pendingSync: this.config.mirror.pendingSync,
+      },
+    };
+
+    await saveConfig(merged); // throws on invalid; never persists junk
+    this.config = merged;
+    this._broadcast();
+    this._maybeAutoSync(before, merged);
+    return this.config;
+  }
+
+  /**
+   * Persist backend-owned mirror state.
+   *
+   * Private on purpose: only a completed sync may say what the ledger holds,
+   * so this is the one path allowed to write it.
+   */
+  private async _setMirrorState(mirror: CollectionsConfig["mirror"]): Promise<void> {
+    const next: CollectionsConfig = { ...this.config, mirror };
+    await saveConfig(next);
     this.config = next;
     this._broadcast();
-    this._maybeAutoSync(before, next);
-    return this.config;
   }
 
   /**
@@ -395,6 +435,27 @@ export default class CollectionsBackend implements PluginBackend {
     deleted: number;
     failures: MirrorSyncResult["failures"];
   }> {
+    // Queue behind any sync already in flight. Overlapping runs each plan
+    // against the same pre-sync ledger, so both decide to *create* the same
+    // tab's collection — leaving two in Steam with only the later one
+    // recorded, and the other unreachable forever.
+    const run = this.syncChain.then(
+      () => this._syncMirrorOnce(),
+      () => this._syncMirrorOnce(),
+    );
+    // The chain must not reject, or one failure poisons every later sync.
+    this.syncChain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async _syncMirrorOnce(): Promise<{
+    summary: string;
+    created: number;
+    updated: number;
+    renamed: number;
+    deleted: number;
+    failures: MirrorSyncResult["failures"];
+  }> {
     this._assertWritable();
 
     let plan: MirrorPlan;
@@ -417,9 +478,14 @@ export default class CollectionsBackend implements PluginBackend {
       throw err;
     }
 
-    await this.setConfig({
-      ...this.config,
-      mirror: { ...this.config.mirror, ledger: result.ledger, pendingSync: false },
+    await this._setMirrorState({
+      ...this.config.mirror,
+      ledger: result.ledger,
+      // Only clear the owed-sync flag when everything actually landed. Steam
+      // dying *after* the session connects makes each op fail individually,
+      // which the executor collects rather than throws — so a "successful"
+      // sync that wrote nothing would otherwise cancel the retry forever.
+      pendingSync: result.failures.length > 0,
     });
 
     const { created, updated, renamed, deleted, failures } = result;
@@ -436,10 +502,7 @@ export default class CollectionsBackend implements PluginBackend {
   private async _rememberPendingSync(): Promise<void> {
     if (this.config.mirror.pendingSync) return;
     try {
-      await this.setConfig({
-        ...this.config,
-        mirror: { ...this.config.mirror, pendingSync: true },
-      });
+      await this._setMirrorState({ ...this.config.mirror, pendingSync: true });
     } catch {
       // The original failure is the one worth reporting.
     }
