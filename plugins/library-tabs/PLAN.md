@@ -92,8 +92,10 @@ list here wins:
    the create-then-delete fallback that loses the user's sidebar position is
    not needed. Phase 4's open question is closed.
 
-Still unverified on hardware: `pushBackInterceptor` from a plugin React root
-(gates the sheet-based editor UX).
+The other stated hardware risk — `pushBackInterceptor` from a plugin React
+root — is **also retired, by precedent rather than measurement**: `Select`
+pushes one whenever its dropdown is open, and five shipped plugins render
+`Select`. See the constraints section.
 
 ### Two plan assumptions that turned out wrong
 
@@ -219,10 +221,15 @@ TabMaster's worst failure mode.
   scroll, no reorder, no context menu). Build `components/TabStrip.tsx`
   in-plugin — which we want anyway, since **adding a `@loadout/ui` export
   forces a full overlay rebuild + reinstall**.
-- `pushBackInterceptor` **is** exported from `packages/ui/src/index.ts:57`
-  but is used only by overlay-internal components. library-tabs would be
-  the first plugin consumer — treat B-button sheet handling as a Phase-1
-  hardware risk, not a given.
+- ~~`pushBackInterceptor` is used only by overlay-internal components.
+  library-tabs would be the first plugin consumer.~~ **Wrong — it already has
+  plugin consumers.** `packages/ui/src/components/Select.tsx:186` pushes an
+  interceptor whenever its dropdown is open, and `protondb-badges`,
+  `battery-tracker`, `steamgriddb`, `hltb` and `lsfg-vk` all render `Select`.
+  So B-closes-the-modal-without-popping-the-page is shipped behaviour from a
+  plugin React root, and `Sheet.tsx` can follow `Select`'s pattern rather than
+  treating it as unproven. Still worth eyeballing once on hardware, but it is
+  no longer a design risk.
 - `readUserCollections` (`packages/game-library/src/index.ts:140`) types the
   JSON as `{ id?, added? }` and **discards `name` and `removed`**. So
   `tags` holds raw ids like `uc-1234567` with no way to render a friendly
@@ -1136,9 +1143,10 @@ not fatal.
   1. ~~Run `scripts/probe-steam-metadata.ts`, commit
      `docs/steam-metadata-probe.md`.~~ **Done 2026-07-30** — see the preamble
      for the four results that change the plan.
-  2. Verify `pushBackInterceptor` works from a plugin React root — B closes
-     the sheet without popping the plugin page. **Gates the sheet-based
-     editor UX.**
+  2. Confirm `pushBackInterceptor` from a plugin React root — B closes the
+     sheet without popping the plugin page. ~~**Gates the sheet-based editor
+     UX.**~~ No longer a gate: `Select` already does this from five shipped
+     plugins. Worth one look on hardware, not a blocker.
   3. Verify the mirror end to end: enable on one tab, "Sync now", confirm
      the collection appears in Steam's library with the right games; hand-edit
      it in Steam and confirm `drifted` is surfaced rather than clobbered;
