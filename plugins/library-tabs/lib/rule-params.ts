@@ -29,7 +29,7 @@ import { GAME_FEATURE_KEYS } from "@loadout/types";
 import type { GameFeatures } from "@loadout/types";
 import { isRuleComplete, ruleDef } from "./rules";
 import { featureLabel } from "./summarize";
-import type { FactKey, Rule, RuleKind, SetMode } from "./types";
+import type { Rule, RuleKind, SetMode } from "./types";
 
 /** Seconds in a day — the unit every date default is expressed in. */
 const DAY = 86_400;
@@ -352,35 +352,6 @@ export interface RuleCandidate {
   rule: Rule;
   /** True when the defaults leave the rule unable to assert anything. */
   needsInput: boolean;
-}
-
-/**
- * Why a fact-backed rule can't be evaluated, phrased for a player.
- *
- * These rules read a `FactKey` resolved outside the evaluator. Until a
- * resolver exists (Phase 5) the fact is `indeterminate` — and because
- * `Tab.indeterminatePolicy` defaults to `"pass"`, an indeterminate rule
- * *matches everything*. That default is right for a tab already in use (an
- * outage degrades it rather than emptying it) but it makes the palette lie:
- * pricing "Achievements ≥ 50%" at the full library reads as "adding this
- * changes nothing" when the truth is "this can't be checked at all".
- *
- * So a candidate whose facts are unavailable is labelled, never priced.
- */
-export function factUnavailableReason(fact: FactKey): string {
-  switch (fact) {
-    case "hltbMain":
-      return "Needs the How Long To Beat plugin";
-    case "protonTier":
-      return "Needs the ProtonDB Badges plugin";
-    case "friendsPlaying":
-    case "friendsOwn":
-      return "Needs Steam friends data";
-    case "achievements":
-      return "Needs Steam achievement data";
-    case "onSdCard":
-      return "Needs install-path data";
-  }
 }
 
 export function ruleCandidate(args: {

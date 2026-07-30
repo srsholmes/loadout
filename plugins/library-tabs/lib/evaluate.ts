@@ -45,7 +45,7 @@ import type {
   Tab,
   Verdict,
 } from "./types";
-import { evaluateLeaf, leafRules, ruleDef } from "./rules";
+import { evaluateLeaf, factUnavailableReason, leafRules, ruleDef } from "./rules";
 import { sortGames } from "./sort";
 import { groupGames } from "./group";
 
@@ -262,15 +262,32 @@ function collectBlockedFacts(
     // One unavailable reason is enough to report the fact as blocked; we
     // take the first concrete reason we find rather than scanning all
     // games, since resolvers fail wholesale, not per game.
+    let reason: string | null = null;
+    let carriedByAnyGame = false;
     for (const game of games) {
       const fact = game.facts[key];
-      if (fact?.state === "unavailable") {
-        const entry = byFact.get(key);
-        if (entry) entry.ruleIds.add(leaf.id);
-        else byFact.set(key, { reason: fact.reason, ruleIds: new Set([leaf.id]) });
+      if (!fact) continue;
+      carriedByAnyGame = true;
+      if (fact.state === "unavailable") {
+        reason = fact.reason;
         break;
       }
     }
+
+    // A fact that NO game carries has no resolver behind it, which is every bit
+    // as blocked as one that failed — and considerably more dangerous, because
+    // nothing anywhere says so. `readFact` returns `indeterminate` for an absent
+    // fact, and `Tab.indeterminatePolicy` defaults to `"pass"`, so such a rule
+    // silently matches the entire library while the diagnostics stay quiet.
+    // Reporting it is what lets `diagnoseTab` reach its `blocked-facts` branch.
+    if (!carriedByAnyGame && games.length > 0) {
+      reason = factUnavailableReason(key);
+    }
+
+    if (reason === null) continue;
+    const entry = byFact.get(key);
+    if (entry) entry.ruleIds.add(leaf.id);
+    else byFact.set(key, { reason, ruleIds: new Set([leaf.id]) });
   }
 
   return [...byFact.entries()].map(([fact, { reason, ruleIds }]) => ({

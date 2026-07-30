@@ -335,18 +335,41 @@ describe("template gallery", () => {
       expect(screen.getByRole("button", { name: "Add tab" })).toBeTruthy();
     });
     screen.getByRole("button", { name: "Add tab" }).click();
+    // "Space hogs" needs nothing beyond Phase-1 data, so it is always pickable.
+    await waitFor(() => {
+      expect(screen.getByText("Space hogs")).toBeTruthy();
+    });
+
+    screen.getByText("Space hogs").closest("button")!.click();
+    await waitFor(() => {
+      expect(
+        calls.some(
+          (c) => c.method === "createTabFromTemplate" && c.args[0] === "space-hogs",
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("does not offer a template whose data is missing", async () => {
+    // This test used to click "Installed & unplayed" (backlog) to create a tab.
+    // It filters on `lastPlayed`, which no provider populates, so it was
+    // guaranteed to produce an empty tab — and because it declared no `needs`,
+    // nothing greyed it out. It now declares the dependency and is disabled.
+    mountApp();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Add tab" })).toBeTruthy();
+    });
+    screen.getByRole("button", { name: "Add tab" }).click();
     await waitFor(() => {
       expect(screen.getByText("Installed & unplayed")).toBeTruthy();
     });
 
-    screen.getByText("Installed & unplayed").closest("button")!.click();
-    await waitFor(() => {
-      expect(
-        calls.some(
-          (c) => c.method === "createTabFromTemplate" && c.args[0] === "backlog",
-        ),
-      ).toBe(true);
-    });
+    const backlog = screen.getByText("Installed & unplayed").closest("button")!;
+    expect(backlog.hasAttribute("disabled")).toBe(true);
+    backlog.click();
+    expect(
+      calls.some((c) => c.method === "createTabFromTemplate" && c.args[0] === "backlog"),
+    ).toBe(false);
   });
 });
 

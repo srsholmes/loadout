@@ -28,9 +28,9 @@ import type { RuleRowAction } from "./RuleNodeRow";
 import type { RuleNodeTrace } from "../lib/evaluate";
 import { countMatches, evaluateTab } from "../lib/evaluate";
 import { diagnoseTab } from "../lib/diagnose";
-import { factUnavailableReason, ruleCandidate } from "../lib/rule-params";
+import { ruleCandidate } from "../lib/rule-params";
 import type { ParamOption } from "../lib/rule-params";
-import { RULE_KINDS, requiredFacts } from "../lib/rules";
+import { RULE_KINDS, factUnavailableReason, requiredFacts } from "../lib/rules";
 import {
   asRoot,
   duplicateRule,

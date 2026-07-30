@@ -46,6 +46,18 @@ export function skipAllowed(): boolean {
  * caller doesn't have to look it up twice.
  */
 export async function requireSteam(): Promise<{ webSocketDebuggerUrl: string }> {
+  // Running under the UI preload replaces `fetch` with a DOM-scoped one that
+  // blocks the cross-origin request to Steam's debug port, and the resulting
+  // "no tab found" is thoroughly misleading. `bun run test:ui` never collects
+  // this file, but an ad-hoc `bun test plugins/library-tabs` (a *directory*
+  // filter, broader than CI's substring one) does.
+  if (typeof (globalThis as { document?: unknown }).document !== "undefined") {
+    throw new SteamUnavailableError(
+      "This spec is running with the happy-dom preload, whose fetch cannot " +
+        "reach Steam's debug port.\nRun the live suite on its own: bun run test:live",
+    );
+  }
+
   let tab: Awaited<ReturnType<typeof findSharedJsTab>>;
   try {
     tab = await findSharedJsTab();

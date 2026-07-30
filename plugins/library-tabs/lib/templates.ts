@@ -95,7 +95,18 @@ export function builtinTabs(): Tab[] {
           epochSec: { min: 0 },
         },
       ],
-      { builtin: "recent", icon: "FaClockRotateLeft", sort: RECENT_FIRST, limit: 30 },
+      // autoHide: a tab with nothing in it drops out of the strip while keeping
+      // its position for when it fills up again. That matters more than it
+      // looks here — until a provider populates `lastPlayed`, this tab can
+      // never match anything, and a permanently-empty tab sitting in the strip
+      // reads as a broken plugin rather than as missing data.
+      {
+        builtin: "recent",
+        icon: "FaClockRotateLeft",
+        sort: RECENT_FIRST,
+        limit: 30,
+        autoHide: true,
+      },
     ),
 
     makeTab(
@@ -110,7 +121,7 @@ export function builtinTabs(): Tab[] {
           neverPlayedOnly: true,
         },
       ],
-      { builtin: "never-played", icon: "FaSeedling" },
+      { builtin: "never-played", icon: "FaSeedling", autoHide: true },
     ),
 
     makeTab(
@@ -165,6 +176,10 @@ export function templates(now: number = Math.floor(Date.now() / 1000)): TabTempl
       label: "Installed & unplayed",
       description: "Games you've installed but never started — your actual backlog",
       icon: "FaSeedling",
+      // Without lastPlayed this can only ever be empty. Declaring it is what
+      // makes the gallery grey it out and say why, instead of offering a
+      // template that looks ready and produces nothing.
+      needs: ["lastPlayed"],
       build: (id) =>
         makeTab(
           id,
@@ -209,6 +224,7 @@ export function templates(now: number = Math.floor(Date.now() / 1000)): TabTempl
       label: "Pick up again",
       description: "Played before, but not in the last three months",
       icon: "FaRotateLeft",
+      needs: ["lastPlayed", "playtime"],
       build: (id) =>
         makeTab(
           id,

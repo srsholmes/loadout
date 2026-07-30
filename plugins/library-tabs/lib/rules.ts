@@ -592,3 +592,32 @@ export function leafRules(rule: Rule): Rule[] {
   if (rule.kind !== "group") return [rule];
   return rule.children.flatMap(leafRules);
 }
+
+/**
+ * Why a fact-backed rule can't be evaluated, phrased for a player.
+ *
+ * These rules read a `FactKey` resolved outside the evaluator. Until a
+ * resolver exists (Phase 5) the fact is `indeterminate` — and because
+ * `Tab.indeterminatePolicy` defaults to `"pass"`, an indeterminate rule
+ * *matches everything*. That default is right for a tab already in use (an
+ * outage degrades it rather than emptying it) but it makes the palette lie:
+ * pricing "Achievements ≥ 50%" at the full library reads as "adding this
+ * changes nothing" when the truth is "this can't be checked at all".
+ *
+ * So a candidate whose facts are unavailable is labelled, never priced.
+ */
+export function factUnavailableReason(fact: FactKey): string {
+  switch (fact) {
+    case "hltbMain":
+      return "Needs the How Long To Beat plugin";
+    case "protonTier":
+      return "Needs the ProtonDB Badges plugin";
+    case "friendsPlaying":
+    case "friendsOwn":
+      return "Needs Steam friends data";
+    case "achievements":
+      return "Needs Steam achievement data";
+    case "onSdCard":
+      return "Needs install-path data";
+  }
+}
