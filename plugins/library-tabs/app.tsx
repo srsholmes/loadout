@@ -37,6 +37,7 @@ import { RuleBuilder } from "./components/RuleBuilder";
 import { LibraryTabsHeader } from "./components/LibraryTabsHeader";
 import { TabActionsPage } from "./components/TabActionsPage";
 import { MirrorPage } from "./components/MirrorPage";
+import { SettingsPage } from "./components/SettingsPage";
 import type { MirrorPlan } from "./lib/mirror";
 import { BuilderPage } from "./components/BuilderPage";
 import type { ParamOption } from "./lib/rule-params";
@@ -76,6 +77,7 @@ function LibraryTabs() {
   /** Tab whose rename/move/delete page is open. */
   const [managingTabId, setManagingTabId] = useState<string | null>(null);
   const [showMirror, setShowMirror] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [mirror, setMirror] = useState<{
     plan: MirrorPlan;
     summary: string;
@@ -410,9 +412,34 @@ function LibraryTabs() {
 
   const openMirror = useCallback(() => {
     setShowMirror(true);
+    setShowSettings(false);
     setManagingTabId(null);
     void refreshMirrorPlan();
   }, [refreshMirrorPlan]);
+
+  /**
+   * Turn automatic syncing on or off.
+   *
+   * Switching it on syncs immediately rather than waiting for the next edit —
+   * otherwise the setting reads as broken: you enable it, look at Steam, and
+   * nothing has happened.
+   */
+  const setAutoSync = useCallback(
+    async (next: boolean) => {
+      if (!config) return;
+      try {
+        await call("setConfig", {
+          ...config,
+          mirror: { ...config.mirror, autoSync: next },
+        });
+      } catch (err) {
+        notify(err instanceof Error ? err.message : "Couldn't change that setting", {
+          kind: "error",
+        });
+      }
+    },
+    [call, config],
+  );
 
   const deleteTab = useCallback(
     async (tabId: string) => {
@@ -507,6 +534,7 @@ function LibraryTabs() {
       onTabOptions={
         !readOnly && activeTab ? () => setManagingTabId(activeTab.id) : undefined
       }
+      onSettings={() => setShowSettings(true)}
     />
   );
 
@@ -524,6 +552,23 @@ function LibraryTabs() {
         >
           <TemplateGallery snapshot={snapshot} onPick={addTemplate} />
         </BuilderPage>
+      </div>
+    );
+  }
+
+  if (showSettings) {
+    return (
+      <div className="p-7 h-full overflow-y-auto" style={{ overflowX: "hidden" }}>
+        {header}
+        <SettingsPage
+          autoSync={config.mirror.autoSync}
+          mirroredCount={config.tabs.filter((t) => t.mirror.enabled).length}
+          pendingSync={config.mirror.pendingSync}
+          readOnly={readOnly}
+          onBack={() => setShowSettings(false)}
+          onToggleAutoSync={(next) => void setAutoSync(next)}
+          onOpenMirror={openMirror}
+        />
       </div>
     );
   }

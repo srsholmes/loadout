@@ -33,6 +33,8 @@ export interface LibraryTabsHeaderProps {
   onTabOptions?: () => void;
   /** Absent when the config is read-only. */
   onAddTab?: () => void;
+  /** Opens the plugin's settings — Steam syncing lives there. */
+  onSettings?: () => void;
   /** Label for the add/close toggle, since it doubles as a close. */
   addTabLabel: string;
   searchPlaceholder: string;
@@ -45,6 +47,7 @@ export function LibraryTabsHeader({
   showBrowseActions,
   onTabOptions,
   onAddTab,
+  onSettings,
   addTabLabel,
   searchPlaceholder,
 }: LibraryTabsHeaderProps) {
@@ -77,6 +80,11 @@ export function LibraryTabsHeader({
             {onAddTab ? (
               <Button variant="neutral" onClick={onAddTab}>
                 {addTabLabel}
+              </Button>
+            ) : null}
+            {onSettings ? (
+              <Button variant="neutral" onClick={onSettings}>
+                Settings
               </Button>
             ) : null}
           </div>

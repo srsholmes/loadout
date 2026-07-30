@@ -251,6 +251,56 @@ export function planMirror(args: PlanMirrorArgs): MirrorPlan {
   return plan;
 }
 
+/**
+ * Would this config change alter what the mirror should contain?
+ *
+ * Auto-sync hangs off this. Two things make it necessary rather than nice:
+ * a sync is a full library evaluation plus writes to Steam Cloud, so running
+ * one because the user hid a tab would be waste; and `syncMirror` persists its
+ * ledger through the same config setter that triggers auto-sync, so without a
+ * check on *what* changed the mirror would sync itself in a loop forever.
+ *
+ * Compared as a projection rather than field-by-field, so a new field on `Tab`
+ * is included by default. Being too eager here costs a redundant sync; being
+ * too lazy leaves Steam silently stale, which is the failure users can't see.
+ */
+export function mirrorAffecting(
+  before: MirrorRelevantConfig,
+  after: MirrorRelevantConfig,
+): boolean {
+  return JSON.stringify(project(before)) !== JSON.stringify(project(after));
+}
+
+/** The parts of the plugin config a mirror sync actually reads. */
+export interface MirrorRelevantConfig {
+  tabs: readonly Tab[];
+  gameOverrides: Record<string, unknown>;
+  settings: { mirrorPrefix: string };
+  mirror: { autoSync: boolean };
+}
+
+function project(config: MirrorRelevantConfig) {
+  return {
+    // `visible` is deliberately absent: a concealed tab still evaluates and
+    // still mirrors, so hiding one from the strip must not empty its
+    // collection in Steam.
+    tabs: config.tabs.map((t) => ({
+      id: t.id,
+      label: t.label,
+      root: t.root,
+      sort: t.sort,
+      limit: t.limit,
+      manualOrder: t.manualOrder,
+      mirror: t.mirror,
+      policy: t.indeterminatePolicy,
+    })),
+    // Whitelists and blacklists live here, so they change membership.
+    overrides: config.gameOverrides,
+    prefix: config.settings.mirrorPrefix,
+    autoSync: config.mirror.autoSync,
+  };
+}
+
 /** Does this plan write anything? Used to keep "Sync" honest when it wouldn't. */
 export function planIsEmpty(plan: MirrorPlan): boolean {
   return (

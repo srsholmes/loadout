@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   applyToLedger,
   collectionNameFor,
+  mirrorAffecting,
   planIsEmpty,
   planMirror,
   summarizePlan,
@@ -550,5 +551,82 @@ describe("planMirror — settling", () => {
     expect(planIsEmpty(second)).toBe(true);
     expect(second.drifted).toHaveLength(0);
     expect(second.noops).toEqual(["t1"]);
+  });
+});
+
+describe("mirrorAffecting — when auto-sync should fire", () => {
+  function config(overrides: Partial<Parameters<typeof mirrorAffecting>[0]> = {}) {
+    return {
+      tabs: [tab()],
+      gameOverrides: {},
+      settings: { mirrorPrefix: "" },
+      mirror: { autoSync: true },
+      ...overrides,
+    };
+  }
+
+  it("fires when a rule changes", () => {
+    const after = config({
+      tabs: [
+        tab({
+          root: {
+            kind: "group",
+            id: "g",
+            combinator: "and",
+            children: [{ kind: "installed", id: "r", value: true }],
+          } as Tab["root"],
+        }),
+      ],
+    });
+    expect(mirrorAffecting(config(), after)).toBe(true);
+  });
+
+  it("fires when a tab is renamed", () => {
+    expect(mirrorAffecting(config(), config({ tabs: [tab({ label: "Shelf" })] }))).toBe(true);
+  });
+
+  it("fires when mirroring is switched on or off", () => {
+    const off = config({ tabs: [tab({ mirror: { enabled: false, collectionName: "Backlog" } })] });
+    expect(mirrorAffecting(config(), off)).toBe(true);
+  });
+
+  it("fires when a tab is added or removed", () => {
+    expect(mirrorAffecting(config(), config({ tabs: [] }))).toBe(true);
+  });
+
+  it("fires when the cap changes", () => {
+    // `limit` decides which games survive, so it changes the collection.
+    expect(mirrorAffecting(config(), config({ tabs: [tab({ limit: 30 })] }))).toBe(true);
+  });
+
+  it("fires when a game override changes", () => {
+    // Whitelists and blacklists live here and change membership directly.
+    expect(mirrorAffecting(config(), config({ gameOverrides: { "440": { pin: true } } }))).toBe(
+      true,
+    );
+  });
+
+  it("fires when the collection-name prefix changes", () => {
+    expect(mirrorAffecting(config(), config({ settings: { mirrorPrefix: "▸ " } }))).toBe(true);
+  });
+
+  it("does NOT fire when only the ledger changed", () => {
+    // The one that matters: `syncMirror` persists its ledger through the same
+    // config setter that triggers auto-sync. Without this the mirror would
+    // sync itself in a loop forever.
+    expect(mirrorAffecting(config(), config())).toBe(false);
+  });
+
+  it("does not fire when a tab is merely hidden from the strip", () => {
+    // A concealed tab still evaluates and still mirrors — hiding it must not
+    // empty its Steam collection.
+    expect(mirrorAffecting(config(), config({ tabs: [tab({ visible: false })] }))).toBe(false);
+  });
+
+  it("does not fire when only the tile size changed", () => {
+    const after = config({
+      tabs: [tab({ display: { tileWidth: 300, showLabels: false, badges: [] } })],
+    });
+    expect(mirrorAffecting(config(), after)).toBe(false);
   });
 });

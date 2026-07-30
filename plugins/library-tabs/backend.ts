@@ -57,11 +57,21 @@ import { exportTabs, encodeShareString, importTabs } from "./lib/share";
 import { findTemplate } from "./lib/templates";
 import { buildEvalGames } from "./lib/facts";
 import { evaluateTab } from "./lib/evaluate";
-import { planMirror, summarizePlan, type MirrorPlan } from "./lib/mirror";
+import { mirrorAffecting, planMirror, summarizePlan, type MirrorPlan } from "./lib/mirror";
 import { applyMirrorPlan, type MirrorOps, type MirrorSyncResult } from "./lib/mirror-apply";
 
 const GAME_LIBRARY_SERVICE = "__core:game-library";
 const PLAYTIME_PLUGIN = "playtime";
+
+/**
+ * How long to wait for edits to settle before auto-syncing.
+ *
+ * A sync is a full library evaluation plus writes that reach Steam Cloud, and
+ * the rule builder writes on every keystroke. Long enough to coalesce a burst
+ * of edits, short enough that finishing a tab and switching to Steam finds it
+ * already there.
+ */
+const AUTO_SYNC_DEBOUNCE_MS = 2500;
 
 export default class LibraryTabsBackend implements PluginBackend {
   emit?: (payload: EmitPayload) => void;
@@ -73,6 +83,8 @@ export default class LibraryTabsBackend implements PluginBackend {
   private loadWarnings: string[] = [];
   /** Set when the stored config came from a newer build — refuse all writes. */
   private readOnly = false;
+  /** Pending debounced auto-sync, if any. */
+  private syncTimer: ReturnType<typeof setTimeout> | null = null;
 
   async onLoad(): Promise<void> {
     const result = await loadConfig();
@@ -82,6 +94,24 @@ export default class LibraryTabsBackend implements PluginBackend {
         `[library-tabs] Loaded with warnings: ${result.warnings.join("; ")}`,
       );
     }
+
+    // A sync owed from a session where Steam was closed. Retried here rather
+    // than on a timer: plugin load is the one moment we know Steam has just
+    // had a chance to come up.
+    if (this.config.mirror.autoSync && this.config.mirror.pendingSync) {
+      void this.syncMirror().catch((err) => {
+        this.log?.warn(
+          `[library-tabs] Owed sync still can't run: ${err instanceof Error ? err.message : err}`,
+        );
+      });
+    }
+  }
+
+  async onUnload(): Promise<void> {
+    // A debounced sync firing after the plugin is gone would write a config
+    // the loader has already stopped tracking.
+    if (this.syncTimer) clearTimeout(this.syncTimer);
+    this.syncTimer = null;
   }
 
   // ── Config ───────────────────────────────────────────────────────────
@@ -105,10 +135,39 @@ export default class LibraryTabsBackend implements PluginBackend {
    */
   async setConfig(next: LibraryTabsConfig): Promise<LibraryTabsConfig> {
     this._assertWritable();
+    const before = this.config;
     await saveConfig(next); // throws on invalid; never persists junk
     this.config = next;
     this._broadcast();
+    this._maybeAutoSync(before, next);
     return this.config;
+  }
+
+  /**
+   * Queue a mirror sync when a change made one necessary.
+   *
+   * Deliberately fire-and-forget: a config write must not block on Steam, and
+   * a Steam that is closed must not make renaming a tab fail.
+   *
+   * The recursion guard matters more than it looks. `syncMirror` persists the
+   * ledger through this very method, so without a check on *what* changed,
+   * every sync would schedule another one forever.
+   */
+  private _maybeAutoSync(before: LibraryTabsConfig, after: LibraryTabsConfig): void {
+    if (!after.mirror.autoSync) return;
+    if (!mirrorAffecting(before, after)) return;
+
+    if (this.syncTimer) clearTimeout(this.syncTimer);
+    // Coalesce: dragging a slider in the rule builder can write a dozen times
+    // a second, and each sync is a full library evaluation plus Steam writes.
+    this.syncTimer = setTimeout(() => {
+      this.syncTimer = null;
+      void this.syncMirror().catch((err) => {
+        this.log?.warn(
+          `[library-tabs] Auto-sync failed: ${err instanceof Error ? err.message : err}`,
+        );
+      });
+    }, AUTO_SYNC_DEBOUNCE_MS);
   }
 
   async setTabs(tabs: Tab[]): Promise<LibraryTabsConfig> {
@@ -337,16 +396,26 @@ export default class LibraryTabsBackend implements PluginBackend {
     failures: MirrorSyncResult["failures"];
   }> {
     this._assertWritable();
-    const plan = await this._buildMirrorPlan();
 
-    const result = await withSteamClient(async (client) => {
-      return applyMirrorPlan({
-        plan,
-        ledger: this.config.mirror.ledger,
-        ops: mirrorOps(client),
-        now: Date.now(),
-      });
-    });
+    let plan: MirrorPlan;
+    let result: MirrorSyncResult;
+    try {
+      plan = await this._buildMirrorPlan();
+      result = await withSteamClient(async (client) =>
+        applyMirrorPlan({
+          plan,
+          ledger: this.config.mirror.ledger,
+          ops: mirrorOps(client),
+          now: Date.now(),
+        }),
+      );
+    } catch (err) {
+      // Steam closed, or mid-restart. Remember that a sync is owed rather than
+      // dropping it — on a handheld, editing tabs with Steam down is normal,
+      // and silently never syncing is how the feature stops being trusted.
+      await this._rememberPendingSync();
+      throw err;
+    }
 
     await this.setConfig({
       ...this.config,
@@ -361,6 +430,19 @@ export default class LibraryTabsBackend implements PluginBackend {
       );
     }
     return { summary: summarizePlan(plan), created, updated, renamed, deleted, failures };
+  }
+
+  /** Record that a sync is owed, without letting that write fail the caller. */
+  private async _rememberPendingSync(): Promise<void> {
+    if (this.config.mirror.pendingSync) return;
+    try {
+      await this.setConfig({
+        ...this.config,
+        mirror: { ...this.config.mirror, pendingSync: true },
+      });
+    } catch {
+      // The original failure is the one worth reporting.
+    }
   }
 
   /**
