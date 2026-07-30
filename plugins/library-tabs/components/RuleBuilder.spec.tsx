@@ -204,6 +204,39 @@ describe("RuleBuilder — the palette", () => {
     expect(within(dialog).getAllByText("Needs a value").length).toBeGreaterThan(0);
   });
 
+  it("labels a fact-backed rule instead of pricing it at the whole library", () => {
+    // Regression, found on hardware: an unresolvable fact is `indeterminate`,
+    // and the default "pass" policy turns that into every game — so the
+    // palette read "Friends playing now → 2002 games (no change)" for a rule
+    // that cannot be checked at all. The opposite of the truth.
+    renderBuilder(tab([]));
+    fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+    const dialog = screen.getByRole("dialog");
+
+    const card = within(dialog).getByText("Friends playing now").closest("button");
+    if (!card) throw new Error("expected a Friends playing now candidate");
+    expect(card.textContent).toContain("Needs Steam friends data");
+    expect(card.textContent).not.toContain("no change");
+    expect(card.textContent).not.toMatch(/→ \d+ games/);
+  });
+
+  it("prices a fact-backed rule once its fact is available", () => {
+    render(
+      <RuleBuilder
+        tab={tab([])}
+        games={games}
+        onSave={() => {}}
+        onCancel={() => {}}
+        availableFacts={new Set(["friendsPlaying"] as const)}
+        now={NOW}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+    const dialog = screen.getByRole("dialog");
+    const card = within(dialog).getByText("Friends playing now").closest("button");
+    expect(card?.textContent).not.toContain("Needs Steam friends data");
+  });
+
   it("adds the picked rule to the tree", () => {
     const { onSave } = renderBuilder(tab([]));
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }));

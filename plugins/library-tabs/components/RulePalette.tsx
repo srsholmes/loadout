@@ -26,9 +26,17 @@ import type { RuleCategory } from "../lib/rules";
 export interface PricedCandidate extends RuleCandidate {
   /**
    * Total the tab would show with this rule added, or `undefined` when the
-   * rule needs a value first and so cannot be priced.
+   * rule cannot be priced — because it needs a value, or because its data
+   * source is unavailable.
    */
   total?: number;
+  /**
+   * Set when the rule reads a fact nothing can currently resolve. Shown
+   * instead of a count: an unresolvable fact is `indeterminate`, and under
+   * the default `"pass"` policy that prices as *the whole library*, which
+   * would read as "adding this changes nothing" — the opposite of the truth.
+   */
+  unavailable?: string;
 }
 
 export interface RulePaletteProps {
@@ -89,7 +97,7 @@ export function RulePalette({
     for (const bucket of byCategory.values()) {
       bucket.sort((a, b) => {
         const rank = (c: PricedCandidate) =>
-          c.total === undefined ? 1 : c.total === 0 ? 2 : 0;
+          c.unavailable ? 3 : c.total === undefined ? 1 : c.total === 0 ? 2 : 0;
         return rank(a) - rank(b) || a.label.localeCompare(b.label);
       });
     }
@@ -156,9 +164,10 @@ function CandidateCard({
   onPick: () => void;
 }) {
   const { ref, focused } = useFocusable({ onEnterPress: onPick });
-  const zero = candidate.total === 0;
+  const zero = candidate.total === 0 || candidate.unavailable !== undefined;
 
   const consequence = (() => {
+    if (candidate.unavailable) return candidate.unavailable;
     if (candidate.needsInput) return "Needs a value";
     if (candidate.total === undefined) return "";
     if (candidate.total === currentTotal) return `→ ${candidate.total} games (no change)`;

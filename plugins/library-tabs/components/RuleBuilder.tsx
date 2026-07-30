@@ -28,9 +28,9 @@ import type { RuleRowAction } from "./RuleNodeRow";
 import type { RuleNodeTrace } from "../lib/evaluate";
 import { countMatches, evaluateTab } from "../lib/evaluate";
 import { diagnoseTab } from "../lib/diagnose";
-import { ruleCandidate } from "../lib/rule-params";
+import { factUnavailableReason, ruleCandidate } from "../lib/rule-params";
 import type { ParamOption } from "../lib/rule-params";
-import { RULE_KINDS } from "../lib/rules";
+import { RULE_KINDS, requiredFacts } from "../lib/rules";
 import {
   asRoot,
   duplicateRule,
@@ -47,7 +47,7 @@ import {
   wrapInGroup,
 } from "../lib/rule-tree";
 import { summarizeTab } from "../lib/summarize";
-import type { EvalGame, GroupRule, Rule, Tab } from "../lib/types";
+import type { EvalGame, FactKey, GroupRule, Rule, Tab } from "../lib/types";
 
 /**
  * `whitelist` and `blacklist` carry no `invert` — inverting a whitelist *is* a
@@ -66,9 +66,16 @@ export interface RuleBuilderProps {
     game?: readonly ParamOption[];
     collection?: readonly ParamOption[];
   };
+  /**
+   * Facts a resolver can actually supply. Empty until Phase 5 lands the
+   * resolvers, which is why fact-backed rules are labelled rather than priced.
+   */
+  availableFacts?: ReadonlySet<FactKey>;
   /** Injected for deterministic date defaults and tests. */
   now?: number;
 }
+
+const NO_FACTS: ReadonlySet<FactKey> = new Set();
 
 /** Flatten a trace to a lookup, so a row can find its own counts by id. */
 function indexTrace(node: RuleNodeTrace, into: Map<string, RuleNodeTrace>): Map<string, RuleNodeTrace> {
@@ -91,6 +98,7 @@ export function RuleBuilder({
   onSave,
   onCancel,
   pickerOptions,
+  availableFacts = NO_FACTS,
   now,
 }: RuleBuilderProps) {
   const [draft, setDraft] = useState<Tab>(tab);
@@ -191,6 +199,17 @@ export function RuleBuilder({
         id: "__candidate",
         now: Math.floor((now ?? Date.now()) / 1000),
       });
+
+      // A rule reading a fact nothing resolves evaluates to `indeterminate`,
+      // which the default "pass" policy turns into the whole library. Pricing
+      // it would claim "no change" for a rule that cannot be checked at all.
+      const missing = [...requiredFacts(candidate.rule)].find(
+        (fact) => !availableFacts.has(fact),
+      );
+      if (missing) {
+        return { ...candidate, unavailable: factUnavailableReason(missing) };
+      }
+
       if (candidate.needsInput) return candidate;
       const withCandidate = insertRule({
         root: deferredRoot,
@@ -208,7 +227,7 @@ export function RuleBuilder({
         ),
       };
     });
-  }, [paletteParent, deferredRoot, draft.root, draft.indeterminatePolicy, games, now]);
+  }, [paletteParent, deferredRoot, draft.root, draft.indeterminatePolicy, games, now, availableFacts]);
 
   // ── Actions ────────────────────────────────────────────────────────
 
