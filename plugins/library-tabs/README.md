@@ -6,18 +6,34 @@ Loadout's overlay rather than by patching Steam's library UI.
 
 ## Status
 
-**Phase 1 in progress.** The rule engine (`lib/`) is complete and fully
-specced. The UI (`app.tsx`, `components/`), the backend (`backend.ts`) and
-the config layer are not yet written.
+**Phase 1 is functional.** You can browse tabs with live match counts,
+create tabs from templates, search, and launch games. What is *not* built yet
+is the in-app rule builder — tabs come from templates and can be repaired by
+the diagnostics, but there is no UI to author a rule tree by hand. The engine
+underneath it is complete and specced.
 
 | Phase | Scope | State |
 |---|---|---|
-| 1 | Tabbed browser, Phase-1 rules, config durability, hardware probe | engine done, UI pending |
-| 2 | Ownership + `appStore` metadata over CDP | not started |
-| 3 | `appinfo.vdf` offline metadata (`packages/steam-appinfo`) | not started |
-| 4 | Steam Collection mirror | not started |
-| 5 | Sub-tabs, async facts, presentation | types in place, resolvers pending |
-| 6 | Profiles, sharing, home widget | not started |
+| 1 | Tabbed browser, Phase-1 rules, config durability, hardware probe | **functional**; rule builder UI outstanding |
+| 2 | Ownership + `appStore` metadata over CDP | not started — gated on the probe |
+| 3 | `appinfo.vdf` offline metadata (`packages/steam-appinfo`) | not started — gated on the probe |
+| 4 | Steam Collection mirror | not started — gated on the probe |
+| 5 | Sub-tabs, async facts, presentation | grouping + fact plumbing done; resolvers outstanding |
+| 6 | Profiles, sharing, home widget | share codes done; profiles/widget outstanding |
+
+Outstanding for Phase 1, in rough priority order:
+
+- `components/RuleBuilder.tsx` and friends — the rule-authoring UI. The
+  `ALL → 0 · ANY → 340` consequence line and the per-candidate palette counts
+  are the differentiating features and both are unbuilt. `lib/` already
+  supplies everything they need (`countMatches`, `EvalResult.trace`,
+  `summarizeRule`).
+- `components/BackupsPanel.tsx` — the backend surface exists
+  (`listBackups`, `createBackup`, `restoreBackupFile`); nothing renders it.
+- Tab reorder / hide / rename UI. Backend methods exist.
+- Row windowing (`hooks/useVisibleRows.ts`) before anyone points a
+  1000-game library at this. Evaluation is fast; mounting 2000 `GameCard`s
+  is not.
 
 ## Why not patch Steam's library, like TabMaster does?
 
