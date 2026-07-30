@@ -33,6 +33,8 @@ import { FaLayerGroup } from "react-icons/fa6";
 import type { GameMetadata, GameMetadataSnapshot } from "@loadout/types";
 import { TabStrip, type TabStripEntry } from "./components/TabStrip";
 import { TabDiagnostics } from "./components/TabDiagnostics";
+import { RuleBuilder } from "./components/RuleBuilder";
+import type { ParamOption } from "./lib/rule-params";
 import type { LibraryTabsConfig } from "./lib/config";
 import { orderedTabs, resolveDefaultTab } from "./lib/config";
 import { countMatches, evaluateTab } from "./lib/evaluate";
@@ -60,6 +62,8 @@ function LibraryTabs() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showTemplates, setShowTemplates] = useState(false);
+  /** Tab whose rules are being edited, or null when browsing. */
+  const [editingTabId, setEditingTabId] = useState<string | null>(null);
 
   // ── Data ───────────────────────────────────────────────────────────
 
@@ -157,6 +161,33 @@ function LibraryTabs() {
     [visibleTabs, activeId],
   );
 
+  const editingTab: Tab | null = useMemo(
+    () => config?.tabs.find((t) => t.id === editingTabId) ?? null,
+    [config, editingTabId],
+  );
+
+  /**
+   * Choices for the builder's `picker` params. Derived from the snapshot the
+   * page already holds, so opening the editor costs no extra RPC.
+   */
+  const pickerOptions = useMemo(() => {
+    const games: ParamOption[] = (snapshot?.games ?? []).map((game) => ({
+      value: game.appId,
+      label: game.name,
+    }));
+    const seen = new Set<string>();
+    const collections: ParamOption[] = [];
+    for (const game of snapshot?.games ?? []) {
+      for (const id of game.collections) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        collections.push({ value: id, label: friendlyCollectionName(id) });
+      }
+    }
+    collections.sort((a, b) => a.label.localeCompare(b.label));
+    return { game: games, collection: collections };
+  }, [snapshot]);
+
   const result = useMemo(
     // `trace` is on only while a diagnosis might be needed — it roughly
     // triples evaluation cost, and the happy path doesn't need it.
@@ -234,6 +265,21 @@ function LibraryTabs() {
     [call],
   );
 
+  const saveTab = useCallback(
+    async (next: Tab) => {
+      if (!config) return;
+      try {
+        await call("setTabs", config.tabs.map((t) => (t.id === next.id ? next : t)));
+        setEditingTabId(null);
+      } catch (err) {
+        notify(err instanceof Error ? err.message : "Couldn't save that tab", {
+          kind: "error",
+        });
+      }
+    },
+    [call, config],
+  );
+
   const launch = useCallback(
     async (game: GameMetadata) => {
       try {
@@ -254,6 +300,21 @@ function LibraryTabs() {
       <div className="flex items-center justify-center py-16">
         <Spinner />
       </div>
+    );
+  }
+
+  // The builder takes over the page rather than opening beside it: the rule
+  // tree, its counts and the palette all need the width, and a gamepad user
+  // should never have two focus regions competing for the D-pad.
+  if (editingTab) {
+    return (
+      <RuleBuilder
+        tab={editingTab}
+        games={evalGames}
+        pickerOptions={pickerOptions}
+        onCancel={() => setEditingTabId(null)}
+        onSave={(next) => void saveTab(next)}
+      />
     );
   }
 
@@ -299,7 +360,17 @@ function LibraryTabs() {
       ) : null}
 
       {activeTab ? (
-        <Text variant="secondary">{summarizeTab(activeTab)}</Text>
+        <div className="flex items-center justify-between gap-2">
+          <Text variant="secondary">{summarizeTab(activeTab)}</Text>
+          {!readOnly && activeTab.builtin === undefined ? (
+            <Button
+              variant="neutral"
+              onClick={() => setEditingTabId(activeTab.id)}
+            >
+              Edit rules
+            </Button>
+          ) : null}
+        </div>
       ) : null}
 
       {diagnosis && diagnosis.kind !== "ok" ? (
