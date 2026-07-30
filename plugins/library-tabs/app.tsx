@@ -261,7 +261,15 @@ function LibraryTabs() {
   const addTemplate = useCallback(
     async (templateId: string) => {
       try {
-        await call("createTabFromTemplate", templateId);
+        const before = new Set((config?.tabs ?? []).map((t) => t.id));
+        const next = (await call("createTabFromTemplate", templateId)) as
+          | LibraryTabsConfig
+          | undefined;
+        // Select whatever the backend just created. It owns id generation
+        // (`uniqueTabId` suffixes collisions), so the new id is whichever one
+        // wasn't there a moment ago rather than anything we can predict.
+        const created = (next?.tabs ?? []).find((t) => !before.has(t.id));
+        if (created) setActiveId(created.id);
         setShowTemplates(false);
       } catch (err) {
         notify(err instanceof Error ? err.message : "Couldn't create that tab", {

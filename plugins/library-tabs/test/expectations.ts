@@ -190,6 +190,7 @@ export const TAB_EXPECTATIONS: Record<string, TabExpectation> = {
 
   // Templates
   blank: { verdict: "non-empty", minGames: 1 },
+  "on-this-device": { verdict: "non-empty", minGames: 1 },
   "space-hogs": { verdict: "non-empty", minGames: 1 },
   emulation: { verdict: "non-empty", minGames: 1 },
   backlog: { verdict: "non-empty", minGames: 1 },

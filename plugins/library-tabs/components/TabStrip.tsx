@@ -145,16 +145,33 @@ export function TabStrip({
   showCounts = true,
   edgePadding = 0,
 }: TabStripProps) {
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+
   if (tabs.length === 0) return null;
 
   return (
     <div
       role="tablist"
       aria-label="Library tabs"
+      ref={scrollerRef}
       // Horizontal scroll rather than wrapping: a wrapped strip reflows the
       // grid below it every time a count changes, which reads as jitter.
-      className="flex gap-2 overflow-x-auto pb-1"
-      style={edgePadding ? { paddingInline: edgePadding } : undefined}
+      //
+      // `overflow-x` is set inline, not via `overflow-x-auto`. That class is
+      // not in the shell's stylesheet — measured on device, the computed value
+      // was `visible` — so the strip never scrolled and the page container
+      // simply clipped the tabs that ran past its right edge. See README on
+      // plugin-only utility classes.
+      className="flex gap-2 pb-1"
+      style={{ overflowX: "auto", paddingInline: edgePadding || undefined }}
+      onWheel={(event) => {
+        // A vertical wheel is the only scroll gesture a docked mouse has here,
+        // and the page it would otherwise scroll is behind the strip.
+        const el = scrollerRef.current;
+        if (!el || el.scrollWidth <= el.clientWidth) return;
+        if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+        el.scrollLeft += event.deltaY;
+      }}
     >
       {tabs.map((entry) => (
         <TabButton

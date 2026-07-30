@@ -8,7 +8,7 @@ This is what the Tier-B non-degeneracy floors are calibrated against. A field
 at 0% is a rule that cannot possibly discriminate; that is the point of
 capturing it.
 
-Captured: 2026-07-30T20:47:51.486Z
+Captured: 2026-07-30T21:00:40.823Z
 Apps: **4356**
 
 ## Provider states at capture
@@ -24,10 +24,8 @@ Apps: **4356**
 | Field | Populated | % |
 |---|---:|---:|
 | `appId` | 4356 | 100% |
-| `capsuleUrl` | 4356 | 100% |
 | `collections` | 4356 | 100% |
 | `contributors` | 4356 | 100% |
-| `headerUrl` | 4356 | 100% |
 | `kind` | 4356 | 100% |
 | `lastPlayed` | 4356 | 100% |
 | `name` | 4356 | 100% |
@@ -35,6 +33,8 @@ Apps: **4356**
 | `playtimeMinutes` | 4356 | 100% |
 | `sortAs` | 4356 | 100% |
 | `source` | 4356 | 100% |
+| `capsuleUrl` | 2498 | 57% |
+| `headerUrl` | 2498 | 57% |
 | `sizeOnDisk` | 2081 | 48% |
 | `streamable` | 1935 | 44% |
 | `purchasedAt` | 569 | 13% |

@@ -250,6 +250,25 @@ export function templates(now: number = Math.floor(Date.now() / 1000)): TabTempl
         ),
     },
     {
+      id: "on-this-device",
+      label: "On this device",
+      description: "Hides copies that live on another PC you stream from",
+      icon: "FaLaptop",
+      build: (id) =>
+        makeTab(
+          id,
+          "On this device",
+          [
+            // Steam surfaces every app installed on any machine on the account.
+            // On a setup that streams from a desktop, that means a second copy
+            // of everything — measured on a real device: 3787 non-Steam entries
+            // of which 1858 were remote duplicates of the 1929 local ones.
+            { id: rid(id, 1), kind: "streamable", invert: true },
+          ],
+          { icon: "FaLaptop" },
+        ),
+    },
+    {
       id: "space-hogs",
       label: "Space hogs",
       description: "Installed games over 20 GB — start here when freeing up space",
