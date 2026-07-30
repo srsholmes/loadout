@@ -40,7 +40,7 @@ import { orderedTabs, resolveDefaultTab } from "./lib/config";
 import { countMatches, evaluateTab } from "./lib/evaluate";
 import { buildEvalGames } from "./lib/facts";
 import { diagnoseTab, type Fix } from "./lib/diagnose";
-import { requiredFacts } from "./lib/rules";
+import { RULE_FIELD, factUnavailableReason, requiredFacts, ruleDef } from "./lib/rules";
 import { summarizeTab } from "./lib/summarize";
 import { templates } from "./lib/templates";
 import type { Tab } from "./lib/types";
@@ -421,32 +421,12 @@ function LibraryTabs() {
  * they happen to touch — but enough to dim a tab and set an honest tooltip.
  */
 function tabTouchesBrokenField(tab: Tab, brokenFields: Set<string>): boolean {
-  const KIND_FIELD: Partial<Record<string, string>> = {
-    owned: "owned",
-    lastPlayed: "lastPlayed",
-    playtime: "playtimeMinutes",
-    reviewScore: "reviewPercentage",
-    metacritic: "metacritic",
-    deckCompat: "deckCompat",
-    steamOsCompat: "steamOsCompat",
-    releaseDate: "releaseDate",
-    purchaseDate: "purchasedAt",
-    storeTags: "storeTags",
-    genres: "genres",
-    developer: "developers",
-    publisher: "publishers",
-    feature: "features",
-    appKind: "kind",
-    comingSoon: "comingSoon",
-    familyShared: "familyShared",
-    streamable: "streamable",
-  };
 
   const walk = (rule: Tab["root"] | { kind: string; children?: unknown }): boolean => {
     if ("children" in rule && Array.isArray(rule.children)) {
       return (rule.children as Array<Parameters<typeof walk>[0]>).some(walk);
     }
-    const field = KIND_FIELD[rule.kind];
+    const field = RULE_FIELD[rule.kind as keyof typeof RULE_FIELD];
     return field !== undefined && brokenFields.has(field);
   };
   return walk(tab.root);
@@ -468,11 +448,29 @@ function TemplateGallery({ snapshot, onPick }: TemplateGalleryProps) {
   const providers = snapshot?.providers;
 
   const blockedReason = (needs: string[] | undefined): string | null => {
-    if (!needs || !providers) return null;
-    for (const provider of Object.values(providers)) {
-      if (provider.status !== "unavailable") continue;
-      // A template is blocked when the provider that owns its data is out.
-      if (needs.length > 0 && provider.reason) return provider.reason;
+    if (!needs || needs.length === 0 || !providers) return null;
+
+    // Map each needed rule kind to the field it reads, then to the provider
+    // that owns that field. Only *that* provider being unavailable blocks the
+    // template. The previous version greyed out anything with a non-empty
+    // `needs` as soon as any provider was down — so a Deck Verified template
+    // was disabled because genres were missing, long after Deck ratings worked.
+    for (const kind of needs) {
+      const field = RULE_FIELD[kind as keyof typeof RULE_FIELD];
+      if (!field) continue;
+      for (const provider of Object.values(providers)) {
+        if (provider.status !== "unavailable") continue;
+        if ((provider.ownsFields as readonly string[]).includes(field)) {
+          return provider.reason ?? "This needs data that isn't available yet.";
+        }
+      }
+    }
+
+    // A rule backed by an async fact has no provider at all, so nothing above
+    // can speak for it. Report it rather than leaving the template clickable.
+    for (const kind of needs) {
+      const factKey = ruleDef(kind as Parameters<typeof ruleDef>[0])?.factKey;
+      if (factKey) return factUnavailableReason(factKey);
     }
     return null;
   };

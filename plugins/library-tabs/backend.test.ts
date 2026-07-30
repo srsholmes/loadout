@@ -1,13 +1,36 @@
 // Real-disk I/O against a per-test temp XDG_CONFIG_HOME. See
 // lib/backups.test.ts for why fs is not mocked.
 
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveMethod } from "@loadout/types";
 import type { GameInfo } from "@loadout/types";
-import LibraryTabsBackend from "./backend";
+import type { SteamLibraryEntry } from "@loadout/steam-cdp";
+
+/**
+ * `getSnapshot` reads Steam's live library over CDP. Without this stub these
+ * tests pass or fail depending on whether Steam happens to be running on the
+ * machine — on a dev Deck they were reaching the real client and getting 4356
+ * games where the fixture supplies one. Default is "Steam unreachable", which
+ * exercises the degradation path; `steamEntries` opts a test into the merge.
+ */
+let steamEntries: SteamLibraryEntry[] | null = null;
+
+mock.module("@loadout/steam-cdp", () => ({
+  withSteamClient: async (fn: (client: unknown) => unknown) => {
+    if (steamEntries === null) throw new Error("Steam is not running (test stub)");
+    return fn({});
+  },
+  readSteamLibrary: async () => ({
+    entries: steamEntries ?? [],
+    installedCount: (steamEntries ?? []).filter((e) => e.installed).length,
+    resolvedTagCount: 0,
+  }),
+}));
+
+const { default: LibraryTabsBackend } = await import("./backend");
 import { LIBRARY_TABS_SCHEMA_VERSION, defaultConfig } from "./lib/config";
 import { UNKNOWN } from "./lib/rules";
 import { encodeShareString, exportTabs } from "./lib/share";
@@ -17,6 +40,7 @@ let tempDir: string;
 let prevXdg: string | undefined;
 
 beforeEach(() => {
+  steamEntries = null;
   prevXdg = process.env.XDG_CONFIG_HOME;
   tempDir = mkdtempSync(join(tmpdir(), "library-tabs-backend-"));
   process.env.XDG_CONFIG_HOME = tempDir;
@@ -255,6 +279,67 @@ describe("createTabFromTemplate / deleteTab", () => {
 });
 
 describe("getSnapshot", () => {
+  /** A Steam entry with everything the merge reads. */
+  function steamEntry(
+    appId: string,
+    extra: Partial<SteamLibraryEntry> = {},
+  ): SteamLibraryEntry {
+    return {
+      appId,
+      name: `App ${appId}`,
+      sortAs: `app ${appId}`,
+      kind: "game",
+      installed: false,
+      owned: true,
+      streamable: false,
+      sizeOnDisk: -1,
+      lastPlayed: -1,
+      playtimeMinutes: -1,
+      deckCompat: 0,
+      steamOsCompat: 0,
+      reviewPercentage: -1,
+      metacritic: -1,
+      releaseDate: -1,
+      purchasedAt: -1,
+      comingSoon: false,
+      familyShared: false,
+      storeTags: [],
+      collections: [],
+      romPlatform: null,
+      ...extra,
+    };
+  }
+
+  it("adds owned-but-not-installed games Steam knows about", async () => {
+    // The whole point of the appstore provider: the manifest scan only sees
+    // installed games, so an uninstalled purchase was invisible entirely.
+    steamEntries = [steamEntry("620"), steamEntry("999", { deckCompat: 3 })];
+    const { backend } = await harness();
+    const snapshot = await backend.getSnapshot();
+
+    expect(snapshot.games.map((g) => g.appId).sort()).toEqual(["620", "999"]);
+    expect(snapshot.games.find((g) => g.appId === "999")!.deckCompat).toBe("verified");
+    expect(snapshot.providers.appstore.status).toBe("ok");
+  });
+
+  it("keeps the manifest's measured size over Steam's guess", async () => {
+    // Steam populates size_on_disk for ~3% of a library; the manifest measured
+    // it from an actual .acf, so it wins where both have an answer.
+    steamEntries = [steamEntry("620", { sizeOnDisk: 5 })];
+    const { backend } = await harness();
+    const snapshot = await backend.getSnapshot();
+    expect(snapshot.games.find((g) => g.appId === "620")!.sizeOnDisk).toBe(1024 ** 3);
+  });
+
+  it("falls back to the manifest-only snapshot when Steam is unreachable", async () => {
+    steamEntries = null;
+    const { backend } = await harness();
+    const snapshot = await backend.getSnapshot();
+    // A smaller honest library beats an error, and the provider state says so.
+    expect(snapshot.games).toHaveLength(1);
+    expect(snapshot.providers.appstore.status).not.toBe("ok");
+  });
+
   it("adapts the library and reports provider health", async () => {
     const { backend } = await harness();
     const snapshot = await backend.getSnapshot();

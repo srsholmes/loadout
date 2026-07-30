@@ -182,22 +182,20 @@ describe("templates", () => {
     }
   });
 
-  it("does not declare `needs` for templates that work on Phase 1 data alone", () => {
-    // `backlog` and `pick-up-again` used to be on this list. They are not:
-    // both filter on `lastPlayed`, which no provider populates, so they were
-    // guaranteed empty *and* not greyed out — a template that looks ready and
-    // silently produces nothing. Caught by the corpus non-degeneracy suite.
-    for (const id of ["space-hogs", "emulation", "blank"]) {
+  it("does not declare `needs` for templates the live providers can satisfy", () => {
+    // `backlog` and `pick-up-again` briefly declared `needs: ["lastPlayed"]`
+    // while nothing populated that field. The appstore provider populates it
+    // now, so declaring it again would grey out a template that works.
+    for (const id of ["space-hogs", "emulation", "blank", "backlog", "pick-up-again"]) {
       expect(templates(NOW).find((t) => t.id === id)!.needs).toBeUndefined();
     }
   });
 
-  it("declares `needs` for every template that filters on unpopulated data", () => {
-    // `blockedReason` in app.tsx greys a template out only when it declares
-    // `needs`, so an undeclared dependency is invisible to the user.
+  it("declares `needs` for templates whose data still has no provider", () => {
     for (const [id, needs] of [
-      ["backlog", ["lastPlayed"]],
-      ["pick-up-again", ["lastPlayed", "playtime"]],
+      ["short-games", ["hltbMain"]],
+      ["couch-coop", ["feature"]],
+      ["friends-playing", ["friendsPlaying"]],
     ] as const) {
       expect(templates(NOW).find((t) => t.id === id)!.needs).toEqual([...needs]);
     }

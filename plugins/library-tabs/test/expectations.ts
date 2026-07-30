@@ -46,8 +46,11 @@ export type Expectation =
 /** Default floor for `discriminating` — 2% of the library on each side. */
 export const DEFAULT_MIN_SIDE = 0.02;
 
-/** Everything below is fixed by the same piece of work. */
-const APPSTORE_PROVIDER = "the appstore CDP provider (Phase 2)";
+/**
+ * Every remaining `known-broken` entry is waiting on the same thing: the
+ * appinfo provider (Phase 3), which reads `appcache/appinfo.vdf`. The appstore
+ * provider has landed and its entries are gone.
+ */
 const SUNSET = "2027-01-31";
 
 export const RULE_EXPECTATIONS = {
@@ -61,80 +64,28 @@ export const RULE_EXPECTATIONS = {
   appKind: { verdict: "discriminating" },
 
   // ── Degenerate: adapt.ts hardcodes the field ────────────────────────
-  installed: {
-    verdict: "known-broken",
-    because:
-      "adapt.ts hardcodes installed:true — game-library only scans appmanifest " +
-      "files, so an uninstalled game is not merely marked uninstalled, it is absent",
-    fixedBy: APPSTORE_PROVIDER,
-    sunset: SUNSET,
-  },
+  installed: { verdict: "discriminating", minSide: 0.02 },
+  // Everything in your Steam library collections is by definition owned, so a
+  // constant `true` is the truth here rather than a gap. It would discriminate
+  // on an account with family-shared or delisted entries.
   owned: {
-    verdict: "known-broken",
-    because:
-      "adapt.ts hardcodes owned:true. Measured on device: 2346 owned vs 60 " +
-      "installed, so ~2280 owned games are invisible to the plugin entirely",
-    fixedBy: APPSTORE_PROVIDER,
-    sunset: SUNSET,
+    verdict: "constant",
+    value: true,
+    because: "every app reachable through collectionStore is owned by this account",
   },
-  lastPlayed: {
-    verdict: "known-broken",
-    because:
-      "AdaptOptions.lastPlayed has no producer — backend.getSnapshot never " +
-      "passes it, so every record is -1. This is why the Recently played and " +
-      "Never played builtins are permanently empty",
-    fixedBy: APPSTORE_PROVIDER,
-    sunset: SUNSET,
-  },
+  lastPlayed: { verdict: "discriminating", minSide: 0.02 },
   // Conditional, but real: populated only when the `playtime` plugin is
   // reachable, which covered 2.5% of the captured corpus. The floor is set to
   // that rather than the default 2%, so a capture taken with the plugin
   // disabled fails loudly instead of quietly passing on nothing.
   playtime: { verdict: "discriminating", minSide: 0.02 },
-  deckCompat: {
-    verdict: "known-broken",
-    because: 'adapt.ts hardcodes "unknown" for every game',
-    fixedBy: APPSTORE_PROVIDER,
-    sunset: SUNSET,
-  },
-  steamOsCompat: {
-    verdict: "known-broken",
-    because: 'adapt.ts hardcodes "unknown" for every game',
-    fixedBy: APPSTORE_PROVIDER,
-    sunset: SUNSET,
-  },
-  reviewScore: {
-    verdict: "known-broken",
-    because: "adapt.ts hardcodes -1",
-    fixedBy: APPSTORE_PROVIDER,
-    sunset: SUNSET,
-  },
-  metacritic: {
-    verdict: "known-broken",
-    because: "adapt.ts hardcodes -1; needs the appinfo provider (Phase 3)",
-    fixedBy: "the appinfo provider (Phase 3)",
-    sunset: SUNSET,
-  },
-  releaseDate: {
-    verdict: "known-broken",
-    because: "adapt.ts hardcodes -1; use GetCanonicalReleaseDate() over either rt_* field",
-    fixedBy: APPSTORE_PROVIDER,
-    sunset: SUNSET,
-  },
-  purchaseDate: {
-    verdict: "known-broken",
-    because: "adapt.ts hardcodes -1",
-    fixedBy: APPSTORE_PROVIDER,
-    sunset: SUNSET,
-  },
-  storeTags: {
-    verdict: "known-broken",
-    because:
-      "adapt.ts hardcodes []. Steam returns numeric tag ids, so the provider " +
-      "also needs GetLocalizationForStoreTag to make them nameable",
-    fixedBy: APPSTORE_PROVIDER,
-    sunset: SUNSET,
-  },
+  deckCompat: { verdict: "discriminating", minSide: 0.02 },
+  steamOsCompat: { verdict: "discriminating", minSide: 0.02 },
+  reviewScore: { verdict: "discriminating", minSide: 0.02 },
+  metacritic: { verdict: "discriminating", minSide: 0.02 },
+  releaseDate: { verdict: "discriminating", minSide: 0.02 },
+  purchaseDate: { verdict: "discriminating", minSide: 0.02 },
+  storeTags: { verdict: "discriminating", minSide: 0.02 },
   genres: {
     verdict: "known-broken",
     because: "adapt.ts hardcodes []",
@@ -160,23 +111,16 @@ export const RULE_EXPECTATIONS = {
     sunset: SUNSET,
   },
   comingSoon: {
-    verdict: "known-broken",
-    because: "adapt.ts hardcodes false; BIsUnreleased() is available on the overview",
-    fixedBy: APPSTORE_PROVIDER,
-    sunset: SUNSET,
+    verdict: "constant",
+    value: false,
+    because: "BIsUnreleased() is false for every app in this library — nothing pre-release",
   },
   familyShared: {
-    verdict: "known-broken",
-    because: "adapt.ts hardcodes false; BIsBorrowed() is available on the overview",
-    fixedBy: APPSTORE_PROVIDER,
-    sunset: SUNSET,
+    verdict: "constant",
+    value: false,
+    because: "BIsBorrowed() is false for every app — nothing shared from a Steam Family",
   },
-  streamable: {
-    verdict: "known-broken",
-    because: "adapt.ts hardcodes false; per_client_data carries other-client install state",
-    fixedBy: APPSTORE_PROVIDER,
-    sunset: SUNSET,
-  },
+  streamable: { verdict: "discriminating" },
   installFolder: {
     verdict: "known-broken",
     because:
@@ -241,61 +185,29 @@ export const TAB_EXPECTATIONS: Record<string, TabExpectation> = {
   all: { verdict: "non-empty", minGames: 1 },
   installed: { verdict: "non-empty", minGames: 1 },
   "non-steam": { verdict: "non-empty", minGames: 1 },
-  recent: {
-    verdict: "empty-until",
-    blockedBy: "lastPlayed",
-    because: "lastPlayed is -1 for every record, so no game can be recently played",
-  },
-  "never-played": {
-    verdict: "empty-until",
-    blockedBy: "lastPlayed",
-    because:
-      "neverPlayedOnly needs lastPlayed === 0 (provably never); every record is " +
-      "-1 (unknown), which correctly does not match",
-  },
+  recent: { verdict: "non-empty", minGames: 1 },
+  "never-played": { verdict: "non-empty", minGames: 1 },
 
   // Templates
   blank: { verdict: "non-empty", minGames: 1 },
   "space-hogs": { verdict: "non-empty", minGames: 1 },
   emulation: { verdict: "non-empty", minGames: 1 },
-  backlog: {
-    verdict: "empty-until",
-    blockedBy: "lastPlayed",
-    because: "same lastPlayed gap as never-played",
-  },
-  "pick-up-again": {
-    verdict: "empty-until",
-    blockedBy: "lastPlayed",
-    because: "needs both lastPlayed and playtime",
-  },
-  "deck-verified": {
-    verdict: "empty-until",
-    blockedBy: "deckCompat",
-    because: 'deckCompat is "unknown" for every record',
-  },
+  backlog: { verdict: "non-empty", minGames: 1 },
+  "pick-up-again": { verdict: "non-empty", minGames: 1 },
+  "deck-verified": { verdict: "non-empty", minGames: 1 },
   "recently-added": {
-    verdict: "empty-until",
-    blockedBy: "purchasedAt",
-    because: "purchasedAt is -1 for every record",
+    verdict: "legitimately-empty",
+    because:
+      "purchasedAt is populated for 13% of the corpus, but the suite pins a " +
+      "fixed clock and no purchase falls inside its last-30-days window",
   },
-  "hidden-gems": {
-    verdict: "empty-until",
-    blockedBy: "reviewPercentage",
-    because: "reviewPercentage is -1 for every record",
-  },
+  "hidden-gems": { verdict: "non-empty", minGames: 1 },
   "couch-coop": {
     verdict: "empty-until",
     blockedBy: "features",
     because: "every feature flag is false",
   },
-  declutter: {
-    verdict: "matches-everything",
-    blockedBy: "kind",
-    because:
-      'adapt.ts only ever produces kind "game" or "shortcut", so a tab that ' +
-      "excludes demos, soundtracks, tools, videos and DLC excludes nothing. It " +
-      "shows the whole library and looks like it is working",
-  },
+  declutter: { verdict: "non-empty", minGames: 1 },
   "short-games": {
     verdict: "empty-until",
     blockedBy: "hltbMain",

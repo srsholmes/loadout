@@ -51,6 +51,13 @@ export type AppKind =
   | "config"
   | "beta"
   | "shortcut"
+  /**
+   * A non-Steam shortcut that is an emulated game, identified by its Steam ROM
+   * Manager collection. Distinct from `shortcut` because on a handheld these
+   * dominate the library — a real device had 1878 of them against 417 owned
+   * Steam games — and lumping them together makes every default view unusable.
+   */
+  | "rom"
   | "unknown";
 
 /** Steam Deck compatibility rating. Ordered worst → best for sorting. */

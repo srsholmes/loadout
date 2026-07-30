@@ -98,7 +98,13 @@ export function TabDiagnostics({
 }: TabDiagnosticsProps) {
   if (diagnosis.kind === "ok") return null;
 
-  const fixes = "fixes" in diagnosis ? diagnosis.fixes : [];
+  // Every fix is a `Tab -> Tab` that the caller persists, and the most common
+  // one is "remove the rule that is excluding everything". On a builtin tab —
+  // whose root is documented as not editable — that silently guts a shipped
+  // tab, and the damage outlives whatever made it empty. It is exactly how the
+  // Recently played and Never played builtins on a real device ended up with
+  // no rules at all while their data source was missing.
+  const fixes = editable && "fixes" in diagnosis ? diagnosis.fixes : [];
 
   const token = variant(diagnosis);
 

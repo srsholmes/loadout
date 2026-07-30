@@ -176,10 +176,6 @@ export function templates(now: number = Math.floor(Date.now() / 1000)): TabTempl
       label: "Installed & unplayed",
       description: "Games you've installed but never started — your actual backlog",
       icon: "FaSeedling",
-      // Without lastPlayed this can only ever be empty. Declaring it is what
-      // makes the gallery grey it out and say why, instead of offering a
-      // template that looks ready and produces nothing.
-      needs: ["lastPlayed"],
       build: (id) =>
         makeTab(
           id,
@@ -224,7 +220,6 @@ export function templates(now: number = Math.floor(Date.now() / 1000)): TabTempl
       label: "Pick up again",
       description: "Played before, but not in the last three months",
       icon: "FaRotateLeft",
-      needs: ["lastPlayed", "playtime"],
       build: (id) =>
         makeTab(
           id,

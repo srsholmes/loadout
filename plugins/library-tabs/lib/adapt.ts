@@ -167,3 +167,47 @@ export function phase1Providers(
     },
   };
 }
+
+/**
+ * Provider states once Steam's live library has been read.
+ *
+ * `appstore` becomes `ok` and takes ownership of `kind` and `releaseDate` from
+ * `appinfo`: the app-type collections classify every app, and
+ * `GetCanonicalReleaseDate()` is populated more often than either raw `rt_*`
+ * field. `appinfo` keeps only what genuinely needs `appinfo.vdf` — genres,
+ * studios, Metacritic and the feature flags.
+ */
+export function appStoreProviders(
+  hasPlaytime: boolean,
+  now: number = Date.now(),
+): Record<MetadataProviderId, ProviderState> {
+  const base = phase1Providers(hasPlaytime, now);
+  return {
+    manifest: base.manifest,
+    appstore: {
+      status: "ok",
+      capturedAt: now,
+      ownsFields: [
+        "owned",
+        "installed",
+        "kind",
+        "lastPlayed",
+        "playtimeMinutes",
+        "reviewPercentage",
+        "deckCompat",
+        "steamOsCompat",
+        "purchasedAt",
+        "releaseDate",
+        "comingSoon",
+        "familyShared",
+        "streamable",
+        "storeTags",
+      ],
+    },
+    appinfo: {
+      ...base.appinfo,
+      reason: "Genres, developers and Metacritic scores aren't available yet.",
+      ownsFields: ["genres", "developers", "publishers", "franchises", "metacritic", "features"],
+    },
+  };
+}

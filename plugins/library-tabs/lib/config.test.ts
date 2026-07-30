@@ -427,3 +427,58 @@ describe("uniqueTabId", () => {
     expect(uniqueTabId(config, "x")).toBe("x-3");
   });
 });
+
+describe("coerceConfig — built-in tabs are ours, not the user's", () => {
+  it("restores a built-in whose rules were removed", () => {
+    // Exactly what happened on a real device: while `recent` had no data to
+    // match, the empty-state offered "remove the rule excluding everything",
+    // and applying it left a builtin with no rules that then matched the whole
+    // library. The damage outlived the missing data.
+    const config = defaultConfig();
+    const gutted = config.tabs.map((t) =>
+      t.id === "recent" ? { ...t, root: { ...t.root, children: [] } } : t,
+    );
+
+    const result = coerceConfig({ ...config, tabs: gutted });
+    const recent = result.config.tabs.find((t) => t.id === "recent")!;
+    const shipped = builtinTabs().find((t) => t.id === "recent")!;
+
+    expect(recent.root).toEqual(shipped.root);
+    expect(result.dropped.some((d) => d.includes("Recently played"))).toBe(true);
+  });
+
+  it("keeps the parts of a built-in the user legitimately controls", () => {
+    const config = defaultConfig();
+    const customised = config.tabs.map((t) =>
+      t.id === "recent"
+        ? { ...t, visible: false, limit: 5, root: { ...t.root, children: [] } }
+        : t,
+    );
+
+    const recent = coerceConfig({ ...config, tabs: customised }).config.tabs.find(
+      (t) => t.id === "recent",
+    )!;
+    expect(recent.visible).toBe(false);
+    expect(recent.limit).toBe(5);
+    // …but the rules came back.
+    expect(recent.root.children.length).toBeGreaterThan(0);
+  });
+
+  it("leaves an untouched built-in alone, and says nothing about it", () => {
+    const result = coerceConfig(defaultConfig());
+    expect(result.dropped.filter((d) => d.includes("built-in"))).toEqual([]);
+  });
+
+  it("never rewrites a user-created tab", () => {
+    const config = defaultConfig();
+    const mine = {
+      ...config.tabs[0]!,
+      id: "mine",
+      label: "Mine",
+      builtin: undefined,
+      root: { id: "mine-root", kind: "group" as const, combinator: "all" as const, children: [] },
+    };
+    const result = coerceConfig({ ...config, tabs: [...config.tabs, mine] });
+    expect(result.config.tabs.find((t) => t.id === "mine")!.root.children).toEqual([]);
+  });
+});

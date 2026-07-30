@@ -77,6 +77,7 @@ async function callPlugin<T>(plugin: string, method: string): Promise<T> {
   const ws = new WebSocket(
     `ws://127.0.0.1:33820/ws?token=${encodeURIComponent(token)}`,
   );
+  const requestId = `capture-${method}-${Date.now()}`;
 
   return await new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -84,19 +85,27 @@ async function callPlugin<T>(plugin: string, method: string): Promise<T> {
       reject(new Error(`${plugin}.${method} timed out after ${RPC_TIMEOUT_MS}ms`));
     }, RPC_TIMEOUT_MS);
 
-    ws.onopen = () =>
-      ws.send(JSON.stringify({ id: `capture-${method}`, plugin, method, args: [] }));
+    ws.onopen = () => ws.send(JSON.stringify({ id: requestId, plugin, method, args: [] }));
 
     ws.onmessage = (event) => {
+      // The socket also carries plugin event broadcasts, which arrive
+      // unsolicited and can land before the reply. Match on the request id
+      // rather than taking whatever shows up first.
+      let frame: { id?: string; result?: T; error?: string };
+      try {
+        frame = JSON.parse(String(event.data)) as typeof frame;
+      } catch (err) {
+        clearTimeout(timer);
+        ws.close();
+        reject(err instanceof Error ? err : new Error(String(err)));
+        return;
+      }
+      if (frame.id !== requestId) return;
+
       clearTimeout(timer);
       ws.close();
-      try {
-        const frame = JSON.parse(String(event.data)) as { result?: T; error?: string };
-        if (frame.error) reject(new Error(`${plugin}.${method}: ${frame.error}`));
-        else resolve(frame.result as T);
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)));
-      }
+      if (frame.error) reject(new Error(`${plugin}.${method}: ${frame.error}`));
+      else resolve(frame.result as T);
     };
 
     ws.onerror = () => {

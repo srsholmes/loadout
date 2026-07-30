@@ -350,25 +350,24 @@ describe("template gallery", () => {
     });
   });
 
-  it("does not offer a template whose data is missing", async () => {
-    // This test used to click "Installed & unplayed" (backlog) to create a tab.
-    // It filters on `lastPlayed`, which no provider populates, so it was
-    // guaranteed to produce an empty tab — and because it declared no `needs`,
-    // nothing greyed it out. It now declares the dependency and is disabled.
+  it("does not offer a template whose data source is genuinely missing", async () => {
+    // "Short games" needs `hltbMain`, an async fact with no resolver — nothing
+    // can populate it, so the template must be disabled rather than handed
+    // over to produce an empty tab.
     mountApp();
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Add tab" })).toBeTruthy();
     });
     screen.getByRole("button", { name: "Add tab" }).click();
     await waitFor(() => {
-      expect(screen.getByText("Installed & unplayed")).toBeTruthy();
+      expect(screen.getByText("Short games")).toBeTruthy();
     });
 
-    const backlog = screen.getByText("Installed & unplayed").closest("button")!;
-    expect(backlog.hasAttribute("disabled")).toBe(true);
-    backlog.click();
+    const shortGames = screen.getByText("Short games").closest("button")!;
+    expect(shortGames.hasAttribute("disabled")).toBe(true);
+    shortGames.click();
     expect(
-      calls.some((c) => c.method === "createTabFromTemplate" && c.args[0] === "backlog"),
+      calls.some((c) => c.method === "createTabFromTemplate" && c.args[0] === "short-games"),
     ).toBe(false);
   });
 });

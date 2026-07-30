@@ -23,12 +23,22 @@ import type {
   PluginBackend,
   PluginLogger,
 } from "@loadout/types";
-import { withSteamClient } from "@loadout/steam-cdp";
+import {
+  readSteamLibrary,
+  withSteamClient,
+  type SteamLibrarySnapshot,
+} from "@loadout/steam-cdp";
 import { shortcutGameId64 } from "@loadout/vdf";
 import type { LibraryTabsConfig } from "./lib/config";
 import type { Tab } from "./lib/types";
 import { defaultConfig, uniqueTabId, validateConfig } from "./lib/config";
-import { adaptLibrary, phase1Providers, type PlaytimeRow } from "./lib/adapt";
+import {
+  adaptLibrary,
+  appStoreProviders,
+  phase1Providers,
+  type PlaytimeRow,
+} from "./lib/adapt";
+import { mergeSteamLibrary } from "./lib/merge-appstore";
 import { type BackupInfo, listBackups, writeBackup } from "./lib/backups";
 import {
   type LoadResult,
@@ -154,12 +164,49 @@ export default class LibraryTabsBackend implements PluginBackend {
   async getSnapshot(): Promise<GameMetadataSnapshot> {
     const games = await this._fetchGames();
     const playtime = await this._fetchPlaytime();
+    const manifestGames = adaptLibrary(games, { playtime: playtime ?? undefined });
+
+    // Steam's live view supplies the owned-but-not-installed half of the
+    // library and most of the fields the manifest scan cannot know. When it is
+    // unreachable we keep the manifest-only snapshot rather than failing: a
+    // smaller honest library beats an error, and `providers` says which it is.
+    const steam = await this._fetchSteamLibrary();
+    if (!steam) {
+      return {
+        games: manifestGames,
+        providers: phase1Providers(playtime !== null),
+        generatedAt: Date.now(),
+      };
+    }
+
+    const merged = mergeSteamLibrary(manifestGames, steam.entries);
+    this.log?.info(
+      `[library-tabs] Steam library merged: ${merged.addedFromSteam} added, ` +
+        `${merged.enriched} enriched (${steam.installedCount} installed)`,
+    );
 
     return {
-      games: adaptLibrary(games, { playtime: playtime ?? undefined }),
-      providers: phase1Providers(playtime !== null),
+      games: merged.games,
+      providers: appStoreProviders(playtime !== null),
       generatedAt: Date.now(),
     };
+  }
+
+  /**
+   * Steam's live library over CDP, or `null` when Steam isn't reachable.
+   *
+   * `null` rather than a throw: Steam being closed is an ordinary state on a
+   * handheld, and it must degrade the snapshot rather than break the plugin.
+   */
+  private async _fetchSteamLibrary(): Promise<SteamLibrarySnapshot | null> {
+    try {
+      return await withSteamClient((client) => readSteamLibrary(client));
+    } catch (err) {
+      this.log?.warn(
+        `[library-tabs] Steam library unavailable: ${err instanceof Error ? err.message : err}`,
+      );
+      return null;
+    }
   }
 
   private async _fetchGames(): Promise<GameInfo[]> {

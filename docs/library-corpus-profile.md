@@ -8,58 +8,62 @@ This is what the Tier-B non-degeneracy floors are calibrated against. A field
 at 0% is a rule that cannot possibly discriminate; that is the point of
 capturing it.
 
-Captured: 2026-07-30T17:04:07.787Z
-Apps: **2001**
+Captured: 2026-07-30T20:28:34.761Z
+Apps: **4356**
 
 ## Provider states at capture
 
 | Provider | Status | Reason |
 |---|---|---|
 | `manifest` | ok |  |
-| `appstore` | stale | Only play time is available yet — ownership, reviews and Deck ratings need a newer Loadout. |
+| `appstore` | ok |  |
 | `appinfo` | unavailable | Genres, developers and Metacritic scores aren't available yet. |
 
 ## Field population
 
 | Field | Populated | % |
 |---|---:|---:|
-| `appId` | 2001 | 100% |
-| `capsuleUrl` | 2001 | 100% |
-| `contributors` | 2001 | 100% |
-| `headerUrl` | 2001 | 100% |
-| `installed` | 2001 | 100% |
-| `kind` | 2001 | 100% |
-| `name` | 2001 | 100% |
-| `owned` | 2001 | 100% |
-| `sizeOnDisk` | 2001 | 100% |
-| `sortAs` | 2001 | 100% |
-| `source` | 2001 | 100% |
-| `collections` | 1904 | 95% |
-| `playtimeMinutes` | 50 | 2% |
+| `appId` | 4356 | 100% |
+| `capsuleUrl` | 4356 | 100% |
+| `collections` | 4356 | 100% |
+| `contributors` | 4356 | 100% |
+| `headerUrl` | 4356 | 100% |
+| `kind` | 4356 | 100% |
+| `lastPlayed` | 4356 | 100% |
+| `name` | 4356 | 100% |
+| `owned` | 4356 | 100% |
+| `playtimeMinutes` | 4356 | 100% |
+| `sortAs` | 4356 | 100% |
+| `source` | 4356 | 100% |
+| `sizeOnDisk` | 2081 | 48% |
+| `streamable` | 1935 | 44% |
+| `purchasedAt` | 569 | 13% |
+| `reviewPercentage` | 420 | 10% |
+| `storeTags` | 412 | 9% |
+| `releaseDate` | 394 | 9% |
+| `deckCompat` | 385 | 9% |
+| `steamOsCompat` | 378 | 9% |
+| `metacritic` | 230 | 5% |
+| `installed` | 138 | 3% |
 | `comingSoon` | 0 | 0% |
-| `deckCompat` | 0 | 0% |
 | `developers` | 0 | 0% |
 | `familyShared` | 0 | 0% |
 | `features` | 0 | 0% |
 | `franchises` | 0 | 0% |
 | `genres` | 0 | 0% |
 | `installPath` | 0 | 0% |
-| `lastPlayed` | 0 | 0% |
-| `metacritic` | 0 | 0% |
 | `publishers` | 0 | 0% |
-| `purchasedAt` | 0 | 0% |
-| `releaseDate` | 0 | 0% |
-| `reviewPercentage` | 0 | 0% |
-| `steamOsCompat` | 0 | 0% |
-| `storeTags` | 0 | 0% |
-| `streamable` | 0 | 0% |
 
 ## Kind histogram
 
 ```json
 {
-  "game": 74,
-  "shortcut": 1927
+  "game": 419,
+  "tool": 146,
+  "music": 3,
+  "shortcut": 1909,
+  "rom": 1878,
+  "application": 1
 }
 ```
 
@@ -67,7 +71,7 @@ Apps: **2001**
 
 ```json
 {
-  "steam": 74,
-  "shortcut": 1927
+  "steam": 569,
+  "shortcut": 3787
 }
 ```

@@ -348,6 +348,40 @@ export interface CoerceResult {
  * A config that can't be salvaged at all falls back to defaults — which is
  * still recoverable, because `storage.ts` writes a backup before it lands.
  */
+/**
+ * Restore a builtin tab's rules from the shipped definition.
+ *
+ * A builtin's `root` is not user-editable by design — the user can hide it,
+ * reorder it or change its sort, but the rules are ours. Nothing should ever
+ * have written a different tree, and yet on a real device the `recent` builtin
+ * came back with `children: []` and `never-played` had lost its
+ * `lastPlayed` rule, so both silently matched far more than they should.
+ *
+ * The cause was the empty-state's one-tap fixes: while those tabs had no data
+ * to match, the diagnostics offered "remove the rule that is excluding
+ * everything", and applying it persisted a gutted builtin. `TabDiagnostics`
+ * no longer offers fixes for a non-editable tab, but that does not repair a
+ * config already damaged — this does, on the next load.
+ *
+ * Only `root` is restored. Everything the user legitimately controls
+ * (`visible`, `autoHide`, `sort`, `limit`, `display`, `mirror`) is preserved.
+ */
+function resyncBuiltins(tabs: readonly Tab[], dropped: string[]): Tab[] {
+  const shipped = new Map(builtinTabs().map((t) => [t.id, t]));
+
+  return tabs.map((tab) => {
+    if (tab.builtin === undefined) return tab;
+    const source = shipped.get(tab.id);
+    if (!source) return tab;
+    if (JSON.stringify(tab.root) === JSON.stringify(source.root)) return tab;
+
+    dropped.push(
+      `The built-in "${tab.label}" tab had modified rules; restored the original`,
+    );
+    return { ...tab, root: source.root };
+  });
+}
+
 export function coerceConfig(raw: unknown): CoerceResult {
   const base = defaultConfig();
   if (!isRecord(raw)) {
@@ -389,7 +423,7 @@ export function coerceConfig(raw: unknown): CoerceResult {
     return true;
   });
 
-  const finalTabs = deduped.length > 0 ? deduped : base.tabs;
+  const finalTabs = resyncBuiltins(deduped.length > 0 ? deduped : base.tabs, dropped);
   const validIds = new Set(finalTabs.map((t) => t.id));
 
   const order = isStringArray(raw.tabOrder)
