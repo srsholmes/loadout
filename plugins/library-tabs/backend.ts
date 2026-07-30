@@ -37,7 +37,7 @@ import {
 import { shortcutGameId64 } from "@loadout/vdf";
 import type { LibraryTabsConfig } from "./lib/config";
 import type { Tab } from "./lib/types";
-import { defaultConfig, orderedTabs, uniqueTabId, validateConfig } from "./lib/config";
+import { defaultConfig, uniqueTabId, validateConfig } from "./lib/config";
 import {
   adaptLibrary,
   appStoreProviders,
@@ -58,12 +58,6 @@ import { findTemplate } from "./lib/templates";
 import { buildEvalGames } from "./lib/facts";
 import { evaluateTab } from "./lib/evaluate";
 import { mirrorAffecting, planMirror, summarizePlan, type MirrorPlan } from "./lib/mirror";
-import {
-  buildTabsRuntime,
-  setTabsExpression,
-  steamTabId,
-  type SteamTabPayload,
-} from "./lib/steam-tabs";
 import { applyMirrorPlan, type MirrorOps, type MirrorSyncResult } from "./lib/mirror-apply";
 
 const GAME_LIBRARY_SERVICE = "__core:game-library";
@@ -100,15 +94,6 @@ export default class LibraryTabsBackend implements PluginBackend {
         `[library-tabs] Loaded with warnings: ${result.warnings.join("; ")}`,
       );
     }
-
-    // Steam's tab bar holds no state of its own — the patch asks our runtime
-    // for tabs on every render, and the runtime lives in Steam's page. So a
-    // Steam restart, or a plugin reload, needs this to run again.
-    void this.pushSteamTabs().catch((err) => {
-      this.log?.warn(
-        `[library-tabs] Steam's tab bar not populated: ${err instanceof Error ? err.message : err}`,
-      );
-    });
 
     // A sync owed from a session where Steam was closed. Retried here rather
     // than on a timer: plugin load is the one moment we know Steam has just
@@ -169,30 +154,14 @@ export default class LibraryTabsBackend implements PluginBackend {
    * every sync would schedule another one forever.
    */
   private _maybeAutoSync(before: LibraryTabsConfig, after: LibraryTabsConfig): void {
-    // `visible` doesn't affect the mirror but does affect the tab bar, so the
-    // two triggers differ by exactly that.
-    const tabsChanged =
-      mirrorAffecting(before, after) ||
-      JSON.stringify(before.tabs.map((t) => t.visible)) !==
-        JSON.stringify(after.tabs.map((t) => t.visible)) ||
-      JSON.stringify(before.tabOrder) !== JSON.stringify(after.tabOrder);
-    if (!tabsChanged) return;
+    if (!after.mirror.autoSync) return;
+    if (!mirrorAffecting(before, after)) return;
 
     if (this.syncTimer) clearTimeout(this.syncTimer);
     // Coalesce: dragging a slider in the rule builder can write a dozen times
     // a second, and each sync is a full library evaluation plus Steam writes.
     this.syncTimer = setTimeout(() => {
       this.syncTimer = null;
-
-      // Tabs in Steam are the point of the plugin, so they refresh whether or
-      // not the user opted into collection mirroring.
-      void this.pushSteamTabs().catch((err) => {
-        this.log?.warn(
-          `[library-tabs] Couldn't refresh Steam's tab bar: ${err instanceof Error ? err.message : err}`,
-        );
-      });
-
-      if (!this.config.mirror.autoSync) return;
       void this.syncMirror().catch((err) => {
         this.log?.warn(
           `[library-tabs] Auto-sync failed: ${err instanceof Error ? err.message : err}`,
@@ -382,46 +351,6 @@ export default class LibraryTabsBackend implements PluginBackend {
     } catch {
       throw new Error("Couldn't reach Steam");
     }
-  }
-
-  // ── Tabs in Steam's own library ──────────────────────────────────────
-
-  /**
-   * Push the evaluated tabs into Steam, so its library tab bar shows them.
-   *
-   * This is the plugin's headline feature and the reason it is named what it
-   * is. The webpack patch (declared in `package.json`) makes Steam's tab array
-   * ask us for extras; this supplies them. Collections mirroring is the
-   * fallback for when a Steam update moves the patch site out from under us.
-   *
-   * Every tab goes over, not just mirrored ones: appearing in Steam is what
-   * the tabs are *for*, whereas `mirror.enabled` is specifically about writing
-   * a collection.
-   */
-  async pushSteamTabs(): Promise<{ installed: boolean; tabs: number }> {
-    const snapshot = await this.getSnapshot();
-    const evalGames = buildEvalGames(snapshot.games);
-    const now = Date.now();
-
-    const payload: SteamTabPayload[] = orderedTabs(this.config)
-      .filter((tab) => tab.visible)
-      .map((tab) => ({
-        id: steamTabId(tab.id),
-        title: tab.label,
-        appIds: evaluateTab(tab, evalGames, { now }).matched.map((g) => g.appId),
-      }));
-
-    return withSteamClient(async (client) => {
-      // Installing first is cheap and idempotent — it returns
-      // "already-installed" — and it means a Steam restart doesn't need us to
-      // notice before tabs come back.
-      await client._evaluateAsync(buildTabsRuntime());
-      const count = (await client._evaluateAsync(setTabsExpression(payload))) as number;
-      if (count < 0) {
-        throw new Error("Couldn't install the tab runtime into Steam");
-      }
-      return { installed: true, tabs: count };
-    });
   }
 
   // ── Steam collection mirror ──────────────────────────────────────────
