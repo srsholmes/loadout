@@ -1,6 +1,6 @@
 /**
  * Shared types for the `__core:game-metadata` core service — the enriched
- * per-app corpus that `plugins/library-tabs` (and, later, any plugin that
+ * per-app corpus that `plugins/collections` (and, later, any plugin that
  * wants genres / Deck compatibility / ownership) evaluates rules against.
  *
  * Relationship to `./game-library`: `GameInfo` is the cheap, hot path —

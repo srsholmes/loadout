@@ -103,7 +103,7 @@ export function buildWebpackPatcherScript(patches: WebpackPatchEntry[]): string 
       // Support $self — reference to the plugin's global module.
       //
       // Bracket notation, not dot: plugin ids are kebab-case, so
-      // \`globalThis.__LOADOUT_PLUGIN_library-tabs\` parses as a subtraction
+      // \`globalThis.__LOADOUT_PLUGIN_input-plumber\` parses as a subtraction
       // and every hyphenated plugin — which is most of them — got a patch that
       // compiled and then threw at runtime. \`route-patcher.ts\` had this right.
       replaceStr = replaceStr.split("$self").join(

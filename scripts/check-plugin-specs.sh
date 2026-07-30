@@ -94,11 +94,11 @@ EXEMPT_LIB=""
 # Scoped to the plugins whose lib/ trees have been ratcheted onto the
 # rule. recomp is back in scope — its lib modules now carry sibling
 # specs. store-bridge stays out until its lib coverage lands.
-# library-tabs is in scope from its first commit: its lib/ tree is the
+# collections is in scope from its first commit: its lib/ tree is the
 # rule engine, and every module there is designed to be unit-testable in
 # isolation, so the gate should hold by construction rather than be
 # ratcheted on afterwards.
-SPEC_SCOPED_LIB_DIRS="plugins/recomp/lib plugins/library-tabs/lib"
+SPEC_SCOPED_LIB_DIRS="plugins/recomp/lib plugins/collections/lib"
 for dir in $SPEC_SCOPED_LIB_DIRS; do
   [ -d "$dir" ] || continue
   for lib in $(find "$dir" -type f -name '*.ts' 2>/dev/null); do

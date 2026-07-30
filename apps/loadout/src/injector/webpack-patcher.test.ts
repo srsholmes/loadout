@@ -37,7 +37,7 @@ function runPatcher(args: {
 
 function patch(overrides: Partial<WebpackPatchEntry["patch"]> = {}): WebpackPatchEntry {
   return {
-    pluginId: "library-tabs",
+    pluginId: "collections",
     patch: {
       find: "MARKER_FIND",
       replacement: { match: "return TABS", replace: "return TABS.concat(EXTRA)" },
@@ -155,7 +155,7 @@ describe("webpack patcher — surviving a bad patch", () => {
     ) as (...a: unknown[]) => unknown;
 
     const { win } = runPatcher({ patches: [patch()], modules: { m: factory } });
-    expect(win.__LOADOUT_APPLIED_PATCHES).toEqual({ "library-tabs:0": true });
+    expect(win.__LOADOUT_APPLIED_PATCHES).toEqual({ "collections:0": true });
     expect((win.__LOADOUT_PATCH_LOG as unknown[]).length).toBe(1);
   });
 });
@@ -208,9 +208,10 @@ describe("webpack patcher — re-injection", () => {
 
 describe("webpack patcher — $self", () => {
   it("resolves for a kebab-case plugin id", () => {
-    // Dot notation made `globalThis.__LOADOUT_PLUGIN_library-tabs` a
+    // Dot notation made `globalThis.__LOADOUT_PLUGIN_input-plumber` a
     // subtraction, so every hyphenated plugin got a patch that compiled and
-    // then threw. Nearly every plugin id in this repo is hyphenated.
+    // then threw. Nearly every plugin id in this repo is hyphenated, so the
+    // id here must contain a hyphen or the test proves nothing.
     const factory = new Function(
       "module",
       "var MARKER_FIND = 1; var TABS = ['a']; return TABS;",
@@ -218,14 +219,20 @@ describe("webpack patcher — $self", () => {
 
     const { modules } = runPatcher({
       patches: [
-        patch({ replacement: { match: "return TABS", replace: "return $self.extend(TABS)" } }),
+        {
+          pluginId: "input-plumber",
+          patch: {
+            find: "MARKER_FIND",
+            replacement: { match: "return TABS", replace: "return $self.extend(TABS)" },
+          },
+        },
       ],
       modules: { m: factory },
     });
 
     // The rebuilt factory is created by `new Function` inside the patcher, so
     // it resolves the real global scope — as it does in Steam.
-    const key = "__LOADOUT_PLUGIN_library-tabs";
+    const key = "__LOADOUT_PLUGIN_input-plumber";
     (globalThis as Record<string, unknown>)[key] = {
       extend: (t: string[]) => [...t, "injected"],
     };
