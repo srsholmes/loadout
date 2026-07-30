@@ -518,7 +518,7 @@ function TemplateCard({
         "flex flex-col items-start gap-1 rounded-lg border p-3 text-left min-h-[44px]",
         "bg-base-100 border-base-300 transition-colors",
         disabled ? "opacity-50 cursor-not-allowed" : "hover:border-primary",
-        focused ? "ring-2 ring-primary" : "",
+        focused ? "ring-2 ring-primary/60" : "",
       ]
         .filter(Boolean)
         .join(" ")}

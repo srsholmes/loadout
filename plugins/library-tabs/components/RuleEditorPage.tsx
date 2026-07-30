@@ -1,15 +1,15 @@
 /**
  * Edit one rule's parameters, with its match count updating as you type.
  *
- * The live count is the reason this is a sheet over the tree rather than a
- * separate screen: you are changing a number, and the number is right there.
- * Editing is done against a draft, so Cancel genuinely reverts — a rule
- * editor that commits as you type has no way to back out of a mistake.
+ * The live count is the point: you are changing a number, and the number is
+ * on the same screen. Editing runs against a draft, so Cancel genuinely
+ * reverts — an editor that commits as you type has no way back out of a
+ * mistake.
  */
 
 import { useEffect, useMemo, useState } from "react";
 import { Badge, Button, Text, Toggle } from "@loadout/ui";
-import { Sheet } from "./Sheet";
+import { BuilderPage } from "./BuilderPage";
 import { ParamEditor } from "./ParamEditors";
 import type { ParamOption } from "../lib/rule-params";
 import { paramSpecs } from "../lib/rule-params";
@@ -17,7 +17,7 @@ import { isRuleComplete, ruleDef } from "../lib/rules";
 import { summarizeRule } from "../lib/summarize";
 import type { Rule } from "../lib/types";
 
-export interface RuleEditorSheetProps {
+export interface RuleEditorPageProps {
   /** Rule being edited, or null when the sheet is closed. */
   rule: Rule | null;
   onCancel: () => void;
@@ -34,13 +34,13 @@ export interface RuleEditorSheetProps {
   };
 }
 
-export function RuleEditorSheet({
+export function RuleEditorPage({
   rule,
   onCancel,
   onSave,
   countFor,
   pickerOptions,
-}: RuleEditorSheetProps) {
+}: RuleEditorPageProps) {
   const [draft, setDraft] = useState<Rule | null>(rule);
 
   // Re-seed whenever a different rule is opened. Keyed on id rather than the
@@ -61,11 +61,11 @@ export function RuleEditorSheet({
     setDraft({ ...draft, [key]: value } as Rule);
 
   return (
-    <Sheet
-      open
+    <BuilderPage
       title={def?.label ?? "Group"}
       description={def?.description}
-      onClose={onCancel}
+      onBack={onCancel}
+      backLabel="Cancel"
       footer={
         <>
           <Button variant="neutral" onClick={onCancel}>
@@ -135,6 +135,6 @@ export function RuleEditorSheet({
           </p>
         ) : null}
       </div>
-    </Sheet>
+    </BuilderPage>
   );
 }

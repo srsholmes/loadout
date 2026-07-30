@@ -20,9 +20,9 @@
 import { useCallback, useDeferredValue, useMemo, useState } from "react";
 import { Button, Text } from "@loadout/ui";
 import { RuleGroupNode, TotalBadge, type CombinatorCounts, type RuleTreeContext } from "./RuleGroupNode";
-import { RuleEditorSheet } from "./RuleEditorSheet";
+import { BuilderPage } from "./BuilderPage";
+import { RuleEditorPage } from "./RuleEditorPage";
 import { RulePalette, type PricedCandidate } from "./RulePalette";
-import { Sheet } from "./Sheet";
 import { TabDiagnostics } from "./TabDiagnostics";
 import type { RuleRowAction } from "./RuleNodeRow";
 import type { RuleNodeTrace } from "../lib/evaluate";
@@ -327,6 +327,49 @@ export function RuleBuilder({
 
   // ── Render ─────────────────────────────────────────────────────────
 
+  // One page at a time. The palette and the editor replace the tree rather
+  // than floating over it — see `BuilderPage` for why a modal is wrong here.
+  if (paletteParent !== null) {
+    return (
+      <BuilderPage
+        title="Add a rule"
+        description="Each option shows what your tab would contain with it added."
+        onBack={() => setPaletteParent(null)}
+      >
+        <RulePalette
+          candidates={candidates}
+          currentTotal={result.total}
+          onCancel={() => setPaletteParent(null)}
+          onPick={(candidate) => {
+            const parentId = paletteParent;
+            if (parentId === null) return;
+            const rule = { ...candidate.rule, id: newId() } as Rule;
+            setRoot(insertRule({ root: draft.root, parentId, rule }));
+            setPaletteParent(null);
+            // A rule that needs a value opens straight into its editor, so it
+            // never sits in the tree in an unusable state.
+            if (candidate.needsInput) setEditing(rule);
+          }}
+        />
+      </BuilderPage>
+    );
+  }
+
+  if (editing) {
+    return (
+      <RuleEditorPage
+        rule={editing}
+        countFor={countFor}
+        pickerOptions={pickerOptions}
+        onCancel={() => setEditing(null)}
+        onSave={(next) => {
+          setRoot(replaceRule({ root: draft.root, id: next.id, next }));
+          setEditing(null);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -357,40 +400,6 @@ export function RuleBuilder({
       <ul className="flex flex-col gap-2">
         <RuleGroupNode rule={draft.root} depth={1} ctx={ctx} isRoot />
       </ul>
-
-      <Sheet
-        open={paletteParent !== null}
-        title="Add a rule"
-        description="Each option shows what your tab would contain with it added."
-        onClose={() => setPaletteParent(null)}
-      >
-        <RulePalette
-          candidates={candidates}
-          currentTotal={result.total}
-          onCancel={() => setPaletteParent(null)}
-          onPick={(candidate) => {
-            const parentId = paletteParent;
-            if (parentId === null) return;
-            const rule = { ...candidate.rule, id: newId() } as Rule;
-            setRoot(insertRule({ root: draft.root, parentId, rule }));
-            setPaletteParent(null);
-            // A rule that needs a value opens straight into its editor, so it
-            // never sits in the tree in an unusable state.
-            if (candidate.needsInput) setEditing(rule);
-          }}
-        />
-      </Sheet>
-
-      <RuleEditorSheet
-        rule={editing}
-        countFor={countFor}
-        pickerOptions={pickerOptions}
-        onCancel={() => setEditing(null)}
-        onSave={(next) => {
-          setRoot(replaceRule({ root: draft.root, id: next.id, next }));
-          setEditing(null);
-        }}
-      />
     </div>
   );
 }

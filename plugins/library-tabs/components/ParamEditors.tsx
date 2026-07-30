@@ -39,7 +39,6 @@ export interface ParamEditorProps {
 const CONTROL = [
   "min-h-[44px] rounded-lg border border-base-300 bg-base-200 px-3",
   "text-base-content transition-colors",
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
 ].join(" ");
 
 const CHIP_ON = "border-primary bg-primary/20 text-base-content";
@@ -66,7 +65,6 @@ function Chip({
       onClick={onToggle}
       className={[
         "flex min-h-[44px] flex-col items-start justify-center gap-0.5 rounded-lg border px-3 py-1 text-left",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
         selected ? CHIP_ON : CHIP_OFF,
       ].join(" ")}
     >
@@ -287,7 +285,6 @@ function TokensEditor({
                 aria-label={`Remove ${value}`}
                 className={[
                   "flex min-h-[44px] items-center gap-2 rounded-lg border px-3",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                   CHIP_ON,
                 ].join(" ")}
               >

@@ -27,7 +27,7 @@ export interface TabDiagnosticsProps {
 function FixButton({ fix, onApply }: { fix: Fix; onApply: () => void }) {
   const { ref, focused } = useFocusable({ onEnterPress: onApply });
   return (
-    <div ref={ref} className={focused ? "rounded-lg ring-2 ring-primary" : undefined}>
+    <div ref={ref} className={focused ? "rounded-lg ring-2 ring-primary/60" : undefined}>
       <Button variant="primary" onClick={onApply}>
         {fix.label}
       </Button>

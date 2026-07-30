@@ -144,6 +144,23 @@ on only while the tab editor is open.
   every sentinel state, both sources, multi-genre and no-genre games. Use
   it rather than inventing inline literals, so asserted counts stay
   reviewable.
+- **Only use Tailwind classes the shell's stylesheet already defines.** The
+  overlay's CSS is generated at *its* build time from *its* sources; plugins
+  are compiled at runtime, so a utility that no shell or existing-plugin file
+  already uses simply does not exist and the class silently does nothing.
+  Measured on hardware: `max-h-[85vh]`, `rounded-t-2xl`, `border-l-base-300`,
+  `ring-primary` and every `focus-visible:*` variant were all absent, while
+  `max-w-2xl`, `ring-2` and `ring-primary/60` were present. This is not
+  theoretical — an uncapped `max-h` is what made the rule palette taller than
+  a Steam Deck screen. For anything novel use an inline `style`, and check a
+  suspect class on-device with
+  `getComputedStyle(document.body.appendChild(Object.assign(document.createElement("div"), { className: "the-class" })))`.
+- **No modals.** Loadout is already an overlay over Steam, so a dialog is a
+  modal on top of a modal — and in desktop mode, where the overlay is an
+  ordinary window, a centred sheet with its own scrim reads as a bug. Sub-views
+  are pages (`components/BuilderPage.tsx`), which also inherit the plugin's
+  scroll box instead of fighting it with `position: fixed` inside the shell's
+  zoomed subtree.
 - **Don't add `@loadout/ui` exports** for this plugin's components. A new
   SDK export requires a full overlay rebuild + reinstall; in-plugin
   components don't. Build `components/TabStrip.tsx` locally rather than

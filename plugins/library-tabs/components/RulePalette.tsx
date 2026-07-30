@@ -144,7 +144,6 @@ export function RulePalette({
           onClick={onCancel}
           className={[
             "min-h-[44px] rounded-lg border border-base-300 bg-base-200 px-4",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
           ].join(" ")}
         >
           Cancel
@@ -182,25 +181,36 @@ function CandidateCard({
       className={[
         "flex w-full min-h-[44px] flex-col items-start gap-1 rounded-lg border p-3 text-left",
         "border-base-300 bg-base-100 transition-colors hover:border-primary",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
         // Dimmed, never hidden: "0 games" is information.
         zero ? "opacity-50" : "",
-        focused ? "ring-2 ring-primary" : "",
+        focused ? "ring-2 ring-primary/60" : "",
       ]
         .filter(Boolean)
         .join(" ")}
     >
-      <span className="flex w-full items-baseline justify-between gap-2">
-        <span className="font-semibold text-base-content">{candidate.label}</span>
-        <span
-          className={[
-            "shrink-0 text-xs",
-            zero ? "text-base-content/50" : "text-base-content/70",
-          ].join(" ")}
-        >
-          {consequence}
+      {/* A count is short and reads best right-aligned beside the label. An
+          unavailable *reason* is a sentence — inline it and it squeezes the
+          label until it wraps mid-word, so it gets its own line. */}
+      {candidate.unavailable ? (
+        <>
+          <span className="font-semibold text-base-content">{candidate.label}</span>
+          <span className="text-xs text-base-content/50">{consequence}</span>
+        </>
+      ) : (
+        <span className="flex w-full items-baseline justify-between gap-2">
+          <span className="min-w-0 font-semibold text-base-content">
+            {candidate.label}
+          </span>
+          <span
+            className={[
+              "shrink-0 text-xs",
+              zero ? "text-base-content/50" : "text-base-content/70",
+            ].join(" ")}
+          >
+            {consequence}
+          </span>
         </span>
-      </span>
+      )}
       <span className="text-xs text-base-content/60">{candidate.description}</span>
     </button>
   );

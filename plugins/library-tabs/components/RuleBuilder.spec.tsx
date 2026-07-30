@@ -191,16 +191,16 @@ describe("RuleBuilder — the palette", () => {
     renderBuilder(tab([]));
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
 
-    // The palette opens in a sheet and every priceable candidate carries a
-    // consequence — this is the whole point of the preview.
-    const dialog = screen.getByRole("dialog");
+    // The palette opens as its own page and every priceable candidate carries
+    // a consequence — this is the whole point of the preview.
+    const dialog = screen.getByRole("region", { name: "Add a rule" });
     expect(within(dialog).getAllByText(/→ \d+ games?/).length).toBeGreaterThan(0);
   });
 
   it("says so rather than showing a number when a rule needs a value", () => {
     renderBuilder(tab([]));
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
-    const dialog = screen.getByRole("dialog");
+    const dialog = screen.getByRole("region", { name: "Add a rule" });
     expect(within(dialog).getAllByText("Needs a value").length).toBeGreaterThan(0);
   });
 
@@ -211,7 +211,7 @@ describe("RuleBuilder — the palette", () => {
     // that cannot be checked at all. The opposite of the truth.
     renderBuilder(tab([]));
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
-    const dialog = screen.getByRole("dialog");
+    const dialog = screen.getByRole("region", { name: "Add a rule" });
 
     const card = within(dialog).getByText("Friends playing now").closest("button");
     if (!card) throw new Error("expected a Friends playing now candidate");
@@ -232,7 +232,7 @@ describe("RuleBuilder — the palette", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
-    const dialog = screen.getByRole("dialog");
+    const dialog = screen.getByRole("region", { name: "Add a rule" });
     const card = within(dialog).getByText("Friends playing now").closest("button");
     expect(card?.textContent).not.toContain("Needs Steam friends data");
   });
@@ -240,7 +240,7 @@ describe("RuleBuilder — the palette", () => {
   it("adds the picked rule to the tree", () => {
     const { onSave } = renderBuilder(tab([]));
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
-    const dialog = screen.getByRole("dialog");
+    const dialog = screen.getByRole("region", { name: "Add a rule" });
     fireEvent.click(within(dialog).getByText("Installed").closest("button") as HTMLElement);
 
     fireEvent.click(screen.getByRole("button", { name: "Save tab" }));

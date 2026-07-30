@@ -61,7 +61,7 @@ export function RuleGroupNode({ rule, depth, ctx, isRoot = false }: RuleGroupNod
         className={[
           "flex flex-col gap-1 rounded-lg border border-base-300 p-3",
           // Depth tint, so which group you are inside is legible at a glance.
-          depth > 1 ? "border-l-2 border-l-base-300 bg-base-300/40" : "bg-base-200",
+          depth > 1 ? "border-l-2 bg-base-300/40" : "bg-base-200",
         ].join(" ")}
       >
         <div className="flex flex-wrap items-center gap-2">
@@ -82,7 +82,6 @@ export function RuleGroupNode({ rule, depth, ctx, isRoot = false }: RuleGroupNod
               onClick={() => ctx.onAddInside(rule.id)}
               className={[
                 "min-h-[44px] rounded-lg border border-base-300 bg-base-100 px-3 text-sm",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
               ].join(" ")}
             >
               Add rule
@@ -95,7 +94,6 @@ export function RuleGroupNode({ rule, depth, ctx, isRoot = false }: RuleGroupNod
                 aria-expanded={menuOpen}
                 className={[
                   "min-h-[44px] rounded-lg border border-base-300 bg-base-100 px-3",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                 ].join(" ")}
               >
                 ⋮
@@ -129,7 +127,6 @@ export function RuleGroupNode({ rule, depth, ctx, isRoot = false }: RuleGroupNod
                   onClick={action.run}
                   className={[
                     "min-h-[44px] rounded-lg border border-base-300 bg-base-100 px-3 text-sm",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                   ].join(" ")}
                 >
                   {action.label}
@@ -219,11 +216,10 @@ function CombinatorOption({
       onClick={onSelect}
       className={[
         "min-h-[44px] rounded-lg border px-3 text-sm uppercase",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
         selected
           ? "border-primary bg-primary/20 text-base-content"
           : "border-base-300 bg-base-100 text-base-content/60",
-        focused ? "ring-2 ring-primary" : "",
+        focused ? "ring-2 ring-primary/60" : "",
       ].join(" ")}
     >
       {option}

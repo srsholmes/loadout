@@ -67,9 +67,9 @@ export function RuleNodeRow({
       <div
         className={[
           "flex items-center gap-2 rounded-lg border px-3 py-1 min-h-[44px]",
-          depth > 1 ? "border-l-2 border-l-base-300" : "",
+          depth > 1 ? "border-l-2" : "",
           complete ? "bg-base-200 border-base-300" : "bg-warning/10 border-warning/40",
-          focused ? "ring-2 ring-primary" : "",
+          focused ? "ring-2 ring-primary/60" : "",
         ]
           .filter(Boolean)
           .join(" ")}
@@ -80,7 +80,7 @@ export function RuleNodeRow({
           onClick={onEdit}
           className={[
             "flex flex-1 flex-col items-start gap-0.5 text-left",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded",
+            " rounded",
           ].join(" ")}
         >
           <span className="text-xs uppercase tracking-wide text-base-content/50">
@@ -106,7 +106,6 @@ export function RuleNodeRow({
           className={[
             "shrink-0 rounded-lg border border-base-300 bg-base-100 px-3 min-h-[44px]",
             "text-base-content/70 hover:text-base-content",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
           ].join(" ")}
         >
           ⋮
@@ -123,7 +122,6 @@ export function RuleNodeRow({
                 className={[
                   "min-h-[44px] rounded-lg border border-base-300 bg-base-100 px-3 text-sm",
                   "text-base-content/80 hover:text-base-content",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                 ].join(" ")}
               >
                 {action.label}
