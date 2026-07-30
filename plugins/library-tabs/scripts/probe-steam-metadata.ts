@@ -78,12 +78,67 @@ async function evaluateInSteam<T>(expression: string): Promise<T> {
 
 // ── appStore ───────────────────────────────────────────────────────────
 
+interface ExpectedField {
+  key: string;
+  /** Look the key up on `per_client_data[]` entries, not the overview. */
+  inPerClient?: boolean;
+  /** Value is a Set/Map — "carries data" means non-empty rather than truthy. */
+  isSet?: boolean;
+  /** Short note carried into the report. */
+  note?: string;
+}
+
+/**
+ * The fields Phase 2 wants, including the names originally *guessed* from
+ * TabMaster's source alongside the real ones, so the report shows the guesses
+ * failing rather than quietly omitting them.
+ */
+const EXPECTED_FIELDS: readonly ExpectedField[] = [
+  { key: "appid" },
+  { key: "display_name" },
+  { key: "app_type" },
+  { key: "sort_as" },
+  { key: "size_on_disk" },
+  { key: "rt_original_release_date" },
+  { key: "rt_steam_release_date" },
+  { key: "rt_purchased_time" },
+  { key: "rt_last_time_played" },
+  { key: "minutes_playtime_forever" },
+  { key: "metacritic_score" },
+  { key: "per_client_data" },
+  { key: "steam_deck_compat_category", note: "**prefer this** — already unpacked (1|2|3)" },
+  { key: "steam_hw_compat_category_packed", note: "packed bitfield; the getter above decodes it" },
+  { key: "steam_os_compat_category", note: "for the steamOsCompat rule" },
+  { key: "steam_machine_compat_category" },
+  { key: "steam_frame_compat_category" },
+  { key: "review_percentage", note: "equals review_percentage_without_bombs" },
+  { key: "review_percentage_without_bombs" },
+  { key: "store_tag", note: "same numeric IDs as m_setStoreTags — **not names**" },
+  { key: "m_setStoreTags", isSet: true, note: "numeric tag IDs, not names" },
+  { key: "store_category", note: "numeric category IDs" },
+  { key: "m_setStoreCategories", isSet: true },
+  { key: "display_status", note: "getter; also on per_client_data[]" },
+  { key: "display_status", inPerClient: true },
+  { key: "installed", note: "getter; also on per_client_data[]" },
+  { key: "installed", inPerClient: true },
+];
+
+function fieldLabel(f: ExpectedField): string {
+  return f.inPerClient ? `per_client_data[].${f.key}` : f.key;
+}
+
 /**
  * Dump the full key set of a few overview objects, with each value's type
  * and a truncated sample. Types matter as much as names: several of these
  * fields are documented in TabMaster as numbers but could plausibly be
  * strings, and a silent `Number(undefined)` is how a filter ends up matching
  * nothing.
+ *
+ * Key *presence* is measured over a 200-app sample but *population* is
+ * measured over the whole library, because they are different questions with
+ * different answers. `size_on_disk` is a key on every overview object and
+ * carries a value on under 3% of apps; a probe that only reported presence
+ * said PRESENT and sent Phase 2 off to build a filter on nothing.
  */
 async function probeAppStore(): Promise<void> {
   heading("`window.appStore.allApps` overview shape");
@@ -127,11 +182,72 @@ async function probeAppStore(): Promise<void> {
       typeCounts[app.app_type] = (typeCounts[app.app_type] ?? 0) + 1;
     }
 
+    // Population over the WHOLE library. "defined" = the key carries a value
+    // at all; "usable" additionally excludes 0 and "" (Steam's unset markers)
+    // and, for Sets, empties.
+    const expected = ${JSON.stringify(EXPECTED_FIELDS)};
+    const populated = expected.map((spec) => {
+      let defined = 0;
+      let usable = 0;
+      let own = 0;
+      let resolves = 0;
+      for (const app of store.allApps) {
+        if (!app) continue;
+        let value;
+        if (spec.inPerClient) {
+          const arr = app.per_client_data;
+          if (!Array.isArray(arr)) continue;
+          let found;
+          for (const entry of arr) {
+            if (entry && entry[spec.key] !== undefined) { found = entry[spec.key]; break; }
+          }
+          value = found;
+        } else {
+          // An own key is enumerable via Object.keys; a getter on the
+          // prototype is not, but reads perfectly well. Both are usable, and
+          // conflating them is how a real field gets reported MISSING.
+          if (Object.prototype.hasOwnProperty.call(app, spec.key)) own++;
+          if (spec.key in app) resolves++;
+          try { value = app[spec.key]; } catch (e) { continue; }
+        }
+        if (value === undefined || value === null) continue;
+        defined++;
+        if (spec.isSet) {
+          const n = value.size ?? Object.keys(value).length;
+          if (n > 0) usable++;
+        } else if (Array.isArray(value)) {
+          if (value.length > 0) usable++;
+        } else if (value !== 0 && value !== "" && value !== false) {
+          usable++;
+        }
+      }
+      return { defined, usable, own, resolves };
+    });
+
+    // The overview class's prototype. Its getters are the half of the API
+    // Object.keys cannot see, and several are exactly what Phase 2 wants —
+    // steam_deck_compat_category returns a decoded enum rather than the packed
+    // bitfield the own key carries.
+    const first = store.allApps.find((a) => a);
+    const proto = first ? Object.getPrototypeOf(first) : null;
+    const protoAccessors = [];
+    const protoMethods = [];
+    for (const name of proto ? Object.getOwnPropertyNames(proto) : []) {
+      if (name === "constructor") continue;
+      const d = Object.getOwnPropertyDescriptor(proto, name);
+      if (!d) continue;
+      if (typeof d.get === "function") protoAccessors.push(name);
+      else if (typeof d.value === "function") protoMethods.push(name);
+    }
+
     return {
       tag: "ok",
       total: store.allApps.length,
       typeCounts,
       allKeys: [...new Set(store.allApps.slice(0, 200).flatMap((a) => a ? Object.keys(a) : []))].sort(),
+      protoAccessors: protoAccessors.sort(),
+      protoMethods: protoMethods.sort(),
+      populated,
       samples: [...byType.entries()].map(([appType, app]) => ({
         appType,
         displayName: app.display_name,
@@ -148,6 +264,14 @@ async function probeAppStore(): Promise<void> {
           total: number;
           typeCounts: Record<string, number>;
           allKeys: string[];
+          protoAccessors: string[];
+          protoMethods: string[];
+          populated: Array<{
+            defined: number;
+            usable: number;
+            own: number;
+            resolves: number;
+          }>;
           samples: Array<{
             appType: number;
             displayName: string;
@@ -170,6 +294,21 @@ async function probeAppStore(): Promise<void> {
     );
     fence(result.allKeys.join("\n"));
 
+    console.log(
+      `\n### Prototype getters (**${result.protoAccessors.length}**) — invisible to \`Object.keys\`\n`,
+    );
+    note(
+      "These are part of the API and read like any other field, but no " +
+        "key-enumeration probe will ever list them. Several are strictly " +
+        "better than the own key covering the same ground: " +
+        "`steam_deck_compat_category` returns a decoded category where " +
+        "`steam_hw_compat_category_packed` returns a bitfield.",
+    );
+    fence(result.protoAccessors.join("\n"));
+
+    console.log(`\nPrototype methods (**${result.protoMethods.length}**):\n`);
+    fence(result.protoMethods.join("\n"));
+
     for (const sample of result.samples) {
       console.log(`\n### \`app_type: ${sample.appType}\` — ${sample.displayName}\n`);
       fence(
@@ -180,25 +319,43 @@ async function probeAppStore(): Promise<void> {
     }
 
     console.log("\n### Fields Phase 2 expects\n");
-    const expected = [
-      "appid", "display_name", "app_type", "sort_as", "size_on_disk",
-      "rt_original_release_date", "rt_steam_release_date", "rt_purchased_time",
-      "rt_last_time_played", "minutes_playtime_forever",
-      "steam_deck_compat_category", "steam_hw_compat_category_packed",
-      "review_percentage", "metacritic_score", "display_status",
-      "store_tag", "store_category", "per_client_data", "installed",
-    ];
-    const present = new Set(result.allKeys);
-    fence(
-      expected
-        .map((key) => `${present.has(key) ? "PRESENT " : "MISSING "} ${key}`)
-        .join("\n"),
+    console.log(
+      `All counts are over the whole library (**${result.total} apps**), not ` +
+        `the 200-app key sample above.\n`,
     );
+    console.log(
+      "`Access` distinguishes an **own key** (enumerable, shows up in " +
+        "`Object.keys`) from a **getter** on the prototype (invisible to " +
+        "`Object.keys`, reads fine) from **absent** (not resolvable at all). " +
+        "Only *absent* means the name is wrong.\n",
+    );
+    console.log("| Field | Access | Defined | Usable | % | Note |");
+    console.log("|---|---|---:|---:|---:|---|");
+    for (const [i, spec] of EXPECTED_FIELDS.entries()) {
+      const c = result.populated[i] ?? { defined: 0, usable: 0, own: 0, resolves: 0 };
+      const pct = result.total > 0 ? Math.round((c.usable / result.total) * 100) : 0;
+      const access = spec.inPerClient
+        ? "nested"
+        : c.own > 0
+          ? "own key"
+          : c.resolves > 0
+            ? "getter"
+            : "**absent**";
+      console.log(
+        `| \`${fieldLabel(spec)}\` | ${access} | ${c.defined} | ` +
+          `${c.usable} | ${pct}% | ${spec.note ?? ""} |`,
+      );
+    }
+    console.log("");
     note(
-      "Every MISSING row is a Phase-2 field that needs a different source or a " +
-        "corrected name. `providers/appstore.ts` reads all of these through a " +
-        "`pick()` helper, so a missing key degrades one field with a warning " +
-        "rather than breaking the provider.",
+      "Two failure modes, and the row layout separates them. **absent** means " +
+        "the name is wrong — fix it. A field that resolves but has a low " +
+        "`usable` count is the more dangerous one, because nothing looks " +
+        "broken: it reads without error and is simply unset for most of the " +
+        "library. `providers/appstore.ts` reads every field through a `pick()` " +
+        "helper so a bad name degrades one field rather than the provider — but " +
+        "no helper rescues a filter built on a field 3% of games populate. " +
+        "Prefer another source for those.",
     );
   } catch (err) {
     note(`Could not reach Steam over CDP: ${err instanceof Error ? err.message : String(err)}`);
@@ -301,15 +458,74 @@ async function probeCollectionStore(): Promise<void> {
 const MAGIC_V28 = 0x07564428;
 const MAGIC_V29 = 0x07564429;
 
+/** Binary-KV type byte opening a nested object — the first byte of a body. */
+const KV_NESTED = 0x00;
+/** Binary-KV byte closing a nested object. A section ends with two. */
+const KV_END = 0x08;
+
 /**
- * Walk the per-app section chain, validating that each section's declared
- * size lands exactly on the next section's first byte.
+ * Candidate per-section header layouts, in bytes measured from the start of
+ * the section (so each figure includes `appid` and `size`):
  *
- * This is the measurement that turns a format guess into a fact. We try both
- * candidate header layouts — with and without the trailing 20-byte binary
- * sha1 — and report which one chains cleanly over the *whole* file. Phase 3's
- * `sections.ts` then does the same thing at runtime instead of hardcoding a
- * layout that happens to work on one Steam build.
+ *   appid u32 · size u32 · infoState u32 · lastUpdated u32 · picsToken u64
+ *   · sha1_text u8[20] · changeNumber u32 · [sha1_binary u8[20]]
+ *
+ * `sha1_binary` is the field implementations disagree about across v28/v29.
+ * The two `no picsToken` candidates are the arithmetic this script used
+ * before 2026-07-30 — they dropped `picsToken`'s 8 bytes — kept here so the
+ * report shows them losing instead of leaving a reader to wonder.
+ */
+interface HeaderCandidate {
+  /** Total header size from the start of the section, including appid + size. */
+  bytes: number;
+  label: string;
+  picsToken: boolean;
+  sha1Binary: boolean;
+}
+
+const HEADER_CANDIDATES: readonly HeaderCandidate[] = [
+  {
+    bytes: 4 + 4 + 4 + 4 + 8 + 20 + 4 + 20,
+    label: "picsToken + sha1_binary",
+    picsToken: true,
+    sha1Binary: true,
+  },
+  {
+    bytes: 4 + 4 + 4 + 4 + 8 + 20 + 4,
+    label: "picsToken, no sha1_binary",
+    picsToken: true,
+    sha1Binary: false,
+  },
+  {
+    bytes: 4 + 4 + 4 + 4 + 20 + 4 + 20,
+    label: "no picsToken, sha1_binary",
+    picsToken: false,
+    sha1Binary: true,
+  },
+  {
+    bytes: 4 + 4 + 4 + 4 + 20 + 4,
+    label: "no picsToken, no sha1_binary",
+    picsToken: false,
+    sha1Binary: false,
+  },
+];
+
+/**
+ * Walk the per-app section chain and measure which header layout is real.
+ *
+ * Two distinct checks, because they answer different questions and conflating
+ * them is what made the pre-2026-07-30 version of this probe useless:
+ *
+ * - **Chain integrity** — each section's declared `size` must land exactly on
+ *   the next section's first byte. This catches a corrupt file. It says
+ *   *nothing* about the header layout: the next section is at
+ *   `offset + 8 + size` regardless of how many header fields follow `size`,
+ *   so every candidate layout "passes" it. The old probe reported exactly
+ *   that and claimed it discriminated.
+ * - **Body framing** — the byte at `offset + headerSize` must be `0x00`
+ *   (a nested object opens every section) and the section's last two bytes
+ *   must be `0x08 0x08`. This *does* discriminate: a wrong header size points
+ *   into the middle of a sha1 instead of at a type byte.
  */
 async function probeAppInfo(): Promise<void> {
   heading("`appcache/appinfo.vdf`");
@@ -364,28 +580,67 @@ async function probeAppInfo(): Promise<void> {
       }
     }
 
-    // Try both candidate header layouts and see which one chains.
-    for (const withSha1 of [true, false]) {
-      const headerSize = withSha1 ? 4 + 4 + 4 + 4 + 20 + 4 + 20 : 4 + 4 + 4 + 4 + 20 + 4;
-      const label = withSha1
-        ? "with trailing 20-byte binary sha1"
-        : "without trailing binary sha1";
+    const report = await walkSections(handle, bodyStart, size);
 
-      const report = await chainValidate(handle, bodyStart, size, headerSize);
-      console.log(`\n### Header layout: ${label} (${headerSize} bytes)\n`);
-      fence(report.lines.join("\n"));
+    console.log("\n### Section chain\n");
+    fence(report.lines.join("\n"));
+    console.log(
+      report.ok
+        ? `\n**Chain validated over all ${report.sections} sections.**\n`
+        : `\n**Chain BROKE after ${report.sections} sections.**\n`,
+    );
+    note(
+      "Chain integrity only. The next section sits at `offset + 8 + size` no " +
+        "matter how many header fields follow `size`, so this result is the " +
+        "same for every candidate layout and **cannot** identify the header. " +
+        "That is what the next section is for.",
+    );
+
+    console.log("\n### Header layout discrimination\n");
+    console.log(
+      "A section body opens with `0x00` and the section's last two bytes are " +
+        "`0x08 0x08`. A wrong header size lands mid-sha1 instead of on a type " +
+        "byte, so this measurement discriminates where the chain walk cannot.\n",
+    );
+    console.log("| Header | Bytes | Sections framed correctly | |");
+    console.log("|---|---:|---:|---|");
+    const ranked = [...HEADER_CANDIDATES].sort(
+      (a, b) => (report.bodyValid.get(b.bytes) ?? 0) - (report.bodyValid.get(a.bytes) ?? 0),
+    );
+    for (const c of HEADER_CANDIDATES) {
+      const ok = report.bodyValid.get(c.bytes) ?? 0;
+      const verdict =
+        ok === report.sections && report.sections > 0
+          ? "**ALL VALID**"
+          : ok === 0
+            ? "no"
+            : "coincidence";
+      console.log(`| ${c.label} | ${c.bytes} | ${ok} / ${report.sections} | ${verdict} |`);
+    }
+
+    const winner = ranked[0];
+    const winnerOk = winner ? (report.bodyValid.get(winner.bytes) ?? 0) : 0;
+    console.log("");
+    if (winner && report.sections > 0 && winnerOk === report.sections) {
       console.log(
-        report.ok
-          ? `\n**Chain validated over all ${report.sections} sections.**\n`
-          : `\n**Chain BROKE after ${report.sections} sections.**\n`,
+        `**Header is ${winner.bytes} bytes** (${winner.label}) — framed ` +
+          `correctly for all ${report.sections} sections. This is what ` +
+          "Phase 3's `sections.ts` must use.\n",
+      );
+      fence(await describeSection(handle, bodyStart, winner), "text");
+    } else {
+      note(
+        "No candidate frames every section. The format has moved — " +
+          "`framing.ts` must report `{ supported: false, magic }` and the " +
+          "provider must go `unavailable` rather than decode garbage.",
       );
     }
 
     note(
-      "Exactly one layout above should validate over the whole file. That is " +
-        "the one `sections.ts` must use — and it must chain-validate at runtime " +
-        "and retry the alternate layout on mismatch, because this is a " +
-        "measurement of one Steam build, not a guarantee about all of them.",
+      "`sections.ts` must validate the **body framing** at runtime, not the " +
+        "chain, and retry the alternate layout on mismatch. Chain-validating " +
+        "cannot fail on a wrong header size, so it yields false confidence. " +
+        "This is a measurement of one Steam build, not a guarantee about all.",
     );
   } finally {
     await handle.close();
@@ -396,33 +651,40 @@ interface ChainReport {
   ok: boolean;
   sections: number;
   lines: string[];
+  /** Candidate header size -> sections whose body framed correctly under it. */
+  bodyValid: Map<number, number>;
 }
 
 /**
- * Follow `offset + size` from section to section. Each app section is
- * `appid (u32)`, `size (u32)`, then `size` bytes of body — so the next
- * section begins at `offset + 8 + size`. A terminator appid of 0 ends the
- * list.
+ * Follow `offset + size` from section to section, scoring every candidate
+ * header layout along the way. Each app section is `appid (u32)`,
+ * `size (u32)`, then `size` bytes of header-plus-body — so the next section
+ * begins at `offset + 8 + size`. A terminator appid of 0 ends the list.
  */
-async function chainValidate(
+async function walkSections(
   handle: Awaited<ReturnType<typeof open>>,
   start: number,
   fileSize: number,
-  headerSize: number,
 ): Promise<ChainReport> {
   const lines: string[] = [];
-  const header = Buffer.alloc(headerSize);
+  const bodyValid = new Map<number, number>();
+  for (const c of HEADER_CANDIDATES) bodyValid.set(c.bytes, 0);
+
+  const widest = Math.max(...HEADER_CANDIDATES.map((c) => c.bytes));
+  // +1 so the byte *at* the widest candidate's body start is readable.
+  const header = Buffer.alloc(widest + 1);
+  const tail = Buffer.alloc(2);
   let offset = start;
   let count = 0;
 
   while (offset + 8 <= fileSize) {
-    const { bytesRead } = await handle.read(header, 0, headerSize, offset);
+    const { bytesRead } = await handle.read(header, 0, header.length, offset);
     if (bytesRead < 8) break;
 
     const appId = header.readUInt32LE(0);
     if (appId === 0) {
       lines.push(`@${offset}: terminator (appid 0) — clean end`);
-      return { ok: true, sections: count, lines };
+      return { ok: true, sections: count, lines, bodyValid };
     }
 
     const sectionSize = header.readUInt32LE(4);
@@ -445,7 +707,21 @@ async function chainValidate(
         `@${offset}: appid=${appId} declares size=${sectionSize}, next would be ` +
           `@${next} but the file is ${fileSize} bytes — CHAIN BROKEN`,
       );
-      return { ok: false, sections: count, lines };
+      return { ok: false, sections: count, lines, bodyValid };
+    }
+
+    // A section closes with `0x08 0x08` (end nested, end root) regardless of
+    // header layout, so read it once and reuse it for every candidate.
+    await handle.read(tail, 0, 2, next - 2);
+    const closes = tail[0] === KV_END && tail[1] === KV_END;
+
+    for (const c of HEADER_CANDIDATES) {
+      // The body must start inside this section, and `header` must actually
+      // hold the byte we are about to test.
+      if (c.bytes >= 8 + sectionSize || c.bytes >= bytesRead) continue;
+      if (closes && header[c.bytes] === KV_NESTED) {
+        bodyValid.set(c.bytes, (bodyValid.get(c.bytes) ?? 0) + 1);
+      }
     }
 
     offset = next;
@@ -453,7 +729,37 @@ async function chainValidate(
   }
 
   lines.push(`Ran out of file after ${count} sections (no terminator found)`);
-  return { ok: false, sections: count, lines };
+  return { ok: false, sections: count, lines, bodyValid };
+}
+
+/** Field-by-field decode of one section under a known header layout. */
+async function describeSection(
+  handle: Awaited<ReturnType<typeof open>>,
+  offset: number,
+  layout: HeaderCandidate,
+): Promise<string> {
+  const buf = Buffer.alloc(layout.bytes + 16);
+  await handle.read(buf, 0, buf.length, offset);
+  const hex = (from: number, to: number) =>
+    [...buf.subarray(from, to)].map((b) => b.toString(16).padStart(2, "0")).join(" ");
+
+  const sha1TextAt = layout.picsToken ? 24 : 16;
+  const changeAt = sha1TextAt + 20;
+  const out = [
+    `@${offset} appid=${buf.readUInt32LE(0)} size=${buf.readUInt32LE(4)}`,
+    `  infoState    ${buf.readUInt32LE(8)}`,
+    `  lastUpdated  ${buf.readUInt32LE(12)}`,
+  ];
+  if (layout.picsToken) out.push(`  picsToken    ${buf.readBigUInt64LE(16)}`);
+  out.push(
+    `  sha1_text    ${hex(sha1TextAt, sha1TextAt + 20)}`,
+    `  changeNumber ${buf.readUInt32LE(changeAt)}`,
+  );
+  if (layout.sha1Binary) {
+    out.push(`  sha1_binary  ${hex(changeAt + 4, changeAt + 24)}`);
+  }
+  out.push(`  body @+${layout.bytes}  ${hex(layout.bytes, layout.bytes + 16)} …`);
+  return out.join("\n");
 }
 
 // ── main ───────────────────────────────────────────────────────────────
