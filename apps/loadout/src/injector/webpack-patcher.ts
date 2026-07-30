@@ -18,6 +18,15 @@
 
 import type { PluginPatch } from "@loadout/types";
 
+/**
+ * Largest module source we will stringify and scan, in characters.
+ *
+ * Sized from the real client rather than guessed: Steam's library module is
+ * ~646 KB and is the one every UI patch cares about, so anything under about
+ * 1 MB excludes the whole point of having a patcher.
+ */
+export const MAX_MODULE_SOURCE = 2_000_000;
+
 export interface WebpackPatchEntry {
   /** Plugin ID that owns this patch */
   pluginId: string;
@@ -44,6 +53,8 @@ export function buildWebpackPatcherScript(patches: WebpackPatchEntry[]): string 
   return `
 (function() {
   "use strict";
+
+  var MAX_MODULE_SOURCE = ${MAX_MODULE_SOURCE};
 
   if (window.__LOADOUT_WEBPACK_PATCHER) {
     console.log("[loadout:wp] Webpack patcher already installed");
@@ -127,8 +138,16 @@ export function buildWebpackPatcherScript(patches: WebpackPatchEntry[]): string 
       return factory;
     }
 
-    // Skip very large modules (likely generated code) and tiny ones
-    if (source.length > 200000 || source.length < 10) return factory;
+    // Skip tiny modules, and ones so large that stringifying every chunk would
+    // cost more than any patch is worth.
+    //
+    // The ceiling was 200,000, which silently skipped the module we most need:
+    // Steam's library module (97220 on the 2026-07 client) holds the tab bar
+    // and is 646,312 chars. A patch against it matched nothing and reported
+    // nothing, because a skipped module never reaches the find check. Measured
+    // on device: 2449 modules across 54 chunks, and stringifying all of them
+    // is not the expensive part.
+    if (source.length > MAX_MODULE_SOURCE || source.length < 10) return factory;
 
     var wasPatched = false;
 
