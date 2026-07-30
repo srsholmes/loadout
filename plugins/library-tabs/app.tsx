@@ -347,16 +347,25 @@ function LibraryTabs() {
     [call, config],
   );
 
-  const launch = useCallback(
+  /**
+   * Open the game's page in Steam rather than starting it.
+   *
+   * Launching straight from a tile is a lot of consequence for one press —
+   * especially on a grid of 4356 tiles where a mis-tap starts a download or a
+   * game you did not want. Navigating lands you where you can read about it and
+   * press Play, which is also where Steam's own library takes you.
+   *
+   * Hide first, then navigate: the overlay is its own X11 window over
+   * Gamescope, so leaving it up means Steam moves behind it and the press looks
+   * like it did nothing.
+   */
+  const openGame = useCallback(
     async (game: GameMetadata) => {
-      // Hide first, then launch. The overlay is its own X11 window layered over
-      // Gamescope, so leaving it up means Steam starts the game behind it and
-      // the launch looks like it did nothing. Same ordering as protondb-badges.
       void hideOverlay().catch(() => {});
       try {
-        await call("launchGame", game.appId, game.source);
+        await call("showGameInSteam", game.appId);
       } catch (err) {
-        notify(err instanceof Error ? err.message : "Couldn't launch that game", {
+        notify(err instanceof Error ? err.message : "Couldn't open that game", {
           kind: "error",
         });
       }
@@ -474,7 +483,21 @@ function LibraryTabs() {
           edge, then re-apply it inside so the first and last tab still clear
           the sides. Inline rather than `-mx-7`, which is not in the shell's
           stylesheet (see README). */}
-      <div style={{ marginInline: -PAGE_PADDING }}>
+      <div
+        style={{
+          marginInline: -PAGE_PADDING,
+          // Sticky rather than pinned in the header: it belongs to the page's
+          // scroll box, so it can bleed to the edges and still scroll with the
+          // content until it reaches the top. `top` cancels the page's padding
+          // so it lands flush. Inline because `sticky`/`z-10` are not classes
+          // this plugin can rely on (see README).
+          position: "sticky",
+          top: -PAGE_PADDING,
+          zIndex: 10,
+          background: "var(--color-base-100)",
+          paddingBlock: 8,
+        }}
+      >
         <TabStrip
           tabs={stripTabs}
           activeId={activeId}
@@ -519,7 +542,7 @@ function LibraryTabs() {
                 fallbackImageUrl={game.headerUrl}
                 title={game.name}
                 collections={game.collections.map(friendlyCollectionName)}
-                onPick={() => void launch(game)}
+                onPick={() => void openGame(game)}
               />
             ))}
           </GameCardGrid>

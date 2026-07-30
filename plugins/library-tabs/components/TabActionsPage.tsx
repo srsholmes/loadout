@@ -58,7 +58,20 @@ export function TabActionsPage({
         <section className="flex flex-col gap-2">
           <Text variant="secondary">Name</Text>
           <div className="flex gap-2">
-            <TextInput value={label} onChange={setLabel} placeholder="Tab name" />
+            <TextInput
+              value={label}
+              onChange={setLabel}
+              placeholder="Tab name"
+              // Typing a name and pressing Enter is what everyone does — more
+              // so on a handheld, where the on-screen keyboard's confirm is
+              // right there and the separate Rename button is easy to miss.
+              // Without this the rename silently did nothing.
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" || !renamed) return;
+                event.preventDefault();
+                onRename(label.trim());
+              }}
+            />
             <Button
               variant="primary"
               disabled={!renamed}

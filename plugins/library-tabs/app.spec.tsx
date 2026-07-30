@@ -42,6 +42,8 @@ function info(appId: string, name: string, extra: Partial<GameInfo> = {}): GameI
   };
 }
 
+const hideOverlayMock = mock(() => Promise.resolve());
+
 const callMock = mock((method: string, ...args: unknown[]) => {
   calls.push({ method, args });
   switch (method) {
@@ -73,6 +75,7 @@ const callMock = mock((method: string, ...args: unknown[]) => {
 
 mock.module("@loadout/ui", () => ({
   ...actualUi,
+  hideOverlay: hideOverlayMock,
   PluginProvider: ({ children }: { children: unknown }) => children,
   // The real `PluginHeader` portals into a slot the shell reserves, which
   // doesn't exist here — it would render nothing and the header's search box
@@ -110,6 +113,7 @@ beforeEach(() => {
   calls.length = 0;
   eventHandlers.clear();
   callMock.mockClear();
+  hideOverlayMock.mockClear();
   document.body.innerHTML = "";
 });
 
@@ -392,8 +396,11 @@ describe("search", () => {
   });
 });
 
-describe("launching", () => {
-  it("passes the game's source, so shortcuts get their 64-bit gameid", async () => {
+describe("picking a game", () => {
+  it("opens the game's Steam page rather than starting it", async () => {
+    // Starting a game is a lot of consequence for one press on a grid of
+    // thousands of tiles; navigating is what Steam's own library does, and it
+    // still puts Play one press away.
     mountApp();
     await waitFor(() => {
       expect(screen.getByText("Super Mario 64")).toBeTruthy();
@@ -401,10 +408,23 @@ describe("launching", () => {
 
     screen.getByText("Super Mario 64").closest("button")!.click();
     await waitFor(() => {
-      expect(calls.some((c) => c.method === "launchGame")).toBe(true);
+      expect(calls.some((c) => c.method === "showGameInSteam")).toBe(true);
     });
-    const launch = calls.find((c) => c.method === "launchGame")!;
-    expect(launch.args).toEqual(["3405691582", "shortcut"]);
+    expect(calls.find((c) => c.method === "showGameInSteam")!.args).toEqual([
+      "3405691582",
+    ]);
+    expect(calls.some((c) => c.method === "launchGame")).toBe(false);
+  });
+
+  it("hides the overlay, or Steam moves behind it and nothing appears to happen", async () => {
+    mountApp();
+    await waitFor(() => {
+      expect(screen.getByText("Super Mario 64")).toBeTruthy();
+    });
+    screen.getByText("Super Mario 64").closest("button")!.click();
+    await waitFor(() => {
+      expect(hideOverlayMock).toHaveBeenCalled();
+    });
   });
 });
 

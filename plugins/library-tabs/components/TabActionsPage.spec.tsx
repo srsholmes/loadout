@@ -49,6 +49,23 @@ describe("TabActionsPage — a custom tab", () => {
     expect(h.onRename).toHaveBeenCalledWith("Chonky");
   });
 
+  it("renames on Enter, not only from the button", () => {
+    // On a handheld the on-screen keyboard's confirm is right there and the
+    // separate Rename button is easy to miss, so Enter doing nothing reads as
+    // "renaming is broken".
+    const h = renderPage(custom());
+    const input = document.querySelector("input")!;
+    fireEvent.change(input, { target: { value: "Chonky" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(h.onRename).toHaveBeenCalledWith("Chonky");
+  });
+
+  it("ignores Enter when the name has not changed", () => {
+    const h = renderPage(custom());
+    fireEvent.keyDown(document.querySelector("input")!, { key: "Enter" });
+    expect(h.onRename).not.toHaveBeenCalled();
+  });
+
   it("requires a second press before deleting", () => {
     // One tap destroying a tab the user spent time on is the wrong trade; two
     // taps with the name in the prompt is enough for a single tab.
