@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { diagnoseTab, removeRule } from "./diagnose";
+import { diagnoseTab } from "./diagnose";
 import { countMatches, evaluateTab } from "./evaluate";
 import { buildEvalGames } from "./facts";
 import type { GroupRule, Rule, Tab } from "./types";
@@ -53,59 +53,6 @@ function diagnose(tab: Tab, games = evalLibrary) {
     flippedCombinatorCount: flipped,
   });
 }
-
-describe("removeRule", () => {
-  it("removes a top-level child", () => {
-    const root: GroupRule = {
-      id: "root",
-      kind: "group",
-      combinator: "all",
-      children: [
-        { id: "a", kind: "installed" },
-        { id: "b", kind: "owned" },
-      ],
-    };
-    const next = removeRule(root, "a") as GroupRule;
-    expect(next.children.map((c) => c.id)).toEqual(["b"]);
-  });
-
-  it("removes a deeply nested child, leaving the structure intact", () => {
-    const root: GroupRule = {
-      id: "root",
-      kind: "group",
-      combinator: "all",
-      children: [
-        {
-          id: "g2",
-          kind: "group",
-          combinator: "any",
-          children: [
-            { id: "a", kind: "installed" },
-            { id: "b", kind: "owned" },
-          ],
-        },
-      ],
-    };
-    const next = removeRule(root, "b") as GroupRule;
-    const inner = next.children[0] as GroupRule;
-    expect(inner.children.map((c) => c.id)).toEqual(["a"]);
-  });
-
-  it("returns null when asked to remove the node itself", () => {
-    expect(removeRule({ id: "a", kind: "installed" }, "a")).toBeNull();
-  });
-
-  it("does not mutate its input", () => {
-    const root: GroupRule = {
-      id: "root",
-      kind: "group",
-      combinator: "all",
-      children: [{ id: "a", kind: "installed" }],
-    };
-    removeRule(root, "a");
-    expect(root.children).toHaveLength(1);
-  });
-});
 
 describe("diagnoseTab — ok", () => {
   it("says nothing when the tab has games", () => {

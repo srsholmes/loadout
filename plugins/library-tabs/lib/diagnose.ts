@@ -25,6 +25,7 @@
 import type { EvalResult, RuleNodeTrace } from "./evaluate";
 import type { FactKey, GroupRule, Rule, Tab } from "./types";
 import { leafRules } from "./rules";
+import { asRoot, removeRule } from "./rule-tree";
 import { summarizeRule } from "./summarize";
 
 /** A one-tap repair. `apply` must be pure and must not mutate its input. */
@@ -56,16 +57,6 @@ export type Diagnosis =
 
 // ── Pure tab transforms used by the fixes ──────────────────────────────
 
-/** Remove a rule by id, anywhere in the tree. */
-export function removeRule(rule: Rule, targetId: string): Rule | null {
-  if (rule.id === targetId) return null;
-  if (rule.kind !== "group") return rule;
-  const children = rule.children
-    .map((c) => removeRule(c, targetId))
-    .filter((c): c is Rule => c !== null);
-  return { ...rule, children };
-}
-
 function withRoot(tab: Tab, root: GroupRule): Tab {
   return { ...tab, root };
 }
@@ -73,15 +64,13 @@ function withRoot(tab: Tab, root: GroupRule): Tab {
 function fixRemoveRule(ruleId: string, label: string): Fix {
   return {
     label,
-    apply: (tab) => {
-      const next = removeRule(tab.root, ruleId);
-      // Removing the root itself would leave no tree; fall back to an empty
-      // group, which matches everything — a sane, recoverable state.
-      if (next === null || next.kind !== "group") {
-        return withRoot(tab, { ...tab.root, children: [] });
-      }
-      return withRoot(tab, next);
-    },
+    apply: (tab) =>
+      // Removing the root itself would leave no tree; `asRoot` falls back to an
+      // empty group, which matches everything — a sane, recoverable state.
+      withRoot(
+        tab,
+        asRoot({ candidate: removeRule(tab.root, ruleId), fallback: tab.root }),
+      ),
   };
 }
 
