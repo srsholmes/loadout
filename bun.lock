@@ -300,6 +300,7 @@
       "name": "@loadout/plugin-library-tabs",
       "version": "0.1.0",
       "dependencies": {
+        "@loadout/plugin-storage": "workspace:*",
         "@loadout/types": "workspace:*",
       },
     },

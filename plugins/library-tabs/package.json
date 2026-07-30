@@ -4,7 +4,8 @@
   "type": "module",
   "private": true,
   "dependencies": {
-    "@loadout/types": "workspace:*"
+    "@loadout/types": "workspace:*",
+    "@loadout/plugin-storage": "workspace:*"
   },
   "plugin": {
     "id": "library-tabs",
