@@ -12,7 +12,7 @@
  * The backend owns only persistence and the library snapshot.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   GameCard,
   GameCardGrid,
@@ -36,11 +36,13 @@ import { TabDiagnostics } from "./components/TabDiagnostics";
 import { RuleBuilder } from "./components/RuleBuilder";
 import { LibraryTabsHeader } from "./components/LibraryTabsHeader";
 import { TabActionsPage } from "./components/TabActionsPage";
+import { BuilderPage } from "./components/BuilderPage";
 import type { ParamOption } from "./lib/rule-params";
 import type { LibraryTabsConfig } from "./lib/config";
 import { orderedTabs, resolveDefaultTab } from "./lib/config";
 import { countMatches, evaluateTab } from "./lib/evaluate";
 import { buildEvalGames } from "./lib/facts";
+import { useVisibleRows } from "./hooks/useVisibleRows";
 import { diagnoseTab, type Fix } from "./lib/diagnose";
 import { RULE_FIELD, factUnavailableReason, requiredFacts, ruleDef } from "./lib/rules";
 import { summarizeTab } from "./lib/summarize";
@@ -71,6 +73,13 @@ function LibraryTabs() {
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
   /** Tab whose rename/move/delete page is open. */
   const [managingTabId, setManagingTabId] = useState<string | null>(null);
+  /** The scrolling page, and the wrapper around the tile grid — both measured
+   *  by `useVisibleRows` so only the rows in view are mounted. */
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const gridWrapperRef = useRef<HTMLDivElement | null>(null);
+  /** Wraps the spacers and the grid; its top is the fixed point the window
+   *  measures from, since the grid's own offset moves as padTop grows. */
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   // ── Data ───────────────────────────────────────────────────────────
 
@@ -241,6 +250,15 @@ function LibraryTabs() {
     return fuzzySearchGames(searchable, search);
   }, [result, search]);
 
+  // Mounting 4356 GameCards stalls CEF; evaluation is not the bottleneck,
+  // rendering is. Only the rows in view (plus a little overscan) are mounted.
+  const rowWindow = useVisibleRows({
+    total: shown.length,
+    gridWrapperRef,
+    listRef,
+    scrollRef,
+  });
+
   // ── Actions ────────────────────────────────────────────────────────
 
   const applyFix = useCallback(
@@ -269,7 +287,13 @@ function LibraryTabs() {
         // (`uniqueTabId` suffixes collisions), so the new id is whichever one
         // wasn't there a moment ago rather than anything we can predict.
         const created = (next?.tabs ?? []).find((t) => !before.has(t.id));
-        if (created) setActiveId(created.id);
+        if (created) {
+          setActiveId(created.id);
+          // A template with no rules is the "start from scratch" case: leaving
+          // the user on an empty tab with no obvious next step is the worst
+          // possible landing, so go straight into the builder.
+          if (created.root.children.length === 0) setEditingTabId(created.id);
+        }
         setShowTemplates(false);
       } catch (err) {
         notify(err instanceof Error ? err.message : "Couldn't create that tab", {
@@ -277,7 +301,10 @@ function LibraryTabs() {
         });
       }
     },
-    [call],
+    // `config?.tabs` is a real dependency, not a lint formality: the new tab is
+    // identified by diffing against the ids that existed a moment ago, so a
+    // stale list would pick out the wrong tab — or none at all.
+    [call, config?.tabs],
   );
 
   const saveTab = useCallback(
@@ -408,6 +435,24 @@ function LibraryTabs() {
     />
   );
 
+  // Its own screen, not a panel under the tab strip. Inline, it opened
+  // wherever you happened to be scrolled — on a 4356-tile grid that is usually
+  // off-screen, so pressing Add tab appeared to do nothing at all.
+  if (showTemplates) {
+    return (
+      <div className="p-7 h-full overflow-y-auto" style={{ overflowX: "hidden" }}>
+        {header}
+        <BuilderPage
+          title="Add a tab"
+          description="Start from a template, or build one from scratch."
+          onBack={() => setShowTemplates(false)}
+        >
+          <TemplateGallery snapshot={snapshot} onPick={addTemplate} />
+        </BuilderPage>
+      </div>
+    );
+  }
+
   if (managingTab) {
     const order = config ? orderedTabs(config) : [];
     return (
@@ -465,11 +510,19 @@ function LibraryTabs() {
 
   return (
     <div
+      ref={scrollRef}
       className="p-7 h-full overflow-y-auto flex flex-col gap-3"
-      // `overflow-y: auto` makes overflow-x compute to `auto` as well, so the
-      // tab strip's scrollIntoView scrolled this container sideways and clipped
-      // the page. The strip owns its own horizontal scrolling.
-      style={{ overflowX: "hidden" }}
+      style={{
+        // `overflow-y: auto` makes overflow-x compute to `auto` as well, so the
+        // tab strip's scrollIntoView scrolled this container sideways and
+        // clipped the page. The strip owns its own horizontal scrolling.
+        overflowX: "hidden",
+        // Makes this the offsetParent of the grid. `offsetParent` skips
+        // unpositioned ancestors, so without it the windowing hook's walk up
+        // the chain sailed past the scroller and summed offsets all the way to
+        // the body — a gridTop so large that the window never left row 0.
+        position: "relative",
+      }}
     >
       {header}
       {readOnly ? (
@@ -508,13 +561,6 @@ function LibraryTabs() {
         />
       </div>
 
-      {showTemplates ? (
-        <TemplateGallery
-          snapshot={snapshot}
-          onPick={addTemplate}
-        />
-      ) : null}
-
       {diagnosis && diagnosis.kind !== "ok" ? (
         <TabDiagnostics
           diagnosis={diagnosis}
@@ -534,18 +580,31 @@ function LibraryTabs() {
               {shown.length} of {result?.matched.length ?? 0} shown
             </Text>
           ) : null}
-          <GameCardGrid minTileWidth={activeTab?.display.tileWidth ?? 150}>
-            {shown.map((game) => (
-              <GameCard
-                key={game.appId}
-                imageUrl={game.capsuleUrl}
-                fallbackImageUrl={game.headerUrl}
-                title={game.name}
-                collections={game.collections.map(friendlyCollectionName)}
-                onPick={() => void openGame(game)}
-              />
-            ))}
-          </GameCardGrid>
+          {/* Spacers stand in for the rows that aren't mounted, so the
+              scrollbar still describes the whole list. They sit outside the
+              grid because a CSS grid would lay them out as tiles. */}
+          <div ref={listRef} style={{ flexShrink: 0 }}>
+          <div style={{ height: rowWindow.padTop, flexShrink: 0 }} />
+          {/* flexShrink: 0 throughout — the page is a flex column, and a flex
+              item defaults to shrinking to fit, which silently collapsed the
+              spacers to zero and left the scrollbar describing four rows
+              instead of eight hundred. */}
+          <div ref={gridWrapperRef} style={{ flexShrink: 0 }}>
+            <GameCardGrid minTileWidth={activeTab?.display.tileWidth ?? 150}>
+              {shown.slice(rowWindow.start, rowWindow.end).map((game) => (
+                <GameCard
+                  key={game.appId}
+                  imageUrl={game.capsuleUrl}
+                  fallbackImageUrl={game.headerUrl}
+                  title={game.name}
+                  collections={game.collections.map(friendlyCollectionName)}
+                  onPick={() => void openGame(game)}
+                />
+              ))}
+            </GameCardGrid>
+          </div>
+          <div style={{ height: rowWindow.padBottom, flexShrink: 0 }} />
+          </div>
         </>
       ) : null}
     </div>
@@ -613,8 +672,7 @@ function TemplateGallery({ snapshot, onPick }: TemplateGalleryProps) {
   };
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg bg-base-200 p-3">
-      <Text variant="heading">Add a tab</Text>
+    <div className="flex flex-col gap-2">
       <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
         {templates().map((template) => {
           const blocked = blockedReason(template.needs);
