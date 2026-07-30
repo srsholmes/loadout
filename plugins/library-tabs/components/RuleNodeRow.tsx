@@ -68,11 +68,22 @@ export function RuleNodeRow({
         className={[
           "flex items-center gap-2 rounded-lg border px-3 py-1 min-h-[44px]",
           depth > 1 ? "border-l-2" : "",
-          complete ? "bg-base-200 border-base-300" : "bg-warning/10 border-warning/40",
+          complete ? "bg-base-200 border-base-300" : "",
           focused ? "ring-2 ring-primary/60" : "",
         ]
           .filter(Boolean)
           .join(" ")}
+        // A rule still missing its value gets a faint warning tint rather than
+        // a saturated one — it is a prompt, not an error, and this row sits in
+        // a list the user is actively working down.
+        style={
+          complete
+            ? undefined
+            : {
+                background: "color-mix(in oklab, var(--color-warning) 10%, transparent)",
+                borderColor: "color-mix(in oklab, var(--color-warning) 30%, transparent)",
+              }
+        }
       >
         <button
           ref={ref as React.Ref<HTMLButtonElement>}

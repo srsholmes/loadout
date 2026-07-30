@@ -11,8 +11,33 @@
  * `setDraft(fix.apply(draft))` and nothing here needs to know what it does.
  */
 
-import { Alert, Button, Text, useFocusable } from "@loadout/ui";
+import { Button, useFocusable } from "@loadout/ui";
 import type { Diagnosis, Fix } from "../lib/diagnose";
+
+/**
+ * A soft tinted panel rather than daisyUI's solid `alert-<variant>`.
+ *
+ * The solid warning alert is a bright yellow fill, and its body inherited
+ * `Text variant="secondary"` — light grey text meant for the dark base
+ * surface. Light-grey-on-bright-yellow is close to unreadable, and a
+ * saturated fill is far too loud for a message that appears every time a tab
+ * happens to be empty.
+ *
+ * So: a 12% tint of the semantic colour over the normal background, a 32%
+ * border, and ordinary `base-content` text — the same treatment the shell
+ * gives its plugin-crash panel. Colour still carries the meaning; it just
+ * stops shouting, and the text sits on a dark surface where it belongs.
+ *
+ * Written as inline `color-mix` on the theme tokens rather than Tailwind
+ * classes, so it holds across all five themes and cannot silently no-op the
+ * way a plugin-only utility class does (see README).
+ */
+function tintedSurface(token: "warning" | "info"): React.CSSProperties {
+  return {
+    background: `color-mix(in oklab, var(--color-${token}) 12%, transparent)`,
+    border: `1px solid color-mix(in oklab, var(--color-${token}) 32%, transparent)`,
+  };
+}
 
 export interface TabDiagnosticsProps {
   diagnosis: Diagnosis;
@@ -75,14 +100,34 @@ export function TabDiagnostics({
 
   const fixes = "fixes" in diagnosis ? diagnosis.fixes : [];
 
+  const token = variant(diagnosis);
+
   return (
     <div className="flex flex-col gap-3 py-6">
-      <Alert variant={variant(diagnosis)} title={headline(diagnosis)}>
-        {/* The diagnosis message is written for a player and, in the
-            blocked-facts case, quotes the data source's own reason
-            verbatim. Render it as-is. */}
-        <Text variant="secondary">{diagnosis.message}</Text>
-      </Alert>
+      <div
+        role="alert"
+        className="flex gap-3 rounded-lg p-3"
+        style={tintedSurface(token)}
+      >
+        {/* A slim colour stripe carries the semantics that the old solid fill
+            used to, at a fraction of the visual weight. */}
+        <span
+          aria-hidden="true"
+          className="w-1 shrink-0 rounded-full"
+          style={{ background: `var(--color-${token})` }}
+        />
+        <div className="flex flex-col gap-1">
+          <span className="text-sm font-semibold text-base-content">
+            {headline(diagnosis)}
+          </span>
+          {/* The message is written for a player and, in the blocked-facts
+              case, quotes the data source's own reason verbatim. Render as-is,
+              in ordinary body text on the ordinary background. */}
+          <span className="text-sm text-base-content/70">
+            {diagnosis.message}
+          </span>
+        </div>
+      </div>
 
       {fixes.length > 0 || (editable && onEdit) ? (
         <div className="flex flex-wrap items-center gap-2">

@@ -335,7 +335,7 @@ function LibraryTabs() {
   // should never have two focus regions competing for the D-pad.
   if (editingTab) {
     return (
-      <div className="p-7 h-full overflow-y-auto">
+      <div className="p-7 h-full overflow-y-auto" style={{ overflowX: "hidden" }}>
         {header}
         <RuleBuilder
           tab={editingTab}
@@ -349,7 +349,13 @@ function LibraryTabs() {
   }
 
   return (
-    <div className="p-7 h-full overflow-y-auto flex flex-col gap-3">
+    <div
+      className="p-7 h-full overflow-y-auto flex flex-col gap-3"
+      // `overflow-y: auto` makes overflow-x compute to `auto` as well, so the
+      // tab strip's scrollIntoView scrolled this container sideways and clipped
+      // the page. The strip owns its own horizontal scrolling.
+      style={{ overflowX: "hidden" }}
+    >
       {header}
       {readOnly ? (
         <Text variant="secondary">

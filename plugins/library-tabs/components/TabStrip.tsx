@@ -59,10 +59,26 @@ function TabButton({
   // Keep the active tab in view when the strip overflows. A library with
   // fifteen tabs scrolls, and a gamepad user moving right must not lose
   // sight of where they are.
+  //
+  // Scrolls the strip itself rather than calling `scrollIntoView`, which walks
+  // up and scrolls *every* scrollable ancestor. The plugin's page container is
+  // one — `overflow-y: auto` makes the x axis compute to `auto` too — so
+  // selecting a tab near the right end dragged the whole page sideways and
+  // clipped its left edge. `overflow-x: hidden` does not help: a hidden
+  // overflow container is still programmatically scrollable.
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
-    if (active || focused) {
-      buttonRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (!(active || focused)) return;
+    const button = buttonRef.current;
+    const strip = button?.parentElement;
+    if (!button || !strip) return;
+
+    const left = button.offsetLeft;
+    const right = left + button.offsetWidth;
+    if (left < strip.scrollLeft) {
+      strip.scrollLeft = left;
+    } else if (right > strip.scrollLeft + strip.clientWidth) {
+      strip.scrollLeft = right - strip.clientWidth;
     }
   }, [active, focused]);
 
