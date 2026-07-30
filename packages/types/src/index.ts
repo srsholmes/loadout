@@ -21,3 +21,14 @@ export type {
   GameCollection,
   GameLibraryChangedEvent,
 } from "./game-library";
+export type {
+  AppKind,
+  DeckCompat,
+  SteamOsCompat,
+  MetadataProviderId,
+  GameFeatures,
+  GameMetadata,
+  ProviderState,
+  GameMetadataSnapshot,
+} from "./game-metadata";
+export { GAME_FEATURE_KEYS, emptyFeatures } from "./game-metadata";
