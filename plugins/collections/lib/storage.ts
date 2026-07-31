@@ -57,14 +57,16 @@ async function quarantineUnreadable(now: number): Promise<string | null> {
     return null; // No file at all: a real first run.
   }
 
-  const name = `${PLUGIN_ID}.unreadable-${now}.json`;
+  // The name must be what actually lands on disk — telling the user to look
+  // for a file that was never written is worse than saying nothing.
+  const kept = `${path}.unreadable-${now}`;
   try {
-    await copyFile(path, `${path}.unreadable-${now}`);
-    return name;
+    await copyFile(path, kept);
+    return kept;
   } catch {
-    // Nothing more we can do, but the caller still warns rather than
-    // pretending this was a clean install.
-    return name;
+    // The copy failed, so there is no kept file to name. Return null and let
+    // the caller warn without promising a rescue that does not exist.
+    return null;
   }
 }
 

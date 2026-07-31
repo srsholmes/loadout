@@ -193,8 +193,12 @@ export function groupGames(
    * The caller's already-normalised games, carrying the async facts. Sub-tab
    * rules are evaluated against these; without them a fact-backed rule is
    * `indeterminate` for every game and the first sub-group takes everything.
+   *
+   * Required, deliberately. It defaulted to `[]`, which reinstated exactly the
+   * bug it was added to fix — silently, with no type error, for any caller
+   * that forgot it.
    */
-  evalGames: readonly EvalGame[] = [],
+  evalGames: readonly EvalGame[],
 ): EvalGroupResult[] {
   if (spec.kind === "none") {
     return [{ id: "all", label: tabLabel, games: [...games] }];

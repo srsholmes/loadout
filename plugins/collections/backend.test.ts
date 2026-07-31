@@ -704,3 +704,65 @@ describe("mirror — an owed sync is not forgotten", () => {
     expect((await backend.getConfig()).config.mirror.pendingSync).toBe(true);
   });
 });
+
+describe("mirror — a sync must not clobber a concurrent edit", () => {
+  async function mirroringBackend() {
+    const backend = new CollectionsBackend();
+    await backend.onLoad();
+    const { config } = await backend.getConfig();
+    steamEntries = [];
+    await backend.setTabs(
+      config.tabs.map((t) =>
+        t.id === "all" ? { ...t, mirror: { enabled: true, collectionName: "Everything" } } : t,
+      ),
+    );
+    return backend;
+  }
+
+  it("keeps a tab rename made while a sync is in flight", async () => {
+    // Config writes are read-modify-write across an await. `setConfig` computed
+    // its merge, awaited `saveConfig`, and only then assigned `this.config`; a
+    // sync finishing inside that window built its own next config from the
+    // pre-edit value and wrote it last, losing the rename from memory and disk.
+    const backend = await mirroringBackend();
+
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let gated = false;
+    createGate = async () => {
+      if (gated) return;
+      gated = true;
+      await held;
+    };
+
+    const syncing = backend.syncMirror();
+    const cfg = (await backend.getConfig()).config;
+    const renaming = backend.setTabs(
+      cfg.tabs.map((t) => (t.id === "all" ? { ...t, label: "Renamed" } : t)),
+    );
+    release();
+    await Promise.all([syncing, renaming]);
+
+    const after = (await backend.getConfig()).config;
+    expect(after.tabs.find((t) => t.id === "all")!.label).toBe("Renamed");
+    // And the sync's own bookkeeping survived too.
+    expect(after.mirror.ledger.entries).toHaveLength(1);
+  });
+
+  it("keeps the live ledger when restoring an older backup", async () => {
+    // Steam does not roll back when we restore a config file. Adopting the
+    // backup's empty ledger strands every collection made since: deleting one
+    // requires a ledger entry, so it could never be cleaned up, and its name
+    // would block its own tab forever.
+    const backend = await mirroringBackend();
+    const backup = await backend.createBackup();
+    await backend.syncMirror();
+    expect((await backend.getConfig()).config.mirror.ledger.entries).toHaveLength(1);
+
+    await backend.restoreBackupFile(backup.file);
+
+    const after = (await backend.getConfig()).config;
+    expect(after.mirror.ledger.entries).toHaveLength(1);
+    expect(after.mirror.ledger.entries[0]!.collectionId).toBe(fakeCollections[0]!.id);
+  });
+});

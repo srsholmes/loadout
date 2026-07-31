@@ -93,6 +93,18 @@ export default class CollectionsBackend implements PluginBackend {
    * leaks a collection that nothing can ever clean up.
    */
   private syncChain: Promise<unknown> = Promise.resolve();
+  /**
+   * Serialises every config write.
+   *
+   * A write is read-modify-write across an `await`, so two of them interleave:
+   * `setConfig` computes its merge, awaits `saveConfig`, and only then assigns
+   * `this.config`. A sync finishing inside that window built its own next
+   * config from the *pre-edit* value and wrote it last — so renaming a tab
+   * while a sync was in flight lost the rename, from memory and from disk.
+   * Serialising `syncMirror` alone did not help: `setConfig` is not on that
+   * chain.
+   */
+  private configChain: Promise<unknown> = Promise.resolve();
 
   async onLoad(): Promise<void> {
     const result = await loadConfig();
@@ -143,7 +155,8 @@ export default class CollectionsBackend implements PluginBackend {
    */
   async setConfig(next: CollectionsConfig): Promise<CollectionsConfig> {
     this._assertWritable();
-    const before = this.config;
+    return this._mutateConfig(async () => {
+      const before = this.config;
 
     // The mirror ledger is **backend-owned** and never taken from the caller.
     //
@@ -154,20 +167,35 @@ export default class CollectionsBackend implements PluginBackend {
     // Steam. A ledger that has forgotten a collection can never delete it —
     // deletion requires a ledger entry — so the tab then conflicts with its
     // own orphan, permanently, and the stray is unreachable.
-    const merged: CollectionsConfig = {
-      ...next,
-      mirror: {
-        ...next.mirror,
-        ledger: this.config.mirror.ledger,
-        pendingSync: this.config.mirror.pendingSync,
-      },
-    };
+      const merged: CollectionsConfig = {
+        ...next,
+        mirror: {
+          ...next.mirror,
+          ledger: before.mirror.ledger,
+          pendingSync: before.mirror.pendingSync,
+        },
+      };
 
-    await saveConfig(merged); // throws on invalid; never persists junk
-    this.config = merged;
-    this._broadcast();
-    this._maybeAutoSync(before, merged);
-    return this.config;
+      await saveConfig(merged); // throws on invalid; never persists junk
+      this.config = merged;
+      this._broadcast();
+      this._maybeAutoSync(before, merged);
+      return this.config;
+    });
+  }
+
+  /**
+   * Run a config read-modify-write with no other write interleaving.
+   *
+   * The chain must never reject, or one failed write poisons every later one.
+   */
+  private _mutateConfig<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.configChain.then(fn, fn);
+    this.configChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   /**
@@ -177,10 +205,14 @@ export default class CollectionsBackend implements PluginBackend {
    * so this is the one path allowed to write it.
    */
   private async _setMirrorState(mirror: CollectionsConfig["mirror"]): Promise<void> {
-    const next: CollectionsConfig = { ...this.config, mirror };
-    await saveConfig(next);
-    this.config = next;
-    this._broadcast();
+    await this._mutateConfig(async () => {
+      // Read `this.config` *inside* the lock: a `setConfig` that landed while
+      // the sync was running is already applied, and its edits must survive.
+      const next: CollectionsConfig = { ...this.config, mirror };
+      await saveConfig(next);
+      this.config = next;
+      this._broadcast();
+    });
   }
 
   /**
@@ -517,6 +549,12 @@ export default class CollectionsBackend implements PluginBackend {
    */
   private async _buildMirrorPlan(): Promise<MirrorPlan> {
     const snapshot = await this.getSnapshot();
+    // No fact bag: this backend has no resolvers wired yet, and the webview
+    // passes none either (`app.tsx` builds its games the same way). The day a
+    // resolver lands, both sides must be given the same bag or a tab will mean
+    // one thing on screen and another in Steam — which is the single thing
+    // `mirror-agreement.test.ts` exists to prevent, and which it cannot catch,
+    // because it builds both sides itself.
     const evalGames = buildEvalGames(snapshot.games);
     const now = Date.now();
 
@@ -553,10 +591,26 @@ export default class CollectionsBackend implements PluginBackend {
 
   async restoreBackupFile(file: string): Promise<CollectionsConfig> {
     this._assertWritable();
-    const result = await restoreBackup(file, this.config);
-    this._applyLoad(result);
-    this._broadcast();
-    return this.config;
+    return this._mutateConfig(async () => {
+      const live = this.config.mirror.ledger;
+      const result = await restoreBackup(file, this.config);
+
+      // Keep the *live* ledger, not the backup's. The ledger is not user
+      // preference — it is our record of which Steam collections we created,
+      // and Steam does not roll back when we restore a file. A backup taken
+      // before the first sync carries an empty ledger, and adopting it strands
+      // every collection made since: deleting one requires a ledger entry, so
+      // it can never be cleaned up, and its name blocks its own tab forever.
+      this._applyLoad({
+        ...result,
+        config: {
+          ...result.config,
+          mirror: { ...result.config.mirror, ledger: live },
+        },
+      });
+      this._broadcast();
+      return this.config;
+    });
   }
 
   // ── Sharing ──────────────────────────────────────────────────────────

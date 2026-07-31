@@ -12,6 +12,15 @@ const passMatcher: RuleMatcher = (rule, g) =>
 /** Strict matcher — treats "couldn't check" as no. */
 const failMatcher: RuleMatcher = (rule, g) => evaluateRule(rule, g) === true;
 
+/**
+ * The normalised games `evaluateTab` hands to `groupGames`. Passing these is
+ * not optional: sub-tab rules are evaluated against them, and building them
+ * locally from bare metadata is what once dropped every async fact and let the
+ * first sub-group swallow the whole grid.
+ */
+const evalOf = (games: readonly { appId: string }[]) =>
+  buildEvalGames(games as never);
+
 function labels(groups: ReturnType<typeof groupGames>): string[] {
   return groups.map((g) => g.label);
 }
@@ -20,7 +29,7 @@ describe("groupGames — none", () => {
   it("returns exactly one synthetic group carrying the tab label", () => {
     // Callers never branch on grouped-vs-not: they render `groups`, and a
     // single group renders as a plain grid.
-    const out = groupGames(LIBRARY, { kind: "none" }, "My Tab", passMatcher);
+    const out = groupGames(LIBRARY, { kind: "none" }, "My Tab", passMatcher, evalOf(LIBRARY));
     expect(out).toHaveLength(1);
     expect(out[0]!.id).toBe("all");
     expect(out[0]!.label).toBe("My Tab");
@@ -28,7 +37,7 @@ describe("groupGames — none", () => {
   });
 
   it("copies rather than aliasing the input array", () => {
-    const out = groupGames(LIBRARY, { kind: "none" }, "T", passMatcher);
+    const out = groupGames(LIBRARY, { kind: "none" }, "T", passMatcher, evalOf(LIBRARY));
     expect(out[0]!.games).not.toBe(LIBRARY);
   });
 });
@@ -40,7 +49,7 @@ describe("groupGames — field, single-valued keys", () => {
       { kind: "field", field, sortGroups: "alpha", otherLabel: "Other", ...extra },
       "T",
       passMatcher,
-    );
+      evalOf(LIBRARY));
   }
 
   it("groups by source", () => {
@@ -66,7 +75,7 @@ describe("groupGames — field, single-valued keys", () => {
       { kind: "field", field: "firstLetter", sortGroups: "alpha", otherLabel: null },
       "T",
       passMatcher,
-    );
+      evalOf(g));
     expect(labels(out)).toEqual(["#", "A"]);
     expect(ids(out.find((x) => x.label === "#")!.games).sort()).toEqual(["2", "3"]);
     expect(ids(out.find((x) => x.label === "A")!.games).sort()).toEqual(["1", "4"]);
@@ -94,7 +103,7 @@ describe("groupGames — field, multi-valued keys", () => {
       { kind: "field", field: "genre", sortGroups: "alpha", otherLabel: null },
       "T",
       passMatcher,
-    );
+      evalOf(LIBRARY));
     const action = out.find((g) => g.label === "Action")!;
     const puzzle = out.find((g) => g.label === "Puzzle")!;
     expect(ids(action.games)).toContain(IDS.portal2);
@@ -107,7 +116,7 @@ describe("groupGames — field, multi-valued keys", () => {
       { kind: "field", field: "collection", sortGroups: "countDesc", otherLabel: null },
       "T",
       passMatcher,
-    );
+      evalOf(LIBRARY));
     expect(labels(out)).toContain("Nintendo 64");
     expect(labels(out)[0]).toBe("favorite"); // most populated
   });
@@ -118,7 +127,7 @@ describe("groupGames — field, multi-valued keys", () => {
       { kind: "field", field: "genre", sortGroups: "alpha", otherLabel: null },
       "T",
       passMatcher,
-    );
+      evalOf(LIBRARY));
     const unknown = out.find((g) => g.label === "Unknown")!;
     expect(ids(unknown.games)).toContain(IDS.mario64);
     expect(ids(unknown.games)).toContain(IDS.obscure);
@@ -136,7 +145,7 @@ describe("groupGames — field ordering", () => {
       { kind: "field", field: "developer", sortGroups: "alpha", otherLabel: null },
       "T",
       passMatcher,
-    );
+      evalOf(g));
     expect(labels(out)).toEqual(["Alpha", "zeta"]);
   });
 
@@ -152,7 +161,7 @@ describe("groupGames — field ordering", () => {
       { kind: "field", field: "developer", sortGroups: "countDesc", otherLabel: null },
       "T",
       passMatcher,
-    );
+      evalOf(g));
     expect(labels(out)).toEqual(["Big", "Ace", "Zed"]);
   });
 });
@@ -174,7 +183,7 @@ describe("groupGames — maxGroups", () => {
       },
       "T",
       passMatcher,
-    );
+      evalOf(many));
     expect(labels(out)).toEqual(["Dev0", "Dev1", "Dev2", "Other"]);
     expect(out.at(-1)!.games).toHaveLength(3);
   });
@@ -191,7 +200,7 @@ describe("groupGames — maxGroups", () => {
       },
       "T",
       passMatcher,
-    );
+      evalOf(many));
     expect(labels(out)).toEqual(["Dev0", "Dev1", "Dev2"]);
   });
 
@@ -213,7 +222,7 @@ describe("groupGames — maxGroups", () => {
       },
       "T",
       passMatcher,
-    );
+      evalOf(g));
     const other = out.find((x) => x.label === "Other")!;
     expect(ids(other.games)).toEqual(["2"]);
   });
@@ -224,7 +233,7 @@ describe("groupGames — maxGroups", () => {
       { kind: "field", field: "developer", sortGroups: "alpha", maxGroups: 99, otherLabel: "Other" },
       "T",
       passMatcher,
-    );
+      evalOf(many));
     expect(labels(out)).not.toContain("Other");
     expect(out).toHaveLength(6);
   });
@@ -251,7 +260,7 @@ describe("groupGames — rules (manual sub-tabs)", () => {
   it("assigns each game to the FIRST matching group only", () => {
     // Overlapping rules behave like a `switch`, so sub-tab counts add up
     // to the visible total rather than double-counting.
-    const out = groupGames(LIBRARY, spec, "T", failMatcher);
+    const out = groupGames(LIBRARY, spec, "T", failMatcher, evalOf(LIBRARY));
     const unplayed = out.find((g) => g.label === "Unplayed")!;
     const installed = out.find((g) => g.label === "Installed")!;
 
@@ -265,13 +274,13 @@ describe("groupGames — rules (manual sub-tabs)", () => {
   });
 
   it("collects non-matching games under residualLabel", () => {
-    const out = groupGames(LIBRARY, spec, "T", failMatcher);
+    const out = groupGames(LIBRARY, spec, "T", failMatcher, evalOf(LIBRARY));
     const rest = out.find((g) => g.label === "Everything else")!;
     expect(ids(rest.games)).toContain(IDS.celeste); // played, not installed
   });
 
   it("drops non-matching games when residualLabel is null", () => {
-    const out = groupGames(LIBRARY, { ...spec, residualLabel: null }, "T", failMatcher);
+    const out = groupGames(LIBRARY, { ...spec, residualLabel: null }, "T", failMatcher, evalOf(LIBRARY));
     expect(labels(out)).toEqual(["Unplayed", "Installed"]);
     const total = out.reduce((n, g) => n + g.games.length, 0);
     expect(total).toBeLessThan(LIBRARY.length);
@@ -293,7 +302,7 @@ describe("groupGames — rules (manual sub-tabs)", () => {
       },
       "T",
       failMatcher,
-    );
+      evalOf(LIBRARY));
     expect(out).toEqual([]);
   });
 
@@ -312,9 +321,9 @@ describe("groupGames — rules (manual sub-tabs)", () => {
       residualLabel: null,
     };
     expect(
-      groupGames(LIBRARY, unanswerable, "T", passMatcher)[0]!.games,
+      groupGames(LIBRARY, unanswerable, "T", passMatcher, evalOf(LIBRARY))[0]!.games,
     ).toHaveLength(LIBRARY.length);
-    expect(groupGames(LIBRARY, unanswerable, "T", failMatcher)).toEqual([]);
+    expect(groupGames(LIBRARY, unanswerable, "T", failMatcher, evalOf(LIBRARY))).toEqual([]);
   });
 
   it("preserves the incoming sort order within each group", () => {
@@ -334,7 +343,7 @@ describe("groupGames — rules (manual sub-tabs)", () => {
       },
       "T",
       failMatcher,
-    );
+      evalOf(ordered));
     expect(ids(out[0]!.games)).toEqual(["3", "1", "2"]);
   });
 });
@@ -350,7 +359,7 @@ describe("groupGames — field mode preserves incoming order", () => {
       { kind: "field", field: "genre", sortGroups: "alpha", otherLabel: null },
       "T",
       passMatcher,
-    );
+      evalOf(ordered));
     expect(ids(out[0]!.games)).toEqual(["3", "1"]);
   });
 });
@@ -373,7 +382,7 @@ describe("groupGames — buildEvalGames is used for rule groups", () => {
       },
       "T",
       failMatcher,
-    );
+      evalOf(g));
     expect(ids(out[0]!.games)).toEqual(["1"]);
     // Sanity: the normaliser is what made this work.
     expect(buildEvalGames(g)[0]!.norm.collectionSet.has("favorite")).toBe(true);

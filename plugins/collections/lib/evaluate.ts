@@ -263,11 +263,18 @@ function collectBlockedFacts(
     // take the first concrete reason we find rather than scanning all
     // games, since resolvers fail wholesale, not per game.
     let reason: string | null = null;
-    let carriedByAnyGame = false;
+    let answeredForAnyGame = false;
     for (const game of games) {
       const fact = game.facts[key];
       if (!fact) continue;
-      carriedByAnyGame = true;
+      // `missing` means the resolver ran and had nothing for *this* game, so
+      // it is not evidence the source is alive. Counting it as such — which
+      // "some game carries an entry" did once `missing` started being
+      // materialised for every game — made a resolver that answered for
+      // nobody look perfectly healthy, and its empty tab got diagnosed
+      // "your rules are fine" instead of "this source has no data".
+      if (fact.state === "missing") continue;
+      answeredForAnyGame = true;
       if (fact.state === "unavailable") {
         reason = fact.reason;
         break;
@@ -280,7 +287,7 @@ function collectBlockedFacts(
     // fact, and `Tab.indeterminatePolicy` defaults to `"pass"`, so such a rule
     // silently matches the entire library while the diagnostics stay quiet.
     // Reporting it is what lets `diagnoseTab` reach its `blocked-facts` branch.
-    if (!carriedByAnyGame && games.length > 0) {
+    if (!answeredForAnyGame && games.length > 0) {
       reason = factUnavailableReason(key);
     }
 
