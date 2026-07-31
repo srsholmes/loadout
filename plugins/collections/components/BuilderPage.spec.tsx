@@ -1,11 +1,25 @@
 import { describe, expect, it, mock } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { PluginHeaderSlotProvider } from "@loadout/ui";
 import { tryRunBackInterceptor } from "@loadout/ui";
 import { BuilderPage } from "./BuilderPage";
 
+/**
+ * Render inside a header slot.
+ *
+ * `BuilderPage` portals its title and Back into the shell's topbar, and
+ * `PluginHeader` renders nothing when no slot is wired — so without this the
+ * Back control simply does not exist under test.
+ */
+function renderWithHeader(ui: React.ReactElement) {
+  const slot = document.createElement("div");
+  document.body.appendChild(slot);
+  return render(<PluginHeaderSlotProvider slot={slot}>{ui}</PluginHeaderSlotProvider>);
+}
+
 function open(props: Partial<Parameters<typeof BuilderPage>[0]> = {}) {
   const onBack = mock(() => {});
-  const view = render(
+  const view = renderWithHeader(
     <BuilderPage title="Add a rule" onBack={onBack} {...props}>
       <button type="button">Inside</button>
     </BuilderPage>,

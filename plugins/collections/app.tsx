@@ -34,42 +34,13 @@ import type { GameMetadataSnapshot } from "@loadout/types";
 import { CollectionCard } from "./components/CollectionCard";
 import { CollectionDetail } from "./components/CollectionDetail";
 import { CollectionActionsPage } from "./components/CollectionActionsPage";
+import { NewCollectionPage } from "./components/NewCollectionPage";
 import { RuleBuilder } from "./components/RuleBuilder";
+import { SettingsPage, type SyncChange } from "./components/SettingsPage";
 import { buildEvalGames } from "./lib/facts";
 import type { ManagedCollection } from "./lib/types";
 
 export { FaLayerGroup as icon };
-
-interface SyncChange {
-  label: string;
-  kind: "created" | "updated" | "deleted";
-  added: string[];
-  removed: string[];
-  addedCount: number;
-  removedCount: number;
-}
-
-/**
- * One sync change as a sentence.
- *
- * Names up to a couple of games rather than counts alone — "Portal 2 left"
- * answers the question a bare "1 removed" provokes.
- */
-function describeChange(c: SyncChange): string {
-  if (c.kind === "created") return `${c.label} — created with ${c.addedCount} games`;
-  if (c.kind === "deleted") return `${c.label} — removed from Steam`;
-
-  const parts: string[] = [];
-  if (c.addedCount > 0) parts.push(`${c.addedCount} added${listOf(c.added)}`);
-  if (c.removedCount > 0) parts.push(`${c.removedCount} removed${listOf(c.removed)}`);
-  return `${c.label} — ${parts.join(", ")}`;
-}
-
-function listOf(names: string[]): string {
-  if (names.length === 0) return "";
-  const shown = names.slice(0, 2).join(", ");
-  return names.length > 2 ? ` (${shown}, …)` : ` (${shown})`;
-}
 
 interface CollectionSummary {
   id: string;
@@ -86,7 +57,9 @@ type View =
   | { kind: "grid" }
   | { kind: "detail"; id: string; label: string }
   | { kind: "rules"; id: string }
-  | { kind: "actions"; id: string };
+  | { kind: "actions"; id: string }
+  | { kind: "new" }
+  | { kind: "settings" };
 
 /** Exported for tests: `mount` wraps this in the real `PluginProvider`,
  *  which opens a WebSocket the specs have no use for. */
@@ -118,6 +91,9 @@ export function Collections() {
    * have read it.
    */
   const [lastSync, setLastSync] = useState<SyncChange[] | null>(null);
+  const [autoSync, setAutoSync] = useState(false);
+  const [pendingSync, setPendingSync] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   const evalGames = useMemo(() => buildEvalGames(snapshot?.games ?? []), [snapshot]);
 
@@ -137,22 +113,34 @@ export function Collections() {
     }
   }, [call]);
 
+  /** Config the shell also owns — read back rather than guessed at. */
+  const loadConfig = useCallback(async () => {
+    const cfg = (await call("getConfig")) as {
+      config: {
+        collections: ManagedCollection[];
+        mirror: { autoSync: boolean; pendingSync: boolean };
+      };
+    };
+    setCollections(cfg.config.collections);
+    setAutoSync(cfg.config.mirror.autoSync);
+    setPendingSync(cfg.config.mirror.pendingSync);
+  }, [call]);
+
   useEffect(() => {
     if (!ready) return;
     void loadGrid();
     void (async () => {
       try {
-        const [snap, cfg] = await Promise.all([
+        const [snap] = await Promise.all([
           call("getSnapshot") as Promise<GameMetadataSnapshot>,
-          call("getConfig") as Promise<{ config: { collections: ManagedCollection[] } }>,
+          loadConfig(),
         ]);
         setSnapshot(snap);
-        setCollections(cfg.config.collections);
       } catch {
         // The grid still works without these; only rule editing needs them.
       }
     })();
-  }, [ready, loadGrid, call]);
+  }, [ready, loadGrid, loadConfig, call]);
 
   const openCollection = useCallback(
     async (summary: CollectionSummary) => {
@@ -198,6 +186,37 @@ export function Collections() {
     const q = search.trim().toLowerCase();
     return q ? summaries.filter((c) => c.label.toLowerCase().includes(q)) : summaries;
   }, [summaries, search]);
+
+  // ── Settings ───────────────────────────────────────────────────────
+  if (view.kind === "settings") {
+    return (
+      <div className="p-7 h-full overflow-y-auto" style={{ overflowX: "hidden" }}>
+        <SettingsPage
+          autoSync={autoSync}
+          managedCount={collections.length}
+          pendingSync={pendingSync}
+          busy={syncing}
+          lastSync={lastSync}
+          onBack={() => setView({ kind: "grid" })}
+          onToggleAutoSync={(next) => void setAutoSyncTo(next)}
+          onSyncNow={() => void sync()}
+        />
+      </div>
+    );
+  }
+
+  // ── New ────────────────────────────────────────────────────────────
+  if (view.kind === "new") {
+    return (
+      <div className="p-7 h-full overflow-y-auto" style={{ overflowX: "hidden" }}>
+        <NewCollectionPage
+          existingNames={(summaries ?? []).map((c) => c.label)}
+          onBack={() => setView({ kind: "grid" })}
+          onCreate={(label) => void createCollection(label)}
+        />
+      </div>
+    );
+  }
 
   // ── Options ────────────────────────────────────────────────────────
   if (view.kind === "actions") {
@@ -300,28 +319,21 @@ export function Collections() {
               placeholder="Search collections…"
               width={220}
             />
-            <Button variant="neutral" onClick={() => void createCollection()}>
+            <Button variant="neutral" onClick={() => setView({ kind: "new" })}>
               New
             </Button>
-            <IconButton onClick={() => void sync()} title="Sync with Steam" ariaLabel="Sync with Steam" size={26}>
+            <IconButton
+              onClick={() => setView({ kind: "settings" })}
+              title="Settings"
+              ariaLabel="Settings"
+              size={26}
+            >
               <FaGear size={11} />
             </IconButton>
           </div>
         </div>
       </PluginHeader>
 
-      {lastSync && lastSync.length > 0 ? (
-        <div className="flex flex-col gap-1">
-          <Text variant="secondary">Last sync</Text>
-          <ul style={{ margin: 0, paddingLeft: "1.25rem" }}>
-            {lastSync.map((c) => (
-              <li key={`${c.kind}-${c.label}`}>
-                <Text variant="secondary">{describeChange(c)}</Text>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
 
       {!steamReachable ? (
         <Text variant="secondary">
@@ -428,9 +440,29 @@ export function Collections() {
     }
   }
 
-  async function createCollection() {
+  async function setAutoSyncTo(next: boolean) {
     try {
-      const config = (await call("createCollection", "New collection")) as {
+      const cfg = (await call("getConfig")) as {
+        config: { mirror: Record<string, unknown> };
+      };
+      await call("setConfig", {
+        ...cfg.config,
+        mirror: { ...cfg.config.mirror, autoSync: next },
+      });
+      await loadConfig();
+      // Turning it on syncs straight away — otherwise the switch reads as
+      // broken: you enable it, look at Steam, and nothing has happened.
+      if (next) await sync();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Couldn't change that setting", {
+        kind: "error",
+      });
+    }
+  }
+
+  async function createCollection(label: string) {
+    try {
+      const config = (await call("createCollection", label)) as {
         collections: ManagedCollection[];
       };
       setCollections(config.collections);
@@ -448,6 +480,7 @@ export function Collections() {
   }
 
   async function sync() {
+    setSyncing(true);
     try {
       const result = (await call("syncMirror")) as {
         created: number;
@@ -462,9 +495,13 @@ export function Collections() {
       notify(wrote === 0 ? "Already up to date" : `Synced ${wrote} collections`, {
         kind: result.failures.length > 0 ? "error" : "success",
       });
-      await loadGrid();
+      // pendingSync flips when Steam refuses a write, so read it back rather
+      // than assuming the sync cleared it.
+      await Promise.all([loadGrid(), loadConfig().catch(() => {})]);
     } catch (err) {
       notify(err instanceof Error ? err.message : "Couldn't reach Steam", { kind: "error" });
+    } finally {
+      setSyncing(false);
     }
   }
 }

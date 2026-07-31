@@ -1,6 +1,20 @@
 import { describe, expect, it, mock } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { PluginHeaderSlotProvider } from "@loadout/ui";
 import { CollectionActionsPage } from "./CollectionActionsPage";
+
+/**
+ * Render inside a header slot.
+ *
+ * `BuilderPage` portals its title and Back into the shell's topbar, and
+ * `PluginHeader` renders nothing when no slot is wired — so without this the
+ * Back control simply does not exist under test.
+ */
+function renderWithHeader(ui: React.ReactElement) {
+  const slot = document.createElement("div");
+  document.body.appendChild(slot);
+  return render(<PluginHeaderSlotProvider slot={slot}>{ui}</PluginHeaderSlotProvider>);
+}
 
 function renderPage(props: Partial<Parameters<typeof CollectionActionsPage>[0]> = {}) {
   const handlers = {
@@ -9,7 +23,7 @@ function renderPage(props: Partial<Parameters<typeof CollectionActionsPage>[0]> 
     onDelete: mock(() => {}),
     onEditRules: mock(() => {}),
   };
-  render(
+  renderWithHeader(
     <CollectionActionsPage
       label="Backlog"
       kind="managed"
@@ -101,9 +115,8 @@ describe("deleting", () => {
 
 describe("getting out", () => {
   it("shows a Back control", () => {
-    // This view renders no `PluginHeader`, so `backInHeader` would leave the
-    // page with no visible way out — B and Escape worked, but nothing said so,
-    // and on device it read as being stuck.
+    // Back is rendered by `BuilderPage` into the shell's topbar. It once sat
+    // in the page body, where it scrolled away with the content.
     const h = renderPage();
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(h.onBack).toHaveBeenCalledTimes(1);

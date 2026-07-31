@@ -23,7 +23,8 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import type { ReactNode } from "react";
-import { Button, Text, pushBackInterceptor } from "@loadout/ui";
+import { IconButton, PluginHeader, pushBackInterceptor } from "@loadout/ui";
+import { FaChevronLeft } from "react-icons/fa6";
 
 export interface BuilderPageProps {
   title: string;
@@ -36,18 +37,6 @@ export interface BuilderPageProps {
   footer?: ReactNode;
   /** Label for the back control. */
   backLabel?: string;
-  /**
-   * The plugin header is already showing Back, so don't render a second one.
-   *
-   * Set on the top-level pages (Add tab, Settings, Review, Tab options), where
-   * the header owns navigation. The nested pages *inside* the rule builder —
-   * the palette, a rule's parameters — keep their own, because the header's
-   * Back cannot know which level to pop.
-   *
-   * The B/Escape interceptor is registered either way: it is the control a
-   * gamepad user actually reaches for, and it must work on every page.
-   */
-  backInHeader?: boolean;
 }
 
 /** Interactive descendants, in DOM order. */
@@ -61,7 +50,6 @@ export function BuilderPage({
   children,
   footer,
   backLabel = "Back",
-  backInHeader = false,
 }: BuilderPageProps) {
   const contentRef = useRef<HTMLDivElement | null>(null);
 
@@ -100,19 +88,25 @@ export function BuilderPage({
 
   return (
     <section className="flex flex-col gap-3" aria-label={title}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex flex-col gap-1 min-w-0">
-          <Text variant="heading">{title}</Text>
-          {description ? (
-            <span className="text-xs text-base-content/60">{description}</span>
-          ) : null}
+      {/* Title and Back go in the shell's topbar, not the page body. Back is
+          navigation, and navigation belongs in the chrome — in the body it
+          scrolls away with the content, which on a long rule palette means the
+          only way out is off-screen. */}
+      <PluginHeader>
+        <div className="flex items-center justify-between gap-4 w-full min-w-0">
+          <div className="flex flex-col gap-0.5 min-w-0">
+            <h1 className="text-xl font-semibold m-0 leading-tight truncate">{title}</h1>
+            {description ? (
+              <span className="text-[11.5px] text-base-content/55 truncate leading-tight">
+                {description}
+              </span>
+            ) : null}
+          </div>
+          <IconButton onClick={back} title={backLabel} ariaLabel={backLabel} size={26}>
+            <FaChevronLeft size={11} />
+          </IconButton>
         </div>
-        {backInHeader ? null : (
-          <Button variant="neutral" onClick={back}>
-            {backLabel}
-          </Button>
-        )}
-      </div>
+      </PluginHeader>
 
       <div ref={contentRef} className="flex flex-col gap-3">
         {children}

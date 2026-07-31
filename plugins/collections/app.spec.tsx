@@ -205,8 +205,15 @@ describe("editing a collection's rules", () => {
     ({ unmount } = renderApp());
     await waitFor(() => expect(screen.getByText(/No collections yet/)).toBeTruthy());
 
+    // New now names the collection first — the name is what Steam shows, so
+    // it is the one decision worth taking before the rules.
     fireEvent.click(screen.getByRole("button", { name: "New" }));
+    await waitFor(() => expect(screen.getByText(/Name it first/)).toBeTruthy());
+
+    fireEvent.change(document.querySelector("input")!, { target: { value: "Backlog" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(calls.some((c) => c.method === "createCollection")).toBe(true));
+    expect(calls.find((c) => c.method === "createCollection")!.args).toEqual(["Backlog"]);
     // And lands in the builder rather than back on the grid.
     await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeTruthy());
   });
@@ -221,7 +228,12 @@ describe("sync reporting", () => {
     ({ unmount } = renderApp());
     await waitFor(() => expect(screen.getByText("Backlog")).toBeTruthy());
 
-    fireEvent.click(screen.getByRole("button", { name: "Sync with Steam" }));
+    // The gear opens Settings now. It used to run a sync directly, so pressing
+    // a settings icon usually just produced "Already up to date".
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sync now" })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
     await waitFor(() => expect(screen.getByText(/Backlog — 1 removed \(Portal 2\)/)).toBeTruthy());
   });
 });

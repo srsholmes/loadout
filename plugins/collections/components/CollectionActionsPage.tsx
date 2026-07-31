@@ -1,9 +1,9 @@
 /**
  * Everything you can do to a collection that isn't editing its rules.
  *
- * `BuilderPage` renders its own Back here rather than deferring to the header:
- * this view has no `PluginHeader` of its own, and `backInHeader` left the page
- * with no visible way out at all — B and Escape worked, but nothing said so.
+ * Back lives in the shell's topbar, which `BuilderPage` renders for every
+ * sub-page. In the body it scrolled away with the content — on a long page the
+ * only way out ended up off-screen.
  *
  * A page rather than a dialog. Loadout is already an overlay over Steam, so a
  * modal here is a modal on top of a modal — and in desktop mode, where the
