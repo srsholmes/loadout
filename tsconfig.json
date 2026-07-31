@@ -78,7 +78,9 @@
     "plugins/*/components/**/*.ts",
     "plugins/*/components/**/*.tsx",
     "plugins/*/games/**/*.ts",
-    "plugins/*/scripts/**/*.ts"
+    "plugins/*/scripts/**/*.ts",
+    "plugins/*/test/**/*.ts",
+    "plugins/*/live/**/*.ts"
   ],
   "exclude": [
     "node_modules",

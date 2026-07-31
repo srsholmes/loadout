@@ -1,0 +1,36 @@
+{
+  "name": "@loadout/plugin-collections",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@loadout/types": "workspace:*",
+    "@loadout/plugin-storage": "workspace:*",
+    "@loadout/steam-paths": "workspace:*",
+    "@loadout/steam-cdp": "workspace:*",
+    "@loadout/vdf": "workspace:*",
+    "react": "^18.3.0",
+    "react-icons": "^5.6.0",
+    "@loadout/ui": "workspace:*"
+  },
+  "plugin": {
+    "id": "collections",
+    "name": "Collections",
+    "description": "Custom, filter-driven tabs for your game library — with live match counts, nested rules, and automatic syncing into real Steam collections",
+    "category": "Steam",
+    "subtitle": "Organise your library",
+    "target": {
+      "type": "overlay"
+    },
+    "permissions": {
+      "filesystem": [
+        "read:~/.local/share/Steam",
+        "write:~/.config/loadout/plugins"
+      ],
+      "network": [
+        "localhost",
+        "127.0.0.1"
+      ]
+    }
+  }
+}
