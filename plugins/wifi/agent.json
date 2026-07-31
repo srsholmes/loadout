@@ -1,0 +1,296 @@
+{
+  "id": "wifi",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "getStatus",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "iface": {
+            "type": "string",
+            "nullable": true,
+            "description": "Detected wireless interface, or null if none."
+          },
+          "nmConfigured": {
+            "type": "boolean",
+            "description": "NM drop-in present + setting powersave off."
+          },
+          "iwdPresent": {
+            "type": "boolean",
+            "description": "iwd is installed on this system."
+          },
+          "iwdConfigured": {
+            "type": "boolean",
+            "description": "iwd DriverQuirks PowerSaveDisable present."
+          },
+          "runtime": {
+            "type": "string",
+            "enum": [
+              "off",
+              "on"
+            ],
+            "nullable": true,
+            "description": "Live runtime state, or null when it can't be read."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Persistent config fully in place (NM + iwd-where-present)."
+          },
+          "powerSaveDisabled": {
+            "type": "boolean"
+          },
+          "listenerRunning": {
+            "type": "boolean"
+          },
+          "autoRecover": {
+            "type": "boolean"
+          },
+          "recovering": {
+            "type": "boolean"
+          },
+          "lastRecovery": {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              },
+              "stage": {
+                "type": "string",
+                "enum": [
+                  "precheck",
+                  "unload",
+                  "load",
+                  "wait",
+                  "pci-reset",
+                  "pci-rescan",
+                  "done"
+                ],
+                "description": "Where the run ended: \"done\" on success, else the failing stage."
+              },
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "pci-reset",
+                  "pci-rescan",
+                  "modprobe"
+                ],
+                "nullable": true,
+                "description": "The escalation tier that succeeded (or the last one tried)."
+              },
+              "driver": {
+                "type": "string",
+                "nullable": true
+              },
+              "iface": {
+                "type": "string",
+                "nullable": true,
+                "description": "Post-recovery device name — may differ from before (wlan0 → wlan1)."
+              },
+              "detail": {
+                "type": "string",
+                "description": "Human-readable outcome for the UI's last-result line / notification."
+              },
+              "durationMs": {
+                "type": "number"
+              },
+              "at": {
+                "type": "number"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "manual",
+                  "watchdog"
+                ]
+              }
+            },
+            "required": [
+              "ok",
+              "stage",
+              "tier",
+              "driver",
+              "iface",
+              "detail",
+              "durationMs",
+              "at",
+              "source"
+            ],
+            "nullable": true
+          },
+          "watchdogSuspended": {
+            "type": "boolean"
+          },
+          "lastKnownDriver": {
+            "type": "object",
+            "properties": {
+              "driver": {
+                "type": "string"
+              },
+              "iface": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "driver",
+              "iface"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "iface",
+          "nmConfigured",
+          "iwdPresent",
+          "iwdConfigured",
+          "runtime",
+          "configured",
+          "powerSaveDisabled",
+          "listenerRunning",
+          "autoRecover",
+          "recovering",
+          "lastRecovery",
+          "watchdogSuspended",
+          "lastKnownDriver"
+        ]
+      },
+      "description": "Snapshot WiFi power-save + recovery state for the UI.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "recoverRadio",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "precheck",
+              "unload",
+              "load",
+              "wait",
+              "pci-reset",
+              "pci-rescan",
+              "done"
+            ],
+            "description": "Where the run ended: \"done\" on success, else the failing stage."
+          },
+          "tier": {
+            "type": "string",
+            "enum": [
+              "pci-reset",
+              "pci-rescan",
+              "modprobe"
+            ],
+            "nullable": true,
+            "description": "The escalation tier that succeeded (or the last one tried)."
+          },
+          "driver": {
+            "type": "string",
+            "nullable": true
+          },
+          "iface": {
+            "type": "string",
+            "nullable": true,
+            "description": "Post-recovery device name — may differ from before (wlan0 → wlan1)."
+          },
+          "detail": {
+            "type": "string",
+            "description": "Human-readable outcome for the UI's last-result line / notification."
+          },
+          "durationMs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "ok",
+          "stage",
+          "tier",
+          "driver",
+          "iface",
+          "detail",
+          "durationMs"
+        ]
+      },
+      "description": "Reload the WiFi driver to recover a crashed radio (escalating to a PCI reset when the reload isn't enough). Safe to call while a watchdog run is already in flight — both share the same result.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setAutoRecover",
+      "args": [
+        {
+          "name": "enabled",
+          "schema": {
+            "type": "boolean"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Enable/disable the auto-recover watchdog. Persists across restarts.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setPowerSaveDisabled",
+      "args": [
+        {
+          "name": "enabled",
+          "schema": {
+            "type": "boolean"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "iface": {
+            "type": "string",
+            "nullable": true
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Disable (or restore) WiFi power saving. Persists the choice, writes/removes the configs, applies at runtime, and starts/stops the resume listener so the setting survives wake.",
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "recoveryState"
+    },
+    {
+      "event": "statusChanged"
+    }
+  ]
+}

@@ -149,6 +149,9 @@ Responsibilities (`apps/loadout/src/loader/index.ts`):
 - Register **core services** as synthetic plugins —
   `__core:game-detection` and `__core:game-library` — so the overlay and
   plugins can `useBackend("__core:…")` over the same RPC channel.
+- Serve the **agent-facing API docs** at `/api/agent` (index) and
+  `/api/agent/<id>` (per-plugin method schemas), and dispatch safety-gated
+  calls at `/api/agent/call` — see [Agent API surface](#agent-api-surface).
 - Start the **Steam CEF injector** (below).
 - Watch plugin directories and `packages/ui/src` for changes and broadcast
   `__system` `reload` events for hot reload in dev.
@@ -242,6 +245,48 @@ The overlay loads a plugin bundle by fetching its JS text from
 `/plugins/<id>/app-bundle.js` and importing it as a same-origin blob URL —
 a direct cross-origin `import()` from the `views://` webview origin would be
 blocked (`apps/loadout-overlay/src/overlay/lib/backend.ts`).
+
+## Agent API Surface
+
+Everything Loadout can do has always been reachable over `/api/rpc`, but
+nothing described it — `resolveMethod` finds backend methods by
+reflection, so there is no declared method list and no argument types at
+runtime. Three routes in `loader/routes/agent.ts` close that gap:
+
+| Route | Purpose |
+| ----- | ------- |
+| `GET /api/agent` | Index of the plugins enabled **on this machine**, with per-plugin method counts by safety class |
+| `GET /api/agent/<id>` | One plugin's methods — signatures, argument tables, events, examples |
+| `POST /api/agent/call` | Same dispatch as `/api/rpc`, with the safety gate applied |
+
+Both GETs render Markdown by default (the reader is usually a language
+model) and JSON on `Accept: application/json`, from the same merged data.
+
+Documentation comes from two sources merged at request time by
+`@loadout/agent-docs`:
+
+1. **Generated baseline** — `plugins/<id>/agent.json`, produced from each
+   backend's TypeScript by `scripts/generate-agent-docs.ts` and committed
+   (the compiled binary doesn't ship `typescript`, so it can't be built on
+   device). CI regenerates and diffs it, so it can't go stale.
+2. **Curation** — the optional `agent` block on the plugin manifest,
+   carrying prose, safety classes and examples. Incremental: a plugin with
+   no block still gets generated docs. A plugin with no `agent.json` at
+   all still lists its method *names*, reflected from the live instance.
+
+`POST /api/agent/call` refuses `write` and `destructive` methods with a
+403 unless the caller sends `X-Loadout-Agent-Write: 1` or the user has set
+`agentWrites: true` in their config. The gate lives here rather than on
+`/api/rpc` because the overlay and every plugin frontend call writes
+through that path constantly. It is a guardrail, not a security boundary —
+`/api/token` is public on loopback, so any local process already has
+unrestricted access.
+
+The repo-root `AGENTS.md` is the discovery surface: it tells an agent
+Loadout is installed and to ask `/api/agent` what it can do. It
+deliberately does not list capabilities, since only the running server
+knows which plugins are enabled here. `prepare-plugins.sh` stages it to
+the install root.
 
 ## Steam-Injection Path (CDP)
 

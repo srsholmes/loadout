@@ -20,6 +20,61 @@
         "bluetoothctl",
         "rfkill"
       ]
+    },
+    "agent": {
+      "summary": "Connect and disconnect paired Bluetooth devices, toggle the adapter, and scan for new ones — without leaving the game. Talks to BlueZ over D-Bus.",
+      "methods": {
+        "getDevices": {
+          "safety": "read",
+          "description": "Every known device with its MAC, name, type and current connected/paired state. Start here — the MAC addresses the other methods take come from this.",
+          "example": {
+            "args": []
+          }
+        },
+        "getAdapterInfo": {
+          "safety": "read",
+          "description": "Adapter power state, name, address and whether a scan is running. If `powered` is false, connecting will fail until togglePower(true)."
+        },
+        "connectDevice": {
+          "safety": "write",
+          "description": "Connect to an already-paired device by MAC address.",
+          "notes": "Pairing is not done here — the device must already be paired. Can take several seconds while the link comes up.",
+          "example": {
+            "args": [
+              "AA:BB:CC:DD:EE:FF"
+            ]
+          }
+        },
+        "disconnectDevice": {
+          "safety": "write",
+          "description": "Disconnect a connected device by MAC address.",
+          "notes": "If this is the headset the user is listening through, audio moves back to the speakers immediately.",
+          "example": {
+            "args": [
+              "AA:BB:CC:DD:EE:FF"
+            ]
+          }
+        },
+        "togglePower": {
+          "safety": "write",
+          "description": "Power the Bluetooth adapter on or off.",
+          "notes": "Powering off drops every connected device, including controllers.",
+          "example": {
+            "args": [
+              true
+            ]
+          }
+        },
+        "startScan": {
+          "safety": "write",
+          "description": "Begin discovery. Non-blocking — poll getDevices to see what turns up, then stopScan when done.",
+          "notes": "Holds a long-lived discovery session open; it drains battery until stopped."
+        },
+        "stopScan": {
+          "safety": "write",
+          "description": "End the discovery session started by startScan."
+        }
+      }
     }
   }
 }

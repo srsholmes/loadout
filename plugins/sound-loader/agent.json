@@ -1,0 +1,525 @@
+{
+  "id": "sound-loader",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "getActivePack",
+      "args": [],
+      "returns": {
+        "type": "string",
+        "nullable": true
+      },
+      "description": "Get the currently active pack ID",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getActivePackMappings",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "packId": {
+            "type": "string",
+            "nullable": true
+          },
+          "mappings": {
+            "type": "object"
+          },
+          "ignore": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "packId",
+          "mappings",
+          "ignore"
+        ]
+      },
+      "description": "Get the sound mappings for the active pack. Returns a map of sound event -> base64-encoded audio data. For \"default\" (null) or \"synthesized\", returns empty mappings (the frontend handles those modes without custom audio data).",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getCommunityPacksStatus",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "error",
+              "pending",
+              "ready"
+            ]
+          },
+          "syncedAt": {
+            "type": "number",
+            "nullable": true,
+            "description": "ms epoch of the last successful sync, or null."
+          },
+          "entryCount": {
+            "type": "number",
+            "description": "Number of packs currently in memory."
+          },
+          "lastError": {
+            "type": "string",
+            "nullable": true,
+            "description": "Last fetch error message, if any."
+          }
+        },
+        "required": [
+          "state",
+          "syncedAt",
+          "entryCount",
+          "lastError"
+        ]
+      },
+      "description": "Current state of the community-packs registry sync.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getSoundFile",
+      "args": [
+        {
+          "name": "packId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "filename",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "unknown",
+        "tsType": "{ data: string; mimeType: string; } | { error: string; }"
+      },
+      "description": "Read a single sound file from a pack. Returns base64-encoded audio data with MIME type.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getUseInOverlay",
+      "args": [],
+      "returns": {
+        "type": "boolean"
+      },
+      "description": "Get whether the active pack should also apply to overlay UI sounds",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getUseInSteam",
+      "args": [],
+      "returns": {
+        "type": "boolean"
+      },
+      "description": "Get whether the active pack should also apply to Steam's Big Picture UI sounds",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "installCommunityPack",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Download and install a community pack from the deckthemes blob CDN.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "listCommunityPacks",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "installed": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string",
+              "description": "deckthemes uuid — primary key for install/uninstall and dedupe."
+            },
+            "name": {
+              "type": "string"
+            },
+            "author": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            },
+            "downloadUrl": {
+              "type": "string",
+              "description": "Canonical download URL (api.deckthemes.com/blobs/<id>) — install source."
+            },
+            "previewImageUrl": {
+              "type": "string",
+              "nullable": true,
+              "description": "Hotlinkable preview image URL, or null. CEF loads it directly; we don't bundle/cache."
+            },
+            "githubUrl": {
+              "type": "string",
+              "nullable": true,
+              "description": "Parsed GitHub URL from `source` (display only); null for \"[Zip Deploy]\" packs."
+            },
+            "lastChanged": {
+              "type": "string",
+              "description": "Upstream \"last_changed\" string (for display/sorting)."
+            },
+            "manifestVersion": {
+              "type": "number"
+            },
+            "music": {
+              "type": "boolean",
+              "description": "True for music-only packs (different UX from UI sound packs)."
+            }
+          },
+          "required": [
+            "installed",
+            "id",
+            "name",
+            "author",
+            "description",
+            "version",
+            "downloadUrl",
+            "previewImageUrl",
+            "githubUrl",
+            "lastChanged",
+            "manifestVersion",
+            "music"
+          ]
+        }
+      },
+      "description": "List community packs from the live registry, annotated with install status.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "listPacks",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Directory name — used as the pack ID"
+            },
+            "name": {
+              "type": "string"
+            },
+            "author": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            },
+            "mappedEvents": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "nav",
+                  "select",
+                  "back",
+                  "toggleOn",
+                  "toggleOff",
+                  "sliderUp",
+                  "error",
+                  "sideMenuIn",
+                  "sideMenuOut",
+                  "tabTransition"
+                ]
+              },
+              "description": "Which sound events this pack provides"
+            },
+            "ignoredEvents": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "nav",
+                  "select",
+                  "back",
+                  "toggleOn",
+                  "toggleOff",
+                  "sliderUp",
+                  "error",
+                  "sideMenuIn",
+                  "sideMenuOut",
+                  "tabTransition"
+                ]
+              },
+              "description": "Which sound events this pack explicitly ignores"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "author",
+            "description",
+            "version",
+            "mappedEvents",
+            "ignoredEvents"
+          ]
+        }
+      },
+      "description": "List all available sound packs",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "previewSound",
+      "args": [
+        {
+          "name": "packId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "event",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "unknown",
+        "tsType": "{ data: string; mimeType: string; } | { error: string; }"
+      },
+      "description": "Preview a specific sound event from a pack. Returns the audio data needed to play it on the frontend.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "reconnectSteam",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Force a reconnect attempt to Steam's CEF — used by the UI's Reconnect button.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "refreshCommunityPacksCache",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "error",
+              "pending",
+              "ready"
+            ]
+          },
+          "syncedAt": {
+            "type": "number",
+            "nullable": true,
+            "description": "ms epoch of the last successful sync, or null."
+          },
+          "entryCount": {
+            "type": "number",
+            "description": "Number of packs currently in memory."
+          },
+          "lastError": {
+            "type": "string",
+            "nullable": true,
+            "description": "Last fetch error message, if any."
+          }
+        },
+        "required": [
+          "state",
+          "syncedAt",
+          "entryCount",
+          "lastError"
+        ]
+      },
+      "description": "Force a refresh of the community-packs registry from upstream.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setActivePack",
+      "args": [
+        {
+          "name": "packId",
+          "schema": {
+            "type": "string",
+            "nullable": true
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Set the active pack. null = default (Steam sounds), \"synthesized\" = Web Audio fallback",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setUseInOverlay",
+      "args": [
+        {
+          "name": "value",
+          "schema": {
+            "type": "boolean"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Set whether the active pack should also apply to overlay UI sounds",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setUseInSteam",
+      "args": [
+        {
+          "name": "value",
+          "schema": {
+            "type": "boolean"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Set whether the active pack should also apply to Steam's Big Picture UI sounds",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "uninstallCommunityPack",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Uninstall a community pack by removing its directory.",
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "activePackChanged"
+    },
+    {
+      "event": "steamError"
+    },
+    {
+      "event": "useInOverlayChanged"
+    },
+    {
+      "event": "useInSteamChanged"
+    }
+  ]
+}

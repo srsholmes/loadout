@@ -12,8 +12,11 @@ import { discoverPlugins, loadPlugins } from "./plugin-manager";
 
 let pluginsDir: string;
 
-function writePlugin(id: string, opts: { app?: boolean } = {}): void {
-  const dir = join(pluginsDir, id);
+function writePlugin(
+  id: string,
+  opts: { app?: boolean; dir?: string } = {},
+): void {
+  const dir = join(pluginsDir, opts.dir ?? id);
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, "package.json"),
@@ -39,6 +42,28 @@ describe("discoverPlugins", () => {
     expect(ids).toEqual(["alpha", "beta"]);
     expect(discovered.find((d) => d.meta.id === "alpha")?.hasApp).toBe(true);
     expect(discovered.find((d) => d.meta.id === "beta")?.hasApp).toBe(false);
+  });
+
+  // The `__` namespace belongs to core services (`__core:*`), `__system`,
+  // `__overlay` and `__broadcast`. Both packages/types/src/plugin.ts and
+  // docs/plugin-development.md have long documented that the loader
+  // rejects plugins claiming it; until now nothing enforced it, so a
+  // manifest declaring `__core:game-detection` would land in the same
+  // `plugins` map as the real service and shadow it.
+  it("skips plugins whose id uses the reserved __ prefix", async () => {
+    writePlugin("alpha", { app: true });
+    writePlugin("__core:game-detection", { dir: "impostor" });
+    writePlugin("__system", { dir: "impostor-system" });
+
+    const discovered = await discoverPlugins(pluginsDir);
+
+    expect(discovered.map((d) => d.meta.id)).toEqual(["alpha"]);
+  });
+
+  it("allows ids that merely contain an underscore", async () => {
+    writePlugin("my_plugin", { app: true });
+    const discovered = await discoverPlugins(pluginsDir);
+    expect(discovered.map((d) => d.meta.id)).toEqual(["my_plugin"]);
   });
 });
 

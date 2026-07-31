@@ -18,7 +18,10 @@
     "name": "TDP Control",
     "description": "Adjust CPU/APU TDP wattage with presets and a slider",
     "permissions": {
-      "commands": ["ryzenadj", "tee"],
+      "commands": [
+        "ryzenadj",
+        "tee"
+      ],
       "filesystem": [
         "/sys/devices/system/cpu",
         "/sys/devices/virtual/powercap",
@@ -38,12 +41,133 @@
         "source": "https://github.com/FlyGoat/RyzenAdj",
         "license": "LGPL-3.0",
         "license_file": "bin/linux-x64/LICENSE-ryzenadj",
-        "platforms": ["linux-x64"],
+        "platforms": [
+          "linux-x64"
+        ],
         "rebuild_with": "build-ryzenadj.sh",
         "rationale": "AMD-only SMU write tool; required on stock SteamOS where ryzenadj isn't packaged (/usr is read-only). ~104 KB, dynamic-links libpci/libudev/libcap which are present on every supported distro."
       }
     ],
     "category": "Performance",
-    "subtitle": "CPU/GPU power limits"
+    "subtitle": "CPU/GPU power limits",
+    "agent": {
+      "summary": "Read and set the APU's sustained power limit (TDP) in watts, plus the related CPU/GPU knobs: governor, energy-performance preference, GPU clock range and mode, SMT and CPU boost. Supports named presets and per-game profiles that apply automatically on launch.",
+      "methods": {
+        "getTdpInfo": {
+          "safety": "read",
+          "description": "Current TDP in watts plus the min/max the device supports. Read this before setting a limit — the safe range is device-specific.",
+          "example": {
+            "args": []
+          }
+        },
+        "setTdp": {
+          "safety": "write",
+          "description": "Set the sustained power limit in watts. Takes effect immediately and affects performance, battery life and heat on the device the user is holding.",
+          "notes": "Clamped to the device's supported range, which getTdpInfo reports. Not persisted across reboot on its own — applyProfile is the durable path.",
+          "example": {
+            "args": [
+              12
+            ]
+          }
+        },
+        "getProfiles": {
+          "safety": "read",
+          "description": "The saved named presets, keyed by name."
+        },
+        "applyProfile": {
+          "safety": "write",
+          "description": "Apply a saved preset by name. Names come from getProfiles.",
+          "example": {
+            "args": [
+              "balanced"
+            ]
+          }
+        },
+        "getCurrentProfileState": {
+          "safety": "read"
+        },
+        "getSystemInfo": {
+          "safety": "read"
+        },
+        "getGpuInfo": {
+          "safety": "read"
+        },
+        "getAcPowerStatus": {
+          "safety": "read",
+          "description": "Whether the device is on AC or battery."
+        },
+        "setGpuMode": {
+          "safety": "write",
+          "description": "GPU clock policy. `manual` is what makes setGpuFreqRange take effect."
+        },
+        "setGpuFreqRange": {
+          "safety": "write",
+          "notes": "Requires setGpuMode(\"manual\") first, or the range is ignored."
+        },
+        "setGovernor": {
+          "safety": "write",
+          "description": "CPU frequency governor, e.g. \"powersave\" or \"performance\"."
+        },
+        "setEpp": {
+          "safety": "write",
+          "description": "Energy-performance preference, e.g. \"balance_power\" or \"performance\"."
+        },
+        "setCpuBoost": {
+          "safety": "write"
+        },
+        "setSmt": {
+          "safety": "destructive",
+          "description": "Enable or disable simultaneous multithreading.",
+          "notes": "Offlines CPU threads. A running game will stutter or crash. Don't touch this while the user is playing."
+        },
+        "setPlatformProfile": {
+          "safety": "write"
+        },
+        "getPerGameEnabled": {
+          "safety": "read"
+        },
+        "setPerGameEnabled": {
+          "safety": "write"
+        },
+        "getGameProfiles": {
+          "safety": "read"
+        },
+        "setGameProfile": {
+          "safety": "write",
+          "description": "Save a per-game TDP applied automatically when that game launches."
+        },
+        "removeGameProfile": {
+          "safety": "write"
+        },
+        "getGameDefaultTdp": {
+          "safety": "read"
+        },
+        "setGameDefaultTdp": {
+          "safety": "write"
+        },
+        "getCustomDevice": {
+          "safety": "read"
+        },
+        "setCustomDevice": {
+          "safety": "write",
+          "notes": "Overrides autodetected device limits. Wrong values can push the APU outside its safe range."
+        },
+        "clearCustomDevice": {
+          "safety": "write"
+        },
+        "handleGameLaunch": {
+          "hidden": true
+        },
+        "handleGameExit": {
+          "hidden": true
+        },
+        "onSuspend": {
+          "hidden": true
+        },
+        "onResume": {
+          "hidden": true
+        }
+      }
+    }
   }
 }

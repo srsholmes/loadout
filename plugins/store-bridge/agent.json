@@ -1,0 +1,1170 @@
+{
+  "id": "store-bridge",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "addInstalledToSteam",
+      "args": [
+        {
+          "name": "storeId",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "addScanPath",
+      "args": [
+        {
+          "name": "path",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "cancelInstall",
+      "args": [
+        {
+          "name": "storeId",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "description": "Cancel an in-flight install. Signals the driver to kill the underlying download process, wipes partial files + resume marker, drops the inFlight entry and notifies the UI.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "checkPreflight",
+      "args": [
+        {
+          "name": "storeId",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tool names the driver needs but couldn't find."
+          },
+          "canSelfInstall": {
+            "type": "boolean",
+            "description": "True if `selfInstall()` knows how to fetch the missing tools."
+          },
+          "installHint": {
+            "type": "string",
+            "description": "Human-readable hint when self-install isn't possible."
+          }
+        },
+        "required": [
+          "ok",
+          "missing",
+          "canSelfInstall"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "completeAuth",
+      "args": [
+        {
+          "name": "storeId",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "code",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "getAllInProgressInstalls",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "storeId": {
+              "type": "string",
+              "enum": [
+                "epic",
+                "gog",
+                "amazon",
+                "ubisoft",
+                "xcloud"
+              ]
+            },
+            "gameId": {
+              "type": "string"
+            },
+            "percent": {
+              "type": "number"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "storeId",
+            "gameId",
+            "percent"
+          ]
+        }
+      },
+      "description": "Snapshot of every running install. Catalog view calls this on mount and seeds its per-tile progress map, so leaving + coming back during a long install paints the right state on first render rather than waiting for the next pipelineEvent.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getGameDetail",
+      "args": [
+        {
+          "name": "storeId",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "storeId": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "coverUrl": {
+            "type": "string"
+          },
+          "heroUrl": {
+            "type": "string"
+          },
+          "logoUrl": {
+            "type": "string"
+          },
+          "installSize": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "installed",
+              "library",
+              "imported"
+            ]
+          },
+          "installed": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "installedAt": {
+                "type": "string"
+              },
+              "installDir": {
+                "type": "string"
+              },
+              "installSize": {
+                "type": "number",
+                "description": "Bytes on disk after install completed."
+              },
+              "version": {
+                "type": "string",
+                "description": "Version string reported by the store, when available."
+              },
+              "executable": {
+                "type": "string",
+                "description": "Executable to launch (relative to `installDir`). Set by the"
+              },
+              "launchParameters": {
+                "type": "string",
+                "description": "Extra launch-time CLI args reported by the store (Epic"
+              },
+              "platform": {
+                "type": "string",
+                "enum": [
+                  "windows",
+                  "linux"
+                ],
+                "description": "Native OS of the executable. `\"windows\"` drives whether we set"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "installed",
+                  "imported"
+                ]
+              },
+              "addedToSteam": {
+                "type": "boolean"
+              },
+              "steamAppId": {
+                "type": "number"
+              },
+              "steamGameId64": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "installedAt",
+              "installDir",
+              "source",
+              "addedToSteam"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "longDescription": {
+            "type": "string"
+          },
+          "developer": {
+            "type": "string"
+          },
+          "publisher": {
+            "type": "string"
+          },
+          "releaseDate": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "platforms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "storeId",
+          "id",
+          "title",
+          "status"
+        ],
+        "nullable": true
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getInProgressInstall",
+      "args": [
+        {
+          "name": "storeId",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "storeId": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "gameId": {
+            "type": "string"
+          },
+          "percent": {
+            "type": "number"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "storeId",
+          "gameId",
+          "percent"
+        ],
+        "nullable": true
+      },
+      "description": "Returns the in-flight install for a (storeId, gameId) pair, or null when nothing is running. Detail view calls this on mount to repaint the \"Installing…\" button + progress bar without waiting for the next pipelineEvent to land.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getLibrary",
+      "args": [
+        {
+          "name": "storeId",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "storeId": {
+              "type": "string",
+              "enum": [
+                "epic",
+                "gog",
+                "amazon",
+                "ubisoft",
+                "xcloud"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "coverUrl": {
+              "type": "string"
+            },
+            "heroUrl": {
+              "type": "string"
+            },
+            "logoUrl": {
+              "type": "string"
+            },
+            "installSize": {
+              "type": "number"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "installed",
+                "library",
+                "imported"
+              ]
+            },
+            "installed": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "installedAt": {
+                  "type": "string"
+                },
+                "installDir": {
+                  "type": "string"
+                },
+                "installSize": {
+                  "type": "number",
+                  "description": "Bytes on disk after install completed."
+                },
+                "version": {
+                  "type": "string",
+                  "description": "Version string reported by the store, when available."
+                },
+                "executable": {
+                  "type": "string",
+                  "description": "Executable to launch (relative to `installDir`). Set by the"
+                },
+                "launchParameters": {
+                  "type": "string",
+                  "description": "Extra launch-time CLI args reported by the store (Epic"
+                },
+                "platform": {
+                  "type": "string",
+                  "enum": [
+                    "windows",
+                    "linux"
+                  ],
+                  "description": "Native OS of the executable. `\"windows\"` drives whether we set"
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "installed",
+                    "imported"
+                  ]
+                },
+                "addedToSteam": {
+                  "type": "boolean"
+                },
+                "steamAppId": {
+                  "type": "number"
+                },
+                "steamGameId64": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "installedAt",
+                "installDir",
+                "source",
+                "addedToSteam"
+              ]
+            },
+            "description": {
+              "type": "string"
+            },
+            "longDescription": {
+              "type": "string"
+            },
+            "developer": {
+              "type": "string"
+            },
+            "publisher": {
+              "type": "string"
+            },
+            "releaseDate": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "platforms": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "storeId",
+            "id",
+            "title",
+            "status"
+          ]
+        }
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getSettings",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "enabledStores": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "epic",
+                "gog",
+                "amazon",
+                "ubisoft",
+                "xcloud"
+              ]
+            },
+            "description": "Stores the UI surfaces (chip row)."
+          },
+          "driverOverrides": {
+            "type": "object",
+            "properties": {},
+            "description": "Per-driver overrides — currently just the CLI binary path."
+          },
+          "scanPaths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "User-added directories to scan for already-installed games."
+          },
+          "lastScanAt": {
+            "type": "number",
+            "description": "Unix ms of the last completed scan."
+          }
+        },
+        "required": [
+          "enabledStores",
+          "scanPaths"
+        ]
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getStoreGameSize",
+      "args": [
+        {
+          "name": "storeId",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "downloadSize": {
+            "type": "number"
+          },
+          "installSize": {
+            "type": "number"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "nullable": true
+      },
+      "description": "Fetch a download + install-size estimate for a not-yet-installed title. Returns null when the driver can't get it (no CLI, network down, store doesn't expose it). Detail view calls this lazily so the user sees \"this'll be 24 GB\" before clicking Install.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getStores",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "enum": [
+                "epic",
+                "gog",
+                "amazon",
+                "ubisoft",
+                "xcloud"
+              ]
+            },
+            "displayName": {
+              "type": "string"
+            },
+            "authStatus": {
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "preflightOk": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "displayName",
+            "authStatus",
+            "enabled",
+            "preflightOk"
+          ]
+        }
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "importDetected",
+      "args": [
+        {
+          "name": "storeId",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "dir",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "installGame",
+      "args": [
+        {
+          "name": "storeId",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "launchGame",
+      "args": [
+        {
+          "name": "storeId",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "refreshLibrary",
+      "args": [
+        {
+          "name": "storeId",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "removeFromSteam",
+      "args": [
+        {
+          "name": "storeId",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "removeScanPath",
+      "args": [
+        {
+          "name": "path",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "scanForInstalls",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "detected": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "storeId": {
+                  "type": "string",
+                  "enum": [
+                    "epic",
+                    "gog",
+                    "amazon",
+                    "ubisoft",
+                    "xcloud"
+                  ]
+                },
+                "gameId": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "dir": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "storeId",
+                "gameId",
+                "title",
+                "dir"
+              ]
+            }
+          }
+        },
+        "required": [
+          "detected"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "selfInstallTooling",
+      "args": [
+        {
+          "name": "storeId",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "signOut",
+      "args": [
+        {
+          "name": "storeId",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "startAuth",
+      "args": [
+        {
+          "name": "storeId",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "uninstallGame",
+      "args": [
+        {
+          "name": "storeId",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "epic",
+              "gog",
+              "amazon",
+              "ubisoft",
+              "xcloud"
+            ]
+          },
+          "optional": false
+        },
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "updateSettings",
+      "args": [
+        {
+          "name": "patch",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "enabledStores": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "epic",
+                    "gog",
+                    "amazon",
+                    "ubisoft",
+                    "xcloud"
+                  ]
+                },
+                "description": "Stores the UI surfaces (chip row)."
+              },
+              "driverOverrides": {
+                "type": "object",
+                "properties": {},
+                "description": "Per-driver overrides — currently just the CLI binary path."
+              },
+              "scanPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "User-added directories to scan for already-installed games."
+              },
+              "lastScanAt": {
+                "type": "number",
+                "description": "Unix ms of the last completed scan."
+              }
+            }
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "enabledStores": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "epic",
+                "gog",
+                "amazon",
+                "ubisoft",
+                "xcloud"
+              ]
+            },
+            "description": "Stores the UI surfaces (chip row)."
+          },
+          "driverOverrides": {
+            "type": "object",
+            "properties": {},
+            "description": "Per-driver overrides — currently just the CLI binary path."
+          },
+          "scanPaths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "User-added directories to scan for already-installed games."
+          },
+          "lastScanAt": {
+            "type": "number",
+            "description": "Unix ms of the last completed scan."
+          }
+        },
+        "required": [
+          "enabledStores",
+          "scanPaths"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "authEvent"
+    },
+    {
+      "event": "gameStatusChanged"
+    },
+    {
+      "event": "libraryRefreshed"
+    },
+    {
+      "event": "pipelineEvent"
+    },
+    {
+      "event": "scanProgress"
+    }
+  ]
+}

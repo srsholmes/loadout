@@ -37,7 +37,7 @@ export class GameDetectionService implements PluginBackend {
       { appId, gameName: gameName ?? "", startTime },
       ...this.recent.filter((s) => s.appId !== appId),
     ].slice(0, RECENT_SESSIONS_LIMIT);
-    this.broadcastChange();
+    this._broadcastChange();
   }
 
   async handleGameExit(appId: number): Promise<void> {
@@ -54,7 +54,7 @@ export class GameDetectionService implements PluginBackend {
     if (this.current && this.current.appId === appId) {
       this.current = null;
     }
-    this.broadcastChange();
+    this._broadcastChange();
   }
 
   async getCurrentGame(): Promise<CurrentGame | null> {
@@ -65,8 +65,12 @@ export class GameDetectionService implements PluginBackend {
     return this.recent.map((s) => ({ ...s }));
   }
 
-  private broadcastChange(): void {
-    const sig = this.signature();
+  // Underscore-prefixed, not merely `private`: TypeScript's `private` is
+  // erased at runtime, so `resolveMethod` happily dispatches it and this
+  // internal would otherwise be a callable RPC endpoint. The underscore
+  // convention is the only thing the dispatcher actually honours.
+  private _broadcastChange(): void {
+    const sig = this._signature();
     if (sig === this.lastBroadcastSig) return;
     this.lastBroadcastSig = sig;
     const payload: GameChangedEvent = {
@@ -76,7 +80,7 @@ export class GameDetectionService implements PluginBackend {
     this.emit?.({ event: "gameChanged", data: payload });
   }
 
-  private signature(): string {
+  private _signature(): string {
     // Compact projection of the state that the payload exposes. Only
     // the fields a subscriber would care about (appId + endTime) drive
     // the signature; startTime intentionally not included so re-launch

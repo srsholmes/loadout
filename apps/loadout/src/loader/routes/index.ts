@@ -28,6 +28,7 @@ import { rpcRoute } from "./rpc";
 import { injectRoutes } from "./inject";
 import { overlayButtonRoute } from "./overlay-button";
 import { selfUpdateRoute, restartRoute } from "./self-update";
+import { agentRoutes } from "./agent";
 
 /**
  * Ordered route list. Populated incrementally as A-001 progresses;
@@ -38,6 +39,9 @@ const routes: RouteHandler[] = [
   statusRoute,
   userConfigRoute,
   steamGridRoute,
+  // Ahead of `pluginsRoutes` so the `/api/agent/...` docs surface is
+  // matched before anything reaching into `/plugins/<id>/...` space.
+  ...agentRoutes,
   ...pluginsRoutes,
   rpcRoute,
   overlayButtonRoute,

@@ -1,0 +1,161 @@
+{
+  "id": "bluetooth",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "connectDevice",
+      "args": [
+        {
+          "name": "mac",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "string"
+      },
+      "description": "Connect to a device by MAC address.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "disconnectDevice",
+      "args": [
+        {
+          "name": "mac",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "string"
+      },
+      "description": "Disconnect a device by MAC address.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "getAdapterInfo",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "powered": {
+            "type": "boolean"
+          },
+          "discovering": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "powered",
+          "discovering",
+          "name",
+          "address"
+        ]
+      },
+      "description": "Get adapter status (powered, discovering, name, address).",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getDevices",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "mac": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "connected": {
+              "type": "boolean"
+            },
+            "paired": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "audio",
+                "input",
+                "keyboard",
+                "unknown"
+              ]
+            }
+          },
+          "required": [
+            "mac",
+            "name",
+            "connected",
+            "paired",
+            "type"
+          ]
+        }
+      },
+      "description": "List all known devices with their connection status.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "startScan",
+      "args": [],
+      "returns": {
+        "type": "string"
+      },
+      "description": "Start scanning for new devices. A long-lived bluetoothctl process holds the discovery session open (see class doc). Non-blocking.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "stopScan",
+      "args": [],
+      "returns": {
+        "type": "string"
+      },
+      "description": "Stop scanning for devices.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "togglePower",
+      "args": [
+        {
+          "name": "on",
+          "schema": {
+            "type": "boolean"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "string"
+      },
+      "description": "Toggle Bluetooth adapter power on or off.",
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "adapterChanged"
+    },
+    {
+      "event": "deviceChanged"
+    }
+  ]
+}

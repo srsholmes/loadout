@@ -304,6 +304,45 @@ export async function startServer(options: ServerOptions = {}) {
       description:
         "Core service: enumerates installed Steam apps and non-Steam shortcuts.",
       author: "core",
+      // Core services are synthetic — they have no package.json to carry
+      // an `agent` block, and no generated agent.json (the generator
+      // walks plugins/*/backend.ts), so the docs route would otherwise
+      // fall back to reflecting bare method names. Curating inline gives
+      // an agent the one thing it most often needs — "what games are
+      // installed" — with prose instead of a shrug.
+      agent: {
+        summary:
+          "The installed-game list: Steam apps and non-Steam shortcuts, " +
+          "merged from Steam's own on-disk manifests. This is the right " +
+          "place to answer 'what games are on this machine' — it needs no " +
+          "Steam API key and works offline.",
+        methods: {
+          getGames: {
+            safety: "read",
+            description:
+              "Every installed game — appId, name, artwork URLs and whether " +
+              "it is a Steam app or a non-Steam shortcut. Cached; call " +
+              "rescan to force a re-read from disk.",
+            example: { args: [] },
+          },
+          getCollections: {
+            safety: "read",
+            description:
+              "The user's Steam library collections, as tagged in Steam's " +
+              "localconfig.vdf.",
+          },
+          rescan: {
+            safety: "read",
+            description:
+              "Re-read the library from disk and return it, bypassing the " +
+              "cache. Emits gameLibraryChanged if the set actually changed.",
+            notes:
+              "Reads several VDF/ACF files across every Steam library " +
+              "folder — noticeably slower than getGames. Use it after " +
+              "installing something, not on a poll loop.",
+          },
+        },
+      },
     },
     instance: gameLibrary,
     sandboxedFetch: globalThis.fetch,

@@ -176,6 +176,21 @@ export async function discoverPlugins(
       continue;
     }
 
+    // The `__` namespace belongs to core services (`__core:*`), the
+    // loader's own diagnostic channel (`__system`), the overlay
+    // (`__overlay`) and the RPC fan-out id (`__broadcast`). Both
+    // `packages/types/src/plugin.ts` and the plugin-development guide
+    // have always documented that the loader rejects plugin manifests
+    // claiming it — this is where that finally becomes true. Without
+    // the check a plugin declaring `"id": "__core:game-detection"`
+    // silently collides with the real service in the `plugins` map.
+    if (meta.id.startsWith("__")) {
+      log.warn(
+        `Skipping ${entry}: plugin id "${meta.id}" uses the reserved "__" prefix (core services own that namespace)`,
+      );
+      continue;
+    }
+
     discovered.push({
       meta,
       pluginDir,

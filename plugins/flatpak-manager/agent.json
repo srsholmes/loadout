@@ -1,0 +1,150 @@
+{
+  "id": "flatpak-manager",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "checkUpdates",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "appId": {
+              "type": "string"
+            },
+            "newVersion": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "appId",
+            "newVersion"
+          ]
+        }
+      },
+      "description": "Check for available updates.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "getAppInfo",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "string"
+      },
+      "description": "Get detailed info about a Flatpak application.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getInstalled",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "appId": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            },
+            "size": {
+              "type": "string"
+            },
+            "origin": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "appId",
+            "version",
+            "size",
+            "origin"
+          ]
+        }
+      },
+      "description": "List all installed Flatpak applications.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "removeUnused",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "removed"
+        ]
+      },
+      "description": "Remove unused Flatpak runtimes and extensions.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "updateAll",
+      "args": [],
+      "returns": {
+        "type": "string"
+      },
+      "description": "Update all Flatpak applications. Emits progress events as output streams.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "updateApp",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "string"
+      },
+      "description": "Update a single Flatpak application by app ID.",
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "updateComplete"
+    },
+    {
+      "event": "updateProgress"
+    },
+    {
+      "event": "updateStarted"
+    }
+  ]
+}

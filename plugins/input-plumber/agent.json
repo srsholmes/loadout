@@ -1,0 +1,369 @@
+{
+  "id": "input-plumber",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "cancelInstall",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "cancelled": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cancelled"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "captureWakeButton",
+      "args": [
+        {
+          "name": "timeoutMs",
+          "schema": {
+            "type": "number"
+          },
+          "optional": true
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "capturedRaw": {
+            "type": "string",
+            "description": "Raw capability string of the button the user pressed."
+          },
+          "capturedLabel": {
+            "type": "string",
+            "description": "Human label for that button (UI confirmation)."
+          },
+          "timedOut": {
+            "type": "boolean",
+            "description": "True when the capture window expired without a press."
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "description": "Press-to-capture: temporarily map every recommended button to a unique sentinel key, wait for the user to press one, then bind it for real.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "clearWakeButton",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "description": "Disable the wake binding (controller keeps working).",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "getStatus",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "installed": {
+            "type": "boolean",
+            "description": "Is the daemon binary present anywhere known?"
+          },
+          "binaryPath": {
+            "type": "string",
+            "nullable": true,
+            "description": "Where it lives, or null if not installed."
+          },
+          "managedBy": {
+            "type": "string",
+            "enum": [
+              "none",
+              "us",
+              "distro"
+            ],
+            "description": "\"us\"     — at /var/lib/inputplumber/bin/inputplumber (this script)."
+          },
+          "version": {
+            "type": "string",
+            "nullable": true,
+            "description": "Reported by `inputplumber --version` if reachable."
+          },
+          "serviceActive": {
+            "type": "boolean",
+            "description": "Is inputplumber.service currently active?"
+          },
+          "serviceEnabled": {
+            "type": "boolean",
+            "description": "Is inputplumber.service enabled (starts on boot)?"
+          },
+          "scriptPresent": {
+            "type": "boolean",
+            "description": "Does the bundled install script exist on disk?"
+          },
+          "summary": {
+            "type": "string",
+            "description": "One-line human summary."
+          }
+        },
+        "required": [
+          "installed",
+          "binaryPath",
+          "managedBy",
+          "version",
+          "serviceActive",
+          "serviceEnabled",
+          "scriptPresent",
+          "summary"
+        ]
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getWakeStatus",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "ipActive": {
+            "type": "boolean",
+            "description": "\"Picker is operable\" hint, NOT a literal probe of the InputPlumber"
+          },
+          "isDeck": {
+            "type": "boolean",
+            "description": "Is this a Steam Deck? On Deck the backend routes to the hidraw-based"
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "InputPlumber composite-device name."
+                },
+                "buttons": {
+                  "type": "array",
+                  "items": {
+                    "type": "unknown",
+                    "tsType": "WakeButtonOption"
+                  },
+                  "description": "Buttons the user can bind on this device."
+                }
+              },
+              "required": [
+                "name",
+                "buttons"
+              ]
+            },
+            "description": "Connected composite devices with their pickable buttons."
+          },
+          "selectedRaw": {
+            "type": "string",
+            "nullable": true,
+            "description": "Raw capability currently bound, or null for none/Off."
+          },
+          "hasLegacyProfile": {
+            "type": "boolean",
+            "description": "True when a legacy /var/lib/inputplumber/.../profiles/default.yaml is"
+          }
+        },
+        "required": [
+          "ipActive",
+          "isDeck",
+          "devices",
+          "selectedRaw"
+        ]
+      },
+      "description": "Current wake-trigger status: IP availability, whether this is a Deck, the connected devices' pickable buttons, and the current binding.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "isInstallRunning",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "running": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "running"
+        ]
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "prepareWake",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "ipActive": {
+            "type": "boolean",
+            "description": "\"Picker is operable\" hint, NOT a literal probe of the InputPlumber"
+          },
+          "isDeck": {
+            "type": "boolean",
+            "description": "Is this a Steam Deck? On Deck the backend routes to the hidraw-based"
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "InputPlumber composite-device name."
+                },
+                "buttons": {
+                  "type": "array",
+                  "items": {
+                    "type": "unknown",
+                    "tsType": "WakeButtonOption"
+                  },
+                  "description": "Buttons the user can bind on this device."
+                }
+              },
+              "required": [
+                "name",
+                "buttons"
+              ]
+            },
+            "description": "Connected composite devices with their pickable buttons."
+          },
+          "selectedRaw": {
+            "type": "string",
+            "nullable": true,
+            "description": "Raw capability currently bound, or null for none/Off."
+          },
+          "hasLegacyProfile": {
+            "type": "boolean",
+            "description": "True when a legacy /var/lib/inputplumber/.../profiles/default.yaml is"
+          }
+        },
+        "required": [
+          "ipActive",
+          "isDeck",
+          "devices",
+          "selectedRaw"
+        ]
+      },
+      "description": "Prepare InputPlumber for wake binding (Deck enable + uaccess rule) so the picker can enumerate buttons. No-op-ish on non-Deck hosts where IP is already running.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "restartInputPlumber",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "description": "Recovery: restart the InputPlumber daemon and re-load the wake profile. Rebuilds composite devices from scratch to fix stuck states (a controller not presenting to Steam, deck-uhid emulation confused after churn).",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setWakeButton",
+      "args": [
+        {
+          "name": "raw",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "description": "Bind a physical button (raw capability string) to the overlay wake key. Idempotent full setup; safe to call again to change the button.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "startInstall",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "started": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "started"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "input-plumber-status"
+    },
+    {
+      "event": "install-log"
+    },
+    {
+      "event": "install-state"
+    },
+    {
+      "event": "wake-status"
+    }
+  ]
+}

@@ -189,6 +189,18 @@ if [ "$LOADOUT_PKG_COUNT" -eq 0 ]; then
     exit 1
 fi
 
+# AGENTS.md — the discovery file for AI agents working on this machine.
+# Staged here rather than alongside the binary because this script is the
+# single choke point both install paths share (install-local.sh and the
+# release workflow's plugin tarball), so one copy covers both. It is
+# generated + committed by scripts/generate-agent-docs.ts; a missing file
+# means someone deleted it rather than that it's optional, hence the warn.
+if [ -f "$PROJECT_ROOT/AGENTS.md" ]; then
+    cp "$PROJECT_ROOT/AGENTS.md" "$TARGET/AGENTS.md"
+else
+    echo "WARN: $PROJECT_ROOT/AGENTS.md missing — run scripts/generate-agent-docs.ts" >&2
+fi
+
 PLUGIN_COUNT=$(find "$PLUGINS_DST" -mindepth 1 -maxdepth 1 -type d | wc -l)
 NM_COUNT=$(find "$NM_DST" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) | wc -l)
 # Only sum the two dirs we actually staged — $TARGET may already contain

@@ -1,0 +1,472 @@
+{
+  "id": "protondb-badges",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "checkLinuxSupport",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "boolean"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "clearCache",
+      "args": [],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "clearExternalCache",
+      "args": [],
+      "returns": {
+        "type": "null"
+      },
+      "description": "Loader-broadcast entry point for the global \"Clear all data caches\" button on the Settings page. Same effect as `clearCache` — kept under a distinct, broadcast-safe name so the loader's `__broadcast` fan-out only hits plugins that intentionally implement it.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "getBadgeData",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "report": {
+            "type": "object",
+            "properties": {
+              "tier": {
+                "type": "string"
+              },
+              "confidence": {
+                "type": "string"
+              },
+              "score": {
+                "type": "number"
+              },
+              "trendingTier": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tier",
+              "confidence",
+              "score",
+              "trendingTier"
+            ],
+            "nullable": true
+          },
+          "linuxSupport": {
+            "type": "boolean"
+          },
+          "settings": {
+            "type": "object",
+            "properties": {
+              "size": {
+                "type": "string",
+                "enum": [
+                  "regular",
+                  "small",
+                  "minimalist"
+                ]
+              },
+              "position": {
+                "type": "string",
+                "enum": [
+                  "tl",
+                  "tm",
+                  "tr",
+                  "bl",
+                  "bm",
+                  "br"
+                ]
+              },
+              "labelOnHover": {
+                "type": "string",
+                "enum": [
+                  "regular",
+                  "small",
+                  "off"
+                ]
+              },
+              "showSubmitButton": {
+                "type": "boolean"
+              },
+              "enableLibraryBadge": {
+                "type": "boolean"
+              },
+              "enableStoreBadge": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "size",
+              "position",
+              "labelOnHover",
+              "showSubmitButton",
+              "enableLibraryBadge",
+              "enableStoreBadge"
+            ]
+          }
+        },
+        "required": [
+          "report",
+          "linuxSupport",
+          "settings"
+        ]
+      },
+      "description": "Get badge data in one call (report + linux support).",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getCurrentRouteAppId",
+      "args": [],
+      "returns": {
+        "type": "string",
+        "nullable": true
+      },
+      "description": "appId of the game page currently viewed in Steam BPM (route-derived, NOT the running game). Mirrors hltb's route polling; will fold into a `__core:game-detection` subscribe once that lands for backends.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getReport",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "tier": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number"
+          },
+          "trendingTier": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tier",
+          "confidence",
+          "score",
+          "trendingTier"
+        ],
+        "nullable": true
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getSettings",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "size": {
+            "type": "string",
+            "enum": [
+              "regular",
+              "small",
+              "minimalist"
+            ]
+          },
+          "position": {
+            "type": "string",
+            "enum": [
+              "tl",
+              "tm",
+              "tr",
+              "bl",
+              "bm",
+              "br"
+            ]
+          },
+          "labelOnHover": {
+            "type": "string",
+            "enum": [
+              "regular",
+              "small",
+              "off"
+            ]
+          },
+          "showSubmitButton": {
+            "type": "boolean"
+          },
+          "enableLibraryBadge": {
+            "type": "boolean"
+          },
+          "enableStoreBadge": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "size",
+          "position",
+          "labelOnHover",
+          "showSubmitButton",
+          "enableLibraryBadge",
+          "enableStoreBadge"
+        ]
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getStatus",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "connected": {
+            "type": "boolean"
+          },
+          "tabs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "connected",
+          "tabs"
+        ]
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "listAllGames",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "appId": {
+              "type": "string",
+              "description": "Steam app id, the canonical id Steam uses for art and store URLs."
+            },
+            "name": {
+              "type": "string",
+              "description": "Display name from the manifest."
+            }
+          },
+          "required": [
+            "appId",
+            "name"
+          ]
+        }
+      },
+      "description": "Enumerate the user's *entire owned* Steam library (not just the installed titles) by reading `window.appStore.allApps` from Steam's SharedJSContext tab over CDP. Unlike `listInstalledGames`, this reaches owned-but-not-installed games — there's no `appmanifest_*.acf` on disk for those, so the CDP read is the only source.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "listInstalledGames",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "appId": {
+              "type": "string",
+              "description": "Steam app id, the canonical id Steam uses for art and store URLs."
+            },
+            "name": {
+              "type": "string",
+              "description": "Display name from the manifest."
+            }
+          },
+          "required": [
+            "appId",
+            "name"
+          ]
+        }
+      },
+      "description": "Enumerate the user's installed Steam games via `@loadout/steam-paths`. Returns `{appId, name}` pairs sorted alphabetically by name. No ProtonDB calls happen here — just disk reads of `appmanifest_*.acf`.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "openProtonDb",
+      "args": [
+        {
+          "name": "{ appId }",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "appId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "appId"
+            ]
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "description": "Open a game in the Steam UI and navigate to its ProtonDB page — the same destination the injected library/store badge reaches when clicked. Invoked from the overlay grid after the overlay hides itself, so the user lands on the Steam app's details page with the ProtonDB site open in Steam's in-client browser.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "reconnect",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "searchGames",
+      "args": [
+        {
+          "name": "query",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "appId": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "icon": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "appId",
+            "name",
+            "icon"
+          ]
+        }
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "updateSettings",
+      "args": [
+        {
+          "name": "settings",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "size": {
+                "type": "string",
+                "enum": [
+                  "regular",
+                  "small",
+                  "minimalist"
+                ]
+              },
+              "position": {
+                "type": "string",
+                "enum": [
+                  "tl",
+                  "tm",
+                  "tr",
+                  "bl",
+                  "bm",
+                  "br"
+                ]
+              },
+              "labelOnHover": {
+                "type": "string",
+                "enum": [
+                  "regular",
+                  "small",
+                  "off"
+                ]
+              },
+              "showSubmitButton": {
+                "type": "boolean"
+              },
+              "enableLibraryBadge": {
+                "type": "boolean"
+              },
+              "enableStoreBadge": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "size",
+              "position",
+              "labelOnHover",
+              "showSubmitButton",
+              "enableLibraryBadge",
+              "enableStoreBadge"
+            ]
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "stateChanged"
+    }
+  ]
+}

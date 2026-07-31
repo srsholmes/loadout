@@ -1,0 +1,1110 @@
+{
+  "id": "tdp-control",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "applyProfile",
+      "args": [
+        {
+          "name": "name",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "clearCustomDevice",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Remove the custom device, reverting to auto-detection.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "getAcPowerStatus",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "online": {
+            "type": "boolean",
+            "nullable": true
+          }
+        },
+        "required": [
+          "online"
+        ]
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getCurrentProfileState",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "activeProfile": {
+            "type": "object",
+            "properties": {
+              "appId": {
+                "type": "number"
+              },
+              "gameName": {
+                "type": "string"
+              },
+              "tdpWatts": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "appId",
+              "gameName",
+              "tdpWatts"
+            ],
+            "nullable": true
+          },
+          "currentTdp": {
+            "type": "number"
+          },
+          "isGameRunning": {
+            "type": "boolean"
+          },
+          "perGameEnabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "activeProfile",
+          "currentTdp",
+          "isGameRunning",
+          "perGameEnabled"
+        ],
+        "nullable": true
+      },
+      "description": "Get the current profile engine state (active profile, current TDP, game running status).",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getCustomDevice",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Friendly display name"
+          },
+          "minTdp": {
+            "type": "number"
+          },
+          "maxTdp": {
+            "type": "number",
+            "description": "Max TDP when plugged into AC."
+          },
+          "batteryMaxTdp": {
+            "type": "number",
+            "description": "Max TDP when running on battery. A notch below `maxTdp` for high-power"
+          },
+          "profiles": {
+            "type": "object",
+            "properties": {
+              "Silent": {
+                "type": "number"
+              },
+              "Balanced": {
+                "type": "number"
+              },
+              "Performance": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "Silent",
+              "Balanced",
+              "Performance"
+            ],
+            "description": "Per-profile watt defaults"
+          }
+        },
+        "required": [
+          "name",
+          "minTdp",
+          "maxTdp",
+          "batteryMaxTdp",
+          "profiles"
+        ],
+        "nullable": true
+      },
+      "description": "The user's custom device override, or null when auto-detecting.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getGameDefaultTdp",
+      "args": [],
+      "returns": {
+        "type": "number"
+      },
+      "description": "Get the default TDP (used when no per-game profile applies).",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getGameProfiles",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "appId": {
+              "type": "number"
+            },
+            "gameName": {
+              "type": "string"
+            },
+            "tdpWatts": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "appId",
+            "gameName",
+            "tdpWatts"
+          ]
+        }
+      },
+      "description": "Get all per-game TDP profiles. Note: This is different from getProfiles() which returns device power presets (Silent/Balanced/Performance).",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getGpuInfo",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "vendor": {
+            "type": "string",
+            "enum": [
+              "AMD",
+              "Intel",
+              "Unknown"
+            ]
+          },
+          "minFreqMhz": {
+            "type": "number"
+          },
+          "maxFreqMhz": {
+            "type": "number"
+          },
+          "currentMode": {
+            "type": "string"
+          },
+          "cardPath": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "vendor",
+          "minFreqMhz",
+          "maxFreqMhz",
+          "currentMode",
+          "cardPath"
+        ],
+        "nullable": true
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getPerGameEnabled",
+      "args": [],
+      "returns": {
+        "type": "boolean"
+      },
+      "description": "Whether per-game TDP profiles are enabled.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getProfiles",
+      "args": [],
+      "returns": {
+        "type": "object"
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getSystemInfo",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "deviceName": {
+            "type": "string"
+          },
+          "dmiProductName": {
+            "type": "string"
+          },
+          "cpuVendor": {
+            "type": "string",
+            "enum": [
+              "AMD",
+              "Intel",
+              "Unknown"
+            ]
+          },
+          "cpuModel": {
+            "type": "string"
+          },
+          "scalingDriver": {
+            "type": "string"
+          },
+          "tdpMethod": {
+            "type": "string",
+            "enum": [
+              "none",
+              "ryzenadj",
+              "intel-rapl",
+              "platform_profile",
+              "wmi"
+            ]
+          },
+          "platformProfile": {
+            "type": "string",
+            "nullable": true
+          },
+          "platformProfileChoices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "eppOptions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "governorOptions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "supportsSmt": {
+            "type": "boolean"
+          },
+          "supportsCpuBoost": {
+            "type": "boolean"
+          },
+          "ryzenadjAvailable": {
+            "type": "boolean"
+          },
+          "intelRaplAvailable": {
+            "type": "boolean"
+          },
+          "ryzenadjCanRead": {
+            "type": "boolean"
+          },
+          "gpuVendor": {
+            "type": "string",
+            "enum": [
+              "AMD",
+              "Intel",
+              "Unknown"
+            ]
+          },
+          "supportsGpuControl": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deviceName",
+          "dmiProductName",
+          "cpuVendor",
+          "cpuModel",
+          "scalingDriver",
+          "tdpMethod",
+          "platformProfile",
+          "platformProfileChoices",
+          "eppOptions",
+          "governorOptions",
+          "supportsSmt",
+          "supportsCpuBoost",
+          "ryzenadjAvailable",
+          "intelRaplAvailable",
+          "ryzenadjCanRead",
+          "gpuVendor",
+          "supportsGpuControl"
+        ]
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getTdpInfo",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "currentTdp": {
+            "type": "number",
+            "nullable": true
+          },
+          "tdpReadSource": {
+            "type": "string",
+            "enum": [
+              "read",
+              "tracked",
+              "estimated"
+            ],
+            "description": "How the current TDP was obtained."
+          },
+          "minWatts": {
+            "type": "number"
+          },
+          "maxWatts": {
+            "type": "number",
+            "description": "TDP ceiling that currently applies (power-state aware)."
+          },
+          "pluggedMaxWatts": {
+            "type": "number",
+            "description": "Full ceiling when plugged into AC."
+          },
+          "batteryMaxWatts": {
+            "type": "number",
+            "description": "Ceiling when on battery (<= pluggedMaxWatts)."
+          },
+          "batterySafeMaxWatts": {
+            "type": "number",
+            "description": "Global on-battery ceiling applied to every device."
+          },
+          "batteryLimited": {
+            "type": "boolean",
+            "description": "True when being on battery lowers the ceiling right now (device figure"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "deviceName": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "none",
+              "ryzenadj",
+              "intel-rapl",
+              "platform_profile",
+              "wmi"
+            ]
+          },
+          "profiles": {
+            "type": "object"
+          },
+          "activeProfile": {
+            "type": "string",
+            "nullable": true
+          },
+          "cpuVendor": {
+            "type": "string",
+            "enum": [
+              "AMD",
+              "Intel",
+              "Unknown"
+            ]
+          },
+          "cpuModel": {
+            "type": "string"
+          },
+          "scalingDriver": {
+            "type": "string"
+          },
+          "platformProfile": {
+            "type": "string",
+            "nullable": true
+          },
+          "platformProfileChoices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "eppOptions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "currentEpp": {
+            "type": "string",
+            "nullable": true
+          },
+          "governorOptions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "currentGovernor": {
+            "type": "string",
+            "nullable": true
+          },
+          "supportsSmt": {
+            "type": "boolean"
+          },
+          "supportsCpuBoost": {
+            "type": "boolean"
+          },
+          "usingCustomDevice": {
+            "type": "boolean",
+            "description": "Whether the active device is a user-defined custom device (vs auto-detected)."
+          },
+          "gpuInfo": {
+            "type": "object",
+            "properties": {
+              "vendor": {
+                "type": "string",
+                "enum": [
+                  "AMD",
+                  "Intel",
+                  "Unknown"
+                ]
+              },
+              "minFreqMhz": {
+                "type": "number"
+              },
+              "maxFreqMhz": {
+                "type": "number"
+              },
+              "currentMode": {
+                "type": "string"
+              },
+              "cardPath": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "vendor",
+              "minFreqMhz",
+              "maxFreqMhz",
+              "currentMode",
+              "cardPath"
+            ],
+            "nullable": true
+          },
+          "smtEnabled": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "cpuBoostEnabled": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "cpuBoostSetting": {
+            "type": "boolean",
+            "description": "The boost state the plugin enforces alongside every TDP apply (the"
+          },
+          "acPowerOnline": {
+            "type": "boolean",
+            "nullable": true
+          }
+        },
+        "required": [
+          "currentTdp",
+          "tdpReadSource",
+          "minWatts",
+          "maxWatts",
+          "pluggedMaxWatts",
+          "batteryMaxWatts",
+          "batterySafeMaxWatts",
+          "batteryLimited",
+          "platform",
+          "deviceName",
+          "method",
+          "profiles",
+          "activeProfile",
+          "cpuVendor",
+          "cpuModel",
+          "scalingDriver",
+          "platformProfile",
+          "platformProfileChoices",
+          "eppOptions",
+          "currentEpp",
+          "governorOptions",
+          "currentGovernor",
+          "supportsSmt",
+          "supportsCpuBoost",
+          "usingCustomDevice",
+          "gpuInfo",
+          "smtEnabled",
+          "cpuBoostEnabled",
+          "cpuBoostSetting",
+          "acPowerOnline"
+        ]
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "handleGameExit",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Notify the engine that a game has exited. NOTE: This is exposed as an RPC method for manual testing. In production, this will be called automatically by SteamClient.GameSessions events once the CEF bridge integration is done.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "handleGameLaunch",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "gameName",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Notify the engine that a game has launched. NOTE: This is exposed as an RPC method for manual testing. In production, this will be called automatically by SteamClient.GameSessions events once the CEF bridge integration is done.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "onResume",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "onSuspend",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "removeGameProfile",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Remove a per-game TDP profile.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setCpuBoost",
+      "args": [
+        {
+          "name": "enable",
+          "schema": {
+            "type": "boolean"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setCustomDevice",
+      "args": [
+        {
+          "name": "device",
+          "schema": {
+            "type": "unknown",
+            "tsType": "unknown"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Save a user-defined device. Once saved it becomes the DEFAULT device the plugin uses (its TDP range + presets), overriding auto-detection. Only a single custom device is stored — saving again replaces it. To remove it, the user clears it via clearCustomDevice().",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setEpp",
+      "args": [
+        {
+          "name": "epp",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setGameDefaultTdp",
+      "args": [
+        {
+          "name": "watts",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Set the default TDP (used when no per-game profile applies).",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setGameProfile",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "gameName",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "tdpWatts",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Create or update a per-game TDP profile.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setGovernor",
+      "args": [
+        {
+          "name": "governor",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setGpuFreqRange",
+      "args": [
+        {
+          "name": "minMhz",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "maxMhz",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setGpuMode",
+      "args": [
+        {
+          "name": "mode",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "manual",
+              "high",
+              "low"
+            ]
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setPerGameEnabled",
+      "args": [
+        {
+          "name": "enabled",
+          "schema": {
+            "type": "boolean"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Toggle per-game TDP profiles on/off. When off, game launches don't override the user's manual TDP; the engine still tracks the active game so the UI can offer \"save current TDP for this game\".",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setPlatformProfile",
+      "args": [
+        {
+          "name": "profile",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setSmt",
+      "args": [
+        {
+          "name": "enable",
+          "schema": {
+            "type": "boolean"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setTdp",
+      "args": [
+        {
+          "name": "watts",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "acPowerChanged"
+    },
+    {
+      "event": "deviceChanged"
+    },
+    {
+      "event": "gameProfileChanged"
+    },
+    {
+      "event": "perGameEnabledChanged"
+    },
+    {
+      "event": "platformProfileChanged"
+    },
+    {
+      "event": "tdpChanged"
+    }
+  ]
+}

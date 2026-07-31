@@ -67,6 +67,16 @@ jobs:
       - name: Plugin spec coverage gate
         run: bun run check:specs
 
+      # The agent API docs (plugins/*/agent.json + AGENTS.md) are derived
+      # from each backend's TypeScript, then committed — the compiled
+      # loader binary doesn't ship `typescript`, so they can't be built on
+      # the user's device. Regenerating and diffing here is the whole
+      # freshness story: a signature change that isn't reflected in the
+      # docs fails the build instead of silently shipping a description
+      # of a method that no longer exists.
+      - name: Agent docs up to date
+        run: bun run check:agent-docs
+
       - name: Run unit tests
         run: bun run test
 

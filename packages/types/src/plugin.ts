@@ -5,7 +5,9 @@
  * `__core:<service-name>` so plugins can subscribe to them through the
  * normal RPC `event` channel without needing a bespoke hook. The leading
  * `__` is reserved — plugin manifests whose `id` starts with `__` are
- * rejected by the loader to keep this namespace clean.
+ * rejected by the loader (`discoverPlugins` in
+ * `apps/loadout/src/loader/plugin-manager.ts`) to keep this namespace
+ * clean.
  *
  * Known services (each owns its own message schema; see the service
  * source for the payload shape):
@@ -20,6 +22,8 @@
  * New core services should follow `__core:<kebab>` naming and be
  * documented here.
  */
+import type { AgentManifest } from "./agent";
+
 export interface PluginPermissions {
   network?: string[];
   filesystem?: string[];
@@ -115,6 +119,17 @@ export interface PluginMeta {
   patches?: PluginPatch[];
   /** CSS files to inject (for type: "css" plugins). Map of filename → target context */
   styles?: Record<string, "SharedJSContext" | "QuickAccess" | "BigPictureMode">;
+  /**
+   * Hand-written curation for the agent-facing API docs
+   * (`GET /api/agent/<id>`). Set via `package.json → plugin.agent`.
+   *
+   * Optional and incremental: the generated baseline in
+   * `plugins/<id>/agent.json` already documents every callable method
+   * from the TypeScript signatures, and this block only adds what a
+   * signature can't say — prose, safety class, examples. See
+   * {@link AgentManifest}.
+   */
+  agent?: AgentManifest;
   /**
    * If true, the overlay shell will import this plugin's app bundle at
    * startup and call its exported `init(api)` function (if any) — even

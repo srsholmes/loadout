@@ -1,0 +1,329 @@
+{
+  "id": "rgb-control",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "applyPreset",
+      "args": [
+        {
+          "name": "name",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "boolean"
+      },
+      "description": "Applies a color preset to all zones.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "getPresets",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "r": {
+              "type": "number"
+            },
+            "g": {
+              "type": "number"
+            },
+            "b": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "name",
+            "r",
+            "g",
+            "b"
+          ]
+        }
+      },
+      "description": "Returns available color presets.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getRgbInfo",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "driver": {
+            "type": "string"
+          },
+          "zones": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "color": {
+                  "type": "object",
+                  "properties": {
+                    "r": {
+                      "type": "number"
+                    },
+                    "g": {
+                      "type": "number"
+                    },
+                    "b": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "r",
+                    "g",
+                    "b"
+                  ]
+                },
+                "brightness": {
+                  "type": "number"
+                },
+                "mode": {
+                  "type": "string"
+                },
+                "supportedModes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "color",
+                "brightness",
+                "mode",
+                "supportedModes"
+              ]
+            }
+          },
+          "supportedModes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "available",
+          "driver",
+          "zones",
+          "supportedModes"
+        ]
+      },
+      "description": "Returns information about available RGB hardware.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "rescan",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "driver": {
+            "type": "string"
+          },
+          "zones": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "color": {
+                  "type": "object",
+                  "properties": {
+                    "r": {
+                      "type": "number"
+                    },
+                    "g": {
+                      "type": "number"
+                    },
+                    "b": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "r",
+                    "g",
+                    "b"
+                  ]
+                },
+                "brightness": {
+                  "type": "number"
+                },
+                "mode": {
+                  "type": "string"
+                },
+                "supportedModes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "color",
+                "brightness",
+                "mode",
+                "supportedModes"
+              ]
+            }
+          },
+          "supportedModes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "available",
+          "driver",
+          "zones",
+          "supportedModes"
+        ]
+      },
+      "description": "Re-runs hardware detection and returns the new info.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setBrightness",
+      "args": [
+        {
+          "name": "zone",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "percent",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "boolean"
+      },
+      "description": "Sets the brightness for a specific zone (0-100%).",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setColor",
+      "args": [
+        {
+          "name": "zone",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "r",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "g",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "b",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "boolean"
+      },
+      "description": "Sets the color for a specific zone.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setMode",
+      "args": [
+        {
+          "name": "zone",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "mode",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "boolean"
+      },
+      "description": "Sets the mode for a specific zone.",
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "brightnessChanged"
+    },
+    {
+      "event": "colorChanged"
+    },
+    {
+      "event": "hardwareChanged"
+    },
+    {
+      "event": "modeChanged"
+    },
+    {
+      "event": "presetApplied"
+    }
+  ]
+}

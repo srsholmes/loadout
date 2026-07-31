@@ -1,0 +1,285 @@
+{
+  "id": "storage-cleaner",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "cleanCompatData",
+      "args": [
+        {
+          "name": "appIds",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "deleted",
+          "errors"
+        ]
+      },
+      "description": "Delete compatdata (Proton prefix) for specific app IDs.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "cleanShaderCache",
+      "args": [
+        {
+          "name": "appIds",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "deleted",
+          "errors"
+        ]
+      },
+      "description": "Delete shader cache for specific app IDs. Uses `fs.rm` directly instead of forking `rm -rf` — the appId validation guarantees the leaf segment is a safe digit-only token, and `fs.rm` removes the subprocess boundary as a vector for argv escaping mistakes.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "getCompatDataSize",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "totalFormatted": {
+            "type": "string"
+          },
+          "games": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "appId": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "sizeBytes": {
+                  "type": "number"
+                },
+                "sizeFormatted": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "appId",
+                "name",
+                "sizeBytes",
+                "sizeFormatted"
+              ]
+            }
+          }
+        },
+        "required": [
+          "total",
+          "totalFormatted",
+          "games"
+        ]
+      },
+      "description": "Calculate compatdata (Proton prefix) size per game.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getDiskUsage",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "filesystem": {
+              "type": "string"
+            },
+            "size": {
+              "type": "string"
+            },
+            "used": {
+              "type": "string"
+            },
+            "available": {
+              "type": "string"
+            },
+            "usePercent": {
+              "type": "string"
+            },
+            "mountpoint": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "filesystem",
+            "size",
+            "used",
+            "available",
+            "usePercent",
+            "mountpoint"
+          ]
+        }
+      },
+      "description": "`df -h` for `/`, `$HOME`, and every Steam library mountpoint — deduped by filesystem. Reporting every library matters on multi-drive setups (e.g. an SD-card SteamLibrary) where the stacked-usage bar would otherwise show a \"used\" total that exceeds the displayed disk capacity.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getOrphanedData",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "totalFormatted": {
+            "type": "string"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "shadercache",
+                    "compatdata"
+                  ]
+                },
+                "appId": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "sizeBytes": {
+                  "type": "number"
+                },
+                "sizeFormatted": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "appId",
+                "name",
+                "sizeBytes",
+                "sizeFormatted"
+              ]
+            }
+          }
+        },
+        "required": [
+          "total",
+          "totalFormatted",
+          "entries"
+        ]
+      },
+      "description": "Find orphaned shader cache and compat data — entries whose appId doesn't match any installed game across any Steam library.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getShaderCacheSize",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "totalFormatted": {
+            "type": "string"
+          },
+          "games": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "appId": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "sizeBytes": {
+                  "type": "number"
+                },
+                "sizeFormatted": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "appId",
+                "name",
+                "sizeBytes",
+                "sizeFormatted"
+              ]
+            }
+          }
+        },
+        "required": [
+          "total",
+          "totalFormatted",
+          "games"
+        ]
+      },
+      "description": "Calculate shader cache size per game.",
+      "safety": "read",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "cacheCleared"
+    }
+  ]
+}

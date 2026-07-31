@@ -193,6 +193,7 @@ shape is `PluginMeta` in
 | `patches` | `PluginPatch[]` | Webpack module patches — modify Steam's own components before they render (Vencord-style). |
 | `styles` | `Record<string, "SharedJSContext" \| "QuickAccess" \| "BigPictureMode">` | CSS files to inject (for `type: "css"` plugins). |
 | `loadOnStartup` | `boolean` | If true, the overlay imports the plugin's bundle at startup and calls its exported `init(api)` before the user opens its UI (e.g. to apply persistent settings). Default `false`. |
+| `agent` | `AgentManifest` | Curation for the agent-facing API docs — see [Documenting your plugin for AI agents](#documenting-your-plugin-for-ai-agents). |
 
 > Note: `PluginMeta` types `id`, `name`, `version`, `description`, and
 > `author` as required, but the live in-repo plugins omit `version` and
@@ -582,6 +583,103 @@ Key rules:
 
 ---
 
+## Documenting Your Plugin for AI Agents
+
+Every public method on your backend is already reachable by any agent
+running on the user's machine — `POST /api/agent/call` dispatches to it
+the same way the overlay does. What that agent sees is generated from
+your source, so most of this happens whether you do anything or not.
+
+### What's automatic
+
+`scripts/generate-agent-docs.ts` reads your `backend.ts` with the
+TypeScript compiler API and writes `plugins/<id>/agent.json`: every
+callable method's argument names and types, its return shape, its JSDoc
+summary, and the `this.emit({ event: … })` names it broadcasts. Run it
+after changing a signature:
+
+```bash
+bun run agent-docs
+```
+
+The file is **committed**, and CI (`bun run check:agent-docs`)
+regenerates and diffs it — a signature change without a regenerated doc
+fails the build. Don't hand-edit `agent.json`.
+
+Two things follow from this that are worth knowing:
+
+- **Write good JSDoc on public methods.** The first paragraph becomes
+  the method's description in the agent-facing docs, and `@param` tags
+  become the argument notes. This is the cheapest documentation you will
+  ever write.
+- **TypeScript `private` does not hide a method from RPC.** `private` is
+  erased at runtime, so `resolveMethod` still dispatches it. Only the
+  `_` prefix actually gates exposure. The generator honours `private`,
+  so a private method won't be *documented* — but it is still
+  *callable*. Use `_name` for anything genuinely internal.
+
+### What you should curate
+
+Add an optional `agent` block to your manifest for what a type signature
+can't express:
+
+```jsonc
+"plugin": {
+  "id": "tdp-control",
+  "agent": {
+    "summary": "Read and set the APU's sustained power limit in watts.",
+    "methods": {
+      "getTdpInfo": { "safety": "read", "example": { "args": [] } },
+      "setTdp": {
+        "safety": "write",
+        "description": "Set the sustained power limit in watts.",
+        "notes": "Clamped to the device's range, which getTdpInfo reports.",
+        "example": { "args": [12] }
+      },
+      "setSmt": {
+        "safety": "destructive",
+        "notes": "Offlines CPU threads — a running game will stutter or crash."
+      },
+      "handleGameLaunch": { "hidden": true }
+    }
+  }
+}
+```
+
+| Field | Purpose |
+|-------|---------|
+| `summary` | What the plugin is for. Falls back to `description`. |
+| `methods.<name>.safety` | `read`, `write` or `destructive` — see below. |
+| `methods.<name>.description` | Overrides the JSDoc summary. |
+| `methods.<name>.notes` | Prerequisites, ordering, side effects. |
+| `methods.<name>.example` | `{ "args": [...] }`, rendered as a runnable `curl`. |
+| `methods.<name>.hidden` | Omit from the docs (documentation only — still callable). |
+| `hidden` | Omit the whole plugin from the index. |
+
+### Safety classes
+
+`write` and `destructive` methods return HTTP 403 from
+`/api/agent/call` unless the user has opted in, so classifying honestly
+is the useful thing here:
+
+- **`read`** — observes state. Safe to call speculatively and to poll.
+- **`write`** — changes state noticeably, but the obvious inverse undoes it.
+- **`destructive`** — loses data, interrupts a session, or restarts
+  something. `removeShortcut`, `restartSteam`, `setSmt`.
+
+Anything you don't classify is guessed from the method name — `get*`,
+`list*`, `is*` and friends become `read`, everything else `write` — and
+rendered as *(inferred)* so a reader knows it's a guess. Two cases are
+worth curating for that reason: a getter that isn't (`getAndReset…`) and
+a `write` that's really destructive.
+
+> The 403 is a guardrail against an agent changing hardware state while
+> exploring, **not** a security boundary: `/api/token` is public on
+> loopback and `/api/rpc` is ungated, so any local process already has
+> full access.
+
+---
+
 ## Using Steam UI Components (caveat)
 
 `@loadout/ui` also exposes `Steam.*` — lazy proxies for Steam's own
@@ -820,6 +918,8 @@ All scripts run from the repo root (`package.json`):
 | `bun run build-and-install` | Build, then install locally (`scripts/install-local.sh`). |
 | `bun run typecheck` | `tsc --noEmit`. |
 | `bun run test` | Backend (`*.test.ts`) + UI (`*.spec.tsx`) tests via `bun test`. |
+| `bun run agent-docs` | Regenerate `plugins/*/agent.json` + `AGENTS.md` from backend sources. Run after changing a public method signature. |
+| `bun run check:agent-docs` | Verify those are up to date (what CI runs). |
 | `bun run lint` / `bun run format` | ESLint / Prettier. |
 
 ### The real dev loop

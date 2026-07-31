@@ -1,0 +1,938 @@
+{
+  "id": "hltb",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "clearCache",
+      "args": [],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "clearExternalCache",
+      "args": [],
+      "returns": {
+        "type": "null"
+      },
+      "description": "Loader-broadcast entry point for the global \"Clear all data caches\" button on the Settings page. Same effect as `clearCache` — separate name so the loader's `__broadcast` fan-out only hits plugins that intentionally implement the convention. See packages/external-cache for the rationale.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "getBadgeData",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "times": {
+            "type": "object",
+            "properties": {
+              "gameId": {
+                "type": "number"
+              },
+              "gameName": {
+                "type": "string"
+              },
+              "gameImage": {
+                "type": "string"
+              },
+              "mainStory": {
+                "type": "string"
+              },
+              "mainPlusExtras": {
+                "type": "string"
+              },
+              "completionist": {
+                "type": "string"
+              },
+              "allStyles": {
+                "type": "string"
+              },
+              "mainStorySeconds": {
+                "type": "number"
+              },
+              "mainPlusExtrasSeconds": {
+                "type": "number"
+              },
+              "completionistSeconds": {
+                "type": "number"
+              },
+              "allStylesSeconds": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "gameId",
+              "gameName",
+              "gameImage",
+              "mainStory",
+              "mainPlusExtras",
+              "completionist",
+              "allStyles",
+              "mainStorySeconds",
+              "mainPlusExtrasSeconds",
+              "completionistSeconds",
+              "allStylesSeconds"
+            ],
+            "nullable": true
+          },
+          "settings": {
+            "type": "object",
+            "properties": {
+              "position": {
+                "type": "string",
+                "enum": [
+                  "tl",
+                  "tm",
+                  "tr",
+                  "bl",
+                  "bm",
+                  "br"
+                ]
+              },
+              "showMainStory": {
+                "type": "boolean"
+              },
+              "showMainPlusExtras": {
+                "type": "boolean"
+              },
+              "showCompletionist": {
+                "type": "boolean"
+              },
+              "showAllStyles": {
+                "type": "boolean"
+              },
+              "enableLibraryBadge": {
+                "type": "boolean"
+              },
+              "enableStoreBadge": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "position",
+              "showMainStory",
+              "showMainPlusExtras",
+              "showCompletionist",
+              "showAllStyles",
+              "enableLibraryBadge",
+              "enableStoreBadge"
+            ]
+          }
+        },
+        "required": [
+          "times",
+          "settings"
+        ]
+      },
+      "description": "Get badge data in one call (times + settings). Called by injected BPM script.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getCurrentRouteAppId",
+      "args": [],
+      "returns": {
+        "type": "string",
+        "nullable": true
+      },
+      "description": "Get the appId from the current Steam route URL (the game page being viewed in BPM), NOT the actually-running game. Will be replaced by a `__core:game-detection` subscribe once E-004 lands.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getGameDetailById",
+      "args": [
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "developer": {
+            "type": "string"
+          },
+          "publisher": {
+            "type": "string"
+          },
+          "platforms": {
+            "type": "string",
+            "description": "Comma-separated list as HLTB returns it (e.g. \"PC, PlayStation 5\")."
+          },
+          "genres": {
+            "type": "string",
+            "description": "Comma-separated genre tags (e.g. \"Action, Open World\")."
+          },
+          "releaseWorld": {
+            "type": "string",
+            "description": "ISO date (YYYY-MM-DD); HLTB uses release_world."
+          },
+          "reviewScore": {
+            "type": "number",
+            "description": "Aggregate review score (0–100) when HLTB has enough samples."
+          },
+          "reviewCount": {
+            "type": "number",
+            "description": "Number of HLTB users who reviewed."
+          },
+          "playingCount": {
+            "type": "number",
+            "description": "Number of HLTB users currently playing."
+          },
+          "completedCount": {
+            "type": "number",
+            "description": "Number of HLTB users who marked it as completed."
+          },
+          "hltbUrl": {
+            "type": "string",
+            "description": "Permalink back to HLTB."
+          },
+          "gameId": {
+            "type": "number"
+          },
+          "gameName": {
+            "type": "string"
+          },
+          "gameImage": {
+            "type": "string"
+          },
+          "mainStory": {
+            "type": "string"
+          },
+          "mainPlusExtras": {
+            "type": "string"
+          },
+          "completionist": {
+            "type": "string"
+          },
+          "allStyles": {
+            "type": "string"
+          },
+          "mainStorySeconds": {
+            "type": "number"
+          },
+          "mainPlusExtrasSeconds": {
+            "type": "number"
+          },
+          "completionistSeconds": {
+            "type": "number"
+          },
+          "allStylesSeconds": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "hltbUrl",
+          "gameId",
+          "gameName",
+          "gameImage",
+          "mainStory",
+          "mainPlusExtras",
+          "completionist",
+          "allStyles",
+          "mainStorySeconds",
+          "mainPlusExtrasSeconds",
+          "completionistSeconds",
+          "allStylesSeconds"
+        ],
+        "nullable": true
+      },
+      "description": "Detail-view fetcher used by the new \"click a card → full breakdown\" route. Pulls the same /_next/data deep-link as `getGameTimes` but surfaces the richer metadata HLTB embeds in the page response (developer, publisher, platforms, genres, release date, review score, summary). The card view continues to use the trimmed `GameTimes` projection so we don't pay for the detail fields on every grid tile.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getGameDetailForGame",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "name",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "developer": {
+            "type": "string"
+          },
+          "publisher": {
+            "type": "string"
+          },
+          "platforms": {
+            "type": "string",
+            "description": "Comma-separated list as HLTB returns it (e.g. \"PC, PlayStation 5\")."
+          },
+          "genres": {
+            "type": "string",
+            "description": "Comma-separated genre tags (e.g. \"Action, Open World\")."
+          },
+          "releaseWorld": {
+            "type": "string",
+            "description": "ISO date (YYYY-MM-DD); HLTB uses release_world."
+          },
+          "reviewScore": {
+            "type": "number",
+            "description": "Aggregate review score (0–100) when HLTB has enough samples."
+          },
+          "reviewCount": {
+            "type": "number",
+            "description": "Number of HLTB users who reviewed."
+          },
+          "playingCount": {
+            "type": "number",
+            "description": "Number of HLTB users currently playing."
+          },
+          "completedCount": {
+            "type": "number",
+            "description": "Number of HLTB users who marked it as completed."
+          },
+          "hltbUrl": {
+            "type": "string",
+            "description": "Permalink back to HLTB."
+          },
+          "gameId": {
+            "type": "number"
+          },
+          "gameName": {
+            "type": "string"
+          },
+          "gameImage": {
+            "type": "string"
+          },
+          "mainStory": {
+            "type": "string"
+          },
+          "mainPlusExtras": {
+            "type": "string"
+          },
+          "completionist": {
+            "type": "string"
+          },
+          "allStyles": {
+            "type": "string"
+          },
+          "mainStorySeconds": {
+            "type": "number"
+          },
+          "mainPlusExtrasSeconds": {
+            "type": "number"
+          },
+          "completionistSeconds": {
+            "type": "number"
+          },
+          "allStylesSeconds": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "hltbUrl",
+          "gameId",
+          "gameName",
+          "gameImage",
+          "mainStory",
+          "mainPlusExtras",
+          "completionist",
+          "allStyles",
+          "mainStorySeconds",
+          "mainPlusExtrasSeconds",
+          "completionistSeconds",
+          "allStylesSeconds"
+        ],
+        "nullable": true
+      },
+      "description": "Same two-hop pipeline as `getGameDetailForSteamApp`, but takes the game name directly so non-Steam shortcuts (emulator titles, Heroic / Lutris launchers, etc.) get the rich detail payload too. The card-grid → detail-view click handler uses this for any installed game, Steam or not.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getGameDetailForSteamApp",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "developer": {
+            "type": "string"
+          },
+          "publisher": {
+            "type": "string"
+          },
+          "platforms": {
+            "type": "string",
+            "description": "Comma-separated list as HLTB returns it (e.g. \"PC, PlayStation 5\")."
+          },
+          "genres": {
+            "type": "string",
+            "description": "Comma-separated genre tags (e.g. \"Action, Open World\")."
+          },
+          "releaseWorld": {
+            "type": "string",
+            "description": "ISO date (YYYY-MM-DD); HLTB uses release_world."
+          },
+          "reviewScore": {
+            "type": "number",
+            "description": "Aggregate review score (0–100) when HLTB has enough samples."
+          },
+          "reviewCount": {
+            "type": "number",
+            "description": "Number of HLTB users who reviewed."
+          },
+          "playingCount": {
+            "type": "number",
+            "description": "Number of HLTB users currently playing."
+          },
+          "completedCount": {
+            "type": "number",
+            "description": "Number of HLTB users who marked it as completed."
+          },
+          "hltbUrl": {
+            "type": "string",
+            "description": "Permalink back to HLTB."
+          },
+          "gameId": {
+            "type": "number"
+          },
+          "gameName": {
+            "type": "string"
+          },
+          "gameImage": {
+            "type": "string"
+          },
+          "mainStory": {
+            "type": "string"
+          },
+          "mainPlusExtras": {
+            "type": "string"
+          },
+          "completionist": {
+            "type": "string"
+          },
+          "allStyles": {
+            "type": "string"
+          },
+          "mainStorySeconds": {
+            "type": "number"
+          },
+          "mainPlusExtrasSeconds": {
+            "type": "number"
+          },
+          "completionistSeconds": {
+            "type": "number"
+          },
+          "allStylesSeconds": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "hltbUrl",
+          "gameId",
+          "gameName",
+          "gameImage",
+          "mainStory",
+          "mainPlusExtras",
+          "completionist",
+          "allStyles",
+          "mainStorySeconds",
+          "mainPlusExtrasSeconds",
+          "completionistSeconds",
+          "allStylesSeconds"
+        ],
+        "nullable": true
+      },
+      "description": "Resolve a Steam appId to a HLTB detail payload. Reuses the search-+-match pipeline (`getTimesForSteamApp`) for the appId → HLTB gameId hop, then hits the deep-link for the richer metadata. The detail view caches via the same in-process map so navigating back and forth between list and detail is free.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getGameTimes",
+      "args": [
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "gameId": {
+            "type": "number"
+          },
+          "gameName": {
+            "type": "string"
+          },
+          "gameImage": {
+            "type": "string"
+          },
+          "mainStory": {
+            "type": "string"
+          },
+          "mainPlusExtras": {
+            "type": "string"
+          },
+          "completionist": {
+            "type": "string"
+          },
+          "allStyles": {
+            "type": "string"
+          },
+          "mainStorySeconds": {
+            "type": "number"
+          },
+          "mainPlusExtrasSeconds": {
+            "type": "number"
+          },
+          "completionistSeconds": {
+            "type": "number"
+          },
+          "allStylesSeconds": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "gameId",
+          "gameName",
+          "gameImage",
+          "mainStory",
+          "mainPlusExtras",
+          "completionist",
+          "allStyles",
+          "mainStorySeconds",
+          "mainPlusExtrasSeconds",
+          "completionistSeconds",
+          "allStylesSeconds"
+        ],
+        "nullable": true
+      },
+      "description": "Get detailed game times for a specific HLTB game by ID.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getSettings",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "position": {
+            "type": "string",
+            "enum": [
+              "tl",
+              "tm",
+              "tr",
+              "bl",
+              "bm",
+              "br"
+            ]
+          },
+          "showMainStory": {
+            "type": "boolean"
+          },
+          "showMainPlusExtras": {
+            "type": "boolean"
+          },
+          "showCompletionist": {
+            "type": "boolean"
+          },
+          "showAllStyles": {
+            "type": "boolean"
+          },
+          "enableLibraryBadge": {
+            "type": "boolean"
+          },
+          "enableStoreBadge": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "position",
+          "showMainStory",
+          "showMainPlusExtras",
+          "showCompletionist",
+          "showAllStyles",
+          "enableLibraryBadge",
+          "enableStoreBadge"
+        ]
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getStatus",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "connected": {
+            "type": "boolean"
+          },
+          "tabs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "connected",
+          "tabs"
+        ]
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getTimesForGame",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "name",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "gameId": {
+            "type": "number"
+          },
+          "gameName": {
+            "type": "string"
+          },
+          "gameImage": {
+            "type": "string"
+          },
+          "mainStory": {
+            "type": "string"
+          },
+          "mainPlusExtras": {
+            "type": "string"
+          },
+          "completionist": {
+            "type": "string"
+          },
+          "allStyles": {
+            "type": "string"
+          },
+          "mainStorySeconds": {
+            "type": "number"
+          },
+          "mainPlusExtrasSeconds": {
+            "type": "number"
+          },
+          "completionistSeconds": {
+            "type": "number"
+          },
+          "allStylesSeconds": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "gameId",
+          "gameName",
+          "gameImage",
+          "mainStory",
+          "mainPlusExtras",
+          "completionist",
+          "allStyles",
+          "mainStorySeconds",
+          "mainPlusExtrasSeconds",
+          "completionistSeconds",
+          "allStylesSeconds"
+        ],
+        "nullable": true
+      },
+      "description": "Get HLTB times for any installed game by appId + name. Used by the in-overlay library grid where the name is already known from the `__core:game-library` service (Steam appmanifest *or* non-Steam shortcut entry).",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getTimesForSteamApp",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "gameId": {
+            "type": "number"
+          },
+          "gameName": {
+            "type": "string"
+          },
+          "gameImage": {
+            "type": "string"
+          },
+          "mainStory": {
+            "type": "string"
+          },
+          "mainPlusExtras": {
+            "type": "string"
+          },
+          "completionist": {
+            "type": "string"
+          },
+          "allStyles": {
+            "type": "string"
+          },
+          "mainStorySeconds": {
+            "type": "number"
+          },
+          "mainPlusExtrasSeconds": {
+            "type": "number"
+          },
+          "completionistSeconds": {
+            "type": "number"
+          },
+          "allStylesSeconds": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "gameId",
+          "gameName",
+          "gameImage",
+          "mainStory",
+          "mainPlusExtras",
+          "completionist",
+          "allStyles",
+          "mainStorySeconds",
+          "mainPlusExtrasSeconds",
+          "completionistSeconds",
+          "allStylesSeconds"
+        ],
+        "nullable": true
+      },
+      "description": "Get HLTB times for a Steam game by appId. Used by the injected badge script — the BPM / store integration only has the Steam appId, so we have to hit Steam's appdetails API for the name. Cache hits are synchronous (no queueing); cache misses are gated through the concurrency limiter so a 100+ game library fan-out doesn't get 429'd by HLTB.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "listInstalledGames",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "appId": {
+              "type": "string",
+              "description": "Steam app id, the canonical id Steam uses for art and store URLs."
+            },
+            "name": {
+              "type": "string",
+              "description": "Display name from the manifest."
+            }
+          },
+          "required": [
+            "appId",
+            "name"
+          ]
+        }
+      },
+      "description": "Enumerate the user's installed Steam games via the shared `@loadout/steam-paths` helper. Returns `{appId, name}` pairs sorted alphabetically by name. The library-grid view uses this as its source of truth — no HLTB calls happen here, just disk reads of `appmanifest_*.acf`.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "reconnect",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "searchGame",
+      "args": [
+        {
+          "name": "query",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "gameId": {
+              "type": "number"
+            },
+            "gameName": {
+              "type": "string"
+            },
+            "gameImage": {
+              "type": "string"
+            },
+            "mainStory": {
+              "type": "string"
+            },
+            "mainPlusExtras": {
+              "type": "string"
+            },
+            "completionist": {
+              "type": "string"
+            },
+            "allStyles": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "gameId",
+            "gameName",
+            "gameImage",
+            "mainStory",
+            "mainPlusExtras",
+            "completionist",
+            "allStyles"
+          ]
+        }
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "updateSettings",
+      "args": [
+        {
+          "name": "settings",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "position": {
+                "type": "string",
+                "enum": [
+                  "tl",
+                  "tm",
+                  "tr",
+                  "bl",
+                  "bm",
+                  "br"
+                ]
+              },
+              "showMainStory": {
+                "type": "boolean"
+              },
+              "showMainPlusExtras": {
+                "type": "boolean"
+              },
+              "showCompletionist": {
+                "type": "boolean"
+              },
+              "showAllStyles": {
+                "type": "boolean"
+              },
+              "enableLibraryBadge": {
+                "type": "boolean"
+              },
+              "enableStoreBadge": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "position",
+              "showMainStory",
+              "showMainPlusExtras",
+              "showCompletionist",
+              "showAllStyles",
+              "enableLibraryBadge",
+              "enableStoreBadge"
+            ]
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "description": "Debounce window for re-injecting the badge system after settings change. A user dragging the position slider or toggling a tier filter can fire `updateSettings` 5-20× per second. Re-injecting the full CSS+script bundle into Steam over CDP on every call pegs the bridge and the UI stalls visibly. Trailing-edge debounce collapses the burst into a single re-injection after the user stops poking.",
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "stateChanged"
+    }
+  ]
+}
