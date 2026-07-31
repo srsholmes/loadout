@@ -231,17 +231,17 @@ export function Collections() {
   // ── Add games ──────────────────────────────────────────────────────
   if (view.kind === "add") {
     const already = new Set((games ?? []).map((g) => g.appId));
+    // Bare, not wrapped: the picker owns its own scroll box, which is what the
+    // row windowing measures against.
     return (
-      <div className="p-7 h-full overflow-y-auto" style={{ overflowX: "hidden" }}>
-        <AddGamesPage
+      <AddGamesPage
           label={view.label}
           candidates={(snapshot?.games ?? [])
             .filter((g) => !already.has(g.appId))
-            .map((g) => ({ appId: g.appId, name: g.name }))}
-          onBack={() => setView({ kind: "detail", id: view.id, label: view.label })}
-          onAdd={(appIds) => void addToLinked(view.id, view.label, appIds)}
-        />
-      </div>
+            .map((g) => ({ appId: g.appId, name: g.name, installed: g.installed }))}
+        onBack={() => setView({ kind: "detail", id: view.id, label: view.label })}
+        onAdd={(appIds) => void addToLinked(view.id, view.label, appIds)}
+      />
     );
   }
 

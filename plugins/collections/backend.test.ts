@@ -27,10 +27,31 @@ mock.module("@loadout/steam-cdp", () => ({
   },
   readSteamLibrary: async () => ({ entries: [], installedCount: 0, resolvedTagCount: 0 }),
   listCollections: async () => fakeCollections.map((c) => ({ ...c, appIds: [...c.appIds] })),
-  createCollection: async () => ({ id: "uc-new", name: "n", appIds: [], isDynamic: false, isEditable: true }),
-  setCollectionApps: async () => undefined,
-  renameCollection: async () => undefined,
-  deleteCollection: async () => true,
+  // Stateful, so a test can ask what Steam ended up holding. A fake that
+  // accepts every call and remembers nothing cannot tell "wrote it" from
+  // "thought about writing it".
+  createCollection: async (_c: unknown, { name }: { name: string }) => {
+    const made = { id: `uc-${fakeCollections.length + 1}`, name, appIds: [], isDynamic: false, isEditable: true };
+    fakeCollections.push(made);
+    return { ...made };
+  },
+  setCollectionApps: async (_c: unknown, { collectionId, appIds }: { collectionId: string; appIds: string[] }) => {
+    const found = fakeCollections.find((c) => c.id === collectionId);
+    if (found) found.appIds = [...appIds];
+  },
+  renameCollection: async (_c: unknown, { collectionId, name }: { collectionId: string; name: string }) => {
+    const found = fakeCollections.find((c) => c.id === collectionId);
+    if (found) found.name = name;
+  },
+  deleteCollection: async (_c: unknown, { collectionId }: { collectionId: string }) => {
+    // Steam's own implementation calls `.startsWith` on this, so anything but
+    // a string throws there. Passing the whole object was a real bug that 22
+    // tests missed because the fake accepted either shape.
+    if (typeof collectionId !== "string") throw new Error("collectionId must be a string");
+    const at = fakeCollections.findIndex((c) => c.id === collectionId);
+    if (at >= 0) fakeCollections.splice(at, 1);
+    return at >= 0;
+  },
 }));
 
 const { default: CollectionsBackend } = await import("./backend");
@@ -216,6 +237,56 @@ describe("deleteCollection", () => {
     const config = await backend.deleteCollection("backlog");
     expect(config.collections).toEqual([]);
     expect(config.collectionOrder).toEqual([]);
+  });
+
+  /** A managed collection that has been mirrored into Steam. */
+  async function mirrored(backend: Awaited<ReturnType<typeof loaded>>) {
+    await backend.createCollection("Backlog");
+    const { config } = await backend.getConfig();
+    await backend.setCollections([
+      {
+        ...config.collections[0]!,
+        root: {
+          kind: "group",
+          id: "backlog-root",
+          combinator: "all",
+          children: [{ id: "r1", kind: "installed" }],
+        },
+      },
+    ]);
+    await backend.syncMirror();
+  }
+
+  it("removes it from Steam straight away, not at the next sync", async () => {
+    // Syncing is deferred because it is a full library evaluation plus a
+    // batch of writes. A delete is one targeted call, and leaving it to the
+    // next sync meant the collection vanished from the plugin while Steam
+    // still listed it — which reads exactly like a delete that did not work.
+    const backend = await loaded();
+    await mirrored(backend);
+    expect(fakeCollections).toHaveLength(1);
+
+    await backend.deleteCollection("backlog");
+    expect(fakeCollections).toHaveLength(0);
+    expect((await backend.getConfig()).config.mirror.ledger.entries).toEqual([]);
+  });
+
+  it("keeps the ledger row when Steam can't be reached, so the sync finishes it", async () => {
+    const backend = await loaded();
+    await mirrored(backend);
+
+    steamUp = false;
+    await backend.deleteCollection("backlog");
+    const { config } = await backend.getConfig();
+    expect(config.collections).toEqual([]);
+    // The row outlives the collection on purpose: that is what tells the next
+    // sync there is a Steam collection with no owner left to delete.
+    expect(config.mirror.ledger.entries.map((e) => e.managedId)).toEqual(["backlog"]);
+
+    steamUp = true;
+    const report = await backend.syncMirror();
+    expect(report.deleted).toBe(1);
+    expect(fakeCollections).toHaveLength(0);
   });
 });
 

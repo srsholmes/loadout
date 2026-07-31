@@ -202,7 +202,7 @@ describe("editing a collection's rules", () => {
     ({ unmount } = renderApp());
     await waitFor(() => expect(screen.getByRole("button", { name: "New" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "New" }));
-    await waitFor(() => expect(screen.getByText("Presets")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Or start from a preset")).toBeTruthy());
 
     const row = screen.getByRole("button", { name: /Never played/ });
     fireEvent.click(row);
@@ -221,7 +221,7 @@ describe("editing a collection's rules", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "New" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "New" }));
 
-    await waitFor(() => expect(screen.getByText("Presets")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Or start from a preset")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: /Never played/ }));
 
     await waitFor(() => expect(calls.some((c) => c.method === "createCollection")).toBe(true));
@@ -298,13 +298,10 @@ describe("editing a collection's rules", () => {
     );
 
     fireEvent.click(screen.getAllByRole("button", { name: "Add games" })[0]!);
-    await waitFor(() =>
-      expect(document.querySelector('input[placeholder^="Search"]')).toBeTruthy(),
-    );
-    fireEvent.change(document.querySelector('input[placeholder^="Search"]')!, {
-      target: { value: LIBRARY[0]!.name },
-    });
-    fireEvent.click(screen.getByRole("button", { name: new RegExp(LIBRARY[0]!.name) }));
+    // The picker lists the whole library up front rather than asking for a
+    // search first.
+    await waitFor(() => expect(screen.getByText(LIBRARY[0]!.name)).toBeTruthy());
+    fireEvent.click(screen.getByText(LIBRARY[0]!.name));
     fireEvent.click(screen.getByRole("button", { name: "Add 1 game" }));
 
     await waitFor(() => expect(calls.some((c) => c.method === "setLinkedApps")).toBe(true));
@@ -351,7 +348,7 @@ describe("editing a collection's rules", () => {
     // New names the collection first — the name is what Steam shows, so it is
     // the one decision worth taking before the rules.
     fireEvent.click(screen.getByRole("button", { name: "New" }));
-    await waitFor(() => expect(screen.getByText("Or start from scratch")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Name your own")).toBeTruthy());
 
     fireEvent.change(document.querySelector('input[placeholder^="e.g."]')!, {
       target: { value: "Backlog" },

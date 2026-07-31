@@ -218,13 +218,51 @@ export default class CollectionsBackend implements PluginBackend {
     });
   }
 
+  /**
+   * Delete a managed collection — and its Steam collection, now rather than
+   * at the next sync.
+   *
+   * Syncing is deliberately deferred because it is a full library evaluation
+   * plus a batch of Cloud writes. A delete is neither: it is one targeted
+   * call. Leaving it to the next sync meant the collection vanished from the
+   * plugin while Steam still listed it, which reads exactly like a delete that
+   * did not work.
+   *
+   * If Steam can't be reached the ledger row is kept, so the next sync finds
+   * an entry whose owner is gone and issues the delete then — the existing
+   * path, unchanged.
+   */
   async deleteCollection(id: string): Promise<CollectionsConfig> {
     this._assertWritable();
-    return this.setConfig({
+    const entry = this.config.mirror.ledger.entries.find((e) => e.managedId === id);
+
+    const config = await this.setConfig({
       ...this.config,
       collections: this.config.collections.filter((c) => c.id !== id),
       collectionOrder: this.config.collectionOrder.filter((x) => x !== id),
     });
+    if (!entry) return config;
+
+    try {
+      await withSteamClient((c) =>
+        deleteCollection(c, { collectionId: entry.steamCollectionId }),
+      );
+    } catch (err) {
+      this.log?.warn(
+        `[collections] Couldn't remove "${entry.steamName}" from Steam yet, ` +
+          `leaving it for the next sync: ${err instanceof Error ? err.message : err}`,
+      );
+      return this.config;
+    }
+
+    await this._setMirrorState({
+      ...this.config.mirror,
+      ledger: {
+        ...this.config.mirror.ledger,
+        entries: this.config.mirror.ledger.entries.filter((e) => e.managedId !== id),
+      },
+    });
+    return this.config;
   }
 
   private _mutateConfig<T>(fn: () => Promise<T>): Promise<T> {

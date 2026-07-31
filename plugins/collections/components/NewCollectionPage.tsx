@@ -99,31 +99,12 @@ export function NewCollectionPage({
       // show is on screen in the place it will appear, rather than only in the
       // field you are typing into.
       title={trimmed.length > 0 ? trimmed : "New collection"}
-      description="Start from a preset, or name one of your own."
+      description="Name one of your own, or start from a preset."
       onBack={onBack}
       backLabel="Cancel"
     >
       <section className="flex flex-col gap-2">
-        <Text variant="secondary">Presets</Text>
-        <div className="flex flex-col gap-1.5">
-          {priced.map((p) => (
-            <PresetRow
-              key={p.preset.id}
-              priced={p}
-              alreadyExists={taken(p.preset.label)}
-              busy={picked === p.preset.id}
-              locked={picked !== null}
-              onPick={() => {
-                setPicked(p.preset.id);
-                onPickPreset(p.preset);
-              }}
-            />
-          ))}
-        </div>
-      </section>
-
-      <section className="flex flex-col gap-2 border-t border-base-300 pt-3">
-        <Text variant="secondary">Or start from scratch</Text>
+        <Text variant="secondary">Name your own</Text>
         <div className="flex gap-2">
           <TextInput
             value={name}
@@ -156,6 +137,25 @@ export function NewCollectionPage({
             It starts out matching your whole library; rules narrow it down.
           </Text>
         )}
+      </section>
+
+      <section className="flex flex-col gap-2 border-t border-base-300 pt-3">
+        <Text variant="secondary">Or start from a preset</Text>
+        <div className="flex flex-col gap-1.5">
+          {priced.map((p) => (
+            <PresetRow
+              key={p.preset.id}
+              priced={p}
+              alreadyExists={taken(p.preset.label)}
+              busy={picked === p.preset.id}
+              locked={picked !== null}
+              onPick={() => {
+                setPicked(p.preset.id);
+                onPickPreset(p.preset);
+              }}
+            />
+          ))}
+        </div>
       </section>
     </BuilderPage>
   );
