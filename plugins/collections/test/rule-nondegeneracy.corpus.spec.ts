@@ -14,14 +14,13 @@
 
 import { describe, expect, it } from "bun:test";
 import { DEFAULT_MIN_SIDE, RULE_EXPECTATIONS, type Expectation } from "./expectations";
-import { corpusExists, loadCorpus, type Corpus } from "./corpus-loader";
+import { loadCorpus, type Corpus } from "./corpus-loader";
 import { probeFor } from "./probes";
 import { evaluateTab } from "../lib/evaluate";
 import type { EvalResult } from "../lib/evaluate";
 import { RULE_KINDS } from "../lib/rules";
 import type { GroupRule, Rule, RuleKind, Tab } from "../lib/types";
 
-const haveCorpus = corpusExists();
 
 /** A tab containing exactly one rule, so the root trace is that rule's trace. */
 function singleRuleTab(rule: Rule): Tab {
@@ -72,8 +71,8 @@ function describeMeasurement(m: Degeneracy): string {
   return `${m.kind}: passed=${m.passed} failed=${m.failed} indeterminate=${m.indeterminate} of ${m.size}`;
 }
 
-describe.skipIf(!haveCorpus)("rule non-degeneracy against a real library", () => {
-  const corpus = haveCorpus ? loadCorpus() : null;
+describe("rule non-degeneracy against a real library", () => {
+  const corpus = loadCorpus();
 
   it("declares an expectation for every registered rule kind", () => {
     // Belt to the `satisfies` braces, in case the tsconfig include is reverted.
@@ -81,7 +80,6 @@ describe.skipIf(!haveCorpus)("rule non-degeneracy against a real library", () =>
   });
 
   it("accounts for every game in every rule's verdict tally", () => {
-    if (!corpus) return;
     for (const kind of RULE_KINDS) {
       const m = measure(kind, corpus);
       // The partition law. If this ever fails the evaluator is losing games,
@@ -94,7 +92,6 @@ describe.skipIf(!haveCorpus)("rule non-degeneracy against a real library", () =>
     const expectation: Expectation = RULE_EXPECTATIONS[kind];
 
     it(`${kind} — ${expectation.verdict}`, () => {
-      if (!corpus) return;
       const m = measure(kind, corpus);
       const detail = describeMeasurement(m);
 
@@ -145,15 +142,14 @@ describe.skipIf(!haveCorpus)("rule non-degeneracy against a real library", () =>
   }
 });
 
-describe.skipIf(!haveCorpus)("blocked rules must be explainable to the user", () => {
-  const corpus = haveCorpus ? loadCorpus() : null;
+describe("blocked rules must be explainable to the user", () => {
+  const corpus = loadCorpus();
 
   const blockedKinds = RULE_KINDS.filter(
     (kind) => RULE_EXPECTATIONS[kind].verdict === "blocked",
   );
 
   it("reports every unresolvable fact in blockedFacts, with a reason", () => {
-    if (!corpus) return;
 
     const silent: string[] = [];
     for (const kind of blockedKinds) {

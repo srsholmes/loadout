@@ -15,12 +15,11 @@
 
 import { describe, expect, it } from "bun:test";
 import { TAB_EXPECTATIONS, type TabExpectation } from "./expectations";
-import { corpusExists, loadCorpus } from "./corpus-loader";
+import { loadCorpus } from "./corpus-loader";
 import { evaluateTab } from "../lib/evaluate";
 import { BUILTIN_TAB_IDS, builtinTabs, templates } from "../lib/templates";
 import type { Tab } from "../lib/types";
 
-const haveCorpus = corpusExists();
 
 /** Every tab a user can end up with: the builtins plus one per template. */
 function allTabs(now: number): Array<{ id: string; tab: Tab; needs: string[] }> {
@@ -37,8 +36,8 @@ function allTabs(now: number): Array<{ id: string; tab: Tab; needs: string[] }> 
 // evaluated against a stable point rather than drifting with the wall clock.
 const NOW = 1_800_000_000;
 
-describe.skipIf(!haveCorpus)("tab non-degeneracy against a real library", () => {
-  const corpus = haveCorpus ? loadCorpus() : null;
+describe("tab non-degeneracy against a real library", () => {
+  const corpus = loadCorpus();
   const tabs = allTabs(NOW);
 
   it("declares an expectation for every builtin and template", () => {
@@ -94,7 +93,7 @@ describe.skipIf(!haveCorpus)("tab non-degeneracy against a real library", () => 
   }
 });
 
-describe.skipIf(!haveCorpus)("a tab that cannot work must say so", () => {
+describe("a tab that cannot work must say so", () => {
   const tabs = allTabs(NOW);
 
   it("declares `needs` for every template that is blocked on missing data", () => {

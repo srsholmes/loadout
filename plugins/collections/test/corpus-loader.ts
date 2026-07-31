@@ -91,10 +91,6 @@ function isPopulated(game: GameMetadata, field: keyof GameMetadata): boolean {
 
 let cached: Corpus | null = null;
 
-export function corpusExists(): boolean {
-  return existsSync(corpusPath());
-}
-
 /**
  * Parse the corpus. Cached per module instance — with `--isolate` that means
  * once per spec file, which is fine for a handful of files but is the reason
