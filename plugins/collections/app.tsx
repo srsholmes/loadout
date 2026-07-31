@@ -35,6 +35,7 @@ import { CollectionCard } from "./components/CollectionCard";
 import { CollectionDetail } from "./components/CollectionDetail";
 import { CollectionActionsPage } from "./components/CollectionActionsPage";
 import { NewCollectionPage } from "./components/NewCollectionPage";
+import type { CollectionPreset } from "./lib/presets";
 import { RuleBuilder } from "./components/RuleBuilder";
 import { SettingsPage, type SyncChange } from "./components/SettingsPage";
 import { buildEvalGames } from "./lib/facts";
@@ -211,7 +212,9 @@ export function Collections() {
       <div className="p-7 h-full overflow-y-auto" style={{ overflowX: "hidden" }}>
         <NewCollectionPage
           existingNames={(summaries ?? []).map((c) => c.label)}
+          games={evalGames}
           onBack={() => setView({ kind: "grid" })}
+          onPickPreset={(preset) => void createCollection(preset.label, preset)}
           onCreate={(label) => void createCollection(label)}
         />
       </div>
@@ -469,18 +472,35 @@ export function Collections() {
     }
   }
 
-  async function createCollection(label: string) {
+  async function createCollection(label: string, preset?: CollectionPreset) {
     try {
       const config = (await call("createCollection", label)) as {
         collections: ManagedCollection[];
       };
+      const made = config.collections[config.collections.length - 1];
+      if (!made) throw new Error("Steam accepted the collection but didn't return it");
+
+      if (preset) {
+        // Rebuilt against the id the backend assigned rather than the preset's
+        // own, so the rule ids inside it stay unique once two collections come
+        // from the same preset.
+        const built = { ...preset.build(made.id), label: made.label };
+        const updated = config.collections.map((c) => (c.id === made.id ? built : c));
+        await call("setCollections", updated);
+        setCollections(updated);
+        await loadGrid();
+        // A preset is already a result, so it opens as one. The builder would
+        // be showing its homework.
+        await openCollection(built);
+        return;
+      }
+
       setCollections(config.collections);
       await loadGrid();
-      // Straight into the builder: a new collection matches the whole library,
-      // and leaving the user on the grid in front of a 4000-game card with no
-      // obvious next step is the wrong place to stop.
-      const made = config.collections[config.collections.length - 1];
-      if (made) setView({ kind: "rules", id: made.id });
+      // Straight into the builder: a collection built from scratch matches the
+      // whole library, and leaving the user on the grid in front of a
+      // 2500-game card with no obvious next step is the wrong place to stop.
+      setView({ kind: "rules", id: made.id });
     } catch (err) {
       notify(err instanceof Error ? err.message : "Couldn't create that collection", {
         kind: "error",

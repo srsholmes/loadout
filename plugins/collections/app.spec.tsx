@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import * as actualUi from "@loadout/ui";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { LIBRARY } from "./test/fixtures/library";
 
 const calls: Array<{ method: string; args: unknown[] }> = [];
 let summaries: unknown[] = [];
@@ -27,12 +28,27 @@ const callMock = mock((method: string, ...args: unknown[]) => {
     case "listAll":
       return Promise.resolve({ collections: summaries, steamReachable });
     case "getSnapshot":
-      return Promise.resolve({ games: [], providers: {}, generatedAt: 0 });
+      // A real library, not an empty one: the preset gallery greys out any
+      // preset whose data source is missing, so with no games every preset
+      // would be unpickable.
+      return Promise.resolve({ games: LIBRARY, providers: {}, generatedAt: 0 });
     case "getConfig":
-      return Promise.resolve({ config: { collections: managedCollections }, warnings: [], readOnly: false });
+      // `mirror` matters: the app reads it in the same load as the snapshot,
+      // and without it that load throws and the library never arrives.
+      return Promise.resolve({
+        config: {
+          collections: managedCollections,
+          mirror: { autoSync: false, pendingSync: false },
+        },
+        warnings: [],
+        readOnly: false,
+      });
     case "createCollection":
       return Promise.resolve({
-        collections: [...managedCollections, fullCollection("made", "New collection")],
+        collections: [
+          ...managedCollections,
+          fullCollection("made", String((args as string[])[0] ?? "New collection")),
+        ],
       });
     case "syncMirror":
       return Promise.resolve({
@@ -177,6 +193,30 @@ describe("editing a collection's rules", () => {
   /** A managed collection with the shape the rule builder needs. */
   const managed = fullCollection;
 
+  it("builds a collection from a preset without a word being typed", async () => {
+    // Typing on a handheld means the on-screen keyboard and a thumbstick. A
+    // preset arrives named and ruled, so the whole flow is two presses.
+    ({ unmount } = renderApp());
+    await waitFor(() => expect(screen.getByRole("button", { name: "New" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "New" }));
+
+    await waitFor(() => expect(screen.getByText("Presets")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /Never played/ }));
+
+    await waitFor(() => expect(calls.some((c) => c.method === "createCollection")).toBe(true));
+    expect(calls.find((c) => c.method === "createCollection")!.args).toEqual(["Never played"]);
+
+    // And the rules land with it — a preset that created an empty collection
+    // would just be a slower way of pressing New.
+    await waitFor(() => expect(calls.some((c) => c.method === "setCollections")).toBe(true));
+    const saved = calls.find((c) => c.method === "setCollections")!.args[0] as Array<{
+      label: string;
+      root: { children: unknown[] };
+    }>;
+    const made = saved.find((c) => c.label === "Never played")!;
+    expect(made.root.children.length).toBeGreaterThan(0);
+  });
+
   it("opens a managed collection's rules from the cog", async () => {
     // One screen, not two: Options and Edit rules were separate pages that
     // both edited the same collection.
@@ -233,12 +273,14 @@ describe("editing a collection's rules", () => {
     ({ unmount } = renderApp());
     await waitFor(() => expect(screen.getByText(/No collections yet/)).toBeTruthy());
 
-    // New now names the collection first — the name is what Steam shows, so
-    // it is the one decision worth taking before the rules.
+    // New names the collection first — the name is what Steam shows, so it is
+    // the one decision worth taking before the rules.
     fireEvent.click(screen.getByRole("button", { name: "New" }));
-    await waitFor(() => expect(screen.getByText(/Name it first/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Or start from scratch")).toBeTruthy());
 
-    fireEvent.change(document.querySelector("input")!, { target: { value: "Backlog" } });
+    fireEvent.change(document.querySelector('input[placeholder^="e.g."]')!, {
+      target: { value: "Backlog" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(calls.some((c) => c.method === "createCollection")).toBe(true));
     expect(calls.find((c) => c.method === "createCollection")!.args).toEqual(["Backlog"]);
