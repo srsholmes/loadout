@@ -68,15 +68,20 @@ One endpoint for everything. `args` is positional, matching the
 signature in the plugin's documentation:
 
 ```sh
-curl -s http://127.0.0.1:33820/api/rpc \
+curl -s http://127.0.0.1:33820/api/agent/call \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"plugin":"<plugin-id>","method":"<method>","args":[]}'
 ```
 
 Responses are `{"id":"…","result":…}`, or `{"id":"…","error":"…"}` with
-HTTP 500 when the method threw. Malformed requests return HTTP 400 naming
+HTTP 500 when the method threw. Unknown plugins and methods return 404
+with a pointer to the right index; malformed requests return 400 naming
 the problem.
+
+`/api/rpc` accepts the same body and is the raw path Loadout's own
+overlay uses. Prefer `/api/agent/call` — it checks the method's safety
+class first and tells you what you're about to do.
 
 ## Before you change anything
 
@@ -92,11 +97,15 @@ a running game.
 - A safety label marked *(inferred)* was guessed from the method name
   rather than declared by the plugin author. Treat those with more care.
 
-Write access through the documented surface is off by default. If the
-user wants you to make changes, either send `X-Loadout-Agent-Write: 1`
-on the request or set `agentWrites: true` in
-`~/.config/loadout/config.json`. This is a guardrail against accidents,
-not a security boundary: the token is available to any local process.
+Write access is off by default: `write` and `destructive` calls to
+`/api/agent/call` return HTTP 403 until you opt in, either by sending
+`X-Loadout-Agent-Write: 1` on the request or by setting
+`agentWrites: true` in `~/.config/loadout/config.json`.
+
+This is a guardrail against accidents, not a security boundary — the
+token is available to any local process and `/api/rpc` is ungated. Treat
+the 403 as a prompt to check with the user, not an obstacle to route
+around.
 
 ## Live events
 

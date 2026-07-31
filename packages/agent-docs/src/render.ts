@@ -85,17 +85,20 @@ TOKEN=$(curl -s ${ctx.origin}/api/token | jq -r .token)
 signature shown in the docs:
 
 \`\`\`sh
-curl -s ${ctx.origin}/api/rpc \\
+curl -s ${ctx.origin}/api/agent/call \\
   -H "Authorization: Bearer $TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{"plugin":"bluetooth","method":"connectDevice","args":["AA:BB:CC:DD:EE:FF"]}'
 \`\`\`
 
 The response is \`{"id": "...", "result": ...}\`, or
-\`{"id": "...", "error": "..."}\` with HTTP 500 when the method threw. A
-malformed request returns 400 naming the problem. The \`id\` field
-correlates requests on the WebSocket transport; over HTTP you may omit it
-and one will be generated.
+\`{"id": "...", "error": "..."}\` with HTTP 500 when the method threw.
+Unknown plugins and methods return 404 with a pointer to the right index,
+and a malformed request returns 400 naming the problem.
+
+\`/api/rpc\` takes the same body and is the raw path the overlay itself
+uses. Prefer \`/api/agent/call\`: it checks the safety class first and
+gives you a specific error instead of silently doing the thing.
 
 **Safety classes.** Every method is labelled \`read\`, \`write\` or
 \`destructive\`. Where a label is marked *(inferred)* it was guessed from
@@ -104,8 +107,8 @@ more care.
 
 ${
   ctx.writesEnabled
-    ? "Write access is currently **enabled** on this machine, so `write` and\n`destructive` methods will execute."
-    : "Write access is currently **disabled** on this machine. `read` methods\nwork normally; `write` and `destructive` calls through this documented\nsurface require opting in, either by sending `X-Loadout-Agent-Write: 1`\nor by setting `agentWrites: true` in `~/.config/loadout/config.json`."
+    ? "Write access is currently **enabled** on this machine, so `write` and\n`destructive` methods will execute. These adjust real hardware — power\nlimits, fan behaviour, storage — on a device the user is holding. Confirm\nwith them before changing anything they didn't ask you to change."
+    : "Write access is currently **disabled** on this machine. `read` methods\nwork normally; `write` and `destructive` calls to `/api/agent/call`\nreturn HTTP 403 until you opt in, either by sending the header\n`X-Loadout-Agent-Write: 1` or by setting `agentWrites: true` in\n`~/.config/loadout/config.json`.\n\nThis is a guardrail against accidents, not a security boundary — the\ntoken is public on loopback and `/api/rpc` is ungated. Ask the user\nbefore opting in."
 }`;
 }
 
@@ -242,7 +245,7 @@ function renderMethod(method: AgentMethodDoc, pluginId: string, ctx: RenderConte
     parts.push(
       "",
       "```sh",
-      `curl -s ${ctx.origin}/api/rpc \\`,
+      `curl -s ${ctx.origin}/api/agent/call \\`,
       `  -H "Authorization: Bearer $TOKEN" \\`,
       `  -H "Content-Type: application/json" \\`,
       `  -d '${body}'`,

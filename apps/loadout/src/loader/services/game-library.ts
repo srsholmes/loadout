@@ -56,13 +56,17 @@ export class GameLibraryService implements PluginBackend {
   async rescan(): Promise<GameInfo[]> {
     const fresh = await scanLibrary();
     this.cache = fresh;
-    this.broadcastChange();
+    this._broadcastChange();
     return fresh.map((g) => ({ ...g, tags: [...g.tags] }));
   }
 
-  private broadcastChange(): void {
+  // Underscore-prefixed, not merely `private`: TypeScript's `private` is
+  // erased at runtime, so `resolveMethod` happily dispatches it and this
+  // internal would otherwise be a callable RPC endpoint. The underscore
+  // convention is the only thing the dispatcher actually honours.
+  private _broadcastChange(): void {
     const games = this.cache ?? [];
-    const sig = this.signature(games);
+    const sig = this._signature(games);
     if (sig === this.lastBroadcastSig) return;
     this.lastBroadcastSig = sig;
     const payload: GameLibraryChangedEvent = {
@@ -72,7 +76,7 @@ export class GameLibraryService implements PluginBackend {
     this.emit?.({ event: "libraryChanged", data: payload });
   }
 
-  private signature(games: GameInfo[]): string {
+  private _signature(games: GameInfo[]): string {
     // Compact projection: count + sorted appId list. Two libraries with
     // identical membership are treated as identical; an appId or
     // shortcut added/removed flips the sig. Names/tags shifts don't
