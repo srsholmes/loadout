@@ -6,13 +6,12 @@ import {
   formatMinutes,
   joinList,
   ruleLabel,
-  summarizeGrouping,
   summarizeRule,
   summarizeSort,
-  summarizeTab,
+  summarizeCollection,
 } from "./summarize";
 import { RULE_KINDS } from "./rules";
-import type { GroupRule, Rule, RuleKind, Tab } from "./types";
+import type { GroupRule, Rule, RuleKind, ManagedCollection } from "./types";
 import { epoch } from "../test/fixtures/library";
 
 /** One fully-specified rule per kind, for the exhaustive sweeps below. */
@@ -83,16 +82,13 @@ const EMPTY_SAMPLES: Rule[] = [
   { id: "a", kind: "group", combinator: "all", children: [] },
 ];
 
-function tabWith(root: GroupRule, overrides: Partial<Tab> = {}): Tab {
+function collectionWith(root: GroupRule, overrides: Partial<ManagedCollection> = {}): ManagedCollection {
   return {
     id: "t",
     label: "Test",
-    visible: true,
-    autoHide: false,
     root,
     sort: [{ field: "sortAs", dir: "asc" }],
     limit: null,
-    group: { kind: "none" },
     display: { tileWidth: 150, showLabels: true, badges: [] },
     mirror: { enabled: false, steamName: "Test" },
     indeterminatePolicy: "pass",
@@ -387,33 +383,10 @@ describe("summarizeSort", () => {
   });
 });
 
-describe("summarizeGrouping", () => {
-  it("describes each mode", () => {
-    expect(summarizeGrouping({ kind: "none" })).toBe("not grouped");
-    expect(
-      summarizeGrouping({
-        kind: "field",
-        field: "genre",
-        sortGroups: "alpha",
-        otherLabel: null,
-      }),
-    ).toBe("grouped by genre");
-    expect(
-      summarizeGrouping({
-        kind: "rules",
-        groups: [
-          { id: "a", label: "A", rule: SAMPLES.installed },
-          { id: "b", label: "B", rule: SAMPLES.owned },
-        ],
-        residualLabel: null,
-      }),
-    ).toBe("2 sub-tabs");
-  });
-});
 
-describe("summarizeTab", () => {
+describe("summarizeCollection", () => {
   it("reads as one sentence", () => {
-    const tab = tabWith({
+    const tab = collectionWith({
       id: "root",
       kind: "group",
       combinator: "all",
@@ -422,37 +395,36 @@ describe("summarizeTab", () => {
         { id: "b", kind: "lastPlayed", epochSec: {}, neverPlayedOnly: true },
       ],
     });
-    expect(summarizeTab(tab)).toBe(
+    expect(summarizeCollection(tab)).toBe(
       "Show a game when is installed and has never been played, sorted by name ascending",
     );
   });
 
   it("says 'every game' for an empty rule tree rather than an empty clause", () => {
-    const tab = tabWith({ id: "root", kind: "group", combinator: "all", children: [] });
-    expect(summarizeTab(tab)).toBe("Show every game, sorted by name ascending");
+    const tab = collectionWith({ id: "root", kind: "group", combinator: "all", children: [] });
+    expect(summarizeCollection(tab)).toBe("Show every game, sorted by name ascending");
   });
 
   it("reads an inverted root as 'unless'", () => {
-    const tab = tabWith({
+    const tab = collectionWith({
       id: "root",
       kind: "group",
       combinator: "all",
       children: [SAMPLES.installed],
       invert: true,
     });
-    expect(summarizeTab(tab)).toContain("Show a game unless is installed");
+    expect(summarizeCollection(tab)).toContain("Show a game unless is installed");
   });
 
-  it("mentions the limit and grouping when set", () => {
-    const tab = tabWith(
-      { id: "root", kind: "group", combinator: "all", children: [SAMPLES.installed] },
-      {
-        limit: 30,
-        group: { kind: "field", field: "genre", sortGroups: "alpha", otherLabel: null },
-      },
+  it("mentions the limit when set", () => {
+    // Grouping is gone — Steam collections are flat — so the sentence now
+    // carries rules, sort and cap only.
+    const summary = summarizeCollection(
+      collectionWith(
+        { kind: "group", id: "g", combinator: "all", children: [{ id: "a", kind: "installed" }] },
+        { limit: 30 },
+      ),
     );
-    const text = summarizeTab(tab);
-    expect(text).toContain("first 30");
-    expect(text).toContain("grouped by genre");
+    expect(summary).toContain("first 30");
   });
 });

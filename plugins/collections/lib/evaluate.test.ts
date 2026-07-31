@@ -4,16 +4,16 @@ import {
   combineAny,
   countMatches,
   evaluateRule,
-  evaluateTab,
+  evaluateCollection,
 } from "./evaluate";
 import { buildEvalGames } from "./facts";
-import type { EvalGame, GroupRule, Rule, Tab, Verdict } from "./types";
+import type { EvalGame, GroupRule, Rule, ManagedCollection, Verdict } from "./types";
 import { IDS, LIBRARY, game, ids } from "../test/fixtures/library";
 
 const ALL_VERDICTS: Verdict[] = [true, false, "indeterminate"];
 
 /** Minimal tab wrapper so specs only have to describe the rule tree. */
-function tabWith(root: GroupRule, overrides: Partial<Tab> = {}): Tab {
+function collectionWith(root: GroupRule, overrides: Partial<ManagedCollection> = {}): ManagedCollection {
   return {
     id: "t",
     label: "Test",
@@ -178,7 +178,7 @@ describe("evaluateRule — inversion", () => {
   });
 });
 
-describe("evaluateTab — indeterminatePolicy", () => {
+describe("evaluateCollection — indeterminatePolicy", () => {
   // The policy governs an unavailable *source*, not a game with missing
   // metadata. A dead fact resolver is the canonical case.
   const deadSource = buildEvalGames(LIBRARY, {
@@ -194,16 +194,16 @@ describe("evaluateTab — indeterminatePolicy", () => {
   ]);
 
   it('keeps the tab populated under "pass" when a source is down', () => {
-    const result = evaluateTab(
-      tabWith(unanswerable, { indeterminatePolicy: "pass" }),
+    const result = evaluateCollection(
+      collectionWith(unanswerable, { indeterminatePolicy: "pass" }),
       deadSource,
     );
     expect(result.matched).toHaveLength(LIBRARY.length);
   });
 
   it('empties the tab under "fail"', () => {
-    const result = evaluateTab(
-      tabWith(unanswerable, { indeterminatePolicy: "fail" }),
+    const result = evaluateCollection(
+      collectionWith(unanswerable, { indeterminatePolicy: "fail" }),
       deadSource,
     );
     expect(result.matched).toHaveLength(0);
@@ -215,8 +215,8 @@ describe("evaluateTab — indeterminatePolicy", () => {
     // "Metacritic 80+" tab would list unrated games under the default.
     const byScore = group("all", [{ id: "a", kind: "metacritic", score: { min: 80 } }]);
     for (const policy of ["pass", "fail"] as const) {
-      const result = evaluateTab(
-        tabWith(byScore, { indeterminatePolicy: policy }),
+      const result = evaluateCollection(
+        collectionWith(byScore, { indeterminatePolicy: policy }),
         evalLibrary,
       );
       expect(ids(result.matched)).not.toContain(IDS.obscure);
@@ -225,13 +225,13 @@ describe("evaluateTab — indeterminatePolicy", () => {
   });
 });
 
-describe("evaluateTab — sort, cap and ordering", () => {
+describe("evaluateCollection — sort, cap and ordering", () => {
   const everything = group("all", []);
 
   it("applies limit AFTER sorting, not before", () => {
     // "3 most recently played" only means anything if the cap comes last.
-    const result = evaluateTab(
-      tabWith(everything, {
+    const result = evaluateCollection(
+      collectionWith(everything, {
         sort: [{ field: "lastPlayed", dir: "desc" }],
         limit: 3,
       }),
@@ -245,8 +245,8 @@ describe("evaluateTab — sort, cap and ordering", () => {
   });
 
   it("reports total and cappedOut against the pre-cap count", () => {
-    const result = evaluateTab(
-      tabWith(everything, { limit: 4 }),
+    const result = evaluateCollection(
+      collectionWith(everything, { limit: 4 }),
       evalLibrary,
     );
     expect(result.total).toBe(LIBRARY.length);
@@ -255,38 +255,29 @@ describe("evaluateTab — sort, cap and ordering", () => {
   });
 
   it("treats limit 0 as an empty tab rather than uncapped", () => {
-    const result = evaluateTab(tabWith(everything, { limit: 0 }), evalLibrary);
+    const result = evaluateCollection(collectionWith(everything, { limit: 0 }), evalLibrary);
     expect(result.matched).toHaveLength(0);
     expect(result.total).toBe(LIBRARY.length);
     expect(result.cappedOut).toBe(LIBRARY.length);
   });
 
-  it("wraps ungrouped results in one synthetic group carrying the tab label", () => {
-    const result = evaluateTab(
-      tabWith(everything, { label: "Everything" }),
-      evalLibrary,
-    );
-    expect(result.groups).toHaveLength(1);
-    expect(result.groups[0]!.label).toBe("Everything");
-    expect(result.groups[0]!.games).toHaveLength(LIBRARY.length);
-  });
 });
 
-describe("evaluateTab — trace", () => {
+describe("evaluateCollection — trace", () => {
   const root = group("all", [
     { id: "inst", kind: "installed" },
     { id: "big", kind: "sizeOnDisk", bytes: { min: 10 * 1024 ** 3 } },
   ]);
 
   it("is not populated unless requested", () => {
-    const result = evaluateTab(tabWith(root), evalLibrary);
+    const result = evaluateCollection(collectionWith(root), evalLibrary);
     expect(result.leafMasks).toBeUndefined();
     // Counts stay at their zero-initialised values on the untraced path.
     expect(result.trace.passed).toBe(0);
   });
 
   it("tallies passed/failed/indeterminate per node", () => {
-    const result = evaluateTab(tabWith(root), evalLibrary, { trace: true });
+    const result = evaluateCollection(collectionWith(root), evalLibrary, { trace: true });
     const [instNode, bigNode] = result.trace.children!;
 
     const installedCount = LIBRARY.filter((g) => g.installed).length;
@@ -309,8 +300,8 @@ describe("evaluateTab — trace", () => {
         ]),
       ),
     });
-    const result = evaluateTab(
-      tabWith(group("all", [{ id: "p", kind: "protonTier", tiers: ["gold"] }])),
+    const result = evaluateCollection(
+      collectionWith(group("all", [{ id: "p", kind: "protonTier", tiers: ["gold"] }])),
       dead,
       { trace: true },
     );
@@ -318,19 +309,19 @@ describe("evaluateTab — trace", () => {
   });
 
   it("computes withoutThis as the parent count with that child removed", () => {
-    const result = evaluateTab(tabWith(root), evalLibrary, { trace: true });
+    const result = evaluateCollection(collectionWith(root), evalLibrary, { trace: true });
     const [instNode, bigNode] = result.trace.children!;
 
     // Removing `installed` leaves only the size rule.
-    const sizeOnly = evaluateTab(
-      tabWith(group("all", [root.children[1]!])),
+    const sizeOnly = evaluateCollection(
+      collectionWith(group("all", [root.children[1]!])),
       evalLibrary,
     );
     expect(instNode!.withoutThis).toBe(sizeOnly.total);
 
     // Removing the size rule leaves only `installed`.
-    const instOnly = evaluateTab(
-      tabWith(group("all", [root.children[0]!])),
+    const instOnly = evaluateCollection(
+      collectionWith(group("all", [root.children[0]!])),
       evalLibrary,
     );
     expect(bigNode!.withoutThis).toBe(instOnly.total);
@@ -340,7 +331,7 @@ describe("evaluateTab — trace", () => {
   });
 
   it("emits one leaf mask per leaf, aligned to the input array order", () => {
-    const result = evaluateTab(tabWith(root), evalLibrary, { trace: true });
+    const result = evaluateCollection(collectionWith(root), evalLibrary, { trace: true });
     expect([...result.leafMasks!.keys()].sort()).toEqual(["big", "inst"]);
 
     const instMask = result.leafMasks!.get("inst")!;
@@ -359,7 +350,7 @@ describe("evaluateTab — trace", () => {
       { id: "never", kind: "title", match: "contains", value: "zzzznope" },
       { id: "inst", kind: "installed" },
     ]);
-    const result = evaluateTab(tabWith(shortCircuit), evalLibrary, {
+    const result = evaluateCollection(collectionWith(shortCircuit), evalLibrary, {
       trace: true,
     });
     expect(result.matched).toHaveLength(0);
@@ -370,7 +361,7 @@ describe("evaluateTab — trace", () => {
   });
 });
 
-describe("evaluateTab — blockedFacts", () => {
+describe("evaluateCollection — blockedFacts", () => {
   it("reports the resolver's reason verbatim, with the affected rule ids", () => {
     const withFacts = buildEvalGames(
       LIBRARY,
@@ -387,7 +378,7 @@ describe("evaluateTab — blockedFacts", () => {
       { id: "proton", kind: "protonTier", tiers: ["platinum"] },
     ]);
 
-    const result = evaluateTab(tabWith(root), withFacts);
+    const result = evaluateCollection(collectionWith(root), withFacts);
     expect(result.blockedFacts).toEqual([
       {
         fact: "protonTier",
@@ -402,8 +393,8 @@ describe("evaluateTab — blockedFacts", () => {
   });
 
   it("is empty when no fact-backed rule is present", () => {
-    const result = evaluateTab(
-      tabWith(group("all", [{ id: "a", kind: "installed" }])),
+    const result = evaluateCollection(
+      collectionWith(group("all", [{ id: "a", kind: "installed" }])),
       evalLibrary,
     );
     expect(result.blockedFacts).toEqual([]);
@@ -411,19 +402,19 @@ describe("evaluateTab — blockedFacts", () => {
 });
 
 describe("countMatches", () => {
-  it("agrees with evaluateTab's pre-cap total", () => {
+  it("agrees with evaluateCollection's pre-cap total", () => {
     const root = group("any", [
       { id: "a", kind: "installed" },
       { id: "b", kind: "collection", collectionIds: ["favorite"], mode: "anyOf" },
     ]);
-    const tab = tabWith(root);
+    const tab = collectionWith(root);
     expect(countMatches(tab, evalLibrary)).toBe(
-      evaluateTab(tab, evalLibrary).total,
+      evaluateCollection(tab, evalLibrary).total,
     );
   });
 
   it("ignores the cap, since the palette wants the true match count", () => {
-    const tab = tabWith(group("all", []), { limit: 2 });
+    const tab = collectionWith(group("all", []), { limit: 2 });
     expect(countMatches(tab, evalLibrary)).toBe(LIBRARY.length);
   });
 });
@@ -437,8 +428,8 @@ describe("a resolver that answered for only some games", () => {
     const games = buildEvalGames(LIBRARY, {
       protonTier: new Map([[LIBRARY[0]!.appId, { state: "ok", value: "gold" }]]),
     });
-    const tab = tabWith({ kind: "protonTier", id: "r", tiers: ["platinum"] });
-    const result = evaluateTab(tab, games, { trace: true });
+    const tab = collectionWith({ kind: "protonTier", id: "r", tiers: ["platinum"] });
+    const result = evaluateCollection(tab, games, { trace: true });
 
     expect(result.total).toBe(0);
     expect(result.trace.indeterminate).toBe(0);
@@ -448,8 +439,8 @@ describe("a resolver that answered for only some games", () => {
     const games = buildEvalGames(LIBRARY, {
       protonTier: new Map([[LIBRARY[0]!.appId, { state: "ok", value: "platinum" }]]),
     });
-    const tab = tabWith({ kind: "protonTier", id: "r", tiers: ["platinum"] });
-    expect(evaluateTab(tab, games).total).toBe(1);
+    const tab = collectionWith({ kind: "protonTier", id: "r", tiers: ["platinum"] });
+    expect(evaluateCollection(tab, games).total).toBe(1);
   });
 
   it("keeps a whole-source outage indeterminate, not a silent no", () => {
@@ -462,8 +453,8 @@ describe("a resolver that answered for only some games", () => {
         ),
       },
     );
-    const tab = tabWith({ kind: "protonTier", id: "r", tiers: ["platinum"] });
-    const result = evaluateTab(tab, games, { trace: true });
+    const tab = collectionWith({ kind: "protonTier", id: "r", tiers: ["platinum"] });
+    const result = evaluateCollection(tab, games, { trace: true });
     expect(result.trace.indeterminate).toBe(LIBRARY.length);
     expect(result.total).toBe(LIBRARY.length); // "pass" policy
   });

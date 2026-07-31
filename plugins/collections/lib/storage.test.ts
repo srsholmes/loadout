@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pluginStoragePath } from "@loadout/plugin-storage";
-import { listBackups } from "./backups";
+import { MAX_BACKUPS, listBackups } from "./backups";
 import {
   COLLECTIONS_SCHEMA_VERSION,
   defaultConfig,
@@ -42,9 +42,22 @@ function readStored(): CollectionsConfig {
   return JSON.parse(readFileSync(CONFIG_PATH(), "utf-8")) as CollectionsConfig;
 }
 
-function renamedTab(label: string): CollectionsConfig {
-  const base = defaultConfig();
-  return { ...base, collections: [{ ...base.tabs[0]!, label }, ...base.tabs.slice(1)] };
+function withCollection(label: string): CollectionsConfig {
+  return {
+    ...defaultConfig(),
+    collections: [
+      {
+        id: "c0",
+        label,
+        root: { kind: "group", id: "g", combinator: "all", children: [] },
+        sort: [],
+        limit: null,
+        display: { tileWidth: 150, showLabels: true, badges: [] },
+        indeterminatePolicy: "pass",
+      },
+    ] as CollectionsConfig["collections"],
+    collectionOrder: ["c0"],
+  };
 }
 
 describe("loadConfig — first run", () => {
@@ -53,7 +66,7 @@ describe("loadConfig — first run", () => {
     expect(result.seeded).toBe(true);
     expect(result.warnings).toEqual([]);
     expect(result.readOnly).toBe(false);
-    expect(result.config.tabs.length).toBeGreaterThan(0);
+    expect(result.config.collections).toEqual([]);
   });
 
   it("persists the seed, so the second load is not a first run", async () => {
@@ -71,9 +84,9 @@ describe("loadConfig — first run", () => {
 
 describe("loadConfig — normal load", () => {
   it("round-trips a saved config", async () => {
-    await saveConfig(renamedTab("Renamed"));
+    await saveConfig(withCollection("Renamed"));
     const result = await loadConfig();
-    expect(result.config.tabs[0]!.label).toBe("Renamed");
+    expect(result.config.collections[0]!.label).toBe("Renamed");
     expect(result.warnings).toEqual([]);
     expect(result.seeded).toBe(false);
   });
@@ -84,12 +97,12 @@ describe("loadConfig — normal load", () => {
     writeStored("{ not json at all");
     const result = await loadConfig();
     expect(result.seeded).toBe(true);
-    expect(result.config.tabs.length).toBeGreaterThan(0);
+    expect(result.config.collections).toEqual([]);
   });
 
   it("salvages a partly-broken config and reports what went", async () => {
     const base = defaultConfig();
-    writeStored({ ...base, collections: [base.tabs[0], { label: "Broken" }] });
+    writeStored({ ...base, collections: [...withCollection("Fine").collections, { label: "Broken" }] });
 
     const result = await loadConfig();
     expect(result.warnings.some((w) => w.includes("Broken"))).toBe(true);
@@ -98,7 +111,7 @@ describe("loadConfig — normal load", () => {
 
   it("persists the salvaged shape so warnings don't reappear every boot", async () => {
     const base = defaultConfig();
-    writeStored({ ...base, collections: [base.tabs[0], { label: "Broken" }] });
+    writeStored({ ...base, collections: [...withCollection("Fine").collections, { label: "Broken" }] });
 
     await loadConfig();
     expect((await loadConfig()).warnings).toEqual([]);
@@ -108,7 +121,7 @@ describe("loadConfig — normal load", () => {
     for (const junk of ["{ broken", "[]", "null", '"a string"', "{}"]) {
       writeStored(junk);
       const result = await loadConfig();
-      expect(result.config.tabs.length).toBeGreaterThan(0);
+      expect(result.config.collections).toEqual([]);
     }
   });
 });
@@ -133,9 +146,9 @@ describe("loadConfig — a config from a newer build", () => {
     expect(readStored().schemaVersion).toBe(COLLECTIONS_SCHEMA_VERSION + 3);
   });
 
-  it("still returns usable tabs so the plugin renders", async () => {
+  it("still returns a usable config so the plugin renders", async () => {
     writeStored(future());
-    expect((await loadConfig()).config.tabs.length).toBeGreaterThan(0);
+    expect(Array.isArray((await loadConfig()).config.collections)).toBe(true);
   });
 });
 
@@ -162,7 +175,7 @@ describe("loadConfig — daily backup", () => {
     for (let day = 1; day <= 5; day++) {
       await loadConfig(T(`2026-07-0${day}T00:00:00.000Z`));
     }
-    expect((await listBackups()).length).toBeLessThanOrEqual(2);
+    expect((await listBackups()).length).toBeLessThanOrEqual(MAX_BACKUPS);
   });
 });
 
@@ -182,29 +195,29 @@ describe("saveConfig", () => {
   });
 
   it("leaves the previous good config in place when it refuses", async () => {
-    await saveConfig(renamedTab("Good"));
+    await saveConfig(withCollection("Good"));
     const invalid = { ...defaultConfig(), collections: [{ label: "bad" }] } as never;
     await expect(saveConfig(invalid)).rejects.toThrow();
-    expect(readStored().tabs[0]!.label).toBe("Good");
+    expect(readStored().collections[0]!.label).toBe("Good");
   });
 
   it("names the actual problems in the error, for the log", async () => {
     const invalid = { ...defaultConfig(), collections: [{ label: "" }] } as never;
-    await expect(saveConfig(invalid)).rejects.toThrow(/missing an id/);
+    await expect(saveConfig(invalid)).rejects.toThrow(/id must be a non-empty string/);
   });
 });
 
 describe("saveWithBackup", () => {
   it("snapshots the previous state under the given reason", async () => {
-    const before = renamedTab("Before");
+    const before = withCollection("Before");
     await saveConfig(before);
-    await saveWithBackup(renamedTab("After"), before, "pre-import", T("2026-07-30T10:00:00.000Z"));
+    await saveWithBackup(withCollection("After"), before, "pre-import", T("2026-07-30T10:00:00.000Z"));
 
     const backups = await listBackups();
     const backup = backups.find((b) => b.reason === "pre-import")!;
     expect(backup).toBeDefined();
-    expect(backup.tabLabels[0]).toBe("Before");
-    expect(readStored().tabs[0]!.label).toBe("After");
+    expect(backup.collectionLabels[0]).toBe("Before");
+    expect(readStored().collections[0]!.label).toBe("After");
   });
 
   it("still throws if the save itself is invalid", async () => {
@@ -218,31 +231,31 @@ describe("saveWithBackup", () => {
 
 describe("restoreBackup", () => {
   it("restores a backup over the live config", async () => {
-    const original = renamedTab("Original");
+    const original = withCollection("Original");
     await saveConfig(original);
-    await saveWithBackup(renamedTab("Changed"), original, "manual", T("2026-07-30T10:00:00.000Z"));
+    await saveWithBackup(withCollection("Changed"), original, "manual", T("2026-07-30T10:00:00.000Z"));
 
     const backup = (await listBackups()).find((b) => b.reason === "manual")!;
-    const result = await restoreBackup(backup.file, renamedTab("Changed"));
+    const result = await restoreBackup(backup.file, withCollection("Changed"));
 
-    expect(result.config.tabs[0]!.label).toBe("Original");
-    expect(readStored().tabs[0]!.label).toBe("Original");
+    expect(result.config.collections[0]!.label).toBe("Original");
+    expect(readStored().collections[0]!.label).toBe("Original");
   });
 
   it("is itself undoable — it snapshots the state it replaced", async () => {
     // TabMaster's restore instead sets a "don't save until you reboot" flag
     // and asks the user to restart the machine. Making restore just another
     // atomic save removes the need for that ceremony.
-    const original = renamedTab("Original");
+    const original = withCollection("Original");
     await saveConfig(original);
-    await saveWithBackup(renamedTab("Changed"), original, "manual", T("2026-07-30T10:00:00.000Z"));
+    await saveWithBackup(withCollection("Changed"), original, "manual", T("2026-07-30T10:00:00.000Z"));
 
     const backup = (await listBackups()).find((b) => b.reason === "manual")!;
-    await restoreBackup(backup.file, renamedTab("Changed"), T("2026-07-30T11:00:00.000Z"));
+    await restoreBackup(backup.file, withCollection("Changed"), T("2026-07-30T11:00:00.000Z"));
 
     const preRestore = (await listBackups()).find((b) => b.reason === "pre-restore")!;
     expect(preRestore).toBeDefined();
-    expect(preRestore.tabLabels[0]).toBe("Changed");
+    expect(preRestore.collectionLabels[0]).toBe("Changed");
   });
 
   it("propagates a user-facing error for a damaged backup", async () => {
@@ -252,8 +265,8 @@ describe("restoreBackup", () => {
   });
 
   it("does not touch the live config when the restore fails", async () => {
-    await saveConfig(renamedTab("Untouched"));
+    await saveConfig(withCollection("Untouched"));
     await expect(restoreBackup("not-a-backup.json", defaultConfig())).rejects.toThrow();
-    expect(readStored().tabs[0]!.label).toBe("Untouched");
+    expect(readStored().collections[0]!.label).toBe("Untouched");
   });
 });

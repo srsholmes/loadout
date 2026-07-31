@@ -71,7 +71,7 @@ function recordingOps(fail: { step?: string; on?: string } = {}) {
 
 describe("applyMirrorPlan — ordering", () => {
   it("deletes before it creates, so a freed name can be reused in one sync", async () => {
-    // Tab "old" is gone; its collection was called "Shelf". Tab "new" now
+    // ManagedCollection "old" is gone; its collection was called "Shelf". ManagedCollection "new" now
     // wants "Shelf". Creating first would collide with a live collection.
     const plan = planMirror({
       collections: [managed({ id: "new", label: "Shelf" })],

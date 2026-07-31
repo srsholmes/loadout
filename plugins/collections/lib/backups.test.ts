@@ -35,17 +35,19 @@ afterEach(() => {
 
 const T = (iso: string) => Date.parse(iso);
 
-function configWithTabs(labels: string[]): CollectionsConfig {
-  const base = defaultConfig();
+function configWith(labels: string[]): CollectionsConfig {
   return {
-    ...base,
+    ...defaultConfig(),
     collections: labels.map((label, i) => ({
-      ...base.tabs[0]!,
-      id: `t${i}`,
+      id: `c${i}`,
       label,
-      builtin: undefined,
-    })),
-    tabOrder: labels.map((_, i) => `t${i}`),
+      root: { kind: "group", id: "g", combinator: "all", children: [] },
+      sort: [],
+      limit: null,
+      display: { tileWidth: 150, showLabels: true, badges: [] },
+      indeterminatePolicy: "pass",
+    })) as CollectionsConfig["collections"],
+    collectionOrder: labels.map((_, i) => `c${i}`),
   };
 }
 
@@ -111,7 +113,7 @@ describe("writeBackup", () => {
     const info = await writeBackup(defaultConfig(), "manual", T("2026-07-30T10:00:00.000Z"));
     expect(existsSync(join(backupDir(), info.file))).toBe(true);
     expect(info.reason).toBe("manual");
-    expect(info.collectionCount).toBe(defaultConfig().tabs.length);
+    expect(info.collectionCount).toBe(defaultConfig().collections.length);
   });
 
   it("leaves no .tmp file behind, so an interrupted write can't look restorable", async () => {
@@ -120,11 +122,11 @@ describe("writeBackup", () => {
   });
 
   it("writes a config that reloads intact", async () => {
-    const original = configWithTabs(["Alpha", "Beta"]);
+    const original = configWith(["Alpha", "Beta"]);
     const info = await writeBackup(original, "manual");
     const { config: restored, dropped } = await readBackup(info.file);
     expect(dropped).toEqual([]);
-    expect(restored.tabs.map((t) => t.label)).toEqual(["Alpha", "Beta"]);
+    expect(restored.collections.map((t) => t.label)).toEqual(["Alpha", "Beta"]);
     expect(validateConfig(restored)).toEqual([]);
   });
 });
@@ -147,8 +149,8 @@ describe("listBackups", () => {
     ]);
   });
 
-  it("carries tab names so a restore list is identifiable without restoring", async () => {
-    await writeBackup(configWithTabs(["Backlog", "Deck Verified"]), "manual");
+  it("carries collection names so a restore list is identifiable without restoring", async () => {
+    await writeBackup(configWith(["Backlog", "Deck Verified"]), "manual");
     const [info] = await listBackups();
     expect(info!.collectionLabels).toEqual(["Backlog", "Deck Verified"]);
     expect(info!.collectionCount).toBe(2);

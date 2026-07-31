@@ -171,7 +171,7 @@ describe("planMirror — renames", () => {
   });
 
   it("lets a new tab claim a name this same sync is renaming away from", () => {
-    // Tab `a` moves from "Backlog" to "Shelf"; new tab `b` wants "Backlog".
+    // ManagedCollection `a` moves from "Backlog" to "Shelf"; new tab `b` wants "Backlog".
     // Reported as a conflict, this never resolves — the name is only ever
     // freed by the rename that the conflict is blocking.
     const plan = planMirror({
@@ -547,7 +547,7 @@ describe("mirrorAffecting — when auto-sync should fire", () => {
             id: "g",
             combinator: "all",
             children: [{ kind: "installed", id: "r", value: true }],
-          } as Tab["root"],
+          } as ManagedCollection["root"],
         }),
       ],
     });

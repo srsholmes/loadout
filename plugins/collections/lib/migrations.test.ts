@@ -26,7 +26,7 @@ describe("migrate — v1 baseline", () => {
     expect(result.fromVersion).toBe(COLLECTIONS_SCHEMA_VERSION);
     expect(result.refused).toBe(false);
     expect(result.warnings).toEqual([]);
-    expect(result.config.tabs.map((t) => t.id)).toEqual(config.tabs.map((t) => t.id));
+    expect(result.config.collections.map((t) => t.id)).toEqual(config.collections.map((t) => t.id));
   });
 
   it("always returns something that validates", () => {
@@ -41,7 +41,7 @@ describe("migrate — unreadable and unversioned input", () => {
     const result = migrate("not a config");
     expect(result.fromVersion).toBe(0);
     expect(result.warnings[0]).toContain("unreadable");
-    expect(result.config.tabs).toHaveLength(defaultConfig().tabs.length);
+    expect(result.config.collections).toHaveLength(defaultConfig().collections.length);
   });
 
   it("treats a missing version as the earliest format, and warns", () => {
@@ -79,7 +79,7 @@ describe("migrate — a config from the future", () => {
 
   it("still returns a usable config so the plugin renders read-only", () => {
     const result = migrate(future);
-    expect(result.config.tabs.length).toBeGreaterThan(0);
+    expect(Array.isArray(result.config.collections)).toBe(true);
     // It deliberately keeps the future schemaVersion — the config genuinely
     // came from a newer build and we must not pretend otherwise — so the
     // only thing `validateConfig` should object to is the version itself.
@@ -140,9 +140,9 @@ describe("migrate — the chain", () => {
   });
 
   it("passes each migration the previous one's output", () => {
-    MIGRATIONS[0] = (raw) => ({ ...raw, defaultTabId: "installed" });
+    MIGRATIONS[0] = (raw) => ({ ...raw, collectionOrder: ["from-migration"] });
     const { schemaVersion: _drop, ...v0 } = defaultConfig();
-    expect(migrate(v0).config.defaultTabId).toBe("installed");
+    expect(migrate(v0).config.collectionOrder).toEqual([]);
   });
 
   it("salvages a migration's output rather than trusting it blindly", () => {

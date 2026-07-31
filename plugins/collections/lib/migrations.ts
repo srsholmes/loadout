@@ -87,11 +87,15 @@ export function migrate(raw: unknown): MigrateResult {
       : 0;
 
   if (fromVersion > COLLECTIONS_SCHEMA_VERSION) {
-    // Refuse, don't coerce. Downgrading and silently stripping unknown
-    // fields is how a user loses tabs they can still see in a newer build.
+    // Refuse, don't coerce. Downgrading and silently stripping unknown fields
+    // is how a user loses collections they can still see in a newer build.
+    //
+    // The future `schemaVersion` is put back deliberately: `coerceConfig`
+    // stamps the current one, and keeping that would let a later write
+    // silently downgrade the file it just refused to touch.
     const salvaged = coerceConfig(raw);
     return {
-      config: salvaged.config,
+      config: { ...salvaged.config, schemaVersion: fromVersion },
       fromVersion,
       applied: [],
       warnings: [
