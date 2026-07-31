@@ -39,7 +39,7 @@ function configWithTabs(labels: string[]): CollectionsConfig {
   const base = defaultConfig();
   return {
     ...base,
-    tabs: labels.map((label, i) => ({
+    collections: labels.map((label, i) => ({
       ...base.tabs[0]!,
       id: `t${i}`,
       label,
@@ -206,7 +206,7 @@ describe("readBackup", () => {
   it("salvages a partially-bad backup instead of refusing it", async () => {
     const file = backupFilename(T("2026-07-30T10:00:00.000Z"), 1, "manual");
     mkdirSync(backupDir(), { recursive: true });
-    const damaged = { ...defaultConfig(), tabs: [{ label: "Broken" }] };
+    const damaged = { ...defaultConfig(), collections: [{ label: "Broken" }] };
     writeFileSync(join(backupDir(), file), JSON.stringify(damaged));
 
     const { config: restored, dropped } = await readBackup(file);

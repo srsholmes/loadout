@@ -44,7 +44,7 @@ function readStored(): CollectionsConfig {
 
 function renamedTab(label: string): CollectionsConfig {
   const base = defaultConfig();
-  return { ...base, tabs: [{ ...base.tabs[0]!, label }, ...base.tabs.slice(1)] };
+  return { ...base, collections: [{ ...base.tabs[0]!, label }, ...base.tabs.slice(1)] };
 }
 
 describe("loadConfig — first run", () => {
@@ -89,7 +89,7 @@ describe("loadConfig — normal load", () => {
 
   it("salvages a partly-broken config and reports what went", async () => {
     const base = defaultConfig();
-    writeStored({ ...base, tabs: [base.tabs[0], { label: "Broken" }] });
+    writeStored({ ...base, collections: [base.tabs[0], { label: "Broken" }] });
 
     const result = await loadConfig();
     expect(result.warnings.some((w) => w.includes("Broken"))).toBe(true);
@@ -98,7 +98,7 @@ describe("loadConfig — normal load", () => {
 
   it("persists the salvaged shape so warnings don't reappear every boot", async () => {
     const base = defaultConfig();
-    writeStored({ ...base, tabs: [base.tabs[0], { label: "Broken" }] });
+    writeStored({ ...base, collections: [base.tabs[0], { label: "Broken" }] });
 
     await loadConfig();
     expect((await loadConfig()).warnings).toEqual([]);
@@ -177,19 +177,19 @@ describe("saveConfig", () => {
   it("THROWS rather than persisting an invalid config", async () => {
     // This is the guarantee that the file on disk is always loadable, so the
     // guard is deliberately loud.
-    const invalid = { ...defaultConfig(), tabs: [{ label: "no id" }] } as never;
+    const invalid = { ...defaultConfig(), collections: [{ label: "no id" }] } as never;
     await expect(saveConfig(invalid)).rejects.toThrow(/Refusing to save invalid/);
   });
 
   it("leaves the previous good config in place when it refuses", async () => {
     await saveConfig(renamedTab("Good"));
-    const invalid = { ...defaultConfig(), tabs: [{ label: "bad" }] } as never;
+    const invalid = { ...defaultConfig(), collections: [{ label: "bad" }] } as never;
     await expect(saveConfig(invalid)).rejects.toThrow();
     expect(readStored().tabs[0]!.label).toBe("Good");
   });
 
   it("names the actual problems in the error, for the log", async () => {
-    const invalid = { ...defaultConfig(), tabs: [{ label: "" }] } as never;
+    const invalid = { ...defaultConfig(), collections: [{ label: "" }] } as never;
     await expect(saveConfig(invalid)).rejects.toThrow(/missing an id/);
   });
 });
@@ -209,7 +209,7 @@ describe("saveWithBackup", () => {
 
   it("still throws if the save itself is invalid", async () => {
     const before = defaultConfig();
-    const invalid = { ...before, tabs: [{ label: "bad" }] } as never;
+    const invalid = { ...before, collections: [{ label: "bad" }] } as never;
     await expect(saveWithBackup(invalid, before, "pre-import")).rejects.toThrow(
       /Refusing to save invalid/,
     );

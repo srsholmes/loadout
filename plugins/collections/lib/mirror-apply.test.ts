@@ -1,24 +1,21 @@
 import { describe, expect, it } from "bun:test";
 import { applyMirrorPlan, type MirrorOps } from "./mirror-apply";
 import { planMirror, type SteamCollection } from "./mirror";
-import type { MirrorLedger, Tab } from "./types";
+import type { ManagedCollection, MirrorLedger } from "./types";
 
 const NOW = 1_800_000_000_000;
 
-function tab(overrides: Partial<Tab> = {}): Tab {
+function managed(overrides: Partial<ManagedCollection> = {}): ManagedCollection {
   return {
     id: "t1",
     label: "Backlog",
-    visible: true,
-    autoHide: false,
-    root: { kind: "group", id: "g", combinator: "and", rules: [] },
+    root: { kind: "group", id: "g", combinator: "all", children: [] },
     sort: [],
     limit: null,
-    group: { by: "none" },
     display: { tileWidth: 150, showLabels: true, badges: [] },
-    mirror: { enabled: true, collectionName: "Backlog" },
+    indeterminatePolicy: "pass",
     ...overrides,
-  } as Tab;
+  } as ManagedCollection;
 }
 
 function collection(overrides: Partial<SteamCollection> = {}): SteamCollection {
@@ -31,9 +28,9 @@ function ledger(...entries: MirrorLedger["entries"]): MirrorLedger {
 
 function entry(overrides: Partial<MirrorLedger["entries"][number]> = {}) {
   return {
-    tabId: "t1",
-    collectionId: "uc-1",
-    collectionName: "Backlog",
+    managedId: "t1",
+    steamCollectionId: "uc-1",
+    steamName: "Backlog",
     appIds: [] as string[],
     lastSyncedAt: NOW - 1000,
     ...overrides,
@@ -77,9 +74,9 @@ describe("applyMirrorPlan — ordering", () => {
     // Tab "old" is gone; its collection was called "Shelf". Tab "new" now
     // wants "Shelf". Creating first would collide with a live collection.
     const plan = planMirror({
-      tabs: [tab({ id: "new", label: "Shelf", mirror: { enabled: true, collectionName: "Shelf" } })],
+      collections: [managed({ id: "new", label: "Shelf" })],
       evaluated: new Map([["new", ["1"]]]),
-      ledger: ledger(entry({ tabId: "old", collectionId: "uc-old", collectionName: "Shelf" })),
+      ledger: ledger(entry({ managedId: "old", steamCollectionId: "uc-old", steamName: "Shelf" })),
       steamCollections: [collection({ id: "uc-old", name: "Shelf" })],
     });
     expect(plan.deletes).toHaveLength(1);
@@ -93,15 +90,15 @@ describe("applyMirrorPlan — ordering", () => {
 
   it("renames before it creates", async () => {
     const plan = planMirror({
-      tabs: [
-        tab({ id: "a", label: "Shelf", mirror: { enabled: true, collectionName: "Shelf" } }),
-        tab({ id: "b", label: "Backlog", mirror: { enabled: true, collectionName: "Backlog" } }),
+      collections: [
+        managed({ id: "a", label: "Shelf" }),
+        managed({ id: "b", label: "Backlog" }),
       ],
       evaluated: new Map([
         ["a", ["1"]],
         ["b", ["2"]],
       ]),
-      ledger: ledger(entry({ tabId: "a", collectionId: "uc-a", collectionName: "Backlog", appIds: ["1"] })),
+      ledger: ledger(entry({ managedId: "a", steamCollectionId: "uc-a", steamName: "Backlog", appIds: ["1"] })),
       steamCollections: [collection({ id: "uc-a", name: "Backlog", appIds: ["1"] })],
     });
     // "a" is renaming away from Backlog; "b" is claiming it.
@@ -119,7 +116,7 @@ describe("applyMirrorPlan — what gets written", () => {
     // `setCollectionApps` recomputes add/remove in-page. Handing it the diff
     // would make a stale read leave strays behind forever.
     const plan = planMirror({
-      tabs: [tab()],
+      collections: [managed()],
       evaluated: new Map([["t1", ["10", "30"]]]),
       ledger: ledger(entry({ appIds: ["10", "20"] })),
       steamCollections: [collection({ appIds: ["10", "20"] })],
@@ -131,9 +128,9 @@ describe("applyMirrorPlan — what gets written", () => {
 
   it("counts each kind of write", async () => {
     const plan = planMirror({
-      tabs: [tab({ id: "a", mirror: { enabled: true, collectionName: "A" } })],
+      collections: [managed({ id: "a", label: "A" })],
       evaluated: new Map([["a", ["1"]]]),
-      ledger: ledger(entry({ tabId: "z", collectionId: "uc-z", collectionName: "Z" })),
+      ledger: ledger(entry({ managedId: "z", steamCollectionId: "uc-z", steamName: "Z" })),
       steamCollections: [collection({ id: "uc-z", name: "Z" })],
     });
     const { ops } = recordingOps();
@@ -146,9 +143,9 @@ describe("applyMirrorPlan — what gets written", () => {
 describe("applyMirrorPlan — partial failure", () => {
   it("keeps going after one collection fails", async () => {
     const plan = planMirror({
-      tabs: [
-        tab({ id: "a", mirror: { enabled: true, collectionName: "A" } }),
-        tab({ id: "b", mirror: { enabled: true, collectionName: "B" } }),
+      collections: [
+        managed({ id: "a", label: "A" }),
+        managed({ id: "b", label: "B" }),
       ],
       evaluated: new Map([
         ["a", ["1"]],
@@ -161,9 +158,9 @@ describe("applyMirrorPlan — partial failure", () => {
     const result = await applyMirrorPlan({ plan, ledger: ledger(), ops, now: NOW });
 
     expect(result.created).toBe(1);
-    expect(result.failures).toEqual([{ tabId: "a", step: "create", message: "create exploded" }]);
+    expect(result.failures).toEqual([{ managedId: "a", step: "create", message: "create exploded" }]);
     // Only the one that landed is recorded.
-    expect(result.ledger.entries.map((e) => e.tabId)).toEqual(["b"]);
+    expect(result.ledger.entries.map((e) => e.managedId)).toEqual(["b"]);
   });
 
   it("does not record a write that failed", async () => {
@@ -171,7 +168,7 @@ describe("applyMirrorPlan — partial failure", () => {
     // next run see phantom drift and "correct" it by removing real games.
     const before = ledger(entry({ appIds: ["10", "20"] }));
     const plan = planMirror({
-      tabs: [tab()],
+      collections: [managed()],
       evaluated: new Map([["t1", ["10", "30"]]]),
       ledger: before,
       steamCollections: [collection({ appIds: ["10", "20"] })],
@@ -186,9 +183,9 @@ describe("applyMirrorPlan — partial failure", () => {
   it("keeps the ledger entry when a delete fails", async () => {
     // Forgetting a collection we could not delete orphans it in Steam with no
     // record that it was ever ours — nothing would ever clean it up.
-    const before = ledger(entry({ tabId: "gone", collectionId: "uc-1" }));
+    const before = ledger(entry({ managedId: "gone", steamCollectionId: "uc-1" }));
     const plan = planMirror({
-      tabs: [],
+      collections: [],
       evaluated: new Map(),
       ledger: before,
       steamCollections: [collection()],
@@ -205,7 +202,7 @@ describe("applyMirrorPlan — partial failure", () => {
     // Without this the plan proposes the same rename on every sync forever.
     const before = ledger(entry({ appIds: ["10"] }));
     const plan = planMirror({
-      tabs: [tab({ label: "Shelf", mirror: { enabled: true, collectionName: "Shelf" } })],
+      collections: [managed({ label: "Shelf" })],
       evaluated: new Map([["t1", ["10"]]]),
       ledger: before,
       steamCollections: [collection({ name: "Backlog", appIds: ["10"] })],
@@ -215,12 +212,12 @@ describe("applyMirrorPlan — partial failure", () => {
 
     const { ops } = recordingOps();
     const result = await applyMirrorPlan({ plan, ledger: before, ops, now: NOW });
-    expect(result.ledger.entries[0]!.collectionName).toBe("Shelf");
+    expect(result.ledger.entries[0]!.steamName).toBe("Shelf");
     expect(result.ledger.entries[0]!.appIds).toEqual(["10"]);
 
     // And the next plan is a no-op.
     const second = planMirror({
-      tabs: [tab({ label: "Shelf", mirror: { enabled: true, collectionName: "Shelf" } })],
+      collections: [managed({ label: "Shelf" })],
       evaluated: new Map([["t1", ["10"]]]),
       ledger: result.ledger,
       steamCollections: [collection({ name: "Shelf", appIds: ["10"] })],
@@ -232,21 +229,21 @@ describe("applyMirrorPlan — partial failure", () => {
   it("does not record a rename that failed", async () => {
     const before = ledger(entry({ appIds: ["10"] }));
     const plan = planMirror({
-      tabs: [tab({ label: "Shelf", mirror: { enabled: true, collectionName: "Shelf" } })],
+      collections: [managed({ label: "Shelf" })],
       evaluated: new Map([["t1", ["10"]]]),
       ledger: before,
       steamCollections: [collection({ name: "Backlog", appIds: ["10"] })],
     });
     const { ops } = recordingOps({ step: "rename" });
     const result = await applyMirrorPlan({ plan, ledger: before, ops, now: NOW });
-    expect(result.ledger.entries[0]!.collectionName).toBe("Backlog");
+    expect(result.ledger.entries[0]!.steamName).toBe("Backlog");
   });
 });
 
 describe("applyMirrorPlan — nothing to do", () => {
   it("touches Steam not at all for an empty plan", async () => {
     const plan = planMirror({
-      tabs: [tab()],
+      collections: [managed()],
       evaluated: new Map([["t1", ["10"]]]),
       ledger: ledger(entry({ appIds: ["10"] })),
       steamCollections: [collection({ appIds: ["10"] })],

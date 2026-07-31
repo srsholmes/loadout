@@ -24,7 +24,7 @@ function validTab(overrides: Partial<Tab> = {}): Tab {
     limit: null,
     group: { kind: "none" },
     display: { tileWidth: 150, showLabels: true, badges: [] },
-    mirror: { enabled: false, collectionName: "Custom" },
+    mirror: { enabled: false, steamName: "Custom" },
     indeterminatePolicy: "pass",
     ...overrides,
   };
@@ -99,17 +99,17 @@ describe("validateConfig", () => {
   it("catches duplicate tab ids", () => {
     const problems = validateConfig({
       ...defaultConfig(),
-      tabs: [validTab({ id: "dupe" }), validTab({ id: "dupe" })],
+      collections: [validTab({ id: "dupe" }), validTab({ id: "dupe" })],
     });
     expect(problems.some((p) => p.includes('share the id "dupe"'))).toBe(true);
   });
 
   it("catches a missing tab name and a missing id", () => {
     expect(
-      validateConfig({ ...defaultConfig(), tabs: [validTab({ label: "" })] }),
+      validateConfig({ ...defaultConfig(), collections: [validTab({ label: "" })] }),
     ).toContain("tabs[0] is missing a name");
     expect(
-      validateConfig({ ...defaultConfig(), tabs: [validTab({ id: "" })] }),
+      validateConfig({ ...defaultConfig(), collections: [validTab({ id: "" })] }),
     ).toContain("tabs[0] is missing an id");
   });
 
@@ -117,13 +117,13 @@ describe("validateConfig", () => {
     expect(
       validateConfig({
         ...defaultConfig(),
-        tabs: [validTab({ sort: [{ field: "nope", dir: "asc" }] as never })],
+        collections: [validTab({ sort: [{ field: "nope", dir: "asc" }] as never })],
       }),
     ).toContain("tabs[0].sort[0] uses an unknown field");
     expect(
       validateConfig({
         ...defaultConfig(),
-        tabs: [validTab({ sort: [{ field: "sortAs", dir: "sideways" }] as never })],
+        collections: [validTab({ sort: [{ field: "sortAs", dir: "sideways" }] as never })],
       }),
     ).toContain("tabs[0].sort[0] has an unknown direction");
   });
@@ -132,7 +132,7 @@ describe("validateConfig", () => {
     expect(
       validateConfig({
         ...defaultConfig(),
-        tabs: [validTab({ indeterminatePolicy: "maybe" as never })],
+        collections: [validTab({ indeterminatePolicy: "maybe" as never })],
       }),
     ).toContain('tabs[0].indeterminatePolicy must be "pass" or "fail"');
   });
@@ -140,7 +140,7 @@ describe("validateConfig", () => {
   it("validates nested rule trees and reports the path", () => {
     const problems = validateConfig({
       ...defaultConfig(),
-      tabs: [
+      collections: [
         validTab({
           root: {
             id: "root",
@@ -166,7 +166,7 @@ describe("validateConfig", () => {
   it("catches a rule with no id, at depth", () => {
     const problems = validateConfig({
       ...defaultConfig(),
-      tabs: [
+      collections: [
         validTab({
           root: {
             id: "root",
@@ -183,7 +183,7 @@ describe("validateConfig", () => {
   it("rejects a root that is not a group", () => {
     const problems = validateConfig({
       ...defaultConfig(),
-      tabs: [validTab({ root: { id: "r", kind: "installed" } as never })],
+      collections: [validTab({ root: { id: "r", kind: "installed" } as never })],
     });
     expect(problems).toContain("tabs[0].root must be a group");
   });
@@ -203,7 +203,7 @@ describe("coerceConfig — salvage", () => {
     // corrupt is much worse, and that is the failure users are vocal about.
     const { config, dropped } = coerceConfig({
       ...defaultConfig(),
-      tabs: [validTab({ id: "good", label: "Good" }), { label: "Broken" }],
+      collections: [validTab({ id: "good", label: "Good" }), { label: "Broken" }],
     });
     expect(config.tabs.map((t) => t.id)).toEqual(["good"]);
     expect(dropped).toHaveLength(1);
@@ -213,13 +213,13 @@ describe("coerceConfig — salvage", () => {
   it("names an unsalvageable tab by index when it has no label", () => {
     const { dropped } = coerceConfig({
       ...defaultConfig(),
-      tabs: [validTab(), {}],
+      collections: [validTab(), {}],
     });
     expect(dropped[0]).toContain("#2");
   });
 
   it("falls back to defaults when nothing survives", () => {
-    const { config } = coerceConfig({ ...defaultConfig(), tabs: [{}, {}] });
+    const { config } = coerceConfig({ ...defaultConfig(), collections: [{}, {}] });
     expect(config.tabs.map((t) => t.id)).toEqual(builtinTabs().map((t) => t.id));
   });
 
@@ -232,7 +232,7 @@ describe("coerceConfig — salvage", () => {
   it("de-duplicates tab ids, keeping the first", () => {
     const { config, dropped } = coerceConfig({
       ...defaultConfig(),
-      tabs: [
+      collections: [
         validTab({ id: "dupe", label: "First" }),
         validTab({ id: "dupe", label: "Second" }),
       ],
@@ -245,7 +245,7 @@ describe("coerceConfig — salvage", () => {
   it("appends tabs that tabOrder forgot, rather than losing them", () => {
     const { config } = coerceConfig({
       ...defaultConfig(),
-      tabs: [validTab({ id: "a" }), validTab({ id: "b", label: "B" })],
+      collections: [validTab({ id: "a" }), validTab({ id: "b", label: "B" })],
       tabOrder: ["a"],
     });
     expect(config.tabOrder).toEqual(["a", "b"]);
@@ -254,7 +254,7 @@ describe("coerceConfig — salvage", () => {
   it("strips tabOrder entries for tabs that no longer exist", () => {
     const { config } = coerceConfig({
       ...defaultConfig(),
-      tabs: [validTab({ id: "a" })],
+      collections: [validTab({ id: "a" })],
       tabOrder: ["a", "ghost"],
     });
     expect(config.tabOrder).toEqual(["a"]);
@@ -263,7 +263,7 @@ describe("coerceConfig — salvage", () => {
   it("clears a defaultTabId pointing at a deleted tab, and says so", () => {
     const { config, dropped } = coerceConfig({
       ...defaultConfig(),
-      tabs: [validTab({ id: "a" })],
+      collections: [validTab({ id: "a" })],
       tabOrder: ["a"],
       defaultTabId: "ghost",
     });
@@ -281,13 +281,13 @@ describe("coerceConfig — salvage", () => {
           version: 1,
           entries: [
             {
-              tabId: "a",
-              collectionId: "uc-1",
-              collectionName: "A",
+              managedId: "a",
+              steamCollectionId: "uc-1",
+              steamName: "A",
               appIds: [],
               lastSyncedAt: 1,
             },
-            { tabId: "b" },
+            { managedId: "b" },
           ],
         },
       },
@@ -312,7 +312,7 @@ describe("coerceConfig — salvage", () => {
   it("filters unknown badge kinds out of a tab's display", () => {
     const { config } = coerceConfig({
       ...defaultConfig(),
-      tabs: [
+      collections: [
         validTab({
           display: { tileWidth: 150, showLabels: true, badges: ["deckCompat", "bogus"] as never },
         }),
@@ -324,7 +324,7 @@ describe("coerceConfig — salvage", () => {
   it("defaults a missing mirror collectionName to the tab label", () => {
     const { config } = coerceConfig({
       ...defaultConfig(),
-      tabs: [validTab({ label: "Backlog", mirror: { enabled: true } as never })],
+      collections: [validTab({ label: "Backlog", mirror: { enabled: true } as never })],
     });
     expect(config.tabs[0]!.mirror.collectionName).toBe("Backlog");
   });
@@ -335,8 +335,8 @@ describe("coerceConfig — salvage", () => {
       null,
       {},
       "garbage",
-      { tabs: "nope" },
-      { ...defaultConfig(), tabs: [{}] },
+      { collections: "nope" },
+      { ...defaultConfig(), collections: [{}] },
       { ...defaultConfig(), profiles: "nope", gameOverrides: 5 },
     ]) {
       expect(validateConfig(coerceConfig(input).config)).toEqual([]);
@@ -348,7 +348,7 @@ describe("orderedTabs", () => {
   it("follows tabOrder", () => {
     const config = {
       ...defaultConfig(),
-      tabs: [validTab({ id: "a" }), validTab({ id: "b", label: "B" })],
+      collections: [validTab({ id: "a" }), validTab({ id: "b", label: "B" })],
       tabOrder: ["b", "a"],
     };
     expect(orderedTabs(config).map((t) => t.id)).toEqual(["b", "a"]);
@@ -357,7 +357,7 @@ describe("orderedTabs", () => {
   it("appends tabs missing from tabOrder rather than hiding them", () => {
     const config = {
       ...defaultConfig(),
-      tabs: [validTab({ id: "a" }), validTab({ id: "b", label: "B" })],
+      collections: [validTab({ id: "a" }), validTab({ id: "b", label: "B" })],
       tabOrder: ["b"],
     };
     expect(orderedTabs(config).map((t) => t.id)).toEqual(["b", "a"]);
@@ -371,7 +371,7 @@ describe("orderedTabs", () => {
   it("ignores tabOrder entries with no matching tab", () => {
     const config = {
       ...defaultConfig(),
-      tabs: [validTab({ id: "a" })],
+      collections: [validTab({ id: "a" })],
       tabOrder: ["ghost", "a"],
     };
     expect(orderedTabs(config).map((t) => t.id)).toEqual(["a"]);
@@ -408,7 +408,7 @@ describe("resolveDefaultTab", () => {
   it("returns null when every tab is invisible", () => {
     const config = {
       ...defaultConfig(),
-      tabs: defaultConfig().tabs.map((t) => ({ ...t, visible: false })),
+      collections: defaultConfig().tabs.map((t) => ({ ...t, visible: false })),
     };
     expect(resolveDefaultTab(config)).toBeNull();
   });
@@ -422,7 +422,7 @@ describe("uniqueTabId", () => {
   it("suffixes until free", () => {
     const config = {
       ...defaultConfig(),
-      tabs: [validTab({ id: "x" }), validTab({ id: "x-2", label: "X2" })],
+      collections: [validTab({ id: "x" }), validTab({ id: "x-2", label: "X2" })],
     };
     expect(uniqueTabId(config, "x")).toBe("x-3");
   });
@@ -439,7 +439,7 @@ describe("coerceConfig — built-in tabs are ours, not the user's", () => {
       t.id === "recent" ? { ...t, root: { ...t.root, children: [] } } : t,
     );
 
-    const result = coerceConfig({ ...config, tabs: gutted });
+    const result = coerceConfig({ ...config, collections: gutted });
     const recent = result.config.tabs.find((t) => t.id === "recent")!;
     const shipped = builtinTabs().find((t) => t.id === "recent")!;
 
@@ -455,7 +455,7 @@ describe("coerceConfig — built-in tabs are ours, not the user's", () => {
         : t,
     );
 
-    const recent = coerceConfig({ ...config, tabs: customised }).config.tabs.find(
+    const recent = coerceConfig({ ...config, collections: customised }).config.tabs.find(
       (t) => t.id === "recent",
     )!;
     expect(recent.visible).toBe(false);
@@ -478,7 +478,7 @@ describe("coerceConfig — built-in tabs are ours, not the user's", () => {
       builtin: undefined,
       root: { id: "mine-root", kind: "group" as const, combinator: "all" as const, children: [] },
     };
-    const result = coerceConfig({ ...config, tabs: [...config.tabs, mine] });
+    const result = coerceConfig({ ...config, collections: [...config.tabs, mine] });
     expect(result.config.tabs.find((t) => t.id === "mine")!.root.children).toEqual([]);
   });
 });

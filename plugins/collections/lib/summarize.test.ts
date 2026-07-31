@@ -94,7 +94,7 @@ function tabWith(root: GroupRule, overrides: Partial<Tab> = {}): Tab {
     limit: null,
     group: { kind: "none" },
     display: { tileWidth: 150, showLabels: true, badges: [] },
-    mirror: { enabled: false, collectionName: "Test" },
+    mirror: { enabled: false, steamName: "Test" },
     indeterminatePolicy: "pass",
     ...overrides,
   };

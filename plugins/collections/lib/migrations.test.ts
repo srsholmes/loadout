@@ -147,7 +147,7 @@ describe("migrate — the chain", () => {
 
   it("salvages a migration's output rather than trusting it blindly", () => {
     // A buggy migration must not be able to persist an invalid config.
-    MIGRATIONS[0] = (raw) => ({ ...raw, tabs: [{ nonsense: true }] });
+    MIGRATIONS[0] = (raw) => ({ ...raw, collections: [{ nonsense: true }] });
     const { schemaVersion: _drop, ...v0 } = defaultConfig();
     const result = migrate(v0);
     expect(validateConfig(result.config)).toEqual([]);
