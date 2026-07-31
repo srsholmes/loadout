@@ -13,7 +13,7 @@ const callMock = mock((method: string, ...args: unknown[]) => {
     case "listAll":
       return Promise.resolve({ collections: summaries, steamReachable });
     case "listGames":
-      return Promise.resolve({ appIds: games, kind: "linked" });
+      return Promise.resolve({ games: games.map((appId) => ({ appId, name: `Game ${appId}` })), kind: "linked" });
     default:
       return Promise.resolve(null);
   }

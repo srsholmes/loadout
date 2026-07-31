@@ -21,7 +21,7 @@ import { useVisibleRows } from "../hooks/useVisibleRows";
 export interface CollectionDetailProps {
   label: string;
   /** `null` while loading. */
-  games: string[] | null;
+  games: Array<{ appId: string; name: string }> | null;
   onBack: () => void;
   onPickGame: (appId: string) => void;
 }
@@ -81,13 +81,13 @@ export function CollectionDetail({ label, games, onBack, onPickGame }: Collectio
           <div style={{ height: rowWindow.padTop, flexShrink: 0 }} />
           <div ref={gridWrapperRef} style={{ flexShrink: 0 }}>
             <GameCardGrid minTileWidth={150}>
-              {games.slice(rowWindow.start, rowWindow.end).map((appId) => (
+              {games.slice(rowWindow.start, rowWindow.end).map((g) => (
                 <GameCard
-                  key={appId}
-                  imageUrl={artUrl(appId, "capsule")}
-                  fallbackImageUrl={artUrl(appId, "header")}
-                  title={appId}
-                  onPick={() => onPickGame(appId)}
+                  key={g.appId}
+                  imageUrl={artUrl(g.appId, "capsule")}
+                  fallbackImageUrl={artUrl(g.appId, "header")}
+                  title={g.name}
+                  onPick={() => onPickGame(g.appId)}
                 />
               ))}
             </GameCardGrid>

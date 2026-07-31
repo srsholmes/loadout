@@ -58,7 +58,7 @@ export function Collections() {
   const [steamReachable, setSteamReachable] = useState(true);
   const [search, setSearch] = useState("");
 
-  const [games, setGames] = useState<string[] | null>(null);
+  const [games, setGames] = useState<Array<{ appId: string; name: string }> | null>(null);
 
   const loadGrid = useCallback(async () => {
     try {
@@ -85,8 +85,10 @@ export function Collections() {
       setView({ kind: "detail", id: summary.id, label: summary.label });
       setGames(null);
       try {
-        const result = (await call("listGames", summary.id)) as { appIds: string[] };
-        setGames(result.appIds);
+        const result = (await call("listGames", summary.id)) as {
+          games: Array<{ appId: string; name: string }>;
+        };
+        setGames(result.games);
       } catch (err) {
         notify(err instanceof Error ? err.message : "Couldn't open that collection", {
           kind: "error",

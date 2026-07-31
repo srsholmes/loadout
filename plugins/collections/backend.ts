@@ -290,20 +290,34 @@ export default class CollectionsBackend implements PluginBackend {
     };
   }
 
-  /** The games in one collection — computed for managed, read for linked. */
-  async listGames(id: string): Promise<{ appIds: string[]; kind: "managed" | "linked" }> {
+  /**
+   * The games in one collection — computed for managed, read from Steam for
+   * linked.
+   *
+   * Names come back with the ids. A linked collection is just a list of
+   * appIds; resolving them here rather than in the webview means one lookup
+   * against the snapshot we already built, and the alternative is a grid of
+   * bare numbers.
+   */
+  async listGames(
+    id: string,
+  ): Promise<{ games: Array<{ appId: string; name: string }>; kind: "managed" | "linked" }> {
+    const snapshot = await this.getSnapshot();
+    const nameOf = new Map(snapshot.games.map((g) => [g.appId, g.name] as const));
+    const named = (appIds: readonly string[]) =>
+      appIds.map((appId) => ({ appId, name: nameOf.get(appId) ?? appId }));
+
     const managed = this.config.collections.find((c) => c.id === id);
     if (managed) {
-      const snapshot = await this.getSnapshot();
-      const games = buildEvalGames(snapshot.games);
-      const matched = evaluateCollection(managed, games, { now: Date.now() }).matched;
-      return { appIds: matched.map((g) => g.appId), kind: "managed" };
+      const evalGames = buildEvalGames(snapshot.games);
+      const matched = evaluateCollection(managed, evalGames, { now: Date.now() }).matched;
+      return { games: matched.map((g) => ({ appId: g.appId, name: g.name })), kind: "managed" };
     }
 
     const steamCollections = await withSteamClient((c) => listCollections(c));
     const found = steamCollections.find((c) => c.id === id);
     if (!found) throw new Error("That collection no longer exists");
-    return { appIds: found.appIds, kind: "linked" };
+    return { games: named(found.appIds), kind: "linked" };
   }
 
   // ── Editing a linked collection ──────────────────────────────────────
