@@ -94,26 +94,36 @@ describe("migrate — a config from the future", () => {
 });
 
 describe("migrate — the chain", () => {
-  it("applies migrations in ascending order", () => {
+  it("runs a migration below the current version, and records it", () => {
+    // What the old test claimed to check — ascending order — cannot be
+    // exercised while `COLLECTIONS_SCHEMA_VERSION` is 1, because only
+    // version 0 is below it and one migration has no order. It installed
+    // MIGRATIONS[1..3], ran nothing, and asserted `[]`, so deleting the sort
+    // (or the loop) broke nothing. This asserts what the loop can actually
+    // do today; add the ordering case with the second real migration.
     const order: number[] = [];
-    MIGRATIONS[1] = (raw) => {
-      order.push(1);
-      return raw;
-    };
-    MIGRATIONS[3] = (raw) => {
-      order.push(3);
-      return raw;
-    };
-    MIGRATIONS[2] = (raw) => {
-      order.push(2);
+    MIGRATIONS[0] = (raw) => {
+      order.push(0);
       return raw;
     };
 
-    // Pretend the current schema is 4 by feeding a v1 file and letting the
-    // loop run every migration below COLLECTIONS_SCHEMA_VERSION. With the
-    // real version at 1 nothing runs, which is itself the assertion below.
-    migrate({ ...defaultConfig(), schemaVersion: 1 });
-    expect(order).toEqual([]);
+    const result = migrate({ ...defaultConfig(), schemaVersion: 0 });
+    expect(order).toEqual([0]);
+    expect(result.applied).toEqual([0]);
+  });
+
+  it("does not run a migration at or above the current version", () => {
+    // A migration numbered for the *current* schema describes a step this
+    // build has already taken; running it would apply it twice.
+    let ran = false;
+    MIGRATIONS[COLLECTIONS_SCHEMA_VERSION] = (raw) => {
+      ran = true;
+      return raw;
+    };
+
+    const result = migrate({ ...defaultConfig(), schemaVersion: 0 });
+    expect(ran).toBe(false);
+    expect(result.applied).not.toContain(COLLECTIONS_SCHEMA_VERSION);
   });
 
   it("skips migrations older than the file's own version", () => {

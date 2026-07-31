@@ -37,18 +37,54 @@ describe("every preset", () => {
     expect(new Set(all.map((p) => p.build("x").label)).size).toBe(all.length);
   });
 
-  it("evaluates without throwing, and matches no more than the library", () => {
+  it("evaluates without throwing, and at least one preset matches something", () => {
+    // `matched.length <= games.length` was true by construction. What is worth
+    // asserting is that the fixture library can actually satisfy these presets
+    // — a gallery where every offerable entry comes back empty is the failure
+    // the pricing exists to prevent.
+    let matchedSomething = 0;
     for (const preset of offerable) {
       const result = evaluateCollection(preset.build(preset.id), games, { now: NOW * 1000 });
       expect(result.matched.length).toBeLessThanOrEqual(games.length);
+      if (result.matched.length > 0) matchedSomething += 1;
     }
+    expect(offerable.length).toBeGreaterThan(0);
+    expect(matchedSomething).toBeGreaterThan(0);
   });
 
   it("declares every source it reads", () => {
     // A preset that quietly depends on a missing source is offered, comes back
     // empty, and reads as a broken plugin rather than as absent data.
-    const declared = new Set<MetadataNeed>(presets(NOW).flatMap((p) => p.needs));
-    for (const need of declared) expect(NEED_LABELS[need]).toBeTruthy();
+    //
+    // The old version looped over the needs the presets themselves declare and
+    // checked each had a label — a set derived from the data under test, so it
+    // could not fail. This compares the declarations against the rule kinds
+    // actually in each tree, which is the invariant that matters.
+    const NEED_FOR_KIND: Partial<Record<Rule["kind"], MetadataNeed>> = {
+      playtime: "playHistory",
+      lastPlayed: "playHistory",
+      sizeOnDisk: "sizeOnDisk",
+      reviewScore: "reviewScore",
+      metacritic: "metacritic",
+      deckCompat: "deckCompat",
+      purchaseDate: "purchaseDate",
+      storeTags: "storeTags",
+      hltbMain: "hltb",
+    };
+
+    for (const preset of presets(NOW)) {
+      const declared = new Set(preset.needs);
+      for (const need of declared) expect(NEED_LABELS[need]).toBeTruthy();
+
+      const used = preset
+        .build(preset.id)
+        .root.children.map((r) => NEED_FOR_KIND[r.kind])
+        .filter((n): n is MetadataNeed => n !== undefined);
+      for (const need of used) {
+        // Fails loudly if a preset gains a rule whose source it never declared.
+        expect(declared.has(need)).toBe(true);
+      }
+    }
   });
 
   it("is deterministic — the same `now` builds the same tree", () => {
@@ -105,9 +141,33 @@ describe("the presets that read play history", () => {
   it("keeps never-played games out of 'barely started'", () => {
     // Without the lower bound every unplayed game qualifies, and the
     // collection stops being about games you gave up on.
-    const barely = new Set(matched("barely-started"));
-    const never = new Set(matched("never-played"));
-    for (const appId of barely) expect(never.has(appId)).toBe(false);
+    //
+    // Built here rather than taken from the shared fixture: that library has
+    // no game with a handful of minutes on it, so "barely started" matched
+    // nothing and the loop below ran zero times — the assertion was vacuous.
+    const template = LIBRARY[0]!;
+    const withPlaytime = (appId: string, playtimeMinutes: number, lastPlayed: number) => ({
+      ...template,
+      appId,
+      name: `Game ${appId}`,
+      sortAs: `game ${appId}`,
+      playtimeMinutes,
+      lastPlayed,
+    });
+    const tiny = buildEvalGames([
+      withPlaytime("gave-up", 5, NOW - 86_400),
+      withPlaytime("never", 0, 0),
+      withPlaytime("sunk-in", 600, NOW - 86_400),
+    ]);
+    const inTiny = (id: string) =>
+      new Set(
+        evaluateCollection(built(id), tiny, { now: NOW * 1000 }).matched.map((g) => g.appId),
+      );
+
+    const barely = inTiny("barely-started");
+    const never = inTiny("never-played");
+    expect(barely).toEqual(new Set(["gave-up"]));
+    expect(never).toEqual(new Set(["never"]));
   });
 
   it("keeps 'recently played' and 'dive back in' disjoint", () => {

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import * as actualUi from "@loadout/ui";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { LIBRARY } from "./test/fixtures/library";
+import { defaultConfig, validateConfig } from "./lib/config";
 
 const calls: Array<{ method: string; args: unknown[] }> = [];
 let mirrorState = { autoSync: false, pendingSync: false };
@@ -42,12 +43,18 @@ const callMock = mock((method: string, ...args: unknown[]) => {
       // would be unpickable.
       return Promise.resolve({ games: LIBRARY, providers: {}, generatedAt: 0 });
     case "getConfig":
-      // `mirror` matters: the app reads it in the same load as the snapshot,
-      // and without it that load throws and the library never arrives.
+      // A *whole* config, built from the real default. It used to be
+      // `{collections, mirror}` alone — a shape the real `setConfig` rejects
+      // outright ("settings are missing", "collectionOrder must be a list of
+      // ids"), so the autoSync toggle's round trip was being tested against
+      // something that could never have worked on a device. `mirror` in
+      // particular is read in the same load as the library snapshot, and
+      // without it that load throws and the library never arrives.
       return Promise.resolve({
         config: {
+          ...defaultConfig(),
           collections: managedCollections,
-          mirror: mirrorState,
+          mirror: { ...defaultConfig().mirror, ...mirrorState },
         },
         warnings: [],
         readOnly: false,
@@ -260,6 +267,24 @@ describe("editing a collection's rules", () => {
     }>;
     const made = saved.find((c) => c.label === "Never played")!;
     expect(made.root.children.length).toBeGreaterThan(0);
+  });
+
+  it("posts a config the backend would actually accept when toggling sync", async () => {
+    // The UI round-trips the whole config through `setConfig` to flip one
+    // flag. If it drops a field on the way, the real backend throws and the
+    // setting silently never takes — invisible against a fake that accepts
+    // any shape.
+    ({ unmount } = renderApp());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Settings" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sync now" })).toBeTruthy());
+
+    fireEvent.click(document.querySelector('input[type="checkbox"]')!);
+    await waitFor(() => expect(calls.some((c) => c.method === "setConfig")).toBe(true));
+
+    const posted = calls.find((c) => c.method === "setConfig")!.args[0];
+    expect(validateConfig(posted)).toEqual([]);
+    expect((posted as { mirror: { autoSync: boolean } }).mirror.autoSync).toBe(true);
   });
 
   it("syncs on the way out, not while you work", async () => {

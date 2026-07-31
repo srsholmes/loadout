@@ -166,16 +166,23 @@ describe("loadConfig — daily backup", () => {
     expect(periodic).toHaveLength(2);
   });
 
-  it("prunes to the configured maximum", async () => {
-    const config: CollectionsConfig = {
-      ...defaultConfig(),
-      settings: { ...defaultConfig().settings, maxBackups: 2 },
-    };
-    await saveConfig(config);
-    for (let day = 1; day <= 5; day++) {
-      await loadConfig(T(`2026-07-0${day}T00:00:00.000Z`));
+  it("prunes to MAX_BACKUPS, keeping the newest", async () => {
+    // This used to set a `maxBackups: 2` that `CollectionsSettings` has never
+    // had, make five backups, and assert `5 <= 20`. Deleting the `prune()`
+    // call from `loadConfig` entirely would have passed it.
+    await saveConfig(defaultConfig());
+    const days = MAX_BACKUPS + 5;
+    for (let day = 1; day <= days; day++) {
+      const stamp = `2026-07-${String(day).padStart(2, "0")}T00:00:00.000Z`;
+      await loadConfig(T(stamp));
     }
-    expect((await listBackups()).length).toBeLessThanOrEqual(MAX_BACKUPS);
+
+    const kept = await listBackups();
+    expect(kept.length).toBe(MAX_BACKUPS);
+    // The newest survive, not an arbitrary MAX_BACKUPS of them: a prune that
+    // kept the oldest would leave the most recent state unrecoverable.
+    const newest = kept.map((b) => b.file).sort().at(-1)!;
+    expect(newest).toContain(`2026-07-${String(days).padStart(2, "0")}`);
   });
 });
 

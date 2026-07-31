@@ -279,12 +279,22 @@ describe("summarizeRule — inversion is folded into the wording", () => {
   });
 
   it("never leaves a bare (inverted) marker", () => {
+    // The samples don't carry `invert`, so guarding on `"invert" in rule` made
+    // the body unreachable and the whole check vacuous — every kind could have
+    // appended "(inverted)" and this still passed. Invert is applied here
+    // instead, and only the three kinds that genuinely have no inverted form
+    // are skipped.
+    const NO_INVERT = new Set(["group", "whitelist", "blacklist"]);
+    let checked = 0;
     for (const kind of RULE_KINDS) {
-      const rule = SAMPLES[kind];
-      if (!("invert" in rule)) continue;
-      const text = summarizeRule({ ...rule, invert: true } as Rule);
+      if (NO_INVERT.has(kind)) continue;
+      const text = summarizeRule({ ...SAMPLES[kind], invert: true } as Rule);
       expect(text.toLowerCase()).not.toContain("inverted");
+      checked += 1;
     }
+    // A loop that silently stops running is how this got missed the first time.
+    expect(checked).toBe(RULE_KINDS.filter((k) => !NO_INVERT.has(k)).length);
+    expect(checked).toBeGreaterThan(0);
   });
 });
 
