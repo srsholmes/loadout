@@ -1,5 +1,5 @@
 /**
- * Carrying out a {@link MirrorPlan}. [iso]
+ * Carrying out a {@link MirrorPlan}.
  *
  * The effects arrive as an injected {@link MirrorOps}, so the ordering rules —
  * which are the part that can corrupt a library — are testable without Steam

@@ -1,5 +1,5 @@
 /**
- * What syncing the mirror *would* do. [iso]
+ * What syncing the mirror *would* do.
  *
  * This is the whole reason tabs can appear in Steam's own UI without patching
  * Steam. TabMaster injects itself into the library's React tree by hot-swapping

@@ -1,5 +1,5 @@
 /**
- * Merge Steam's live library view over the on-disk manifest scan. [iso]
+ * Merge Steam's live library view over the on-disk manifest scan.
  *
  * The manifest scan (`__core:game-library`) only sees what is installed — it
  * reads `appmanifest_*.acf` files, and an uninstalled game has none. On a real

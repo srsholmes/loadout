@@ -1,5 +1,5 @@
 /**
- * Which rows of a tile grid are worth mounting. [iso]
+ * Which rows of a tile grid are worth mounting.
  *
  * Evaluation was never the bottleneck — filtering 4356 games against eight
  * rules is under 25 ms. **Rendering is.** Every `GameCard` is a DOM subtree

@@ -5,6 +5,14 @@ import { LIBRARY } from "./test/fixtures/library";
 
 const calls: Array<{ method: string; args: unknown[] }> = [];
 let mirrorState = { autoSync: false, pendingSync: false };
+/**
+ * Hold `listGames` open, the way a 713-entry collection does.
+ *
+ * A latch rather than a timer: the assertion is about what is on screen *while*
+ * the read is in flight, and a timing race would make that flaky under load.
+ */
+let releaseListGames: (() => void) | null = null;
+let holdListGames = false;
 let summaries: unknown[] = [];
 let steamReachable = true;
 let games: string[] = [];
@@ -60,8 +68,18 @@ const callMock = mock((method: string, ...args: unknown[]) => {
       });
     case "setCollections":
       return Promise.resolve({ collections: managedCollections });
-    case "listGames":
-      return Promise.resolve({ games: games.map((appId) => ({ appId, name: `Game ${appId}` })), kind: "linked" });
+    case "listGames": {
+      const answer = {
+        games: games.map((appId) => ({ appId, name: `Game ${appId}` })),
+        kind: "linked",
+        staleAppIds: [],
+      };
+      // A real one is a Steam round trip; a 713-entry collection takes seconds.
+      if (!holdListGames) return Promise.resolve(answer);
+      return new Promise((resolve) => {
+        releaseListGames = () => resolve(answer);
+      });
+    }
     default:
       return Promise.resolve(null);
   }
@@ -112,6 +130,8 @@ let unmount: () => void;
 beforeEach(() => {
   calls.length = 0;
   mirrorState = { autoSync: false, pendingSync: false };
+  releaseListGames = null;
+  holdListGames = false;
   summaries = [];
   steamReachable = true;
   games = [];
@@ -290,6 +310,25 @@ describe("editing a collection's rules", () => {
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
+  it("won't offer adding until it knows what is already in the collection", async () => {
+    // Adding against a list that hadn't arrived wrote only what was picked, so
+    // a 713-entry ROM collection came back holding one game.
+    summaries = [summary()];
+    holdListGames = true;
+    ({ unmount } = renderApp());
+    await waitFor(() => expect(screen.getByText("Sega Genesis")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /Sega Genesis/ }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Options" })).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "Add games" })).toBeNull();
+
+    // Once the membership is known, the + is offered.
+    releaseListGames?.();
+    await waitFor(() =>
+      expect(screen.getAllByRole("button", { name: "Add games" }).length).toBeGreaterThan(0),
+    );
+  });
+
   it("adds games to a Steam collection, writing the whole list once", async () => {
     // Removing has worked from the detail grid for a while; without this an
     // accidental Remove was permanent as far as this plugin was concerned.
@@ -310,11 +349,15 @@ describe("editing a collection's rules", () => {
     fireEvent.click(screen.getByText(LIBRARY[0]!.name));
     fireEvent.click(screen.getByRole("button", { name: "Add 1 game" }));
 
-    await waitFor(() => expect(calls.some((c) => c.method === "setLinkedApps")).toBe(true));
-    const [id, appIds] = calls.find((c) => c.method === "setLinkedApps")!.args as [string, string[]];
+    await waitFor(() => expect(calls.some((c) => c.method === "editLinked")).toBe(true));
+    const [id, delta] = calls.find((c) => c.method === "editLinked")!.args as [
+      string,
+      { add?: string[] },
+    ];
     expect(id).toBe("srm-1");
-    // The whole list, not a diff: `setCollectionApps` replaces what Steam has.
-    expect(appIds).toEqual([LIBRARY[0]!.appId]);
+    // A delta. Writing the whole membership from the UI's list truncated the
+    // collection to whatever it happened to be showing.
+    expect(delta.add).toEqual([LIBRARY[0]!.appId]);
   });
 
   it("does not offer hand-editing on a collection Steam maintains", async () => {

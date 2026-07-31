@@ -55,7 +55,12 @@ function recordingOps(fail: { step?: string; on?: string } = {}) {
   let next = 0;
   const ops: MirrorOps = {
     async create({ name, appIds }) {
-      calls.push(`create:${name}`);
+      // The membership goes in the log too. Recording only the name meant
+      // `create({ name, appIds: [] })` passed the whole suite: every first-time
+      // mirror would make an empty Steam collection while the ledger recorded
+      // the full list, and the next sync would read that as the user's own
+      // drift.
+      calls.push(`create:${name}:${appIds.join(",")}`);
       boom("create", name);
       next++;
       return { collectionId: `uc-new-${next}`, name };
@@ -92,7 +97,9 @@ describe("applyMirrorPlan — ordering", () => {
 
     const { ops, calls } = recordingOps();
     await applyMirrorPlan({ plan, ledger: ledger(), ops, now: NOW });
-    expect(calls).toEqual(["remove:uc-old", "create:Shelf"]);
+    // The create carries its planned membership — recording only the name let
+    // `appIds: []` pass the whole suite.
+    expect(calls).toEqual(["remove:uc-old", "create:Shelf:1"]);
   });
 
   it("renames before it creates", async () => {
@@ -114,7 +121,9 @@ describe("applyMirrorPlan — ordering", () => {
 
     const { ops, calls } = recordingOps();
     await applyMirrorPlan({ plan, ledger: ledger(), ops, now: NOW });
-    expect(calls.indexOf("rename:uc-a:Shelf")).toBeLessThan(calls.indexOf("create:Backlog"));
+    expect(calls.indexOf("rename:uc-a:Shelf")).toBeLessThan(
+      calls.findIndex((c) => c.startsWith("create:Backlog")),
+    );
   });
 });
 

@@ -56,14 +56,6 @@ const STEAM_READ_TIMEOUT_MS = 8000;
 const GAME_LIBRARY_SERVICE = "__core:game-library";
 const PLAYTIME_PLUGIN = "playtime";
 
-/**
- * How long to wait for edits to settle before syncing.
- *
- * A sync is a full library evaluation plus writes that reach Steam Cloud, and
- * the rule builder writes on every keystroke. Long enough to coalesce a burst
- * of edits, short enough that finishing a collection and switching to Steam
- * finds it already there.
- */
 
 /** What a sync did to one collection, for reporting it back. */
 export interface SyncChange {
@@ -84,6 +76,16 @@ export interface SyncReport {
   deleted: number;
   failures: MirrorSyncResult["failures"];
   changes: SyncChange[];
+  /**
+   * Collections the plan deliberately refused to write, and why.
+   *
+   * These used to be computed and dropped, so a sync that wrote nothing
+   * *because everything was blocked* reported "Already up to date" — the exact
+   * shape of a success. The likeliest way to hit it is a managed collection
+   * whose name is already taken by one EmuDeck made: the planner correctly
+   * refuses to adopt it, and without this the user is never told.
+   */
+  blocked: Array<{ label: string; reason: string }>;
 }
 
 /** One card on the grid, whichever kind it is. */
@@ -115,6 +117,8 @@ export default class CollectionsBackend implements PluginBackend {
    * collection nothing can clean up.
    */
   private syncChain: Promise<unknown> = Promise.resolve();
+  /** Edits that would change what Steam should hold, counted. */
+  private editSeq = 0;
   /**
    * Serialises config writes. A write is read-modify-write across an `await`,
    * so two interleave: a sync finishing inside `setConfig`'s window would
@@ -160,13 +164,22 @@ export default class CollectionsBackend implements PluginBackend {
     return { config: this.config, warnings, readOnly: this.readOnly };
   }
 
-  async setConfig(next: CollectionsConfig): Promise<CollectionsConfig> {
-    this._assertWritable();
+  /**
+   * Apply an edit to whatever the config is **when the lock is taken**.
+   *
+   * Every caller used to build its next config from `this.config` first and
+   * hand the finished object to `setConfig`. With a prior mutation mid-write —
+   * `saveConfig` is real disk I/O on an SD card — two RPCs arriving during it
+   * both snapshotted the pre-mutation config, and the second erased the
+   * first's collection while reporting success. The lock protected the ledger
+   * and nothing else.
+   */
+  private async _editConfig(
+    edit: (config: CollectionsConfig) => CollectionsConfig,
+  ): Promise<CollectionsConfig> {
     return this._mutateConfig(async () => {
       const before = this.config;
-      // The ledger is backend-owned and never taken from the caller: the UI
-      // posts config built from React state captured before the last sync's
-      // broadcast, and honouring its copy would forget collections that exist.
+      const next = edit(before);
       const merged: CollectionsConfig = {
         ...next,
         mirror: {
@@ -183,32 +196,45 @@ export default class CollectionsBackend implements PluginBackend {
     });
   }
 
+  async setConfig(next: CollectionsConfig): Promise<CollectionsConfig> {
+    this._assertWritable();
+    // The ledger is backend-owned and never taken from the caller: the UI posts
+    // config built from React state captured before the last sync's broadcast,
+    // and honouring its copy would forget collections that exist.
+    return this._editConfig(() => next);
+  }
+
   async setCollections(collections: ManagedCollection[]): Promise<CollectionsConfig> {
-    return this.setConfig({ ...this.config, collections });
+    this._assertWritable();
+    return this._editConfig((config) => ({ ...config, collections }));
   }
 
   /** A new, empty managed collection. Its rules match everything until edited. */
   async createCollection(label: string): Promise<CollectionsConfig> {
     this._assertWritable();
     const trimmed = label.trim() || "New collection";
-    const id = uniqueCollectionId(this.config, slugify(trimmed));
-    const collection: ManagedCollection = {
-      id,
-      label: trimmed,
-      root: { kind: "group", id: `${id}-root`, combinator: "all", children: [] },
-      sort: [{ field: "sortAs", dir: "asc" }],
-      limit: null,
-      display: {
-        tileWidth: this.config.settings.defaultTileWidth,
-        showLabels: true,
-        badges: [],
-      },
-      indeterminatePolicy: this.config.settings.indeterminatePolicy,
-    };
-    return this.setConfig({
-      ...this.config,
-      collections: [...this.config.collections, collection],
-      collectionOrder: [...this.config.collectionOrder, id],
+    // The id is minted inside the lock as well: two creates racing on the same
+    // name both read the same config beforehand and both minted `backlog`.
+    return this._editConfig((config) => {
+      const id = uniqueCollectionId(config, slugify(trimmed));
+      const collection: ManagedCollection = {
+        id,
+        label: trimmed,
+        root: { kind: "group", id: `${id}-root`, combinator: "all", children: [] },
+        sort: [{ field: "sortAs", dir: "asc" }],
+        limit: null,
+        display: {
+          tileWidth: config.settings.defaultTileWidth,
+          showLabels: true,
+          badges: [],
+        },
+        indeterminatePolicy: config.settings.indeterminatePolicy,
+      };
+      return {
+        ...config,
+        collections: [...config.collections, collection],
+        collectionOrder: [...config.collectionOrder, id],
+      };
     });
   }
 
@@ -217,12 +243,10 @@ export default class CollectionsBackend implements PluginBackend {
     this._assertWritable();
     const trimmed = label.trim();
     if (!trimmed) throw new Error("A collection needs a name");
-    return this.setConfig({
-      ...this.config,
-      collections: this.config.collections.map((c) =>
-        c.id === id ? { ...c, label: trimmed } : c,
-      ),
-    });
+    return this._editConfig((config) => ({
+      ...config,
+      collections: config.collections.map((c) => (c.id === id ? { ...c, label: trimmed } : c)),
+    }));
   }
 
   /**
@@ -243,17 +267,25 @@ export default class CollectionsBackend implements PluginBackend {
     this._assertWritable();
     const entry = this.config.mirror.ledger.entries.find((e) => e.managedId === id);
 
-    const config = await this.setConfig({
-      ...this.config,
-      collections: this.config.collections.filter((c) => c.id !== id),
-      collectionOrder: this.config.collectionOrder.filter((x) => x !== id),
-    });
+    const config = await this._editConfig((current) => ({
+      ...current,
+      collections: current.collections.filter((c) => c.id !== id),
+      collectionOrder: current.collectionOrder.filter((x) => x !== id),
+    }));
     if (!entry) return config;
 
+    // Queued behind any sync in flight. A delete landing mid-sync used to
+    // leave the ledger row rewritten by that sync's `applyToLedger` — an entry
+    // with no owner *and* no Steam collection, which nothing then reclaims,
+    // and which permanently hides any collection that reuses the id.
+    const run = this.syncChain.then(
+      () => withSteamClient((c) => deleteCollection(c, { collectionId: entry.steamCollectionId })),
+      () => withSteamClient((c) => deleteCollection(c, { collectionId: entry.steamCollectionId })),
+    );
+    this.syncChain = run.catch(() => undefined);
+
     try {
-      await withSteamClient((c) =>
-        deleteCollection(c, { collectionId: entry.steamCollectionId }),
-      );
+      await run;
     } catch (err) {
       this.log?.warn(
         `[collections] Couldn't remove "${entry.steamName}" from Steam yet, ` +
@@ -309,6 +341,10 @@ export default class CollectionsBackend implements PluginBackend {
    */
   private _markSyncOwed(before: CollectionsConfig, after: CollectionsConfig): void {
     if (!mirrorAffecting(before, after)) return;
+    // Bumped synchronously, and read by `_syncOnce` to decide whether it may
+    // clear the flag. The flag itself is persisted through the config chain, so
+    // a sync reading it back can miss an edit that has already happened.
+    this.editSeq += 1;
     if (after.mirror.pendingSync) return;
     void this._setMirrorState({ ...after.mirror, pendingSync: true }).catch(() => {});
   }
@@ -483,8 +519,28 @@ export default class CollectionsBackend implements PluginBackend {
    */
   async pruneLinked(id: string): Promise<{ removed: number; kept: number }> {
     this._assertWritable();
-    const { staleAppIds } = await this.listGames(id);
+    const snapshot = await this.getSnapshot();
+    const { staleAppIds, games } = await this.listGames(id);
     if (staleAppIds.length === 0) return { removed: 0, kept: 0 };
+
+    // "Stale" means *the library doesn't know this id* — which is only a safe
+    // thing to act on when the library itself is trustworthy. Both sources
+    // degrade to empty on failure, and a thin snapshot makes every ROM in an
+    // EmuDeck collection look dead: 700 entries, none of them in the manifest
+    // scan (shortcuts have no appmanifest), all of them "prunable". Confirming
+    // that dialog would empty a collection somebody else built.
+    if (snapshot.providers.appstore?.status !== "ok") {
+      throw new Error(
+        "Steam's library isn't fully loaded, so this can't tell a dead entry from an unread one. Try again in a moment.",
+      );
+    }
+    // Everything unknown and nothing known is what a broken read looks like,
+    // not what a collection with some dead shortcuts looks like.
+    if (games.length === 0) {
+      throw new Error(
+        "Every entry in this collection looks unreadable, which usually means the library is still loading rather than that they are all dead.",
+      );
+    }
 
     const steamCollections = await this._readSteam((c) => listCollections(c));
     const found = steamCollections.find((c) => c.id === id);
@@ -496,9 +552,38 @@ export default class CollectionsBackend implements PluginBackend {
     return { removed: found.appIds.length - keep.length, kept: keep.length };
   }
 
-  async setLinkedApps(id: string, appIds: string[]): Promise<void> {
+  /**
+   * Add or drop games in a Steam collection, as a **delta against what Steam
+   * holds right now**.
+   *
+   * It used to take the whole membership from the UI, which was wrong twice
+   * over. The UI's list has unresolvable ids filtered out of it, so removing
+   * one game also deleted every dead entry — the same destruction the "Clean
+   * up" button asks twice about, done silently. And the list is a snapshot: if
+   * it was captured before `listGames` returned, or while the library was
+   * degraded, writing it back truncated the collection to whatever the UI
+   * happened to be showing.
+   *
+   * Re-reading here means the only thing that changes is what was asked for.
+   */
+  async editLinked(
+    id: string,
+    { add = [], remove = [] }: { add?: string[]; remove?: string[] },
+  ): Promise<{ count: number }> {
     this._assertWritable();
+    if (add.length === 0 && remove.length === 0) throw new Error("Nothing to change");
+
+    const steamCollections = await this._readSteam((c) => listCollections(c));
+    const found = steamCollections.find((c) => c.id === id);
+    if (!found) throw new Error("That collection no longer exists");
+
+    const dropped = new Set(remove);
+    const kept = found.appIds.filter((appId) => !dropped.has(appId));
+    const present = new Set(kept);
+    const appIds = [...kept, ...add.filter((appId) => !present.has(appId))];
+
     await withSteamClient((c) => setCollectionApps(c, { collectionId: id, appIds }));
+    return { count: appIds.length };
   }
 
   async renameLinked(id: string, name: string): Promise<void> {
@@ -603,6 +688,7 @@ export default class CollectionsBackend implements PluginBackend {
 
   private async _syncOnce(): Promise<SyncReport> {
     this._assertWritable();
+    const editsBefore = this.editSeq;
 
     let plan: MirrorPlan;
     let result: MirrorSyncResult;
@@ -629,7 +715,12 @@ export default class CollectionsBackend implements PluginBackend {
       // Only clear the flag when everything landed. Steam dying *after* the
       // session connects makes each write fail individually, which the
       // executor collects rather than throws.
-      pendingSync: result.failures.length > 0,
+      //
+      // And only when nothing was edited *while* we were writing: an edit that
+      // landed mid-sync was never in this plan, so clearing its flag would
+      // record it as synced and leave Steam quietly wrong until something
+      // unrelated triggered another sync.
+      pendingSync: result.failures.length > 0 || this.editSeq !== editsBefore,
     });
 
     const { created, updated, renamed, deleted, failures } = result;
@@ -640,6 +731,18 @@ export default class CollectionsBackend implements PluginBackend {
       );
     }
 
+    const labels = new Map(this.config.collections.map((c) => [c.id, c.label] as const));
+    const blocked = [
+      ...plan.conflicts.map((c) => ({
+        label: labels.get(c.managedId) ?? c.name,
+        reason: `Steam already has a collection called “${c.name}” with ${c.existingCount} games, and it isn't one of ours. Rename yours to sync it.`,
+      })),
+      ...plan.skipped.map((sk) => ({
+        label: labels.get(sk.managedId) ?? sk.managedId,
+        reason: sk.reason,
+      })),
+    ];
+
     return {
       summary: summarizePlan(plan),
       created,
@@ -648,6 +751,7 @@ export default class CollectionsBackend implements PluginBackend {
       deleted,
       failures,
       changes: await this._describeChanges(plan),
+      blocked,
     };
   }
 
@@ -722,13 +826,31 @@ export default class CollectionsBackend implements PluginBackend {
    * implementation here is how a collection comes to mean one thing on screen
    * and another in Steam.
    */
+  /**
+   * The plan, built against **one** reading of the config.
+   *
+   * `this.config` used to be read twice here — once to evaluate, once to plan
+   * — with two awaits in between, and this backend keeps serving RPCs across
+   * them. A `setCollections` landing in that window paired the *new* rule tree
+   * with the *old* evaluation: a collection that had no rules when we
+   * evaluated (an empty tree matches the whole library) but has one by the
+   * time we plan is no longer skipped, so the whole library gets written into
+   * Steam under it. That is exactly the accident the `unbuilt` guard exists to
+   * prevent, arriving through the back door.
+   */
   private async _buildMirrorPlan(): Promise<MirrorPlan> {
     const snapshot = await this.getSnapshot();
     const evalGames = buildEvalGames(snapshot.games);
     const now = Date.now();
 
+    // One reading, used for both halves. Anything that lands after this point
+    // belongs to the next sync, which `pendingSync` will ask for.
+    const collections = this.config.collections;
+    const ledger = this.config.mirror.ledger;
+    const namePrefix = this.config.settings.namePrefix;
+
     const evaluated = new Map<string, string[]>();
-    for (const c of this.config.collections) {
+    for (const c of collections) {
       evaluated.set(
         c.id,
         evaluateCollection(c, evalGames, { now }).matched.map((g) => g.appId),
@@ -739,13 +861,7 @@ export default class CollectionsBackend implements PluginBackend {
       listCollections(client),
     );
 
-    return planMirror({
-      collections: this.config.collections,
-      evaluated,
-      ledger: this.config.mirror.ledger,
-      steamCollections,
-      namePrefix: this.config.settings.namePrefix,
-    });
+    return planMirror({ collections, evaluated, ledger, steamCollections, namePrefix });
   }
 
   // ── Internals ────────────────────────────────────────────────────────

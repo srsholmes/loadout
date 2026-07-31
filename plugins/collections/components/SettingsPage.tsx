@@ -31,6 +31,8 @@ export interface SettingsPageProps {
   pendingSync: boolean;
   busy: boolean;
   lastSync: SyncChange[] | null;
+  /** What the last sync refused to write, and why. Never silently dropped. */
+  blocked?: Array<{ label: string; reason: string }>;
   onBack: () => void;
   onToggleAutoSync: (next: boolean) => void;
   onSyncNow: () => void;
@@ -60,6 +62,7 @@ export function SettingsPage({
   pendingSync,
   busy,
   lastSync,
+  blocked = [],
   onBack,
   onToggleAutoSync,
   onSyncNow,
@@ -111,6 +114,21 @@ export function SettingsPage({
             </Button>
           </div>
         </section>
+
+        {blocked.length > 0 ? (
+          <section className="flex flex-col gap-1">
+            <Text variant="secondary">Couldn&apos;t sync</Text>
+            <ul style={{ margin: 0, paddingLeft: "1.25rem" }}>
+              {blocked.map((b) => (
+                <li key={b.label}>
+                  <Text variant="secondary">
+                    {b.label} — {b.reason}
+                  </Text>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
 
         {lastSync ? (
           <section className="flex flex-col gap-1">

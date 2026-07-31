@@ -1,5 +1,5 @@
 /**
- * Pure structural edits on a rule tree. [iso]
+ * Pure structural edits on a rule tree.
  *
  * Every operation the builder offers — add, edit, invert, reorder, wrap,
  * duplicate, delete — is a `Rule -> Rule` function here rather than state

@@ -14,6 +14,17 @@ import { resolveMethod } from "@loadout/types";
 let steamUp = true;
 /** Steam answers, but never in time. */
 let hangSteam = false;
+/**
+ * Fail the next write to Steam, the way a live session dying mid-sync does.
+ *
+ * Without this the executor's per-write failure collection is unreachable:
+ * `steamUp = false` throws before any op runs, so `result.failures` was `[]`
+ * in every test and the "half the sync landed" branch had no coverage at all.
+ */
+let failNextWrite: string | null = null;
+/** Hold a write open so an edit can provably land mid-sync. */
+let releaseWrite: (() => void) | null = null;
+let holdWrite = false;
 let fakeCollections: Array<{
   id: string;
   name: string;
@@ -36,11 +47,25 @@ mock.module("@loadout/steam-cdp", () => ({
   // accepts every call and remembers nothing cannot tell "wrote it" from
   // "thought about writing it".
   createCollection: async (_c: unknown, { name }: { name: string }) => {
+    if (failNextWrite === "create") {
+      failNextWrite = null;
+      throw new Error("Steam went away mid-write (test stub)");
+    }
+    if (holdWrite) {
+      holdWrite = false;
+      await new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+    }
     const made = { id: `uc-${fakeCollections.length + 1}`, name, appIds: [], isDynamic: false, isEditable: true };
     fakeCollections.push(made);
     return { ...made };
   },
   setCollectionApps: async (_c: unknown, { collectionId, appIds }: { collectionId: string; appIds: string[] }) => {
+    if (failNextWrite === "setApps") {
+      failNextWrite = null;
+      throw new Error("Steam went away mid-write (test stub)");
+    }
     const found = fakeCollections.find((c) => c.id === collectionId);
     if (found) found.appIds = [...appIds];
   },
@@ -67,6 +92,7 @@ let prevXdg: string | undefined;
 beforeEach(() => {
   steamUp = true;
   hangSteam = false;
+  failNextWrite = null;
   fakeCollections = [];
   prevXdg = process.env.XDG_CONFIG_HOME;
   tempDir = mkdtempSync(join(tmpdir(), "collections-backend-"));
@@ -161,6 +187,18 @@ describe("entries Steam can no longer resolve", () => {
     expect(result.staleAppIds).toEqual(["2924527325", "3541813501"]);
   });
 
+  it("refuses to prune when the library can't vouch for the ids", async () => {
+    // "Stale" means the library doesn't know the id, which is only safe to act
+    // on when the library is trustworthy. Both sources degrade to empty on
+    // failure, and a thin snapshot makes every ROM in an EmuDeck collection
+    // look dead — shortcuts have no appmanifest. Confirming that dialog would
+    // empty a collection somebody else built.
+    withDeadIds();
+    const backend = await loaded([]);
+    await expect(backend.pruneLinked("uc-rh")).rejects.toThrow(/isn't fully loaded|unreadable/);
+    expect(fakeCollections[0]!.appIds).toHaveLength(3);
+  });
+
   it("prunes them on request, keeping everything real", async () => {
     withDeadIds();
     const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
@@ -184,6 +222,220 @@ describe("entries Steam can no longer resolve", () => {
     const backend = await loaded();
     await backend.createCollection("Backlog");
     expect((await backend.listGames("backlog")).staleAppIds).toEqual([]);
+  });
+});
+
+describe("editing a Steam collection by hand", () => {
+  // It used to take the whole membership from the UI. That list has
+  // unresolvable ids filtered out of it, so removing one game also deleted
+  // every dead entry — the destruction the "Clean up" button asks twice about,
+  // done silently — and a list captured while the library was degraded
+  // truncated the collection to whatever the UI happened to be showing.
+  const collectionOf = (appIds: string[]) => {
+    fakeCollections = [
+      { id: "uc-rh", name: "Recomp Hub", appIds, isDynamic: false, isEditable: true },
+    ];
+  };
+
+  it("removes only what was asked for, leaving unresolvable ids alone", async () => {
+    collectionOf(["620", "2924527325", "400"]);
+    const backend = await loaded([
+      { appId: "620", name: "Portal 2" },
+      { appId: "400", name: "Portal" },
+    ]);
+    await backend.editLinked("uc-rh", { remove: ["620"] });
+    expect(fakeCollections[0]!.appIds).toEqual(["2924527325", "400"]);
+  });
+
+  it("adds without rewriting what is already there", async () => {
+    collectionOf(["620", "2924527325"]);
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    await backend.editLinked("uc-rh", { add: ["400"] });
+    expect(fakeCollections[0]!.appIds).toEqual(["620", "2924527325", "400"]);
+  });
+
+  it("keeps what somebody else added between the read and the write", async () => {
+    // The UI's copy is always a moment old. A delta cannot lose what it never
+    // knew about.
+    collectionOf(["620"]);
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    fakeCollections[0]!.appIds.push("999999"); // EmuDeck, mid-edit
+    await backend.editLinked("uc-rh", { add: ["400"] });
+    expect(fakeCollections[0]!.appIds).toEqual(["620", "999999", "400"]);
+  });
+
+  it("won't add the same game twice", async () => {
+    collectionOf(["620"]);
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    await backend.editLinked("uc-rh", { add: ["620"] });
+    expect(fakeCollections[0]!.appIds).toEqual(["620"]);
+  });
+
+  it("refuses an empty edit rather than writing the membership back", async () => {
+    collectionOf(["620"]);
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    await expect(backend.editLinked("uc-rh", {})).rejects.toThrow(/Nothing to change/);
+  });
+});
+
+describe("a sync that writes nothing", () => {
+  it("says which collections it refused, rather than 'already up to date'", async () => {
+    // The planner correctly refuses to adopt a same-named collection it did
+    // not create. Reporting that as a no-op is the shape of a success.
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    fakeCollections = [
+      { id: "uc-emu", name: "Emulation", appIds: ["1"], isDynamic: false, isEditable: true },
+    ];
+    await backend.createCollection("Emulation");
+    const { config } = await backend.getConfig();
+    await backend.setCollections([
+      {
+        ...config.collections[0]!,
+        root: {
+          kind: "group",
+          id: "emulation-root",
+          combinator: "all",
+          children: [{ id: "r1", kind: "installed" }],
+        },
+      },
+    ]);
+
+    const report = await backend.syncMirror();
+    expect(report.created).toBe(0);
+    expect(report.blocked).toHaveLength(1);
+    expect(report.blocked[0]!.label).toBe("Emulation");
+    expect(report.blocked[0]!.reason).toMatch(/already has a collection/);
+  });
+
+  it("names a collection with no rules as blocked rather than syncing it", async () => {
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    await backend.createCollection("Backlog");
+    const report = await backend.syncMirror();
+    expect(report.created).toBe(0);
+    expect(report.blocked[0]!.reason).toMatch(/whole library/);
+  });
+});
+
+describe("things happening at once", () => {
+  /** A managed collection with one rule, ready to mirror. */
+  async function ready(backend: Awaited<ReturnType<typeof loaded>>, label: string) {
+    await backend.createCollection(label);
+    const { config } = await backend.getConfig();
+    const made = config.collections.find((c) => c.label === label)!;
+    await backend.setCollections(
+      config.collections.map((c) =>
+        c.id === made.id
+          ? {
+              ...c,
+              root: {
+                kind: "group" as const,
+                id: `${c.id}-root`,
+                combinator: "all" as const,
+                children: [{ id: "r1", kind: "installed" as const }],
+              },
+            }
+          : c,
+      ),
+    );
+    return made.id;
+  }
+
+  it("does not create the collection twice when two syncs overlap", async () => {
+    // Every overlap used to be able to leak a Steam collection nothing could
+    // clean up: two plans built from the same ledger, both seeing no entry.
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    await ready(backend, "Backlog");
+
+    await Promise.all([backend.syncMirror(), backend.syncMirror()]);
+
+    expect(fakeCollections.filter((c) => c.name === "Backlog")).toHaveLength(1);
+    expect((await backend.getConfig()).config.mirror.ledger.entries).toHaveLength(1);
+  });
+
+  it("does not lose one edit to another that lands during it", async () => {
+    // Both callers build their next config from `this.config` before taking
+    // the lock; the second used to overwrite the first's collection.
+    const backend = await loaded();
+    await Promise.all([
+      backend.createCollection("Backlog"),
+      backend.createCollection("Shooters"),
+    ]);
+    const labels = (await backend.getConfig()).config.collections.map((c) => c.label);
+    expect(labels.sort()).toEqual(["Backlog", "Shooters"]);
+  });
+
+  it("gives two collections made at once different ids", async () => {
+    const backend = await loaded();
+    await Promise.all([backend.createCollection("Backlog"), backend.createCollection("Backlog")]);
+    const ids = (await backend.getConfig()).config.collections.map((c) => c.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("keeps the sync owed when an edit lands while it is writing", async () => {
+    // The edit was never in that plan. Clearing its flag records it as synced
+    // and leaves Steam quietly wrong until something unrelated syncs again.
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    await ready(backend, "Backlog");
+
+    // The write is held open, so the edit provably lands mid-sync rather than
+    // whenever the scheduler happens to run it.
+    holdWrite = true;
+    const syncing = backend.syncMirror();
+    await new Promise((r) => setTimeout(r, 10));
+    await backend.createCollection("Made mid-sync");
+    releaseWrite?.();
+    await syncing;
+
+    expect((await backend.getConfig()).config.mirror.pendingSync).toBe(true);
+  });
+});
+
+describe("a sync that half lands", () => {
+  it("keeps the flag raised so the rest is retried", async () => {
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    await backend.createCollection("Backlog");
+    const { config } = await backend.getConfig();
+    await backend.setCollections([
+      {
+        ...config.collections[0]!,
+        root: {
+          kind: "group",
+          id: "backlog-root",
+          combinator: "all",
+          children: [{ id: "r1", kind: "installed" }],
+        },
+      },
+    ]);
+
+    // A first sync creates rather than updates, so the create is the write to
+    // break.
+    failNextWrite = "create";
+    const report = await backend.syncMirror();
+
+    expect(report.failures.length).toBeGreaterThan(0);
+    expect((await backend.getConfig()).config.mirror.pendingSync).toBe(true);
+  });
+});
+
+describe("writing straight to a Steam collection", () => {
+  // These bypass planMirror's conflict guard by design, which makes them the
+  // one family of writes with nothing protecting them — and they had no tests.
+  beforeEach(() => {
+    fakeCollections = [
+      { id: "uc-1", name: "Mine", appIds: ["10"], isDynamic: false, isEditable: true },
+    ];
+  });
+
+  it("renames the collection in Steam", async () => {
+    const backend = await loaded();
+    await backend.renameLinked("uc-1", "Renamed");
+    expect(fakeCollections[0]!.name).toBe("Renamed");
+  });
+
+  it("deletes the collection in Steam", async () => {
+    const backend = await loaded();
+    expect(await backend.deleteLinked("uc-1")).toBe(true);
+    expect(fakeCollections).toHaveLength(0);
   });
 });
 

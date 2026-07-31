@@ -1,7 +1,7 @@
 /**
  * Collections — the overlay UI.
  *
- * Two screens. The **grid** lists every collection you have: the ones this
+ * Seven screens. The **grid** lists every collection you have: the ones this
  * plugin maintains from rules, and the ones already in Steam (EmuDeck's ROM
  * sets, anything hand-made). Opening one shows the games inside it. That is
  * the whole point — the grid is a preview of what Steam has, so there is never
@@ -78,6 +78,8 @@ export function Collections() {
   const [games, setGames] = useState<Array<{ appId: string; name: string }> | null>(null);
   /** Dead shortcut ids in the open collection — see `listGames`. */
   const [staleCount, setStaleCount] = useState(0);
+  /** Bumped when a create fails, so the New page can unlock itself. */
+  const [createFailedAt, setCreateFailedAt] = useState<number | undefined>(undefined);
 
   /**
    * The whole library, held in the webview.
@@ -97,6 +99,8 @@ export function Collections() {
    * have read it.
    */
   const [lastSync, setLastSync] = useState<SyncChange[] | null>(null);
+  /** Collections the last sync refused to write, and why. */
+  const [blocked, setBlocked] = useState<Array<{ label: string; reason: string }>>([]);
   const [autoSync, setAutoSync] = useState(false);
   const [pendingSync, setPendingSync] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -172,8 +176,20 @@ export function Collections() {
     })();
   }, [ready, loadGrid, loadConfig, call]);
 
+  /**
+   * Which collection the newest `listGames` was for.
+   *
+   * Without it a slow response lands in whichever collection is open when it
+   * arrives: open a 700-game one, go back, open a small one, and the first
+   * response overwrites the second's games. That is not just a display bug —
+   * the edit paths write against what is on screen, so removing a game there
+   * would have written the first collection's members into the second.
+   */
+  const openRequest = useRef(0);
+
   const openCollection = useCallback(
     async (summary: { id: string; label: string }) => {
+      const request = ++openRequest.current;
       setView({ kind: "detail", id: summary.id, label: summary.label });
       setGames(null);
       setStaleCount(0);
@@ -182,9 +198,11 @@ export function Collections() {
           games: Array<{ appId: string; name: string }>;
           staleAppIds?: string[];
         };
+        if (request !== openRequest.current) return;
         setGames(result.games);
         setStaleCount(result.staleAppIds?.length ?? 0);
       } catch (err) {
+        if (request !== openRequest.current) return;
         notify(err instanceof Error ? err.message : "Couldn't open that collection", {
           kind: "error",
         });
@@ -230,6 +248,7 @@ export function Collections() {
           pendingSync={pendingSync}
           busy={syncing}
           lastSync={lastSync}
+          blocked={blocked}
           onBack={() => setView({ kind: "grid" })}
           onToggleAutoSync={(next) => void setAutoSyncTo(next)}
           onSyncNow={() => void sync()}
@@ -265,6 +284,7 @@ export function Collections() {
           onBack={() => setView({ kind: "grid" })}
           onPickPreset={(preset) => void createCollection(preset.label, preset)}
           onCreate={(label) => void createCollection(label)}
+          failedAt={createFailedAt}
         />
       </div>
     );
@@ -345,7 +365,14 @@ export function Collections() {
         onDelete={() => void removeCollection(view.id)}
         staleCount={handEditable ? staleCount : 0}
         onCleanUp={handEditable ? () => void cleanUpLinked(view.id) : undefined}
-        onAddGames={handEditable ? () => setView({ kind: "add", id: view.id, label: view.label }) : undefined}
+        onAddGames={
+          // Only once the membership has arrived. It used to be offered while
+          // the list was still loading, and adding then meant Steam kept only
+          // what was picked.
+          handEditable && games !== null
+            ? () => setView({ kind: "add", id: view.id, label: view.label })
+            : undefined
+        }
         onRemoveGames={
           handEditable ? (appIds) => void removeFromLinked(view.id, appIds) : undefined
         }
@@ -492,7 +519,11 @@ export function Collections() {
    * reads as a delete that did not take.
    */
   async function removeCollection(id: string) {
-    const managed = collections.some((c) => c.id === id);
+    // The grid row's `kind` is the backend's answer and the one to trust;
+    // `collections` is only a fallback, because a failed `getConfig` leaves it
+    // empty and a managed collection would then be deleted as a Steam one.
+    const summary = summaries?.find((c) => c.id === id);
+    const managed = summary ? summary.kind === "managed" : collections.some((c) => c.id === id);
     const before = summaries;
     setSummaries((prev) => prev?.filter((c) => c.id !== id) ?? prev);
     setView({ kind: "grid" });
@@ -502,6 +533,7 @@ export function Collections() {
           collections: ManagedCollection[];
         };
         setCollections(config.collections);
+        setPendingSync(true);
       } else {
         await call("deleteLinked", id);
       }
@@ -514,7 +546,7 @@ export function Collections() {
     }
   }
 
-  /** Drop one game from a linked collection, writing straight to Steam. */
+  /** Drop every entry Steam can no longer resolve — see `listGames`. */
   async function cleanUpLinked(id: string) {
     const before = staleCount;
     setStaleCount(0);
@@ -544,7 +576,9 @@ export function Collections() {
     setGames([...before, ...added]);
     setView({ kind: "detail", id, label });
     try {
-      await call("setLinkedApps", id, [...before.map((g) => g.appId), ...appIds]);
+      // A delta, not the whole list: `games` here is what the UI happens to
+      // be showing, and writing that back truncates the collection to it.
+      await call("editLinked", id, { add: appIds });
       await loadGrid();
     } catch (err) {
       setGames(before);
@@ -562,7 +596,7 @@ export function Collections() {
     // a second reads as a failed press.
     setGames(next);
     try {
-      await call("setLinkedApps", id, next.map((g) => g.appId));
+      await call("editLinked", id, { remove: [...appIds] });
       await loadGrid();
     } catch (err) {
       setGames(before);
@@ -577,6 +611,11 @@ export function Collections() {
       const updated = collections.map((c) => (c.id === next.id ? next : c));
       await call("setCollections", updated);
       setCollections(updated);
+      // The backend marks a sync owed on any edit that reaches Steam. Mirror
+      // that here rather than re-reading the whole config, which would clobber
+      // the collections we have just set — without it, leaving the plugin
+      // skips the very sync the setting exists for.
+      setPendingSync(true);
       // Back to the collection you were editing, not out to the grid: saving a
       // rule is how you find out what it did, and the grid does not show that.
       await loadGrid();
@@ -614,7 +653,7 @@ export function Collections() {
         collections: ManagedCollection[];
       };
       const made = config.collections[config.collections.length - 1];
-      if (!made) throw new Error("Steam accepted the collection but didn't return it");
+      if (!made) throw new Error("The collection was saved but didn't come back — try reopening the plugin");
 
       if (preset) {
         // Rebuilt against the id the backend assigned rather than the preset's
@@ -624,6 +663,7 @@ export function Collections() {
         const updated = config.collections.map((c) => (c.id === made.id ? built : c));
         await call("setCollections", updated);
         setCollections(updated);
+        setPendingSync(true);
         await loadGrid();
         // A preset is already a result, so it opens as one. The builder would
         // be showing its homework.
@@ -632,12 +672,14 @@ export function Collections() {
       }
 
       setCollections(config.collections);
+      setPendingSync(true);
       await loadGrid();
       // Straight into the builder: a collection built from scratch matches the
       // whole library, and leaving the user on the grid in front of a
       // 2500-game card with no obvious next step is the wrong place to stop.
       setView({ kind: "rules", id: made.id });
     } catch (err) {
+      setCreateFailedAt(Date.now());
       notify(err instanceof Error ? err.message : "Couldn't create that collection", {
         kind: "error",
       });
@@ -654,12 +696,22 @@ export function Collections() {
         deleted: number;
         failures: unknown[];
         changes: SyncChange[];
+        blocked?: Array<{ label: string; reason: string }>;
       };
       const wrote = result.created + result.updated + result.renamed + result.deleted;
+      const blocked = result.blocked ?? [];
       setLastSync(result.changes);
-      notify(wrote === 0 ? "Already up to date" : `Synced ${wrote} collections`, {
-        kind: result.failures.length > 0 ? "error" : "success",
-      });
+      setBlocked(blocked);
+      // "Already up to date" is the shape of a success, and a sync that wrote
+      // nothing *because everything was blocked* is not one.
+      notify(
+        blocked.length > 0
+          ? `${blocked.length} ${blocked.length === 1 ? "collection" : "collections"} couldn't sync — see Settings`
+          : wrote === 0
+            ? "Already up to date"
+            : `Synced ${wrote} collections`,
+        { kind: result.failures.length > 0 || blocked.length > 0 ? "error" : "success" },
+      );
       // pendingSync flips when Steam refuses a write, so read it back rather
       // than assuming the sync cleared it.
       await Promise.all([loadGrid(), loadConfig().catch(() => {})]);

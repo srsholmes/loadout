@@ -37,7 +37,7 @@ export interface HeaderBackButtonProps {
   title?: string;
   ariaLabel?: string;
   /** Optional icon-size override. Matches the existing inline pattern
-   *  (`<FaArrowLeft size={11} />`) by default. */
+   *  (13, matching `IconButton`) by default. */
   iconSize?: number;
 }
 
@@ -70,7 +70,7 @@ export function HeaderBackButton({
   onBack,
   title = "Back",
   ariaLabel,
-  iconSize = 11,
+  iconSize = 13,
 }: HeaderBackButtonProps) {
   useHeaderBack(onBack);
   return (

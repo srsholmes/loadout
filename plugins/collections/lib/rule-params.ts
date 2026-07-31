@@ -1,5 +1,5 @@
 /**
- * What a rule's parameters *are*, and what a new one starts as. [iso]
+ * What a rule's parameters *are*, and what a new one starts as.
  *
  * Two jobs, kept together because they answer the same question from
  * opposite ends:

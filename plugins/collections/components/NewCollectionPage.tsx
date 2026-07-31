@@ -17,7 +17,7 @@
  * overlay over Steam has no business opening a modal on top of itself.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button, Text, TextInput, useFocusable } from "@loadout/ui";
 import { BuilderPage } from "./BuilderPage";
 import { evaluateCollection } from "../lib/evaluate";
@@ -37,6 +37,14 @@ export interface NewCollectionPageProps {
   onPickPreset: (preset: CollectionPreset) => void;
   /** Start from scratch under a name of your own. */
   onCreate: (label: string) => void;
+  /**
+   * A create attempt has finished and failed, so the page unlocks.
+   *
+   * Without it the page stays locked on a lie: the spinner keeps spinning and
+   * the header keeps saying it is building something that isn't happening,
+   * with every preset disabled and no way back except leaving.
+   */
+  failedAt?: number;
   /** Injected for deterministic dates in specs. */
   now?: number;
 }
@@ -56,6 +64,7 @@ export function NewCollectionPage({
   onBack,
   onPickPreset,
   onCreate,
+  failedAt,
   now,
 }: NewCollectionPageProps) {
   const [name, setName] = useState("");
@@ -70,6 +79,14 @@ export function NewCollectionPage({
   const [picked, setPicked] = useState<string | null>(null);
   /** The from-scratch Create has been pressed. Same beat, same lock. */
   const [creating, setCreating] = useState(false);
+
+  // The parent bumps `failedAt` when an attempt comes back an error; it stays
+  // on this page, so the lock has to lift here.
+  useEffect(() => {
+    if (failedAt === undefined) return;
+    setPicked(null);
+    setCreating(false);
+  }, [failedAt]);
 
   /** Something is being built: the page is inert until it lands. */
   const busy = picked !== null || creating;
@@ -208,10 +225,14 @@ function PresetRow({
   // already have, is still shown — with the reason. Dropping it silently
   // invites the question of where it went.
   const blocked = unavailable || alreadyExists || locked;
+  // `focusable: !blocked` matters as much as the disabled attribute: a
+  // disabled control left in the focus tree is one the D-pad stops on and A
+  // does nothing to, which reads as the plugin having hung.
   const { ref, focused } = useFocusable({
     onEnterPress: () => {
       if (!blocked) onPick();
     },
+    focusable: !blocked,
   });
 
   const note = busy

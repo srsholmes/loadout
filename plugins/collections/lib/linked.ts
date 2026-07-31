@@ -1,5 +1,5 @@
 /**
- * The collections you already have in Steam. [iso]
+ * The collections you already have in Steam.
  *
  * A **linked** collection is one this plugin did not create — EmuDeck / Steam
  * ROM Manager's `srm-*` sets, anything made by hand in Steam. They are read

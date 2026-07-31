@@ -1,5 +1,5 @@
 /**
- * Buttons and inputs the D-pad can actually reach. [iso]
+ * Buttons and inputs the D-pad can actually reach.
  *
  * The shell drives focus through a single `SpatialNavigation` singleton, and
  * a node only joins that tree by registering through `useFocusable`. A raw

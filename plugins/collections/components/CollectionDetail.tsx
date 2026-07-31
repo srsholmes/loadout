@@ -13,7 +13,7 @@
  * eight hundred.
  */
 
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
   GameCard,
@@ -23,6 +23,7 @@ import {
   SearchField,
   Spinner,
   Text,
+  pushBackInterceptor,
 } from "@loadout/ui";
 import { FaChevronLeft, FaGear, FaPen, FaPlus, FaTrash, FaXmark } from "react-icons/fa6";
 import { useVisibleRows } from "../hooks/useVisibleRows";
@@ -93,6 +94,25 @@ export function CollectionDetail({
   const [selected, setSelected] = useState<readonly string[]>([]);
   /** Filter, because a ROM collection here runs to 700+ entries. */
   const [filter, setFilter] = useState("");
+
+  /**
+   * B goes back to the grid rather than out of the plugin.
+   *
+   * Every other screen here pushes one; this — the most-visited of them — did
+   * not, so B fell through to the shell's default and dropped focus into the
+   * sidebar with the collection still on screen.
+   */
+  const onBackRef = useRef(onBack);
+  onBackRef.current = onBack;
+  const back = useCallback(() => onBackRef.current(), []);
+  useEffect(
+    () =>
+      pushBackInterceptor(() => {
+        back();
+        return true;
+      }),
+    [back],
+  );
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const gridWrapperRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -224,7 +244,7 @@ export function CollectionDetail({
                 <FaGear size={13} />
               </IconButton>
             )}
-            <IconButton onClick={onBack} title="Back" ariaLabel="Back">
+            <IconButton onClick={back} title="Back" ariaLabel="Back">
               <FaChevronLeft size={13} />
             </IconButton>
           </div>
