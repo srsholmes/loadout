@@ -33,7 +33,10 @@ export function NewCollectionPage({ existingNames, onBack, onCreate }: NewCollec
 
   return (
     <BuilderPage
-      title="New collection"
+      // The header echoes the name as you type it, so the thing Steam will
+      // show is on screen in the place it will appear, rather than only in the
+      // field you are typing into.
+      title={trimmed.length > 0 ? trimmed : "New collection"}
       description="Name it first — this is the name Steam will show too."
       onBack={onBack}
       backLabel="Cancel"

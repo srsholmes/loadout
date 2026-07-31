@@ -3,7 +3,7 @@
  *
  * Design axiom, from the plan: *the builder never shows you a number you
  * didn't ask for, and never hides the number that matters.* Every rule row
- * carries its own count, the header carries the tab's, each group carries
+ * carries its own count, the header carries the collection's, each group carries
  * both of its combinator outcomes, and the palette carries what each
  * candidate would produce before you add it.
  *
@@ -105,6 +105,8 @@ export function RuleBuilder({
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   /** Group the palette will insert into, or null when it's closed. */
   const [paletteParent, setPaletteParent] = useState<string | null>(null);
+  /** Back was pressed with unsaved edits, and is asking before discarding. */
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   /**
    * A ref, not state, and that is the whole point.
    *
@@ -179,7 +181,7 @@ export function RuleBuilder({
     [draft, result, games.length, groupCounts],
   );
 
-  /** Count the tab would show with `rule` swapped in — used by the editor. */
+  /** Count the collection would show with `rule` swapped in — used by the editor. */
   const countFor = useCallback(
     (rule: Rule) =>
       countMatches(
@@ -335,13 +337,22 @@ export function RuleBuilder({
 
   // ── Render ─────────────────────────────────────────────────────────
 
+  // Back now lives in the shell topbar, which B and Escape also route to, so
+  // it is a great deal easier to hit than the old body button — and it throws
+  // away every rule you just built. Ask once, and only when there is something
+  // to lose.
+  const dirty = JSON.stringify(draft) !== JSON.stringify(collection);
+
   // One page at a time. The palette and the editor replace the tree rather
   // than floating over it — see `BuilderPage` for why a modal is wrong here.
   if (paletteParent !== null) {
     return (
       <BuilderPage
-        title="Add a rule"
-        description="Each option shows what your tab would contain with it added."
+        // The collection's name stays in the header for every step of the
+        // build, so the page you are on always says which collection it is
+        // editing — the palette and the tree look much alike otherwise.
+        title={draft.label}
+        description="Add a rule — each option shows what the collection would then hold."
         onBack={() => setPaletteParent(null)}
       >
         <RulePalette
@@ -379,23 +390,31 @@ export function RuleBuilder({
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <BuilderPage
+      title={draft.label}
+      description={summarizeCollection(draft)}
+      onBack={() => (dirty ? setConfirmingDiscard(true) : onCancel())}
+      backLabel={dirty ? "Discard changes" : "Back"}
+      footer={
         <div className="flex items-center gap-2">
-          <Text variant="heading">{draft.label}</Text>
           <TotalBadge total={result.total} />
-        </div>
-        <div className="flex gap-2">
-          <Button variant="neutral" onClick={onCancel}>
-            Cancel
-          </Button>
           <Button variant="primary" onClick={() => onSave(draft)}>
             Save
           </Button>
         </div>
-      </div>
-
-      <Text variant="secondary">{summarizeCollection(draft)}</Text>
+      }
+    >
+      {confirmingDiscard ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Text variant="secondary">Leave without saving? The rules you added are lost.</Text>
+          <Button variant="neutral" onClick={() => setConfirmingDiscard(false)}>
+            Keep editing
+          </Button>
+          <Button variant="danger" onClick={onCancel}>
+            Discard
+          </Button>
+        </div>
+      ) : null}
 
       {diagnosis.kind !== "ok" ? (
         <Text variant="secondary">{diagnosis.message}</Text>
@@ -404,6 +423,6 @@ export function RuleBuilder({
       <ul className="flex flex-col gap-2">
         <RuleGroupNode rule={draft.root} depth={1} ctx={ctx} isRoot />
       </ul>
-    </div>
+    </BuilderPage>
   );
 }

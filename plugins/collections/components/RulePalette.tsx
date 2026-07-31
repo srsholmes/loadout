@@ -26,7 +26,7 @@ import { FocusButton } from "./Focusable";
 /** A candidate plus what it would do to the current tab. */
 export interface PricedCandidate extends RuleCandidate {
   /**
-   * Total the tab would show with this rule added, or `undefined` when the
+   * Total the collection would show with this rule added, or `undefined` when the
    * rule cannot be priced — because it needs a value, or because its data
    * source is unavailable.
    */

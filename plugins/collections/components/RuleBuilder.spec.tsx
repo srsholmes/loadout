@@ -1,5 +1,6 @@
 import { describe, expect, it, mock } from "bun:test";
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import { PluginHeaderSlotProvider } from "@loadout/ui";
 import { RuleBuilder } from "./RuleBuilder";
 import { buildEvalGames } from "../lib/facts";
 import { LIBRARY } from "../test/fixtures/library";
@@ -25,10 +26,21 @@ function tab(children: Rule[], combinator: "all" | "any" = "all"): ManagedCollec
   };
 }
 
+/**
+ * The builder puts its title and Back in the shell topbar, so the tests need
+ * somewhere for the portal to land — without a slot the header renders
+ * nowhere and every query for it misses.
+ */
+function withHeader(ui: React.ReactElement) {
+  const slot = document.createElement("div");
+  document.body.appendChild(slot);
+  return render(<PluginHeaderSlotProvider slot={slot}>{ui}</PluginHeaderSlotProvider>);
+}
+
 function renderBuilder(t: ManagedCollection) {
   const onSave = mock((_: ManagedCollection) => {});
   const onCancel = mock(() => {});
-  const view = render(
+  const view = withHeader(
     <RuleBuilder collection={t} games={games} onSave={onSave} onCancel={onCancel} now={NOW} />,
   );
   return { onSave, onCancel, view };
@@ -119,11 +131,26 @@ describe("RuleBuilder — editing is a draft", () => {
     expect(saved.root.children).toHaveLength(0);
   });
 
-  it("Cancel reports without saving", () => {
+  it("leaves without saving, once you confirm", () => {
     const { onCancel, onSave } = renderBuilder(tab([{ id: "a", kind: "installed" }]));
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    // Back sits in the topbar now, where B and Escape also land, so leaving is
+    // a great deal easier to do by accident than the old body button was.
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("asks before throwing away rules you just added", () => {
+    const { onCancel } = renderBuilder(tab([]));
+    fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+    fireEvent.click(screen.getAllByRole("button", { name: /Installed/ })[0]!);
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.getByText(/Leave without saving/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -193,14 +220,14 @@ describe("RuleBuilder — the palette", () => {
 
     // The palette opens as its own page and every priceable candidate carries
     // a consequence — this is the whole point of the preview.
-    const dialog = screen.getByRole("region", { name: "Add a rule" });
+    const dialog = screen.getByRole("region", { name: "Test tab" });
     expect(within(dialog).getAllByText(/→ \d+ games?/).length).toBeGreaterThan(0);
   });
 
   it("says so rather than showing a number when a rule needs a value", () => {
     renderBuilder(tab([]));
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
-    const dialog = screen.getByRole("region", { name: "Add a rule" });
+    const dialog = screen.getByRole("region", { name: "Test tab" });
     expect(within(dialog).getAllByText("Needs a value").length).toBeGreaterThan(0);
   });
 
@@ -211,7 +238,7 @@ describe("RuleBuilder — the palette", () => {
     // that cannot be checked at all. The opposite of the truth.
     renderBuilder(tab([]));
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
-    const dialog = screen.getByRole("region", { name: "Add a rule" });
+    const dialog = screen.getByRole("region", { name: "Test tab" });
 
     const card = within(dialog).getByText("Friends playing now").closest("button");
     if (!card) throw new Error("expected a Friends playing now candidate");
@@ -221,7 +248,7 @@ describe("RuleBuilder — the palette", () => {
   });
 
   it("prices a fact-backed rule once its fact is available", () => {
-    render(
+    withHeader(
       <RuleBuilder
         collection={tab([])}
         games={games}
@@ -232,7 +259,7 @@ describe("RuleBuilder — the palette", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
-    const dialog = screen.getByRole("region", { name: "Add a rule" });
+    const dialog = screen.getByRole("region", { name: "Test tab" });
     const card = within(dialog).getByText("Friends playing now").closest("button");
     expect(card?.textContent).not.toContain("Needs Steam friends data");
   });
@@ -240,7 +267,7 @@ describe("RuleBuilder — the palette", () => {
   it("adds the picked rule to the tree", () => {
     const { onSave } = renderBuilder(tab([]));
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
-    const dialog = screen.getByRole("region", { name: "Add a rule" });
+    const dialog = screen.getByRole("region", { name: "Test tab" });
     fireEvent.click(within(dialog).getByText("Installed").closest("button") as HTMLElement);
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
