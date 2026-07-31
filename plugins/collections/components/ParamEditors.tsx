@@ -21,7 +21,7 @@ import { Field, TextInput, Toggle } from "@loadout/ui";
 import type { ParamOption, ParamSpec, RangeUnit } from "../lib/rule-params";
 import { formatBytes, formatMinutes } from "../lib/summarize";
 import type { NumericRange } from "../lib/types";
-import { FocusButton, FocusInput } from "./Focusable";
+import { FocusButton } from "./Focusable";
 
 export interface ParamEditorProps {
   spec: ParamSpec;
@@ -166,11 +166,11 @@ function RangeEditor({
       <label className="flex flex-1 flex-col gap-1">
         <span className="text-xs text-base-content/60">{label}</span>
         <div className="flex items-center gap-2">
-          <FocusInput
-            inputMode={unit.type === "number" ? "numeric" : "text"}
+          <TextInput
+            type={unit.type}
+            inputMode={unit.type === "number" ? "decimal" : undefined}
             value={stored === undefined ? "" : unit.toInput(stored)}
             placeholder="Any"
-            ariaLabel={label}
             onChange={(raw) => {
               const next = unit.fromInput(raw);
               // Delete the key rather than storing undefined, so a range with
@@ -447,10 +447,10 @@ export function ParamEditor({
 
       case "number":
         return (
-          <FocusInput
+          <TextInput
+            type="number"
             inputMode="numeric"
             value={String((value as number | undefined) ?? "")}
-            ariaLabel={spec.label}
             onChange={(raw) => {
               const next = Number(raw);
               onChange(Number.isNaN(next) ? 0 : next);

@@ -14,7 +14,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { FocusButton, FocusInput } from "./Focusable";
+import { FocusButton } from "./Focusable";
 
 interface Registration {
   focusKey: string;
@@ -112,26 +112,5 @@ describe("FocusButton", () => {
     expect(registered).toHaveLength(1);
     unmount();
     expect(registered).toHaveLength(0);
-  });
-});
-
-describe("FocusInput", () => {
-  it("registers with the shell's focus tree", () => {
-    render(<FocusInput value="" onChange={() => {}} ariaLabel="Minimum" />);
-    expect(registered).toHaveLength(1);
-  });
-
-  it("reports what was typed", () => {
-    const onChange = mock((_: string) => {});
-    render(<FocusInput value="" onChange={onChange} ariaLabel="Minimum" />);
-    fireEvent.change(screen.getByLabelText("Minimum"), { target: { value: "30" } });
-    expect(onChange).toHaveBeenCalledWith("30");
-  });
-
-  it("submits on Enter when the caller wants it", () => {
-    const onEnter = mock(() => {});
-    render(<FocusInput value="a" onChange={() => {}} ariaLabel="Tag" onEnter={onEnter} />);
-    fireEvent.keyDown(screen.getByLabelText("Tag"), { key: "Enter" });
-    expect(onEnter).toHaveBeenCalledTimes(1);
   });
 });

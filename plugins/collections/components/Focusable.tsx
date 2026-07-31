@@ -10,10 +10,15 @@
  * for: "Add rule", both ⋮ menus and every value editor were plain elements,
  * so a gamepad user could read the builder and never build anything.
  *
- * These exist rather than `@loadout/ui`'s `Button` because the builder's
- * controls carry their own visual language — selected chips, menu rows, a
- * narrow number field. `Button` would register focus correctly and repaint
- * the whole builder. Same registration, callsite keeps its styling.
+ * This exists rather than `@loadout/ui`'s `Button` because the builder's
+ * controls carry their own visual language — selected chips, menu rows, an
+ * overflow ⋮. `Button` would register focus correctly and repaint the whole
+ * builder. Same registration, callsite keeps its styling.
+ *
+ * There is deliberately no `FocusInput` counterpart: `@loadout/ui`'s
+ * `TextInput` already registers, and additionally carries `type` (so a date
+ * field gets a real date picker), `select()` on focus, and `disabled`. A
+ * local re-implementation dropped all three.
  */
 
 import type { CSSProperties, ReactNode } from "react";
@@ -75,60 +80,5 @@ export function FocusButton({
     >
       {children}
     </button>
-  );
-}
-
-export interface FocusInputProps {
-  value: string;
-  onChange: (next: string) => void;
-  className?: string;
-  style?: CSSProperties;
-  placeholder?: string;
-  inputMode?: "numeric" | "text";
-  ariaLabel?: string;
-  onEnter?: () => void;
-}
-
-/**
- * A text/number field the D-pad can land on.
- *
- * Enter focuses the field rather than submitting, because on a handheld that
- * press is what summons the on-screen keyboard — there is no other way to
- * type a value.
- */
-export function FocusInput({
-  value,
-  onChange,
-  className,
-  style,
-  placeholder,
-  inputMode,
-  ariaLabel,
-  onEnter,
-}: FocusInputProps) {
-  const { ref, focused } = useFocusable({
-    onEnterPress: () => {
-      const node = ref.current as HTMLInputElement | null;
-      node?.focus();
-    },
-  });
-
-  return (
-    <input
-      ref={ref as React.RefObject<HTMLInputElement>}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" && onEnter) {
-          e.preventDefault();
-          onEnter();
-        }
-      }}
-      placeholder={placeholder}
-      inputMode={inputMode}
-      aria-label={ariaLabel}
-      className={className}
-      style={focusStyle(focused, style)}
-    />
   );
 }
