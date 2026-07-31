@@ -31,7 +31,7 @@
     },
     "apps/loadout": {
       "name": "@loadout/loadout-server",
-      "version": "0.7.1",
+      "version": "0.7.2",
       "dependencies": {
         "@loadout/exec": "workspace:*",
         "@loadout/game-library": "workspace:*",
@@ -44,7 +44,7 @@
     },
     "apps/loadout-overlay": {
       "name": "@loadout/loadout-overlay",
-      "version": "0.7.1",
+      "version": "0.7.2",
       "dependencies": {
         "@loadout/deck-hid": "workspace:*",
         "@loadout/devices": "workspace:*",
@@ -71,6 +71,13 @@
         "tailwindcss": "^4.0.0",
         "typescript": "^5.7.0",
         "vite": "^6.0.0",
+      },
+    },
+    "packages/agent-docs": {
+      "name": "@loadout/agent-docs",
+      "version": "0.0.1",
+      "dependencies": {
+        "@loadout/types": "workspace:*",
       },
     },
     "packages/deck-hid": {
@@ -636,6 +643,8 @@
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.5.5", "", {}, "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og=="],
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
+
+    "@loadout/agent-docs": ["@loadout/agent-docs@workspace:packages/agent-docs"],
 
     "@loadout/deck-hid": ["@loadout/deck-hid@workspace:packages/deck-hid"],
 

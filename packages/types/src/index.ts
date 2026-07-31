@@ -21,3 +21,14 @@ export type {
   GameCollection,
   GameLibraryChangedEvent,
 } from "./game-library";
+export type {
+  AgentSafety,
+  AgentSchema,
+  AgentParam,
+  AgentMethodDoc,
+  AgentEventDoc,
+  AgentDoc,
+  AgentMethodCuration,
+  AgentManifest,
+  AgentIndexEntry,
+} from "./agent";
