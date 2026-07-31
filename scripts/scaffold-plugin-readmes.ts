@@ -157,6 +157,11 @@ function loadPluginMeta(id: string): PluginMeta | null {
 const PAGE_TITLES: Record<string, string> = {
   "": "Overview",
   detail: "Game detail",
+  new: "Starting a collection",
+  games: "Inside a collection",
+  rules: "Rules",
+  "rule-palette": "Adding a rule",
+  "add-games": "Adding games by hand",
   settings: "Settings",
   config: "Settings",
   presets: "Presets",
@@ -170,6 +175,11 @@ const PAGE_TITLES: Record<string, string> = {
 // preferred order, then anything else alphabetically.
 const PAGE_ORDER = [
   "",
+  "games",
+  "new",
+  "rules",
+  "rule-palette",
+  "add-games",
   "library",
   "installed",
   "downloads",
@@ -213,6 +223,8 @@ function pluginScreenshots(id: string): Shot[] {
  * just show their one-liner (and hand-tuned READMEs ignore this).
  */
 const PLUGIN_ABOUT: Record<string, string> = {
+  collections:
+    "Manages your Steam collections from the overlay — the ones you already have, and new ones built from rules. Every collection you own is on the grid, including the ROM sets EmuDeck and Steam ROM Manager create, and opening one shows exactly what Steam shows. Rule-built collections keep themselves up to date: \"installed but never played\", \"under 20 minutes in\", \"over 20 GB\" — each rule priced against your library before you commit to it, so you never build one that turns out to be empty. What you see is what Steam gets.",
   "battery-tracker":
     "Keeps an eye on your battery while you play — current charge, how fast it's draining or charging, estimated time left, and a short history of the session. On a handheld it answers the question that matters: will I reach a save point before I need the charger? On supported hardware it can also cap charging at a set percentage and bypass-charge (run off the adapter without charging the pack) to reduce battery wear.",
   bluetooth:

@@ -159,6 +159,7 @@ Enable or disable each one from **Settings → Plugins**.
 - **[Apex](plugins/apex/README.md)** — OneXPlayer Apex device fixes: recover the internal gamepad when its xHCI controller dies on resume — manually or automatically on every wake (or blacklist the hid-oxp driver to prevent the drop-out), and block the fingerprint reader from waking the device on a light touch.
 - **[Battery](plugins/battery-tracker/README.md)** — Battery level, charge rate, time remaining, charge history, charge limit, and bypass charging
 - **[Bluetooth](plugins/bluetooth/README.md)** — Quick connect/disconnect paired Bluetooth devices without leaving the game
+- **[Collections](plugins/collections/README.md)** — Manage the Steam collections you already have, and build new ones from rules that keep themselves up to date
 - **[Disable Controller Input](plugins/disable-controller-input/README.md)** — Silence individual controllers by telling InputPlumber to drop their virtual targets — useful for handhelds where the built-in pad is hogging player 1
 - **[Display Settings](plugins/display-settings/README.md)** — Adjust display brightness and saturation
 - **[Fan Control](plugins/fan-control/README.md)** — Monitor and control fan speed, temperature, and fan curves — presets or a custom curve editor

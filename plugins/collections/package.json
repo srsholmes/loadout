@@ -14,7 +14,7 @@
   "plugin": {
     "id": "collections",
     "name": "Collections",
-    "description": "Custom, filter-driven tabs for your game library — with live match counts, nested rules, and automatic syncing into real Steam collections",
+    "description": "Manage the Steam collections you already have, and build new ones from rules that keep themselves up to date",
     "category": "Steam",
     "subtitle": "Organise your library",
     "target": {

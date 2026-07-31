@@ -61,6 +61,9 @@ export function CollectionCard({
     <button
       ref={ref as React.RefObject<HTMLButtonElement>}
       type="button"
+      // Stable hook for tooling — the screenshot script drives the grid over
+      // CDP. Render-neutral, mirroring `data-game-card` on the shared GameCard.
+      data-collection-card=""
       onClick={onOpen}
       className="flex flex-col gap-2 rounded-xl border border-base-300 bg-base-200 p-2 text-left"
       style={{
