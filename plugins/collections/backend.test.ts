@@ -141,6 +141,16 @@ describe("entries Steam can no longer resolve", () => {
     ];
   };
 
+  it("counts only the live ones on the grid card", async () => {
+    // Otherwise a collection reads 222 on the card and 16 when opened, which
+    // is the discrepancy this whole thing is about.
+    withDeadIds();
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    const card = (await backend.listAll()).collections.find((c) => c.id === "uc-rh");
+    expect(card?.count).toBe(1);
+    expect(card?.previewAppIds).toEqual(["620"]);
+  });
+
   it("lists the games it can resolve, and counts the rest separately", async () => {
     // They used to be listed as rows named by the number, which is why a
     // collection could read as 221 games here and 16 in Steam.

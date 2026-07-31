@@ -385,17 +385,24 @@ export default class CollectionsBackend implements PluginBackend {
       );
     }
 
+    // Count what Steam can actually show, not what it stores. A collection
+    // holding dead shortcut ids would otherwise read 222 on the card and 16
+    // when opened — see `listGames` for where those ids come from.
+    const known = new Set(snapshot.games.map((g) => g.appId));
     return {
       collections: [
         ...managed,
-        ...linked.map((l) => ({
-          id: l.id,
-          label: l.name,
-          count: l.appIds.length,
-          previewAppIds: l.appIds.slice(0, 4),
-          kind: "linked" as const,
-          autoMaintained: l.isDynamic,
-        })),
+        ...linked.map((l) => {
+          const live = l.appIds.filter((appId) => known.has(appId));
+          return {
+            id: l.id,
+            label: l.name,
+            count: live.length,
+            previewAppIds: live.slice(0, 4),
+            kind: "linked" as const,
+            autoMaintained: l.isDynamic,
+          };
+        }),
       ],
       steamReachable,
     };
