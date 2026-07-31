@@ -138,6 +138,23 @@ export function planMirror(args: PlanMirrorArgs): MirrorPlan {
   const ledgerByManaged = new Map(ledger.entries.map((e) => [e.managedId, e]));
   const managedById = new Map(collections.map((c) => [c.id, c]));
 
+  /**
+   * A collection with no rules matches the whole library, which is never what
+   * anybody wants written into Steam — and it is exactly what an accidental
+   * "New" produces before a single rule has been added.
+   *
+   * Measured on a real device: three such collections had been created and
+   * auto-synced, putting three 2500-app collections into Steam and making both
+   * Steam and the grid crawl. Skipping them is the difference between a stray
+   * press costing nothing and costing 2500 Cloud writes.
+   *
+   * Skipped, not deleted: an existing Steam collection is left exactly as it
+   * is, so removing the last rule from something you already mirrored never
+   * silently destroys it. Deleting the collection here is still the way to
+   * remove it from Steam.
+   */
+  const unbuilt = (collection: ManagedCollection) => collection.root.children.length === 0;
+
   // Two passes, because a create has to know what the renames will free.
   // Swapping two collections' names is otherwise reported as a conflict
   // forever: the new one's name is held by a collection that is, in this very
@@ -147,6 +164,13 @@ export function planMirror(args: PlanMirrorArgs): MirrorPlan {
   for (const collection of collections) {
     const entry = ledgerByManaged.get(collection.id);
     if (!entry) continue;
+    if (unbuilt(collection)) {
+      plan.skipped.push({
+        managedId: collection.id,
+        reason: `"${collection.label}" has no rules yet, so it would match your whole library.`,
+      });
+      continue;
+    }
 
     const wanted = [...(evaluated.get(collection.id) ?? [])];
     const name = collectionNameFor(collection, namePrefix);
@@ -247,6 +271,13 @@ export function planMirror(args: PlanMirrorArgs): MirrorPlan {
   // Pass 2 — collections with no Steam collection yet.
   for (const collection of collections) {
     if (ledgerByManaged.has(collection.id)) continue;
+    if (unbuilt(collection)) {
+      plan.skipped.push({
+        managedId: collection.id,
+        reason: `"${collection.label}" has no rules yet, so it would match your whole library.`,
+      });
+      continue;
+    }
 
     const wanted = [...(evaluated.get(collection.id) ?? [])];
     const name = collectionNameFor(collection, namePrefix);

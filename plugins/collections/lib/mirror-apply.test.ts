@@ -9,7 +9,14 @@ function managed(overrides: Partial<ManagedCollection> = {}): ManagedCollection 
   return {
     id: "t1",
     label: "Backlog",
-    root: { kind: "group", id: "g", combinator: "all", children: [] },
+    // A rule by default: planMirror skips a collection with none, since an
+    // empty tree matches the whole library.
+    root: {
+      kind: "group",
+      id: "g",
+      combinator: "all",
+      children: [{ id: "r1", kind: "installed" }],
+    },
     sort: [],
     limit: null,
     display: { tileWidth: 150, showLabels: true, badges: [] },

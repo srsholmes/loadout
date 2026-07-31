@@ -16,7 +16,15 @@ function managed(overrides: Partial<ManagedCollection> = {}): ManagedCollection 
   return {
     id: "t1",
     label: "Backlog",
-    root: { kind: "group", id: "g", combinator: "all", children: [] },
+    // A rule by default: a collection with none matches the whole library and
+    // is deliberately never mirrored, so an empty root here would silently
+    // skip every case below.
+    root: {
+      kind: "group",
+      id: "g",
+      combinator: "all",
+      children: [{ id: "r1", kind: "installed" }],
+    },
     sort: [],
     limit: null,
     display: { tileWidth: 150, showLabels: true, badges: [] },
@@ -95,6 +103,65 @@ describe("planMirror — first sync", () => {
     expect(plan.conflicts).toEqual([
       { managedId: "t1", name: "Backlog", existingCollectionId: "uc-99", existingCount: 3 },
     ]);
+  });
+});
+
+describe("planMirror — a collection with no rules", () => {
+  const empty = () =>
+    managed({ root: { kind: "group", id: "g", combinator: "all", children: [] } });
+
+  it("is never created in Steam, whatever it matches", () => {
+    // An empty rule tree matches the whole library. Measured on a real device:
+    // three of these had been created by accident and auto-synced, putting
+    // three 2500-app collections into Steam.
+    const plan = planMirror({
+      collections: [empty()],
+      evaluated: new Map([["t1", ["1", "2", "3"]]]),
+      ledger: ledger(),
+      steamCollections: [],
+    });
+    expect(plan.creates).toEqual([]);
+    expect(plan.skipped[0]?.managedId).toBe("t1");
+    expect(plan.skipped[0]?.reason).toMatch(/whole library/);
+  });
+
+  it("leaves one already in Steam exactly as it is", () => {
+    // Skipped rather than deleted: removing the last rule from something you
+    // already mirrored must not silently destroy it.
+    const plan = planMirror({
+      collections: [empty()],
+      evaluated: new Map([["t1", ["1", "2"]]]),
+      ledger: ledger(entry({ appIds: ["1"] })),
+      steamCollections: [collection({ appIds: ["1"] })],
+    });
+    expect(plan.updates).toEqual([]);
+    expect(plan.deletes).toEqual([]);
+    expect(plan.renames).toEqual([]);
+    expect(plan.skipped).toHaveLength(1);
+  });
+
+  it("still deletes it when the collection itself is removed", () => {
+    // The escape hatch: deleting it here is how it leaves Steam.
+    const plan = planMirror({
+      collections: [],
+      evaluated: new Map(),
+      ledger: ledger(entry({ appIds: ["1"] })),
+      steamCollections: [collection({ appIds: ["1"] })],
+    });
+    expect(plan.deletes).toHaveLength(1);
+  });
+
+  it("does not hold the name against a real collection", () => {
+    // A skipped collection creates nothing, so its name is still free.
+    const plan = planMirror({
+      collections: [empty(), managed({ id: "t2", label: "Backlog" })],
+      evaluated: new Map([["t2", ["1"]]]),
+      ledger: ledger(),
+      steamCollections: [],
+    });
+    expect(plan.conflicts).toEqual([]);
+    expect(plan.creates).toHaveLength(1);
+    expect(plan.creates[0]?.managedId).toBe("t2");
   });
 });
 

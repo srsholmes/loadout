@@ -444,6 +444,16 @@ export function RuleBuilder({
 
       <section className="flex flex-col gap-2">
         <Text variant="secondary">Rules</Text>
+        {draft.root.children.length === 0 ? (
+          // No rules means "the whole library", which is never worth writing
+          // into Steam — so the sync skips it. Saying that here is the
+          // difference between a deliberate draft and a collection that looks
+          // saved but never appears.
+          <Text variant="secondary">
+            No rules yet, so this matches your whole library and won&apos;t be
+            written to Steam. Add one to narrow it down.
+          </Text>
+        ) : null}
         {diagnosis.kind !== "ok" ? (
           <Text variant="secondary">{diagnosis.message}</Text>
         ) : null}
