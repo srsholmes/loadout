@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 
 export { isGamescopeRunning } from "./gaming-mode";
 
@@ -38,6 +38,63 @@ export function getSteamAppsDir(): string {
  */
 export function getAppCacheLibraryDir(): string {
   return join(getSteamDir(), "appcache", "librarycache");
+}
+
+/**
+ * Steam's shipped client UI bundle — the webpack output that renders Big
+ * Picture / Gaming Mode.
+ *
+ * Read-only, and only ever *text-searched*: `@loadout/steam-cdp`'s service
+ * caller greps these chunks for a literal like `"Player.GetAchievementsProgress#1"`
+ * to discover which webpack module id currently exports that service, because
+ * the ids change on every Steam build and hardcoding one is a guaranteed
+ * breakage. Never write here.
+ */
+export function getSteamUiDir(): string {
+  return join(getSteamDir(), "steamui");
+}
+
+/**
+ * List the `chunk~*.js` files of Steam's UI bundle, newest first.
+ *
+ * Newest-first because a service literal is overwhelmingly likely to live in
+ * a recently-built chunk, so callers that stop at the first hit do less I/O.
+ *
+ * The filenames are content-hashed by webpack, which makes the *set* of names
+ * a free cache key for "has Steam's UI changed?" — see
+ * `chunkCacheKey` in `@loadout/steam-cdp`. Returns `[]` when Steam isn't
+ * installed rather than throwing; a caller with no chunks to search reports
+ * that as an unresolved service, which is the more useful error.
+ */
+export async function listSteamUiChunks(): Promise<string[]> {
+  const dir = getSteamUiDir();
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return [];
+  }
+
+  const chunks = names.filter((n) => n.startsWith("chunk~") && n.endsWith(".js"));
+
+  // stat every candidate up front so the sort comparator stays pure — an
+  // async comparator would silently not sort.
+  const withMtime = await Promise.all(
+    chunks.map(async (name) => {
+      const path = join(dir, name);
+      try {
+        return { path, mtimeMs: (await stat(path)).mtimeMs };
+      } catch {
+        // Vanished between readdir and stat (Steam updating underneath us).
+        return null;
+      }
+    }),
+  );
+
+  return withMtime
+    .filter((entry): entry is { path: string; mtimeMs: number } => entry !== null)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    .map((entry) => entry.path);
 }
 
 /**

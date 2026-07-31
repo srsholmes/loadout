@@ -33,6 +33,8 @@
       "@loadout/external-cache/*": ["./packages/external-cache/src/*"],
       "@loadout/file-picker": ["./packages/file-picker/src"],
       "@loadout/file-picker/*": ["./packages/file-picker/src/*"],
+      "@loadout/game-facts": ["./packages/game-facts/src"],
+      "@loadout/game-facts/*": ["./packages/game-facts/src/*"],
       "@loadout/game-library": ["./packages/game-library/src"],
       "@loadout/game-library/*": ["./packages/game-library/src/*"],
       "@loadout/per-game-profiles": ["./packages/per-game-profiles/src"],

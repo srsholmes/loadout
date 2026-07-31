@@ -16,6 +16,11 @@
  *
  * For the per-plugin "I need to call one Steam API once" pattern, prefer
  * `withSteamClient(fn)` — it lazy-connects, runs your callback, closes.
+ *
+ * Separately, `callSteamService` reaches Valve's *authenticated protobuf
+ * services* from inside Steam's page (see `./services.ts`) — a much wider
+ * surface than `window.SteamClient`, and the only way to answer questions
+ * about games the user owns but hasn't installed.
  */
 
 export { CDPClient, type CDPResponse, type CDPEvent } from "./cdp-client";
@@ -35,3 +40,17 @@ export {
   withSteamClient,
   type SteamClientOptions,
 } from "./steam-client";
+
+export {
+  buildCallExpression,
+  callSteamService,
+  chunkCacheKey,
+  clearServiceModuleCache,
+  findModuleIdInSource,
+  resolveServiceModuleId,
+  SteamServiceError,
+  type CallServiceOptions,
+  type ResolveOptions,
+  type SteamServiceErrorCode,
+  type SteamServiceSpec,
+} from "./services";
