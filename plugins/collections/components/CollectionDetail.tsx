@@ -13,17 +13,18 @@
  * eight hundred.
  */
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Button,
   GameCard,
   GameCardGrid,
   IconButton,
   PluginHeader,
+  SearchField,
   Spinner,
   Text,
 } from "@loadout/ui";
-import { FaChevronLeft, FaGear, FaPlus, FaTrash, FaXmark } from "react-icons/fa6";
+import { FaChevronLeft, FaGear, FaPen, FaPlus, FaTrash, FaXmark } from "react-icons/fa6";
 import { useVisibleRows } from "../hooks/useVisibleRows";
 
 export interface CollectionDetailProps {
@@ -42,7 +43,7 @@ export interface CollectionDetailProps {
   /** Delete the whole collection. Confirmed here before it is called. */
   onDelete: () => void;
   /**
-   * Add games by hand. Offered on the same terms as {@link onRemoveGame}: a
+   * Add games by hand. Offered on the same terms as {@link onRemoveGames}: a
    * managed collection's members come from its rules, and Steam recomputes a
    * dynamic one.
    */
@@ -55,11 +56,11 @@ export interface CollectionDetailProps {
   /** Drop them. Linked collections only, and confirmed here. */
   onCleanUp?: () => void;
   /**
-   * Drop one game. Offered only for a linked, non-dynamic collection: a
-   * managed one would get the game straight back on the next sync, and Steam
-   * recomputes a dynamic one.
+   * Drop games. Offered only for a linked, non-dynamic collection: a managed
+   * one would get them straight back on the next sync, and Steam recomputes a
+   * dynamic one.
    */
-  onRemoveGame?: (appId: string) => void;
+  onRemoveGames?: (appIds: string[]) => void;
 }
 
 const artUrl = (appId: string, kind: "capsule" | "header") =>
@@ -75,17 +76,37 @@ export function CollectionDetail({
   onAddGames,
   staleCount = 0,
   onCleanUp,
-  onRemoveGame,
+  onRemoveGames,
 }: CollectionDetailProps) {
   /** The bin has been pressed and is showing what it would do. */
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [confirmingCleanUp, setConfirmingCleanUp] = useState(false);
+  /**
+   * Picking games to remove.
+   *
+   * A Remove button on every tile put a destructive control under the thumb on
+   * a grid you scroll with a thumbstick, and made removing five games five
+   * separate writes. Editing is a mode now — the same one adding uses, so the
+   * two halves of curating a collection behave alike.
+   */
+  const [editing, setEditing] = useState(false);
+  const [selected, setSelected] = useState<readonly string[]>([]);
+  /** Filter, because a ROM collection here runs to 700+ entries. */
+  const [filter, setFilter] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const gridWrapperRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
 
+  const shown = useMemo(() => {
+    if (!games) return null;
+    const q = filter.trim().toLowerCase();
+    return q ? games.filter((g) => g.name.toLowerCase().includes(q)) : games;
+  }, [games, filter]);
+
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
+
   const rowWindow = useVisibleRows({
-    total: games?.length ?? 0,
+    total: shown?.length ?? 0,
     gridWrapperRef,
     listRef,
     scrollRef,
@@ -107,16 +128,73 @@ export function CollectionDetail({
           <div className="flex flex-col gap-0.5 min-w-0">
             <h1 className="text-xl font-semibold m-0 leading-tight truncate">{label}</h1>
             <span className="text-[11.5px] text-base-content/55 truncate leading-tight">
-              {games === null ? "Loading…" : `${games.length} games`}
+              {games === null
+                ? "Loading…"
+                : editing
+                  ? selected.length === 0
+                    ? "Pick the ones to remove"
+                    : `${selected.length} picked`
+                  : shown && shown.length !== games.length
+                    ? `${shown.length} of ${games.length} games`
+                    : `${games.length} games`}
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {/* A long ROM collection is unusable without this: 700+ tiles is
+                not something you scroll to the middle of with a thumbstick. */}
+            {games !== null && games.length > 0 ? (
+              <SearchField
+                value={filter}
+                onChange={setFilter}
+                onClear={() => setFilter("")}
+                placeholder="Filter…"
+                width={180}
+              />
+            ) : null}
+            {editing ? (
+              <>
+                <Button
+                  variant="danger"
+                  disabled={selected.length === 0}
+                  onClick={() => {
+                    onRemoveGames?.([...selected]);
+                    setSelected([]);
+                    setEditing(false);
+                  }}
+                >
+                  {selected.length === 0
+                    ? "Remove from collection"
+                    : `Remove ${selected.length} from collection`}
+                </Button>
+                <IconButton
+                  onClick={() => {
+                    setEditing(false);
+                    setSelected([]);
+                  }}
+                  title="Done"
+                  ariaLabel="Done"
+                  size={26}
+                >
+                  <FaXmark size={11} />
+                </IconButton>
+              </>
+            ) : null}
+            {onRemoveGames && !editing ? (
+              <IconButton
+                onClick={() => setEditing(true)}
+                title="Edit collection"
+                ariaLabel="Edit collection"
+                size={26}
+              >
+                <FaPen size={11} />
+              </IconButton>
+            ) : null}
             {/* A bin icon alone is one press away from destroying a collection
                 somebody else's tool may have spent a long time generating, and
                 an icon cannot say what it is about to delete. Pressing it
                 spells the consequence out as a red button instead — the second
                 press is the one that acts. */}
-            {confirmingDelete ? (
+            {editing ? null : confirmingDelete ? (
               <>
                 <Button variant="danger" onClick={onDelete}>
                   Remove collection
@@ -140,14 +218,16 @@ export function CollectionDetail({
                 <FaTrash size={11} />
               </IconButton>
             )}
-            {onAddGames ? (
+            {onAddGames && !editing ? (
               <IconButton onClick={onAddGames} title="Add games" ariaLabel="Add games" size={26}>
                 <FaPlus size={11} />
               </IconButton>
             ) : null}
-            <IconButton onClick={onOptions} title="Options" ariaLabel="Options" size={26}>
-              <FaGear size={11} />
-            </IconButton>
+            {editing ? null : (
+              <IconButton onClick={onOptions} title="Options" ariaLabel="Options" size={26}>
+                <FaGear size={11} />
+              </IconButton>
+            )}
             <IconButton onClick={onBack} title="Back" ariaLabel="Back" size={26}>
               <FaChevronLeft size={11} />
             </IconButton>
@@ -194,6 +274,8 @@ export function CollectionDetail({
         <div className="flex items-center justify-center" style={{ padding: "4rem 0" }}>
           <Spinner />
         </div>
+      ) : shown !== null && shown.length === 0 && games.length > 0 ? (
+        <Text variant="secondary">No game in this collection matches “{filter.trim()}”.</Text>
       ) : games.length === 0 ? (
         // An empty collection is a legitimate state, not an error — a new one
         // starts here, and seeing it empty is the preview doing its job.
@@ -215,17 +297,38 @@ export function CollectionDetail({
           <div style={{ height: rowWindow.padTop, flexShrink: 0 }} />
           <div ref={gridWrapperRef} style={{ flexShrink: 0 }}>
             <GameCardGrid minTileWidth={150}>
-              {games.slice(rowWindow.start, rowWindow.end).map((g) => (
+              {(shown ?? []).slice(rowWindow.start, rowWindow.end).map((g) => (
                 <GameCard
                   key={g.appId}
                   imageUrl={artUrl(g.appId, "capsule")}
                   fallbackImageUrl={artUrl(g.appId, "header")}
                   title={g.name}
-                  onPick={() => onPickGame(g.appId)}
+                  // Out of edit mode the tile opens the game, as it always
+                  // has. In it, the tile picks — the same gesture as adding,
+                  // so both halves of curating a collection behave alike.
+                  onPick={() =>
+                    editing
+                      ? setSelected((prev) =>
+                          prev.includes(g.appId)
+                            ? prev.filter((x) => x !== g.appId)
+                            : [...prev, g.appId],
+                        )
+                      : onPickGame(g.appId)
+                  }
                   action={
-                    onRemoveGame ? (
-                      <Button variant="neutral" size="sm" onClick={() => onRemoveGame(g.appId)}>
-                        Remove
+                    editing ? (
+                      <Button
+                        variant={selectedSet.has(g.appId) ? "primary" : "neutral"}
+                        size="sm"
+                        onClick={() =>
+                          setSelected((prev) =>
+                            prev.includes(g.appId)
+                              ? prev.filter((x) => x !== g.appId)
+                              : [...prev, g.appId],
+                          )
+                        }
+                      >
+                        {selectedSet.has(g.appId) ? "Picked" : "Select"}
                       </Button>
                     ) : undefined
                   }

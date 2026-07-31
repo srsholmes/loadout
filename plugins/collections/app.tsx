@@ -347,7 +347,9 @@ export function Collections() {
         staleCount={handEditable ? staleCount : 0}
         onCleanUp={handEditable ? () => void cleanUpLinked(view.id) : undefined}
         onAddGames={handEditable ? () => setView({ kind: "add", id: view.id, label: view.label }) : undefined}
-        onRemoveGame={handEditable ? (appId) => void removeFromLinked(view.id, appId) : undefined}
+        onRemoveGames={
+          handEditable ? (appIds) => void removeFromLinked(view.id, appIds) : undefined
+        }
       />
     );
   }
@@ -549,9 +551,10 @@ export function Collections() {
     }
   }
 
-  async function removeFromLinked(id: string, appId: string) {
+  async function removeFromLinked(id: string, appIds: readonly string[]) {
     const before = games ?? [];
-    const next = before.filter((g) => g.appId !== appId);
+    const dropped = new Set(appIds);
+    const next = before.filter((g) => !dropped.has(g.appId));
     // Optimistic: the write is a Steam round trip, and a tile that lingers for
     // a second reads as a failed press.
     setGames(next);
