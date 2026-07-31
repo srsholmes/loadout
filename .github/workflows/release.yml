@@ -132,9 +132,15 @@ jobs:
           #    per-plugin duplication that ballooned the tarball. Without
           #    this, curl|sh installs end up with an empty plugins/ dir and
           #    nothing renders (audit 2026-05 H-002).
+          #    AGENTS.md rides along in the same tarball: install.sh extracts
+          #    it straight into $INSTALL_DIR, which is where an AI agent
+          #    looking around the machine will find it. The members are named
+          #    explicitly here, so anything prepare-plugins.sh stages must
+          #    also be listed below or it silently won't ship.
           PLUGIN_STAGE_DIR="$RUNNER_TEMP/staged-install-root"
           bash scripts/prepare-plugins.sh "$PLUGIN_STAGE_DIR"
-          tar -C "$PLUGIN_STAGE_DIR" -cJf loadout-plugins-x86_64.tar.xz plugins node_modules
+          tar -C "$PLUGIN_STAGE_DIR" -cJf loadout-plugins-x86_64.tar.xz \
+            plugins node_modules AGENTS.md
 
           # 4. Checksums so install.sh can verify integrity.
           sha256sum \
