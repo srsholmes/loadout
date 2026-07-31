@@ -1,0 +1,25 @@
+{
+  "name": "@loadout/plugin-achievement-hunter",
+  "version": "0.0.1",
+  "type": "module",
+  "dependencies": {
+    "@loadout/steam-cdp": "workspace:*",
+    "@loadout/steam-paths": "workspace:*"
+  },
+  "plugin": {
+    "id": "achievement-hunter",
+    "name": "Achievement Hunter",
+    "description": "A library-wide achievement completion dashboard. Answers \"which games am I 3 achievements away from 100%?\" across your whole library — including games you haven't installed — plus per-game detail, an unlock timeline and a rarest-unlocked view. Big Picture has no equivalent.",
+    "permissions": {
+      "network": ["localhost", "127.0.0.1"],
+      "filesystem": [
+        "read:~/.local/share/Steam",
+        "write:~/.config/loadout/plugins",
+        "write:~/.cache/loadout"
+      ]
+    },
+    "category": "Steam",
+    "subtitle": "Achievement completion dashboard",
+    "target": { "type": "overlay" }
+  }
+}

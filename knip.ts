@@ -111,6 +111,21 @@ const config: KnipConfig = {
       project: "**/*.{ts,tsx,css}",
     },
 
+    // achievement-hunter ships a maintainer-only hardware probe on top of the
+    // standard plugin entries. It is run by hand on a device
+    // (`bun plugins/achievement-hunter/scripts/probe-achievements.ts`) to
+    // measure Steam's real service surface — batch caps, response shapes —
+    // and is never imported by the plugin itself.
+    "plugins/achievement-hunter": {
+      entry: [
+        "app.tsx",
+        "backend.ts",
+        "**/*.{test,spec}.{ts,tsx}",
+        "scripts/*.ts",
+      ],
+      project: "**/*.{ts,tsx,css}",
+    },
+
     // recomp additionally ships dynamic-loaded game/mod setup modules and
     // operator scripts on top of the standard plugin entries.
     "plugins/recomp": {

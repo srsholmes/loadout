@@ -129,9 +129,15 @@ done
 
 # Shared workspace packages — same rule, scoped to a list of
 # package src/ trees the ratchet has been applied to.
-# Empty: sgdb-art/steam-shortcut/file-picker are removed from the minimal
-# PoC. Re-scope when those packages return with their plugins.
-SPEC_SCOPED_PACKAGES=""
+# sgdb-art/steam-shortcut/file-picker are removed from the minimal PoC;
+# re-scope when those packages return with their plugins.
+# game-facts is scoped from its first commit rather than ratcheted on
+# afterwards, so the gate holds by construction for a package whose whole job
+# is scheduling logic that must be proven at exact boundaries.
+# steam-cdp is free to scope: cdp-client.ts and steam-client.ts already have
+# siblings, tabs.ts and index.ts are under the floor. Scoping it now stops the
+# next addition to Steam's most breakage-prone surface arriving untested.
+SPEC_SCOPED_PACKAGES="packages/game-facts/src packages/steam-cdp/src"
 for dir in $SPEC_SCOPED_PACKAGES; do
   [ -d "$dir" ] || continue
   for src in $(find "$dir" -type f -name '*.ts' 2>/dev/null); do
