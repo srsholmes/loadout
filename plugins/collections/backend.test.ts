@@ -156,6 +156,59 @@ describe("createCollection", () => {
   });
 });
 
+describe("editing never syncs on its own", () => {
+  // A sync is a full library evaluation plus Steam Cloud writes, on a
+  // single-threaded backend. Doing it a couple of seconds after every edit ran
+  // it *while the user was still working*, so every RPC the UI issued queued
+  // behind it — indistinguishable, from the front, from a frozen plugin. Five
+  // identical collections got made that way, one per impatient press.
+  it("records that Steam is behind rather than writing to it", async () => {
+    const backend = await loaded();
+    await backend.setConfig({
+      ...(await backend.getConfig()).config,
+      mirror: { ...(await backend.getConfig()).config.mirror, autoSync: true },
+    });
+
+    await backend.createCollection("Backlog");
+    // Long enough that the old debounce would have fired twice over.
+    await new Promise((r) => setTimeout(r, 60));
+
+    const { config } = await backend.getConfig();
+    expect(config.mirror.pendingSync).toBe(true);
+    // Nothing reached Steam: the fake would be holding a collection if it had.
+    expect(fakeCollections).toEqual([]);
+  });
+
+  it("leaves the flag alone when the change can't affect Steam", async () => {
+    const backend = await loaded();
+    const { config } = await backend.getConfig();
+    await backend.setConfig(config);
+    expect((await backend.getConfig()).config.mirror.pendingSync).toBe(false);
+  });
+
+  it("still writes when asked to", async () => {
+    // The manual path is the whole point of the above: the work is the same,
+    // it just happens when nobody is waiting on it.
+    const backend = await loaded();
+    await backend.createCollection("Backlog");
+    await backend.setCollections([
+      {
+        ...(await backend.getConfig()).config.collections[0]!,
+        root: {
+          kind: "group",
+          id: "backlog-root",
+          combinator: "all",
+          children: [{ id: "r1", kind: "installed" }],
+        },
+      },
+    ]);
+
+    const report = await backend.syncMirror();
+    expect(report.created).toBe(1);
+    expect((await backend.getConfig()).config.mirror.pendingSync).toBe(false);
+  });
+});
+
 describe("deleteCollection", () => {
   it("removes it from the config and the order", async () => {
     const backend = await loaded();

@@ -69,12 +69,18 @@ export function SettingsPage({
       <div className="flex flex-col gap-4">
         <section className="flex flex-col gap-2">
           <div className="flex items-center justify-between gap-4">
-            <Text>Keep Steam in step</Text>
+            <Text>Sync when I leave</Text>
             <Toggle checked={autoSync} onChange={onToggleAutoSync} />
           </div>
           <Text variant="secondary">
-            Writes your rule-built collections into Steam whenever they change.
-            The ones that were already in Steam are left alone.
+            Writes your rule-built collections into Steam when you close this
+            plugin, rather than while you are still working in it. The ones that
+            were already in Steam are left alone.
+          </Text>
+          <Text variant="secondary">
+            A sync reads your whole library and writes to Steam Cloud, so doing
+            it mid-edit made the plugin look frozen. Use the sync button in the
+            header when you want it immediately.
           </Text>
 
           {managedCount === 0 ? (
@@ -94,8 +100,8 @@ export function SettingsPage({
 
           {pendingSync ? (
             <Text variant="secondary">
-              A sync is still owed — Steam wasn&apos;t reachable last time. It will
-              run on its own once Steam is back.
+              Steam is behind — changes are waiting to be written. They go out
+              when you leave, or when you press Sync.
             </Text>
           ) : null}
 

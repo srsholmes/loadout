@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { LIBRARY } from "./test/fixtures/library";
 
 const calls: Array<{ method: string; args: unknown[] }> = [];
+let mirrorState = { autoSync: false, pendingSync: false };
 let summaries: unknown[] = [];
 let steamReachable = true;
 let games: string[] = [];
@@ -38,7 +39,7 @@ const callMock = mock((method: string, ...args: unknown[]) => {
       return Promise.resolve({
         config: {
           collections: managedCollections,
-          mirror: { autoSync: false, pendingSync: false },
+          mirror: mirrorState,
         },
         warnings: [],
         readOnly: false,
@@ -110,6 +111,7 @@ let unmount: () => void;
 
 beforeEach(() => {
   calls.length = 0;
+  mirrorState = { autoSync: false, pendingSync: false };
   summaries = [];
   steamReachable = true;
   games = [];
@@ -193,6 +195,25 @@ describe("editing a collection's rules", () => {
   /** A managed collection with the shape the rule builder needs. */
   const managed = fullCollection;
 
+  it("locks the gallery while a preset is being built", async () => {
+    // Creating one takes a beat, and a press that shows no sign of having
+    // registered gets pressed again — which is how five identical collections
+    // got made.
+    ({ unmount } = renderApp());
+    await waitFor(() => expect(screen.getByRole("button", { name: "New" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "New" }));
+    await waitFor(() => expect(screen.getByText("Presets")).toBeTruthy());
+
+    const row = screen.getByRole("button", { name: /Never played/ });
+    fireEvent.click(row);
+    expect(row.hasAttribute("disabled")).toBe(true);
+    expect(row.textContent).toMatch(/Building it/);
+
+    fireEvent.click(row);
+    fireEvent.click(row);
+    expect(calls.filter((c) => c.method === "createCollection")).toHaveLength(1);
+  });
+
   it("builds a collection from a preset without a word being typed", async () => {
     // Typing on a handheld means the on-screen keyboard and a thumbstick. A
     // preset arrives named and ruled, so the whole flow is two presses.
@@ -215,6 +236,19 @@ describe("editing a collection's rules", () => {
     }>;
     const made = saved.find((c) => c.label === "Never played")!;
     expect(made.root.children.length).toBeGreaterThan(0);
+  });
+
+  it("syncs on the way out, not while you work", async () => {
+    // Nothing is waiting on the backend once the plugin is gone, which is the
+    // entire reason the sync happens here.
+    mirrorState = { autoSync: true, pendingSync: true };
+    ({ unmount } = renderApp());
+    await waitFor(() => expect(screen.getByRole("button", { name: "New" })).toBeTruthy());
+    expect(calls.some((c) => c.method === "syncMirror")).toBe(false);
+
+    unmount();
+    unmount = () => {};
+    expect(calls.some((c) => c.method === "syncMirror")).toBe(true);
   });
 
   it("opens a managed collection's rules from the cog", async () => {

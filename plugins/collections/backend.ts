@@ -57,7 +57,6 @@ const PLAYTIME_PLUGIN = "playtime";
  * of edits, short enough that finishing a collection and switching to Steam
  * finds it already there.
  */
-const AUTO_SYNC_DEBOUNCE_MS = 2500;
 
 /** What a sync did to one collection, for reporting it back. */
 export interface SyncChange {
@@ -101,7 +100,6 @@ export default class CollectionsBackend implements PluginBackend {
   private loadWarnings: string[] = [];
   /** Set when the stored config came from a newer build — refuse all writes. */
   private readOnly = false;
-  private syncTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * Serialises syncs. Three callers can start one — the RPC, the debounce
    * timer, and the owed-sync retry on load — and none can see the others. Two
@@ -129,6 +127,8 @@ export default class CollectionsBackend implements PluginBackend {
     // than on a timer: plugin load is the one moment we know Steam has just
     // had a chance to come up.
     if (this.config.mirror.autoSync && this.config.mirror.pendingSync) {
+      // Load is the one automatic sync left, and it is safe here precisely
+      // because nothing is on screen waiting for this backend yet.
       void this.syncMirror().catch((err) => {
         this.log?.warn(
           `[collections] Owed sync still can't run: ${err instanceof Error ? err.message : err}`,
@@ -137,10 +137,7 @@ export default class CollectionsBackend implements PluginBackend {
     }
   }
 
-  async onUnload(): Promise<void> {
-    if (this.syncTimer) clearTimeout(this.syncTimer);
-    this.syncTimer = null;
-  }
+  async onUnload(): Promise<void> {}
 
   // ── Config ───────────────────────────────────────────────────────────
 
@@ -174,7 +171,7 @@ export default class CollectionsBackend implements PluginBackend {
       await saveConfig(merged); // throws on invalid; never persists junk
       this.config = merged;
       this._broadcast();
-      this._maybeAutoSync(before, merged);
+      this._markSyncOwed(before, merged);
       return this.config;
     });
   }
@@ -251,19 +248,24 @@ export default class CollectionsBackend implements PluginBackend {
     });
   }
 
-  private _maybeAutoSync(before: CollectionsConfig, after: CollectionsConfig): void {
-    if (!after.mirror.autoSync) return;
+  /**
+   * Record that Steam is now behind, rather than syncing on the spot.
+   *
+   * It used to sync a couple of seconds after any edit. A sync is a full
+   * library evaluation plus Steam Cloud writes, and this backend is
+   * single-threaded — so it ran *while the user was still working*, and every
+   * RPC the UI issued queued behind it. From the front that looks like the
+   * plugin has frozen: a press does nothing, so you press again. That is
+   * exactly how five identical collections got made.
+   *
+   * Syncing is now something that happens when nobody is waiting on it —
+   * when you leave the plugin, or when you ask for it — so the work is the
+   * same but it is never in your way.
+   */
+  private _markSyncOwed(before: CollectionsConfig, after: CollectionsConfig): void {
     if (!mirrorAffecting(before, after)) return;
-
-    if (this.syncTimer) clearTimeout(this.syncTimer);
-    this.syncTimer = setTimeout(() => {
-      this.syncTimer = null;
-      void this.syncMirror().catch((err) => {
-        this.log?.warn(
-          `[collections] Auto-sync failed: ${err instanceof Error ? err.message : err}`,
-        );
-      });
-    }, AUTO_SYNC_DEBOUNCE_MS);
+    if (after.mirror.pendingSync) return;
+    void this._setMirrorState({ ...after.mirror, pendingSync: true }).catch(() => {});
   }
 
   // ── The grid ─────────────────────────────────────────────────────────

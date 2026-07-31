@@ -59,6 +59,15 @@ export function NewCollectionPage({
   now,
 }: NewCollectionPageProps) {
   const [name, setName] = useState("");
+  /**
+   * A preset has been picked and the collection is being made.
+   *
+   * Locks the whole gallery, because creating one takes a beat — reading the
+   * library, writing the rules, opening the result — and a press that shows no
+   * sign of having registered gets pressed again. That is how five identical
+   * collections got made.
+   */
+  const [picked, setPicked] = useState<string | null>(null);
 
   const priced = useMemo<PricedPreset[]>(() => {
     const nowSec = now ?? Math.floor(Date.now() / 1000);
@@ -102,7 +111,12 @@ export function NewCollectionPage({
               key={p.preset.id}
               priced={p}
               alreadyExists={taken(p.preset.label)}
-              onPick={() => onPickPreset(p.preset)}
+              busy={picked === p.preset.id}
+              locked={picked !== null}
+              onPick={() => {
+                setPicked(p.preset.id);
+                onPickPreset(p.preset);
+              }}
             />
           ))}
         </div>
@@ -134,8 +148,8 @@ export function NewCollectionPage({
           // nothing when pressed is indistinguishable from a broken one — more
           // so on a handheld, where getting at a keyboard is a deliberate act.
           <Text variant="secondary">
-            Type a name to enable Create — the keyboard button is in the footer.
-            Or pick a preset above and skip the typing entirely.
+            Type a name to enable Create — the keyboard button is in the footer. Or pick a preset
+            above and skip the typing entirely.
           </Text>
         ) : (
           <Text variant="secondary">
@@ -155,10 +169,16 @@ export function NewCollectionPage({
 function PresetRow({
   priced,
   alreadyExists,
+  busy,
+  locked,
   onPick,
 }: {
   priced: PricedPreset;
   alreadyExists: boolean;
+  /** This is the one being made. */
+  busy: boolean;
+  /** Some preset is being made — one at a time. */
+  locked: boolean;
   onPick: () => void;
 }) {
   const { preset, count, missing } = priced;
@@ -166,20 +186,22 @@ function PresetRow({
   // A preset that cannot work here, or that duplicates a collection you
   // already have, is still shown — with the reason. Dropping it silently
   // invites the question of where it went.
-  const blocked = unavailable || alreadyExists;
+  const blocked = unavailable || alreadyExists || locked;
   const { ref, focused } = useFocusable({
     onEnterPress: () => {
       if (!blocked) onPick();
     },
   });
 
-  const note = unavailable
-    ? `Needs ${missing.join(" and ")}`
-    : alreadyExists
-      ? "You have this one"
-      : count === 0
-        ? "Nothing matches — yet"
-        : `→ ${count} game${count === 1 ? "" : "s"}`;
+  const note = busy
+    ? "Building it…"
+    : unavailable
+      ? `Needs ${missing.join(" and ")}`
+      : alreadyExists
+        ? "You have this one"
+        : count === 0
+          ? "Nothing matches — yet"
+          : `→ ${count} game${count === 1 ? "" : "s"}`;
 
   return (
     <button

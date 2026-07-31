@@ -14,7 +14,7 @@
  * has.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
   GameCardGrid,
@@ -29,7 +29,7 @@ import {
   notify,
   useBackend,
 } from "@loadout/ui";
-import { FaGear, FaLayerGroup } from "react-icons/fa6";
+import { FaGear, FaLayerGroup, FaRotate } from "react-icons/fa6";
 import type { GameMetadataSnapshot } from "@loadout/types";
 import { CollectionCard } from "./components/CollectionCard";
 import { CollectionDetail } from "./components/CollectionDetail";
@@ -113,6 +113,26 @@ export function Collections() {
       setSummaries([]);
     }
   }, [call]);
+
+  /**
+   * Sync on the way out.
+   *
+   * Held in a ref and read only in the unmount cleanup: the effect must not
+   * re-run when these values change, or leaving would fire on every edit —
+   * which is the behaviour this replaced.
+   */
+  const syncOnLeave = useRef({ enabled: false, owed: false, call });
+  syncOnLeave.current = { enabled: autoSync, owed: pendingSync, call };
+  useEffect(() => {
+    return () => {
+      const { enabled, owed, call: send } = syncOnLeave.current;
+      if (!enabled || !owed) return;
+      // Fire and forget: the plugin is going away, so there is nobody left to
+      // report to — and nobody left waiting on the backend either, which is
+      // the entire point of doing it here.
+      void (send("syncMirror") as Promise<unknown>).catch(() => {});
+    };
+  }, []);
 
   /** Config the shell also owns — read back rather than guessed at. */
   const loadConfig = useCallback(async () => {
@@ -332,6 +352,26 @@ export function Collections() {
             <Button variant="neutral" onClick={() => setView({ kind: "new" })}>
               New
             </Button>
+            {/* Syncing is a press, not a side effect. It used to run itself a
+                couple of seconds after any edit — a full library evaluation
+                plus Steam Cloud writes, on a single-threaded backend, while
+                the user was still working. Every RPC queued behind it, which
+                from the front is indistinguishable from a frozen plugin. */}
+            <IconButton
+              onClick={() => void sync()}
+              title={
+                syncing
+                  ? "Syncing with Steam…"
+                  : pendingSync
+                    ? "Sync with Steam — changes are waiting"
+                    : "Sync with Steam"
+              }
+              ariaLabel="Sync with Steam"
+              size={26}
+              disabled={syncing}
+            >
+              <FaRotate size={11} style={pendingSync && !syncing ? undefined : { opacity: 0.6 }} />
+            </IconButton>
             <IconButton
               onClick={() => setView({ kind: "settings" })}
               title="Settings"

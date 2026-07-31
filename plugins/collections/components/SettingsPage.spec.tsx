@@ -55,9 +55,9 @@ describe("syncing as a setting, not an action", () => {
     expect(screen.getByText(/Nothing to sync yet/)).toBeTruthy();
   });
 
-  it("says when a sync is still owed", () => {
+  it("says when Steam is behind, and where the changes go", () => {
     renderPage({ pendingSync: true });
-    expect(screen.getByText(/still owed/)).toBeTruthy();
+    expect(screen.getByText(/Steam is behind/)).toBeTruthy();
   });
 });
 
