@@ -34,6 +34,7 @@ import type { GameMetadataSnapshot } from "@loadout/types";
 import { CollectionCard } from "./components/CollectionCard";
 import { CollectionDetail } from "./components/CollectionDetail";
 import { CollectionActionsPage } from "./components/CollectionActionsPage";
+import { AddGamesPage } from "./components/AddGamesPage";
 import { NewCollectionPage } from "./components/NewCollectionPage";
 import type { CollectionPreset } from "./lib/presets";
 import { RuleBuilder } from "./components/RuleBuilder";
@@ -59,6 +60,7 @@ type View =
   | { kind: "detail"; id: string; label: string }
   | { kind: "rules"; id: string }
   | { kind: "actions"; id: string }
+  | { kind: "add"; id: string; label: string }
   | { kind: "new" }
   | { kind: "settings" };
 
@@ -226,6 +228,23 @@ export function Collections() {
     );
   }
 
+  // ── Add games ──────────────────────────────────────────────────────
+  if (view.kind === "add") {
+    const already = new Set((games ?? []).map((g) => g.appId));
+    return (
+      <div className="p-7 h-full overflow-y-auto" style={{ overflowX: "hidden" }}>
+        <AddGamesPage
+          label={view.label}
+          candidates={(snapshot?.games ?? [])
+            .filter((g) => !already.has(g.appId))
+            .map((g) => ({ appId: g.appId, name: g.name }))}
+          onBack={() => setView({ kind: "detail", id: view.id, label: view.label })}
+          onAdd={(appIds) => void addToLinked(view.id, view.label, appIds)}
+        />
+      </div>
+    );
+  }
+
   // ── New ────────────────────────────────────────────────────────────
   if (view.kind === "new") {
     return (
@@ -295,6 +314,11 @@ export function Collections() {
 
   // ── Detail ─────────────────────────────────────────────────────────
   if (view.kind === "detail") {
+    // Only a linked, non-dynamic collection can be edited by hand: a managed
+    // one would get its games straight back on the next sync, and Steam
+    // recomputes a dynamic one.
+    const summary = summaries?.find((c) => c.id === view.id);
+    const handEditable = summary?.kind === "linked" && !summary.autoMaintained;
     return (
       <CollectionDetail
         label={view.label}
@@ -315,15 +339,8 @@ export function Collections() {
           const summary = summaries?.find((c) => c.id === view.id);
           if (summary) void removeCollection(summary);
         }}
-        onRemoveGame={
-          // Only a linked, non-dynamic collection can have games removed by
-          // hand: a managed one would get them straight back on the next sync,
-          // and Steam recomputes a dynamic one.
-          summaries?.find((c) => c.id === view.id)?.kind === "linked" &&
-          !summaries.find((c) => c.id === view.id)?.autoMaintained
-            ? (appId) => void removeFromLinked(view.id, appId)
-            : undefined
-        }
+        onAddGames={handEditable ? () => setView({ kind: "add", id: view.id, label: view.label }) : undefined}
+        onRemoveGame={handEditable ? (appId) => void removeFromLinked(view.id, appId) : undefined}
       />
     );
   }
@@ -459,6 +476,25 @@ export function Collections() {
   }
 
   /** Drop one game from a linked collection, writing straight to Steam. */
+  async function addToLinked(id: string, label: string, appIds: string[]) {
+    const before = games ?? [];
+    const nameOf = new Map((snapshot?.games ?? []).map((g) => [g.appId, g.name] as const));
+    const added = appIds.map((appId) => ({ appId, name: nameOf.get(appId) ?? appId }));
+    // Straight back to the collection, showing what was added: the collection
+    // *is* the confirmation, and a toast on top of an unchanged grid is not.
+    setGames([...before, ...added]);
+    setView({ kind: "detail", id, label });
+    try {
+      await call("setLinkedApps", id, [...before.map((g) => g.appId), ...appIds]);
+      await loadGrid();
+    } catch (err) {
+      setGames(before);
+      notify(err instanceof Error ? err.message : "Couldn't update that collection", {
+        kind: "error",
+      });
+    }
+  }
+
   async function removeFromLinked(id: string, appId: string) {
     const before = games ?? [];
     const next = before.filter((g) => g.appId !== appId);

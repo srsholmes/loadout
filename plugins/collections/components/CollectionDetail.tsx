@@ -23,7 +23,7 @@ import {
   Spinner,
   Text,
 } from "@loadout/ui";
-import { FaChevronLeft, FaGear, FaTrash, FaXmark } from "react-icons/fa6";
+import { FaChevronLeft, FaGear, FaPlus, FaTrash, FaXmark } from "react-icons/fa6";
 import { useVisibleRows } from "../hooks/useVisibleRows";
 
 export interface CollectionDetailProps {
@@ -42,6 +42,12 @@ export interface CollectionDetailProps {
   /** Delete the whole collection. Confirmed here before it is called. */
   onDelete: () => void;
   /**
+   * Add games by hand. Offered on the same terms as {@link onRemoveGame}: a
+   * managed collection's members come from its rules, and Steam recomputes a
+   * dynamic one.
+   */
+  onAddGames?: () => void;
+  /**
    * Drop one game. Offered only for a linked, non-dynamic collection: a
    * managed one would get the game straight back on the next sync, and Steam
    * recomputes a dynamic one.
@@ -59,6 +65,7 @@ export function CollectionDetail({
   onPickGame,
   onOptions,
   onDelete,
+  onAddGames,
   onRemoveGame,
 }: CollectionDetailProps) {
   /** The bin has been pressed and is showing what it would do. */
@@ -123,6 +130,11 @@ export function CollectionDetail({
                 <FaTrash size={11} />
               </IconButton>
             )}
+            {onAddGames ? (
+              <IconButton onClick={onAddGames} title="Add games" ariaLabel="Add games" size={26}>
+                <FaPlus size={11} />
+              </IconButton>
+            ) : null}
             <IconButton onClick={onOptions} title="Options" ariaLabel="Options" size={26}>
               <FaGear size={11} />
             </IconButton>
@@ -140,9 +152,19 @@ export function CollectionDetail({
       ) : games.length === 0 ? (
         // An empty collection is a legitimate state, not an error — a new one
         // starts here, and seeing it empty is the preview doing its job.
-        <Text variant="secondary">
-          Nothing in this collection yet. It will show up empty in Steam too.
-        </Text>
+        <div className="flex flex-col items-start gap-2">
+          <Text variant="secondary">
+            Nothing in this collection yet. It will show up empty in Steam too.
+          </Text>
+          {/* The header's + is a small target to find when the page is
+              otherwise blank, and an empty collection is exactly when you want
+              to add something. */}
+          {onAddGames ? (
+            <Button variant="neutral" onClick={onAddGames}>
+              Add games
+            </Button>
+          ) : null}
+        </div>
       ) : (
         <div ref={listRef} style={{ flexShrink: 0 }}>
           <div style={{ height: rowWindow.padTop, flexShrink: 0 }} />
