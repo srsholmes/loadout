@@ -54,6 +54,29 @@ describe("computeWindow — the visible slice", () => {
     }
   });
 
+  it("covers a viewport that is not a whole number of rows", () => {
+    // The fixture above is row-aligned (800 / 200 = exactly 4), so the partial
+    // row the `+ 1` in `computeWindow` exists for is never exercised by it —
+    // dropping that `+ 1` passed all sixteen other tests while blanking the
+    // bottom row as it slid into view, which is the exact symptom the module
+    // docstring names.
+    // `overscanRows: 0` on purpose. With the default 2 the spare rows cover
+    // the partial one regardless, so the `+ 1` is invisible — which is why
+    // dropping it passed the whole suite.
+    const ragged = { rowHeight: 180, viewportHeight: 500, gridTop: 0, overscanRows: 0 };
+    for (let scrollTop = 0; scrollTop < 20_000; scrollTop += 37) {
+      const w = computeWindow(input({ ...ragged, scrollTop }));
+      const viewBottom = scrollTop + ragged.viewportHeight;
+      const mountedBottom =
+        w.padTop + Math.ceil((w.end - w.start) / 5) * ragged.rowHeight;
+      if (scrollTop >= w.rows * ragged.rowHeight) continue;
+      expect(w.padTop, `top gap at ${scrollTop}`).toBeLessThanOrEqual(scrollTop);
+      expect(mountedBottom, `bottom gap at ${scrollTop}`).toBeGreaterThanOrEqual(
+        Math.min(viewBottom, w.rows * ragged.rowHeight),
+      );
+    }
+  });
+
   it("covers the viewport at every scroll position", () => {
     // The real regression risk: a window that renders rows the user cannot see
     // while blanking the one they can.

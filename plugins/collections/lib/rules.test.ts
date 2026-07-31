@@ -509,3 +509,27 @@ describe("leafRules", () => {
     expect(leafRules(tree).map((r) => r.id)).toEqual(["a", "b", "c", "d"]);
   });
 });
+
+describe("includeUnknown on a fact-backed range", () => {
+  const withFact = (state: "ok" | "missing", value = 100) =>
+    buildEvalGames([LIBRARY[0]!], {
+      hltbMain: new Map([[LIBRARY[0]!.appId, state === "ok" ? { state, value } : { state }]]),
+    })[0]!;
+
+  it("excludes a game the source has nothing for, by default", () => {
+    const rule = { kind: "hltbMain", id: "r", hours: { max: 300 } } as const;
+    expect(evaluateLeaf(rule as never, withFact("missing"))).toBe(false);
+  });
+
+  it("includes it when the rule asks for unknowns", () => {
+    // The toggle is rendered for every range rule, fact-backed included. It
+    // was live and inert on all of them.
+    const rule = { kind: "hltbMain", id: "r", hours: { max: 300, includeUnknown: true } } as const;
+    expect(evaluateLeaf(rule as never, withFact("missing"))).toBe(true);
+  });
+
+  it("still applies the range when the source did answer", () => {
+    const rule = { kind: "hltbMain", id: "r", hours: { max: 50, includeUnknown: true } } as const;
+    expect(evaluateLeaf(rule as never, withFact("ok", 100))).toBe(false);
+  });
+});

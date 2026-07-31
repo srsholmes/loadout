@@ -4,38 +4,27 @@ Custom, filter-driven tabs for your Steam library — a successor to the
 Decky plugin [TabMaster](https://github.com/Tormak9970/TabMaster), built on
 Loadout's overlay rather than by patching Steam's library UI.
 
-## Status
+## What it does
 
-**Phase 1 is functional.** You can browse tabs with live match counts, create
-tabs from templates, author rule trees by hand, search, and launch games. The
-rule builder is reached from "Edit rules" on any non-builtin tab: every group
-shows both combinator outcomes, every rule row shows its own match count, and
-the palette prices each candidate before you add it.
+Build tabs from a rule tree in Loadout's overlay; each tab is kept in step
+with a real Steam collection, so it shows up in Steam's own library too.
 
-| Phase | Scope | State |
-|---|---|---|
-| 1 | Tabbed browser, Phase-1 rules, config durability, rule builder, hardware probe | **functional** |
-| 2 | Ownership + `appStore` metadata over CDP | not started — **probe has run**, no longer gated |
-| 3 | `appinfo.vdf` offline metadata (`packages/steam-appinfo`) | not started — **probe has run**; header is 68 bytes |
-| 4 | Steam Collection mirror | not started — **probe has run**; `RemoveApps` exists |
-| 5 | Sub-tabs, async facts, presentation | grouping + fact plumbing done; resolvers outstanding |
-| 6 | Profiles, sharing, home widget | share codes done; profiles/widget outstanding |
+Shipped: the tabbed browser with live match counts and a windowed tile grid
+that stays responsive on a 4000-game library; the rule builder, reached from
+"Edit rules" on any non-builtin tab; tab management (rename, reorder, hide,
+delete, template gallery); and Steam collection sync, which Settings turns on
+once and which then follows every later edit. The dry run stays reachable,
+because it is the only way to see a deletion before it happens.
 
-Outstanding for Phase 1, in rough priority order:
+The library is the full one, not just what is installed — reading Steam's own
+`appTypeCollectionMap` and `appStore` getters took this from ~2000 games to
+4358 on the development device. ROMs are classified from Steam ROM Manager's
+`srm-` collections so they can be excluded rather than clogging every tab.
 
-- ~~`components/RuleBuilder.tsx` and friends.~~ **Built.** Reached from "Edit
-  rules" on a non-builtin tab. Both differentiating features ship: the
-  `ALL → 0 · ANY → 340` consequence line on every group, and a palette that
-  prices each candidate before you add it. Editing happens on a draft, so
-  Cancel reverts. Drag-to-reorder is still absent — the overflow menu's
-  Move up / Move down cover it, and always will, since drag is unusable with
-  a gamepad.
-- `components/BackupsPanel.tsx` — the backend surface exists
-  (`listBackups`, `createBackup`, `restoreBackupFile`); nothing renders it.
-- Tab reorder / hide / rename UI. Backend methods exist.
-- Row windowing (`hooks/useVisibleRows.ts`) before anyone points a
-  1000-game library at this. Evaluation is fast; mounting 2000 `GameCard`s
-  is not.
+Not built: a backups panel and a share-code import/export UI (both backend
+surfaces exist and are tested; nothing renders them), profiles, and a home
+widget. Deliberately absent: drag-to-reorder — Move left / Move right cover it
+and always will, since drag is unusable with a gamepad.
 
 ## Why not patch Steam's library, like TabMaster does?
 
@@ -54,9 +43,20 @@ Decky store by 5–44 days, so the standing advice is "sideload a zip" or
 Loadout's overlay is its own X11/CEF window layered over Gamescope. Nothing
 we render can take Steam's library down. We get the single biggest
 robustness win for free, by construction, and pay for it only in that our
-tabs live in the overlay rather than in Steam's own tab strip. Phase 4
-closes most of that gap by mirroring each tab into a **real Steam
-collection** over CDP — native-looking organisation, still zero patching.
+tabs live in the overlay rather than in Steam's own tab strip.
+
+Mirroring closes most of that gap: each tab is kept in a **real Steam
+collection** over CDP, so it appears in Steam's own library with no patching.
+
+We did try the other half, and reverted it. Steam builds its library tab bar
+inline in a `useMemo` and returns it as `rgTabs` — no store, no extension
+point — so the only way in is to patch that module. It was implemented via
+source patching (sturdier than TabMaster's render-time dispatcher swap: a
+failed patch leaves Steam rendering stock rather than dying mid-render) and
+verified applying on-device. The tabs still never rendered, most likely
+webpack's module cache, though that was never proven. Three separate injector
+defects sat between a correct patch and a rendered tab. The injector fixes
+were kept; collections is the sturdier half and is what ships.
 
 ## Architecture
 
@@ -72,7 +72,11 @@ lib/evaluate.ts   Kleene tree walk, trace, leaf masks, cap
 lib/summarize.ts  rules -> plain English
 lib/diagnose.ts   why is this tab empty, and what one tap fixes it
 lib/templates.ts  builtin tabs + the template gallery
-lib/adapt.ts      Phase-1 sources -> GameMetadata (replaced in Phase 2)
+lib/adapt.ts      manifest + playtime sources -> GameMetadata
+lib/merge-appstore.ts  merges Steam's live library over the manifest scan
+lib/windowing.ts  which rows of the tile grid are worth mounting
+lib/mirror.ts     pure planner: what a Steam sync *would* do
+lib/mirror-apply.ts  executes a plan against injected effects
 lib/config.ts     schema, defaults, validation, salvage
 lib/migrations.ts versioned upgrades (empty at v1, deliberately)
 lib/share.ts      export/import as a paste-anywhere code
@@ -181,22 +185,42 @@ bun run test:backend    # *.test.ts
 bun run test:ui         # *.spec.tsx
 ```
 
-Two pre-existing baselines to measure against rather than expecting zero:
+Three tiers, because unit tests over a fixture are exactly what hid this
+plugin's worst bug — 545 of them passed while 22 of 32 rule kinds had no data
+behind them.
 
-- `test:backend` reports ~423 failures on macOS repo-wide. Loadout targets
-  Linux and many plugin specs touch sysfs, `/run/media` and systemd.
-- `test:ui` reports ~113 failures repo-wide, including `@loadout/ui`'s *own*
-  `Text` and `hideOverlay` specs. This is the `mock.module` leakage described
-  in `docs/test-mock-contamination.md`: despite `--isolate`, one plugin's
-  `useBackend` mock reaches another file. Concretely, `lsfg-vk`'s mock leaks
-  into `components/TabStrip.spec.tsx`, which mocks nothing at all. Every spec
-  here passes in isolation.
+```sh
+bun run test             # CI: no hardware, no corpus
+bun run test:corpus      # needs a captured library
+bun run test:live        # needs Steam running
+bun run test:live:write  # Tier C — writes to your real Steam collections
+```
 
-## Hardware gate
+`bun run capture:corpus` writes a corpus to
+`~/.cache/loadout/collections-corpus.ndjson` (override with
+`COLLECTIONS_CORPUS`). It is a dump of a real library and is **never
+committed**; `docs/library-corpus-profile.md` records aggregate population
+stats only. Corpus tests assert on the evaluation *trace*, not the match list
+— a rule with `indeterminate === N` matches everything under the `"pass"`
+policy while looking perfectly healthy — and carry a ratchet of known-broken
+rules with expiry dates, so entries can only shrink. A missing corpus throws
+rather than skipping: it skipped silently once, and the ratchet sat dead and
+green for two hours before anyone noticed.
 
-`scripts/probe-steam-metadata.ts` must be run on
-a real Steam Deck before Phases 2–4 begin. There is no Steam install on a
-macOS dev machine, so the `appStore` overview field names and
-`appinfo.vdf`'s byte layout are currently **inferred from TabMaster's
-source, not verified**. The probe dumps the real shapes to
-`docs/steam-metadata-probe.md`.
+`test:live:write` creates and deletes real collections on the signed-in
+account, and Steam Cloud syncs them elsewhere before cleanup runs. Read the
+risk register at the top of `live/mirror-roundtrip.live.spec.ts` first.
+
+Only `bun run test` runs in CI. The other three are deliberate, on hardware.
+
+## Where the Steam data comes from
+
+`scripts/probe-steam-metadata.ts` dumps the real shapes to
+`docs/steam-metadata-probe.md`; it has been run on hardware (2497 apps, Steam
+CEF 126, `appinfo.vdf` v29) and the results are committed. Two things it
+settled that had been guessed: `appStore`'s useful fields are prototype
+getters, invisible to `Object.keys`, and `steam_deck_compat_category` returns a
+decoded `1|2|3` where the own key returns a packed value.
+
+`scripts/capture-library-corpus.ts` captures through the *same code path the
+plugin uses*, so the corpus cannot drift from what the plugin sees.

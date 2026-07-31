@@ -116,6 +116,14 @@ function readFact(game: EvalGame, key: FactKey): Verdict | { value: unknown } {
 }
 
 function factNumber(game: EvalGame, key: FactKey, range: NumericRange): Verdict {
+  // A fact the source has nothing for is the same shape of gap as a `-1`
+  // sentinel on a plain field, so it goes through the same escape hatch.
+  // Short-circuiting on `readFact`'s `false` skipped `matchRange` entirely,
+  // which left the "Also include games we don't know this about" toggle
+  // rendered, live, and doing nothing on every fact-backed range.
+  if (game.facts[key]?.state === "missing") {
+    return range.includeUnknown === true;
+  }
   const got = readFact(game, key);
   if (typeof got !== "object" || !("value" in got)) return got;
   const n = typeof got.value === "number" ? got.value : Number(got.value);
