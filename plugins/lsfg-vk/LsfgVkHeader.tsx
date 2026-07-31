@@ -77,7 +77,7 @@ export function LsfgVkHeader({
               title="Plugin preferences"
               ariaLabel="Plugin preferences"
             >
-              <FaGear size={11} />
+              <FaGear size={13} />
             </IconButton>
           )}
         </div>

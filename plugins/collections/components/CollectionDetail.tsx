@@ -173,9 +173,8 @@ export function CollectionDetail({
                   }}
                   title="Done"
                   ariaLabel="Done"
-                  size={26}
                 >
-                  <FaXmark size={11} />
+                  <FaXmark size={13} />
                 </IconButton>
               </>
             ) : null}
@@ -184,9 +183,8 @@ export function CollectionDetail({
                 onClick={() => setEditing(true)}
                 title="Edit collection"
                 ariaLabel="Edit collection"
-                size={26}
               >
-                <FaPen size={11} />
+                <FaPen size={13} />
               </IconButton>
             ) : null}
             {/* A bin icon alone is one press away from destroying a collection
@@ -203,9 +201,8 @@ export function CollectionDetail({
                   onClick={() => setConfirmingDelete(false)}
                   title="Keep it"
                   ariaLabel="Keep it"
-                  size={26}
                 >
-                  <FaXmark size={11} />
+                  <FaXmark size={13} />
                 </IconButton>
               </>
             ) : (
@@ -213,23 +210,22 @@ export function CollectionDetail({
                 onClick={() => setConfirmingDelete(true)}
                 title="Remove collection"
                 ariaLabel="Remove collection"
-                size={26}
               >
-                <FaTrash size={11} />
+                <FaTrash size={13} />
               </IconButton>
             )}
             {onAddGames && !editing ? (
-              <IconButton onClick={onAddGames} title="Add games" ariaLabel="Add games" size={26}>
-                <FaPlus size={11} />
+              <IconButton onClick={onAddGames} title="Add games" ariaLabel="Add games">
+                <FaPlus size={13} />
               </IconButton>
             ) : null}
             {editing ? null : (
-              <IconButton onClick={onOptions} title="Options" ariaLabel="Options" size={26}>
-                <FaGear size={11} />
+              <IconButton onClick={onOptions} title="Options" ariaLabel="Options">
+                <FaGear size={13} />
               </IconButton>
             )}
-            <IconButton onClick={onBack} title="Back" ariaLabel="Back" size={26}>
-              <FaChevronLeft size={11} />
+            <IconButton onClick={onBack} title="Back" ariaLabel="Back">
+              <FaChevronLeft size={13} />
             </IconButton>
           </div>
         </div>

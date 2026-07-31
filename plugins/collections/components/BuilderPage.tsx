@@ -113,8 +113,8 @@ export function BuilderPage({
           </div>
           <div className="flex items-center gap-2 shrink-0">
             {busy ? <Spinner size={16} /> : null}
-            <IconButton onClick={back} title={backLabel} ariaLabel={backLabel} size={26}>
-              <FaChevronLeft size={11} />
+            <IconButton onClick={back} title={backLabel} ariaLabel={backLabel}>
+              <FaChevronLeft size={13} />
             </IconButton>
           </div>
         </div>

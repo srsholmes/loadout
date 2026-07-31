@@ -16,7 +16,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Button,
   GameCardGrid,
   IconButton,
   PluginHeader,
@@ -29,7 +28,7 @@ import {
   notify,
   useBackend,
 } from "@loadout/ui";
-import { FaGear, FaLayerGroup, FaRotate } from "react-icons/fa6";
+import { FaGear, FaLayerGroup, FaPlus, FaRotate } from "react-icons/fa6";
 import type { GameMetadataSnapshot } from "@loadout/types";
 import { CollectionCard } from "./components/CollectionCard";
 import { CollectionDetail } from "./components/CollectionDetail";
@@ -375,9 +374,15 @@ export function Collections() {
               placeholder="Search collections…"
               width={220}
             />
-            <Button variant="neutral" onClick={() => setView({ kind: "new" })}>
-              New
-            </Button>
+            {/* An icon, like everything else up here. The word sat among four
+                icon buttons and read as the odd one out. */}
+            <IconButton
+              onClick={() => setView({ kind: "new" })}
+              title="New collection"
+              ariaLabel="New collection"
+            >
+              <FaPlus size={13} />
+            </IconButton>
             {/* Syncing is a press, not a side effect. It used to run itself a
                 couple of seconds after any edit — a full library evaluation
                 plus Steam Cloud writes, on a single-threaded backend, while
@@ -393,18 +398,16 @@ export function Collections() {
                     : "Sync with Steam"
               }
               ariaLabel="Sync with Steam"
-              size={26}
               disabled={syncing}
             >
-              <FaRotate size={11} style={pendingSync && !syncing ? undefined : { opacity: 0.6 }} />
+              <FaRotate size={13} style={pendingSync && !syncing ? undefined : { opacity: 0.6 }} />
             </IconButton>
             <IconButton
               onClick={() => setView({ kind: "settings" })}
               title="Settings"
               ariaLabel="Settings"
-              size={26}
             >
-              <FaGear size={11} />
+              <FaGear size={13} />
             </IconButton>
           </div>
         </div>

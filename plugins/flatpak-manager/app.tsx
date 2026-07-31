@@ -221,7 +221,7 @@ function FlatpakManager() {
                 {removingUnused ? (
                   <Spinner size={11} />
                 ) : (
-                  <FaTrashCan size={11} />
+                  <FaTrashCan size={13} />
                 )}
               </IconButton>
             )}
@@ -236,7 +236,7 @@ function FlatpakManager() {
                 {updatingAll ? (
                   <Spinner size={11} />
                 ) : (
-                  <FaDownload size={11} />
+                  <FaDownload size={13} />
                 )}
               </IconButton>
             )}
@@ -331,7 +331,7 @@ function FlatpakManager() {
                           ariaLabel={`Update ${u.name}`}
                           variant="accent"
                         >
-                          <FaDownload size={11} />
+                          <FaDownload size={13} />
                         </IconButton>
                       )}
                     </div>
@@ -488,7 +488,7 @@ function AppRow({
           ariaLabel={`Update ${app.name}`}
           variant="accent"
         >
-          <FaDownload size={11} />
+          <FaDownload size={13} />
         </IconButton>
       ) : null}
     </div>

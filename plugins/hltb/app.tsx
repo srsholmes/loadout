@@ -330,7 +330,7 @@ function HltbPlugin() {
               title="Plugin preferences"
               ariaLabel="Plugin preferences"
             >
-              <FaGear size={11} />
+              <FaGear size={13} />
             </IconButton>
           )}
         </div>

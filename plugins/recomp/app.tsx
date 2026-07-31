@@ -551,7 +551,7 @@ function CatalogView() {
               title="RecompHub settings"
               ariaLabel="RecompHub settings"
             >
-              <FaGear size={11} />
+              <FaGear size={13} />
             </IconButton>
           </div>
         </div>

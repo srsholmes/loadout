@@ -516,7 +516,7 @@ function TdpControl() {
               title="Custom device settings"
               ariaLabel="Custom device settings"
             >
-              <FaGear size={11} />
+              <FaGear size={13} />
             </IconButton>
           )}
         </div>

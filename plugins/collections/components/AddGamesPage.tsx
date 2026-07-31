@@ -134,8 +134,8 @@ export function AddGamesPage({ label, candidates, onBack, onAdd }: AddGamesPageP
                 ? "Add"
                 : `Add ${chosen.length} game${chosen.length === 1 ? "" : "s"}`}
             </Button>
-            <IconButton onClick={back} title="Cancel" ariaLabel="Cancel" size={26}>
-              <FaChevronLeft size={11} />
+            <IconButton onClick={back} title="Cancel" ariaLabel="Cancel">
+              <FaChevronLeft size={13} />
             </IconButton>
           </div>
         </div>

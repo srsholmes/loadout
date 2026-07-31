@@ -272,9 +272,9 @@ function BluetoothManager() {
                 variant="accent"
               >
                 {scanning ? (
-                  <FaArrowsRotate size={11} className="animate-spin" />
+                  <FaArrowsRotate size={13} className="animate-spin" />
                 ) : (
-                  <FaMagnifyingGlass size={11} />
+                  <FaMagnifyingGlass size={13} />
                 )}
               </IconButton>
             ) : (
@@ -284,7 +284,7 @@ function BluetoothManager() {
                 ariaLabel="Turn adapter on"
                 variant="accent"
               >
-                <FaPowerOff size={11} />
+                <FaPowerOff size={13} />
               </IconButton>
             )}
             {adapter?.powered && (
@@ -293,7 +293,7 @@ function BluetoothManager() {
                 title="Turn adapter off"
                 ariaLabel="Turn adapter off"
               >
-                <FaPowerOff size={11} />
+                <FaPowerOff size={13} />
               </IconButton>
             )}
           </div>

@@ -378,7 +378,7 @@ function LaunchOptionsManager() {
                 title="Manage presets"
                 ariaLabel="Manage presets"
               >
-                <FaGear size={11} />
+                <FaGear size={13} />
               </IconButton>
             </>
           )}
@@ -505,7 +505,7 @@ function LaunchOptionsManager() {
                           ariaLabel={`Delete preset ${p.name}`}
                           variant="danger"
                         >
-                          <FaTrash size={11} />
+                          <FaTrash size={13} />
                         </IconButton>
                       </div>
                     ))}

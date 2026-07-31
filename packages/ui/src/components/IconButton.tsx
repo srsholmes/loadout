@@ -6,8 +6,10 @@ const sounds = () => window.__SL_SOUNDS__;
 export type IconButtonVariant = "neutral" | "accent" | "danger";
 
 /**
- * Compact (default 28×28) icon button used in plugin headers and inline rows
- * for gear / back / clear-X / refresh / scan / power / trash actions. Wraps
+ * Compact (default 32×32) icon button used in plugin headers and inline rows
+ * for gear / back / clear-X / refresh / scan / power / trash actions. Sized for
+ * a thumb on a handheld rather than a mouse pointer: 28 was noticeably harder
+ * to hit than the buttons beside it. Wraps
  * `<button>` with `useFocusable` so the d-pad reaches it. Accepts a `size`
  * override and a `className` passthrough so plugins can keep their existing
  * inline icon styling. `<Button>` is too tall (min-h 44px) for these spots.
@@ -19,7 +21,7 @@ export function IconButton({
   title,
   ariaLabel,
   variant = "neutral",
-  size = 28,
+  size = 32,
   className,
   style,
 }: {

@@ -200,8 +200,10 @@ describe("editing a collection's rules", () => {
     // registered gets pressed again — which is how five identical collections
     // got made.
     ({ unmount } = renderApp());
-    await waitFor(() => expect(screen.getByRole("button", { name: "New" })).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "New" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "New collection" })).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "New collection" }));
     await waitFor(() => expect(screen.getByText("Or start from a preset")).toBeTruthy());
 
     const row = screen.getByRole("button", { name: /Never played/ });
@@ -218,8 +220,10 @@ describe("editing a collection's rules", () => {
     // Typing on a handheld means the on-screen keyboard and a thumbstick. A
     // preset arrives named and ruled, so the whole flow is two presses.
     ({ unmount } = renderApp());
-    await waitFor(() => expect(screen.getByRole("button", { name: "New" })).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "New" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "New collection" })).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "New collection" }));
 
     await waitFor(() => expect(screen.getByText("Or start from a preset")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: /Never played/ }));
@@ -243,7 +247,9 @@ describe("editing a collection's rules", () => {
     // entire reason the sync happens here.
     mirrorState = { autoSync: true, pendingSync: true };
     ({ unmount } = renderApp());
-    await waitFor(() => expect(screen.getByRole("button", { name: "New" })).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "New collection" })).toBeTruthy(),
+    );
     expect(calls.some((c) => c.method === "syncMirror")).toBe(false);
 
     unmount();
@@ -387,7 +393,7 @@ describe("editing a collection's rules", () => {
 
     // New names the collection first — the name is what Steam shows, so it is
     // the one decision worth taking before the rules.
-    fireEvent.click(screen.getByRole("button", { name: "New" }));
+    fireEvent.click(screen.getByRole("button", { name: "New collection" }));
     await waitFor(() => expect(screen.getByText("Name your own")).toBeTruthy());
 
     fireEvent.change(document.querySelector('input[placeholder^="e.g."]')!, {

@@ -690,9 +690,8 @@ function SteamGridDB() {
               onClick={() => setShowPrefs((p) => !p)}
               title="Plugin preferences"
               ariaLabel="Plugin preferences"
-              size={26}
             >
-              <FaGear size={11} />
+              <FaGear size={13} />
             </IconButton>
           </div>
         )}

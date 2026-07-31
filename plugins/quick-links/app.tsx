@@ -1159,7 +1159,7 @@ function QuickLinksPanel() {
               title="Quick Links settings"
               ariaLabel="Quick Links settings"
             >
-              <FaGear size={11} />
+              <FaGear size={13} />
             </IconButton>
           )}
         </div>
