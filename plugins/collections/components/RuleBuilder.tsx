@@ -18,7 +18,7 @@
  */
 
 import { useCallback, useDeferredValue, useMemo, useRef, useState } from "react";
-import { Button, Text } from "@loadout/ui";
+import { Button, Text, TextInput } from "@loadout/ui";
 import { RuleGroupNode, TotalBadge, type CombinatorCounts, type RuleTreeContext } from "./RuleGroupNode";
 import { BuilderPage } from "./BuilderPage";
 import { RuleEditorPage } from "./RuleEditorPage";
@@ -61,6 +61,12 @@ export interface RuleBuilderProps {
   games: readonly EvalGame[];
   onSave: (collection: ManagedCollection) => void;
   onCancel: () => void;
+  /**
+   * Delete the whole collection. Given here because this *is* the collection's
+   * options screen — a separate page for rename-and-delete meant two routes
+   * out of the same collection, neither of which said what the other held.
+   */
+  onDelete?: () => void;
   pickerOptions?: {
     game?: readonly ParamOption[];
     collection?: readonly ParamOption[];
@@ -96,6 +102,7 @@ export function RuleBuilder({
   games,
   onSave,
   onCancel,
+  onDelete,
   pickerOptions,
   availableFacts = NO_FACTS,
   now,
@@ -107,6 +114,8 @@ export function RuleBuilder({
   const [paletteParent, setPaletteParent] = useState<string | null>(null);
   /** Back was pressed with unsaved edits, and is asking before discarding. */
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  /** Delete was pressed once and is asking. */
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   /**
    * A ref, not state, and that is the whole point.
    *
@@ -398,7 +407,11 @@ export function RuleBuilder({
       footer={
         <div className="flex items-center gap-2">
           <TotalBadge total={result.total} />
-          <Button variant="primary" onClick={() => onSave(draft)}>
+          <Button
+            variant="primary"
+            disabled={draft.label.trim().length === 0}
+            onClick={() => onSave({ ...draft, label: draft.label.trim() })}
+          >
             Save
           </Button>
         </div>
@@ -416,13 +429,53 @@ export function RuleBuilder({
         </div>
       ) : null}
 
-      {diagnosis.kind !== "ok" ? (
-        <Text variant="secondary">{diagnosis.message}</Text>
-      ) : null}
+      {/* The name is part of the draft, so it saves with the rules rather
+          than through a second screen and a second confirmation. It is also
+          the name Steam shows. */}
+      <section className="flex flex-col gap-1">
+        <Text variant="secondary">Name</Text>
+        <TextInput
+          value={draft.label}
+          onChange={(label) => setDraft((d) => ({ ...d, label }))}
+          placeholder="Collection name"
+        />
+        <Text variant="secondary">Steam uses this name too — it follows on the next sync.</Text>
+      </section>
 
-      <ul className="flex flex-col gap-2">
-        <RuleGroupNode rule={draft.root} depth={1} ctx={ctx} isRoot />
-      </ul>
+      <section className="flex flex-col gap-2">
+        <Text variant="secondary">Rules</Text>
+        {diagnosis.kind !== "ok" ? (
+          <Text variant="secondary">{diagnosis.message}</Text>
+        ) : null}
+
+        <ul className="flex flex-col gap-2">
+          <RuleGroupNode rule={draft.root} depth={1} ctx={ctx} isRoot />
+        </ul>
+      </section>
+
+      {onDelete ? (
+        // At the bottom, past everything you would more likely have come for.
+        <section className="flex flex-col gap-2 border-t border-base-300 pt-3">
+          <Text variant="secondary">Delete</Text>
+          {confirmingDelete ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Text variant="secondary">
+                Delete “{collection.label}”? Its rules are not recoverable.
+              </Text>
+              <Button variant="neutral" onClick={() => setConfirmingDelete(false)}>
+                Keep it
+              </Button>
+              <Button variant="danger" onClick={onDelete}>
+                Delete
+              </Button>
+            </div>
+          ) : (
+            <Button variant="neutral" onClick={() => setConfirmingDelete(true)}>
+              Delete this collection
+            </Button>
+          )}
+        </section>
+      ) : null}
     </BuilderPage>
   );
 }

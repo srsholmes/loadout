@@ -143,7 +143,7 @@ export function Collections() {
   }, [ready, loadGrid, loadConfig, call]);
 
   const openCollection = useCallback(
-    async (summary: CollectionSummary) => {
+    async (summary: { id: string; label: string }) => {
       setView({ kind: "detail", id: summary.id, label: summary.label });
       setGames(null);
       try {
@@ -235,14 +235,9 @@ export function Collections() {
           kind={summaryFor.kind}
           count={summaryFor.count}
           autoMaintained={summaryFor.autoMaintained}
-          onBack={() => setView({ kind: "grid" })}
+          onBack={() => void openCollection(summaryFor)}
           onRename={(label) => void renameCollection(summaryFor, label)}
           onDelete={() => void removeCollection(summaryFor)}
-          onEditRules={
-            summaryFor.kind === "managed"
-              ? () => setView({ kind: "rules", id: view.id })
-              : undefined
-          }
         />
       </div>
     );
@@ -264,8 +259,12 @@ export function Collections() {
         <RuleBuilder
           collection={editing}
           games={evalGames}
-          onCancel={() => setView({ kind: "grid" })}
+          onCancel={() => void openCollection(editing)}
           onSave={(next) => void saveCollection(next)}
+          onDelete={() => {
+            const summary = summaries?.find((c) => c.id === editing.id);
+            if (summary) void removeCollection(summary);
+          }}
         />
       </div>
     );
@@ -279,12 +278,20 @@ export function Collections() {
         games={games}
         onBack={() => setView({ kind: "grid" })}
         onPickGame={(appId) => void openGame(appId)}
-        onEditRules={
-          collections.some((c) => c.id === view.id)
-            ? () => setView({ kind: "rules", id: view.id })
-            : undefined
+        // A managed collection's options *are* its rule builder — name, rules
+        // and delete on one page. A linked one has no rules, so it gets the
+        // shorter page.
+        onOptions={() =>
+          setView(
+            collections.some((c) => c.id === view.id)
+              ? { kind: "rules", id: view.id }
+              : { kind: "actions", id: view.id },
+          )
         }
-        onOptions={() => setView({ kind: "actions", id: view.id })}
+        onDelete={() => {
+          const summary = summaries?.find((c) => c.id === view.id);
+          if (summary) void removeCollection(summary);
+        }}
         onRemoveGame={
           // Only a linked, non-dynamic collection can have games removed by
           // hand: a managed one would get them straight back on the next sync,
@@ -380,8 +387,8 @@ export function Collections() {
       } else {
         await call("renameLinked", c.id, label);
       }
-      setView({ kind: "grid" });
       await loadGrid();
+      await openCollection({ id: c.id, label });
     } catch (err) {
       notify(err instanceof Error ? err.message : "Couldn't rename that collection", {
         kind: "error",
@@ -431,8 +438,10 @@ export function Collections() {
       const updated = collections.map((c) => (c.id === next.id ? next : c));
       await call("setCollections", updated);
       setCollections(updated);
-      setView({ kind: "grid" });
+      // Back to the collection you were editing, not out to the grid: saving a
+      // rule is how you find out what it did, and the grid does not show that.
       await loadGrid();
+      await openCollection(next);
     } catch (err) {
       notify(err instanceof Error ? err.message : "Couldn't save those rules", {
         kind: "error",

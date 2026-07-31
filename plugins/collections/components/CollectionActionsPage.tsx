@@ -30,8 +30,6 @@ export interface CollectionActionsPageProps {
   onBack: () => void;
   onRename: (label: string) => void;
   onDelete: () => void;
-  /** Managed only. */
-  onEditRules?: () => void;
 }
 
 export function CollectionActionsPage({
@@ -42,7 +40,6 @@ export function CollectionActionsPage({
   onBack,
   onRename,
   onDelete,
-  onEditRules,
 }: CollectionActionsPageProps) {
   const [name, setName] = useState(label);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -99,19 +96,10 @@ export function CollectionActionsPage({
                 : "Open the collection to add or remove games."}
             </Text>
           ) : (
-            <>
-              <Text variant="secondary">
-                Rules decide what&apos;s in this one, and they re-run on every sync — a
-                game that stops matching will leave it.
-              </Text>
-              {onEditRules ? (
-                <div>
-                  <Button variant="neutral" onClick={onEditRules}>
-                    Edit rules
-                  </Button>
-                </div>
-              ) : null}
-            </>
+            <Text variant="secondary">
+              Rules decide what&apos;s in this one, and they re-run on every sync — a
+              game that stops matching will leave it.
+            </Text>
           )}
         </section>
 

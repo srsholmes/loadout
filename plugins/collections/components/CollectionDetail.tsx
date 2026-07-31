@@ -13,7 +13,7 @@
  * eight hundred.
  */
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import {
   Button,
   GameCard,
@@ -23,7 +23,7 @@ import {
   Spinner,
   Text,
 } from "@loadout/ui";
-import { FaChevronLeft } from "react-icons/fa6";
+import { FaChevronLeft, FaGear, FaTrash, FaXmark } from "react-icons/fa6";
 import { useVisibleRows } from "../hooks/useVisibleRows";
 
 export interface CollectionDetailProps {
@@ -32,10 +32,15 @@ export interface CollectionDetailProps {
   games: Array<{ appId: string; name: string }> | null;
   onBack: () => void;
   onPickGame: (appId: string) => void;
-  /** Managed collections only — a linked one has no rules to edit. */
-  onEditRules?: () => void;
-  /** Rename / delete, on their own page. */
+  /**
+   * Everything about the collection itself — its name, its rules if it has
+   * any, and deleting it. One screen: "Options" and "Edit rules" were two
+   * buttons leading to two pages that both edited this collection, and
+   * nothing on either said which of them held what.
+   */
   onOptions: () => void;
+  /** Delete the whole collection. Confirmed here before it is called. */
+  onDelete: () => void;
   /**
    * Drop one game. Offered only for a linked, non-dynamic collection: a
    * managed one would get the game straight back on the next sync, and Steam
@@ -52,10 +57,12 @@ export function CollectionDetail({
   games,
   onBack,
   onPickGame,
-  onEditRules,
   onOptions,
+  onDelete,
   onRemoveGame,
 }: CollectionDetailProps) {
+  /** The bin has been pressed and is showing what it would do. */
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const gridWrapperRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -87,14 +94,38 @@ export function CollectionDetail({
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {onEditRules ? (
-              <Button variant="neutral" onClick={onEditRules}>
-                Edit rules
-              </Button>
-            ) : null}
-            <Button variant="neutral" onClick={onOptions}>
-              Options
-            </Button>
+            {/* A bin icon alone is one press away from destroying a collection
+                somebody else's tool may have spent a long time generating, and
+                an icon cannot say what it is about to delete. Pressing it
+                spells the consequence out as a red button instead — the second
+                press is the one that acts. */}
+            {confirmingDelete ? (
+              <>
+                <Button variant="danger" onClick={onDelete}>
+                  Remove collection
+                </Button>
+                <IconButton
+                  onClick={() => setConfirmingDelete(false)}
+                  title="Keep it"
+                  ariaLabel="Keep it"
+                  size={26}
+                >
+                  <FaXmark size={11} />
+                </IconButton>
+              </>
+            ) : (
+              <IconButton
+                onClick={() => setConfirmingDelete(true)}
+                title="Remove collection"
+                ariaLabel="Remove collection"
+                size={26}
+              >
+                <FaTrash size={11} />
+              </IconButton>
+            )}
+            <IconButton onClick={onOptions} title="Options" ariaLabel="Options" size={26}>
+              <FaGear size={11} />
+            </IconButton>
             <IconButton onClick={onBack} title="Back" ariaLabel="Back" size={26}>
               <FaChevronLeft size={11} />
             </IconButton>

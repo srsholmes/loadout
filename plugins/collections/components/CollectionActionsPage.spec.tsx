@@ -21,7 +21,6 @@ function renderPage(props: Partial<Parameters<typeof CollectionActionsPage>[0]> 
     onBack: mock(() => {}),
     onRename: mock((_: string) => {}),
     onDelete: mock(() => {}),
-    onEditRules: mock(() => {}),
   };
   renderWithHeader(
     <CollectionActionsPage
@@ -63,26 +62,23 @@ describe("renaming", () => {
 });
 
 describe("a managed collection", () => {
-  it("offers editing the rules, and says they re-run", () => {
+  it("says the rules re-run", () => {
     // The card and this page both have to say it: rules re-running is what
     // makes a game leave, and silence is what makes that feel arbitrary.
-    const h = renderPage();
+    renderPage();
     expect(screen.getByText(/re-run on every sync/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Edit rules" }));
-    expect(h.onEditRules).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("a linked collection", () => {
   it("has no rules to edit, and says where its games come from", () => {
-    renderPage({ kind: "linked", autoMaintained: false, onEditRules: undefined });
-    expect(screen.queryByRole("button", { name: "Edit rules" })).toBeNull();
+    renderPage({ kind: "linked", autoMaintained: false });
     expect(screen.getByText(/add or remove games/)).toBeTruthy();
   });
 
   it("explains why a dynamic one can't be edited", () => {
     // Steam recomputes it, so any edit we offered would be silently undone.
-    renderPage({ kind: "linked", autoMaintained: true, onEditRules: undefined });
+    renderPage({ kind: "linked", autoMaintained: true });
     expect(screen.getByText(/works this one out from a filter/)).toBeTruthy();
   });
 });

@@ -177,17 +177,25 @@ describe("editing a collection's rules", () => {
   /** A managed collection with the shape the rule builder needs. */
   const managed = fullCollection;
 
-  it("offers Edit rules on a managed collection", async () => {
+  it("opens a managed collection's rules from the cog", async () => {
+    // One screen, not two: Options and Edit rules were separate pages that
+    // both edited the same collection.
     managedCollections = [managed("backlog", "Backlog")];
     summaries = [summary({ id: "backlog", label: "Backlog", kind: "managed", autoMaintained: true })];
     ({ unmount } = renderApp());
 
     await waitFor(() => expect(screen.getByText("Backlog")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: /Backlog/ }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Edit rules" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Options" })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Options" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeTruthy());
+    // Name and delete live on it too, so there is one place to change anything
+    // about this collection.
+    expect(screen.getByRole("button", { name: "Delete this collection" })).toBeTruthy();
   });
 
-  it("does not offer it on a collection that came from Steam", async () => {
+  it("sends a Steam collection to the shorter page, which has no rules", async () => {
     // A linked collection has no rules. Offering the builder would imply we
     // could take over a set EmuDeck curated.
     summaries = [summary()];
@@ -196,7 +204,27 @@ describe("editing a collection's rules", () => {
     await waitFor(() => expect(screen.getByText("Sega Genesis")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: /Sega Genesis/ }));
     await waitFor(() => expect(screen.getByText(/Nothing in this collection/)).toBeTruthy());
-    expect(screen.queryByRole("button", { name: "Edit rules" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Options" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Rename" })).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  });
+
+  it("removes a collection from the detail header, but only on the second press", async () => {
+    summaries = [summary()];
+    ({ unmount } = renderApp());
+
+    await waitFor(() => expect(screen.getByText("Sega Genesis")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /Sega Genesis/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Remove collection" })).toBeTruthy());
+
+    // The bin spells out what it would do rather than doing it: an icon cannot
+    // name the collection it is about to destroy.
+    fireEvent.click(screen.getByRole("button", { name: "Remove collection" }));
+    expect(calls.some((c) => c.method === "deleteLinked")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove collection" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "deleteLinked")).toBe(true));
   });
 
   it("opens the builder straight after creating one", async () => {
