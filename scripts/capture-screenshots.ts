@@ -164,11 +164,25 @@ const PAGE_RECIPES: Record<string, PageShot[]> = {
   ],
 };
 
+/**
+ * Plugins whose landing shot is taken with the sidebar collapsed.
+ *
+ * For a plugin whose landing view is a wide grid, the nav column costs a
+ * column of tiles and the shot stops being about the plugin. Collapsed only
+ * for that one frame — it is expanded again before the sub-pages, so a
+ * plugin's shots don't inherit it from whatever ran before them.
+ */
+const LANDING_COLLAPSED: ReadonlySet<string> = new Set(["collections"]);
+
 // Steps run on a plugin's LANDING view before its landing shot — to put a
 // plugin into the state that screenshots best. PlayTime defaults to the
 // week view; "All" shows the full library grid, which reads better.
 const LANDING_SETUP: Record<string, Step[]> = {
   playtime: [{ kind: "text", label: "All" }],
+  // Clear the search first. The overlay is a live device — a capture run can
+  // land while somebody is mid-search, and the landing shot then shows their
+  // half-typed filter over an empty grid.
+  collections: [{ kind: "type", placeholder: "Search collections", text: "" }],
 };
 
 const sleep = (ms: number) => Bun.sleep(ms);
@@ -626,7 +640,10 @@ async function main(): Promise<void> {
     await navigate(cdp, `#/plugin/${pid}`);
     if (LANDING_SETUP[pid]) await runSteps(cdp, LANDING_SETUP[pid]);
     await varyGridView(cdp, pid);
+    const collapse = LANDING_COLLAPSED.has(pid);
+    if (collapse) await setSidebarCollapsed(cdp, true);
     await cdp.screenshot(join(OUT, theme, `${nn}-${pid}.png`));
+    if (collapse) await setSidebarCollapsed(cdp, false);
 
     for (const page of PAGE_RECIPES[pid] ?? []) {
       // Reset to the plugin landing so each page starts from a clean base.
