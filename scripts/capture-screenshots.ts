@@ -107,14 +107,19 @@ const PAGE_RECIPES: Record<string, PageShot[]> = {
     },
     {
       name: "add-games",
-      // Filtered rather than scrolled to the top: the picker opens on the
-      // whole library, and a shot of row 40 of 4358 reads as an accident.
-      // Narrowing it also shows the filter, which is the point of the screen.
+      // Targeted by name, and filtered, for two reasons. The picker opens on
+      // the whole library, so a shot of row 40 of 4358 reads as an accident —
+      // narrowing it also shows the filter, which is the point of the screen.
+      // And this image ships in a public repo: the last card happens to be an
+      // emulator collection here, which puts a console maker's titles and its
+      // name in the frame. A store collection and a Valve filter keep both out
+      // of it. On a device without "Epic Games" the step finds nothing and the
+      // page is skipped, which is the intended behaviour for a missing target.
       steps: [
-        { kind: "card", last: true },
+        { kind: "text", label: "Epic Games" },
         { kind: "aria", label: "Add games" },
         { kind: "wait", ms: 500 },
-        { kind: "type", placeholder: "Filter", text: "zelda" },
+        { kind: "type", placeholder: "Filter", text: "portal" },
         { kind: "wait", ms: 500 },
         { kind: "scrollTop" },
       ],
