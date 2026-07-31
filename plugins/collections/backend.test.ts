@@ -12,6 +12,8 @@ import { resolveMethod } from "@loadout/types";
  * whether Steam happens to be running on the machine.
  */
 let steamUp = true;
+/** Steam answers, but never in time. */
+let hangSteam = false;
 let fakeCollections: Array<{
   id: string;
   name: string;
@@ -26,7 +28,10 @@ mock.module("@loadout/steam-cdp", () => ({
     return fn({});
   },
   readSteamLibrary: async () => ({ entries: [], installedCount: 0, resolvedTagCount: 0 }),
-  listCollections: async () => fakeCollections.map((c) => ({ ...c, appIds: [...c.appIds] })),
+  listCollections: async () => {
+    if (hangSteam) await new Promise((r) => setTimeout(r, 20_000));
+    return fakeCollections.map((c) => ({ ...c, appIds: [...c.appIds] }));
+  },
   // Stateful, so a test can ask what Steam ended up holding. A fake that
   // accepts every call and remembers nothing cannot tell "wrote it" from
   // "thought about writing it".
@@ -61,6 +66,7 @@ let prevXdg: string | undefined;
 
 beforeEach(() => {
   steamUp = true;
+  hangSteam = false;
   fakeCollections = [];
   prevXdg = process.env.XDG_CONFIG_HOME;
   tempDir = mkdtempSync(join(tmpdir(), "collections-backend-"));
@@ -93,6 +99,26 @@ describe("RPC surface", () => {
       expect(resolveMethod({ instance: backend, name })).toBeFalsy();
     }
   });
+});
+
+describe("Steam being slow", () => {
+  it("shows the managed half rather than waiting on a hung Steam", async () => {
+    // Steam being *down* was always handled. Steam being slow was not: a hung
+    // Runtime.evaluate sits for the CDP client's own 30s ceiling, and the grid
+    // shows a bare spinner for all of it — seen in the wild as two
+    // "CDP Runtime.evaluate timeout after 30000ms" failures in one sync.
+    const backend = await loaded();
+    await backend.createCollection("Backlog");
+
+    hangSteam = true;
+    const t0 = Date.now();
+    const result = await backend.listAll();
+    hangSteam = false;
+
+    expect(Date.now() - t0).toBeLessThan(20_000);
+    expect(result.steamReachable).toBe(false);
+    expect(result.collections.map((c) => c.label)).toEqual(["Backlog"]);
+  }, 30_000);
 });
 
 describe("listAll — the grid", () => {

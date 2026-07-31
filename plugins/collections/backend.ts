@@ -46,6 +46,13 @@ import { linkedCollections, sortLinked, type LinkedCollection } from "./lib/link
 import { mirrorAffecting, planMirror, summarizePlan, type MirrorPlan } from "./lib/mirror";
 import { applyMirrorPlan, type MirrorOps, type MirrorSyncResult } from "./lib/mirror-apply";
 
+/**
+ * How long a screen will wait on Steam before showing what it can without it.
+ * Well under the CDP client's own 30s ceiling: this bounds *perceived* hangs,
+ * not correctness.
+ */
+const STEAM_READ_TIMEOUT_MS = 8000;
+
 const GAME_LIBRARY_SERVICE = "__core:game-library";
 const PLAYTIME_PLUGIN = "playtime";
 
@@ -317,6 +324,36 @@ export default class CollectionsBackend implements PluginBackend {
    * about it. When Steam is unreachable the managed half still renders — a
    * smaller honest grid beats an error page.
    */
+  /**
+   * Read Steam, but never wait on it indefinitely.
+   *
+   * Steam being *down* is already handled — `withSteamClient` throws and the
+   * caller degrades. Steam being **slow** was not: a hung `Runtime.evaluate`
+   * sits for the CDP client's own 30s ceiling, and the grid shows a bare
+   * spinner for all of it. Seen in the wild as two `create: CDP
+   * Runtime.evaluate timeout after 30000ms` failures in one sync.
+   *
+   * Thirty seconds of spinner is indistinguishable from a hang, so reads that
+   * a screen is waiting on get a much shorter deadline and fall back to what
+   * can be shown without Steam.
+   */
+  private async _readSteam<T>(fn: (client: SteamClient) => Promise<T>): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        withSteamClient(fn),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`Steam didn't answer within ${STEAM_READ_TIMEOUT_MS}ms`)),
+            STEAM_READ_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async listAll(): Promise<{ collections: CollectionSummary[]; steamReachable: boolean }> {
     const snapshot = await this.getSnapshot();
     const evalGames = buildEvalGames(snapshot.games);
@@ -337,7 +374,7 @@ export default class CollectionsBackend implements PluginBackend {
     let linked: LinkedCollection[] = [];
     let steamReachable = true;
     try {
-      const steamCollections = await withSteamClient((c) => listCollections(c));
+      const steamCollections = await this._readSteam((c) => listCollections(c));
       linked = sortLinked(
         linkedCollections({ steamCollections, ledger: this.config.mirror.ledger }),
       );
@@ -388,7 +425,7 @@ export default class CollectionsBackend implements PluginBackend {
       return { games: matched.map((g) => ({ appId: g.appId, name: g.name })), kind: "managed" };
     }
 
-    const steamCollections = await withSteamClient((c) => listCollections(c));
+    const steamCollections = await this._readSteam((c) => listCollections(c));
     const found = steamCollections.find((c) => c.id === id);
     if (!found) throw new Error("That collection no longer exists");
     return { games: named(found.appIds), kind: "linked" };

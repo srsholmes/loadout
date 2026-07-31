@@ -72,6 +72,8 @@ export function Collections() {
   const [view, setView] = useState<View>({ kind: "grid" });
   const [summaries, setSummaries] = useState<CollectionSummary[] | null>(null);
   const [steamReachable, setSteamReachable] = useState(true);
+  /** The first grid read has been going long enough to owe an explanation. */
+  const [slowLoad, setSlowLoad] = useState(false);
   const [search, setSearch] = useState("");
 
   const [games, setGames] = useState<Array<{ appId: string; name: string }> | null>(null);
@@ -101,6 +103,7 @@ export function Collections() {
   const evalGames = useMemo(() => buildEvalGames(snapshot?.games ?? []), [snapshot]);
 
   const loadGrid = useCallback(async () => {
+    const slow = setTimeout(() => setSlowLoad(true), 2500);
     try {
       const result = (await call("listAll")) as {
         collections: CollectionSummary[];
@@ -113,6 +116,9 @@ export function Collections() {
         kind: "error",
       });
       setSummaries([]);
+    } finally {
+      clearTimeout(slow);
+      setSlowLoad(false);
     }
   }, [call]);
 
@@ -404,8 +410,17 @@ export function Collections() {
       ) : null}
 
       {summaries === null ? (
-        <div className="flex items-center justify-center" style={{ padding: "4rem 0" }}>
+        <div className="flex flex-col items-center justify-center gap-2" style={{ padding: "4rem 0" }}>
           <Spinner />
+          {/* A spinner alone says "working" for as long as it spins and never
+              says how long that might be. Reading the grid means the whole
+              library plus a Steam round trip, so past a few seconds it owes an
+              explanation. */}
+          {slowLoad ? (
+            <Text variant="secondary">
+              Still reading your library and asking Steam for its collections…
+            </Text>
+          ) : null}
         </div>
       ) : shown.length === 0 ? (
         <Text variant="secondary">
