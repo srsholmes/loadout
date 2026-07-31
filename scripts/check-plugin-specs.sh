@@ -99,6 +99,12 @@ for dir in $SPEC_SCOPED_LIB_DIRS; do
   [ -d "$dir" ] || continue
   for lib in $(find "$dir" -type f -name '*.ts' 2>/dev/null); do
     case "$lib" in
+      # A spec is not itself subject to the spec rule. `*.test.ts` used to
+      # fall through here and pass only by accident — test files usually
+      # have no `export`, so `is_type_only_module` waved them through.
+      # Adding one exported helper to a spec would then have demanded
+      # `foo.test.test.ts`. Skip them explicitly.
+      *.test.ts) continue ;;
       *.spec.ts) continue ;;
       */types.ts) continue ;;
     esac
@@ -130,6 +136,8 @@ for dir in $SPEC_SCOPED_PACKAGES; do
   [ -d "$dir" ] || continue
   for src in $(find "$dir" -type f -name '*.ts' 2>/dev/null); do
     case "$src" in
+      # See the note in the lib/ loop above.
+      *.test.ts) continue ;;
       *.spec.ts) continue ;;
       */types.ts) continue ;;
     esac

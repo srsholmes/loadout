@@ -20,10 +20,22 @@ const HEALTH_INTERVAL_MS = 5000;
 const WEBPACK_READY_POLL_MS = 100;
 const WEBPACK_READY_TIMEOUT_MS = 5000;
 
-export const STEAM_SOUNDS_CUSTOM_DIR = join(
-  homedir(),
-  ".local/share/Steam/steamui/sounds_custom/loadout",
-);
+/**
+ * Where staged sound files go, resolved **per call**.
+ *
+ * A module-level `const` here read `homedir()` once at import time, so it
+ * ignored both `process.env.HOME` and any test sandbox that set it — which
+ * meant `backend.test.ts` wrote into the developer's real Steam install and
+ * failed outright on a machine where `sounds_custom/` happens to be owned by
+ * root (a previous root-run of the plugin leaves it that way). Every other
+ * path in this plugin is already lazy for the same reason.
+ */
+export function steamSoundsCustomDir(): string {
+  return join(
+    process.env.HOME ?? homedir(),
+    ".local/share/Steam/steamui/sounds_custom/loadout",
+  );
+}
 
 export interface PackEntry {
   manifest: {
@@ -291,7 +303,7 @@ function loopbackUrlFor(stagingDir: string, filename: string): string {
 export async function stagePackFiles(
   entry: PackEntry,
   deckyToSteamLoader: Record<string, string>,
-  stagingDir: string = STEAM_SOUNDS_CUSTOM_DIR,
+  stagingDir: string = steamSoundsCustomDir(),
 ): Promise<Record<string, string>> {
   await clearStagedFiles(stagingDir);
   await prepareStagingDir(stagingDir);
@@ -343,7 +355,7 @@ export async function stagePackFiles(
 }
 
 /** Remove the entire staging directory (best-effort). */
-export async function clearStagedFiles(stagingDir: string = STEAM_SOUNDS_CUSTOM_DIR): Promise<void> {
+export async function clearStagedFiles(stagingDir: string = steamSoundsCustomDir()): Promise<void> {
   try {
     await rm(stagingDir, { recursive: true, force: true });
   } catch {
@@ -352,7 +364,7 @@ export async function clearStagedFiles(stagingDir: string = STEAM_SOUNDS_CUSTOM_
 }
 
 /** True if the staging directory exists and contains files (debug helper). */
-export async function listStagedFiles(stagingDir: string = STEAM_SOUNDS_CUSTOM_DIR): Promise<string[]> {
+export async function listStagedFiles(stagingDir: string = steamSoundsCustomDir()): Promise<string[]> {
   try {
     return await readdir(stagingDir);
   } catch {
