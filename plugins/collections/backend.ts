@@ -410,9 +410,26 @@ export default class CollectionsBackend implements PluginBackend {
    * against the snapshot we already built, and the alternative is a grid of
    * bare numbers.
    */
-  async listGames(
-    id: string,
-  ): Promise<{ games: Array<{ appId: string; name: string }>; kind: "managed" | "linked" }> {
+  /**
+   * The games in one collection, and — for a Steam one — what is in it that
+   * Steam no longer knows about.
+   *
+   * A Steam collection stores bare appIds, and a **non-Steam shortcut's appid
+   * is regenerated every time the shortcut is re-added**. Re-run EmuDeck or a
+   * ROM manager and every id the collection holds for those entries becomes a
+   * dead reference. Steam quietly ignores them; we used to list them as rows
+   * named by the number, which is why a collection could read as 221 games
+   * here and 16 in Steam.
+   *
+   * Measured on the dev device: "Recomp Hub" held 221 ids, 16 resolved, and
+   * all 205 that did not were above 2^31 — the shortcut id range.
+   */
+  async listGames(id: string): Promise<{
+    games: Array<{ appId: string; name: string }>;
+    kind: "managed" | "linked";
+    /** Ids in the Steam collection that no longer match anything installed. */
+    staleAppIds: string[];
+  }> {
     const snapshot = await this.getSnapshot();
     const nameOf = new Map(snapshot.games.map((g) => [g.appId, g.name] as const));
     const named = (appIds: readonly string[]) =>
@@ -422,13 +439,23 @@ export default class CollectionsBackend implements PluginBackend {
     if (managed) {
       const evalGames = buildEvalGames(snapshot.games);
       const matched = evaluateCollection(managed, evalGames, { now: Date.now() }).matched;
-      return { games: matched.map((g) => ({ appId: g.appId, name: g.name })), kind: "managed" };
+      // A managed collection's membership is computed from the library every
+      // time, so it cannot hold a reference to something that is gone.
+      return {
+        games: matched.map((g) => ({ appId: g.appId, name: g.name })),
+        kind: "managed",
+        staleAppIds: [],
+      };
     }
 
     const steamCollections = await this._readSteam((c) => listCollections(c));
     const found = steamCollections.find((c) => c.id === id);
     if (!found) throw new Error("That collection no longer exists");
-    return { games: named(found.appIds), kind: "linked" };
+    return {
+      games: named(found.appIds.filter((appId) => nameOf.has(appId))),
+      kind: "linked",
+      staleAppIds: found.appIds.filter((appId) => !nameOf.has(appId)),
+    };
   }
 
   // ── Editing a linked collection ──────────────────────────────────────
@@ -438,6 +465,29 @@ export default class CollectionsBackend implements PluginBackend {
   // plan — and routing them through the planner would mean relaxing its
   // conflict guard, which is what stops us overwriting a collection we did
   // not create.
+
+  /**
+   * Drop the ids in a Steam collection that no longer resolve.
+   *
+   * Returns how many went, so the UI can report it rather than leaving the
+   * user to count. Reads the collection again rather than trusting a list the
+   * UI captured: this writes the *whole* membership, and doing that from a
+   * stale copy is how you lose the entries somebody added in between.
+   */
+  async pruneLinked(id: string): Promise<{ removed: number; kept: number }> {
+    this._assertWritable();
+    const { staleAppIds } = await this.listGames(id);
+    if (staleAppIds.length === 0) return { removed: 0, kept: 0 };
+
+    const steamCollections = await this._readSteam((c) => listCollections(c));
+    const found = steamCollections.find((c) => c.id === id);
+    if (!found) throw new Error("That collection no longer exists");
+
+    const stale = new Set(staleAppIds);
+    const keep = found.appIds.filter((appId) => !stale.has(appId));
+    await withSteamClient((c) => setCollectionApps(c, { collectionId: id, appIds: keep }));
+    return { removed: found.appIds.length - keep.length, kept: keep.length };
+  }
 
   async setLinkedApps(id: string, appIds: string[]): Promise<void> {
     this._assertWritable();

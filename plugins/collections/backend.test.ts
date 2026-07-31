@@ -79,8 +79,30 @@ afterEach(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-async function loaded() {
+/**
+ * A library for the backend to resolve appIds against. Supplied the way the
+ * real one is — through `callPlugin` to the game-library service — so
+ * `listGames` and the rule engine see it exactly as they would on a device.
+ */
+function libraryOf(games: Array<{ appId: string; name: string }>) {
+  return async (_plugin: string, method: string) =>
+    method === "getGames"
+      ? games.map((g) => ({
+          appId: g.appId,
+          name: g.name,
+          sizeOnDisk: 0,
+          headerUrl: "",
+          capsuleUrl: "",
+          installed: true,
+          source: "steam",
+          tags: [],
+        }))
+      : null;
+}
+
+async function loaded(games: Array<{ appId: string; name: string }> = []) {
   const backend = new CollectionsBackend();
+  (backend as unknown as { callPlugin: unknown }).callPlugin = libraryOf(games);
   await backend.onLoad();
   return backend;
 }
@@ -98,6 +120,60 @@ describe("RPC surface", () => {
     for (const name of ["_buildMirrorPlan", "_setMirrorState", "_assertWritable"]) {
       expect(resolveMethod({ instance: backend, name })).toBeFalsy();
     }
+  });
+});
+
+describe("entries Steam can no longer resolve", () => {
+  // A Steam collection stores bare appIds, and a non-Steam shortcut's appid is
+  // regenerated every time the shortcut is re-added. Re-run EmuDeck or a ROM
+  // manager and every id the collection holds for those entries goes dead.
+  // Measured on the dev device: "Recomp Hub" held 221 ids, 16 resolved, and
+  // all 205 that did not were above 2^31 — the shortcut id range.
+  const withDeadIds = () => {
+    fakeCollections = [
+      {
+        id: "uc-rh",
+        name: "Recomp Hub",
+        appIds: ["620", "2924527325", "3541813501"],
+        isDynamic: false,
+        isEditable: true,
+      },
+    ];
+  };
+
+  it("lists the games it can resolve, and counts the rest separately", async () => {
+    // They used to be listed as rows named by the number, which is why a
+    // collection could read as 221 games here and 16 in Steam.
+    withDeadIds();
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    const result = await backend.listGames("uc-rh");
+    expect(result.games.map((g) => g.appId)).toEqual(["620"]);
+    expect(result.staleAppIds).toEqual(["2924527325", "3541813501"]);
+  });
+
+  it("prunes them on request, keeping everything real", async () => {
+    withDeadIds();
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    const result = await backend.pruneLinked("uc-rh");
+    expect(result).toEqual({ removed: 2, kept: 1 });
+    expect(fakeCollections[0]!.appIds).toEqual(["620"]);
+  });
+
+  it("does nothing when there is nothing dead", async () => {
+    fakeCollections = [
+      { id: "uc-rh", name: "Recomp Hub", appIds: ["620"], isDynamic: false, isEditable: true },
+    ];
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    expect(await backend.pruneLinked("uc-rh")).toEqual({ removed: 0, kept: 0 });
+    expect(fakeCollections[0]!.appIds).toEqual(["620"]);
+  });
+
+  it("never reports stale entries for a collection built from rules", async () => {
+    // Its membership is computed from the library every time, so it cannot
+    // hold a reference to something that is gone.
+    const backend = await loaded();
+    await backend.createCollection("Backlog");
+    expect((await backend.listGames("backlog")).staleAppIds).toEqual([]);
   });
 });
 

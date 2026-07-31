@@ -48,6 +48,13 @@ export interface CollectionDetailProps {
    */
   onAddGames?: () => void;
   /**
+   * Entries Steam still stores but can no longer resolve — dead shortcut ids
+   * left behind when EmuDeck or a ROM manager re-added its shortcuts.
+   */
+  staleCount?: number;
+  /** Drop them. Linked collections only, and confirmed here. */
+  onCleanUp?: () => void;
+  /**
    * Drop one game. Offered only for a linked, non-dynamic collection: a
    * managed one would get the game straight back on the next sync, and Steam
    * recomputes a dynamic one.
@@ -66,10 +73,13 @@ export function CollectionDetail({
   onOptions,
   onDelete,
   onAddGames,
+  staleCount = 0,
+  onCleanUp,
   onRemoveGame,
 }: CollectionDetailProps) {
   /** The bin has been pressed and is showing what it would do. */
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [confirmingCleanUp, setConfirmingCleanUp] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const gridWrapperRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -144,6 +154,41 @@ export function CollectionDetail({
           </div>
         </div>
       </PluginHeader>
+
+      {/* Named rather than hidden. These entries are why a collection can read
+          as 221 games here and 16 in Steam, and silently dropping them would
+          leave that discrepancy with no explanation at all. */}
+      {staleCount > 0 ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Text variant="secondary">
+            {staleCount} more {staleCount === 1 ? "entry" : "entries"} in this collection point at
+            shortcuts Steam no longer has — usually left behind when a ROM manager re-added them
+            under new ids. Steam ignores them; they only take up room.
+          </Text>
+          {onCleanUp ? (
+            confirmingCleanUp ? (
+              <>
+                <Button variant="neutral" onClick={() => setConfirmingCleanUp(false)}>
+                  Leave them
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    setConfirmingCleanUp(false);
+                    onCleanUp();
+                  }}
+                >
+                  Remove {staleCount}
+                </Button>
+              </>
+            ) : (
+              <Button variant="neutral" onClick={() => setConfirmingCleanUp(true)}>
+                Clean up
+              </Button>
+            )
+          ) : null}
+        </div>
+      ) : null}
 
       {games === null ? (
         <div className="flex items-center justify-center" style={{ padding: "4rem 0" }}>

@@ -77,6 +77,8 @@ export function Collections() {
   const [search, setSearch] = useState("");
 
   const [games, setGames] = useState<Array<{ appId: string; name: string }> | null>(null);
+  /** Dead shortcut ids in the open collection — see `listGames`. */
+  const [staleCount, setStaleCount] = useState(0);
 
   /**
    * The whole library, held in the webview.
@@ -175,11 +177,14 @@ export function Collections() {
     async (summary: { id: string; label: string }) => {
       setView({ kind: "detail", id: summary.id, label: summary.label });
       setGames(null);
+      setStaleCount(0);
       try {
         const result = (await call("listGames", summary.id)) as {
           games: Array<{ appId: string; name: string }>;
+          staleAppIds?: string[];
         };
         setGames(result.games);
+        setStaleCount(result.staleAppIds?.length ?? 0);
       } catch (err) {
         notify(err instanceof Error ? err.message : "Couldn't open that collection", {
           kind: "error",
@@ -339,6 +344,8 @@ export function Collections() {
           )
         }
         onDelete={() => void removeCollection(view.id)}
+        staleCount={handEditable ? staleCount : 0}
+        onCleanUp={handEditable ? () => void cleanUpLinked(view.id) : undefined}
         onAddGames={handEditable ? () => setView({ kind: "add", id: view.id, label: view.label }) : undefined}
         onRemoveGame={handEditable ? (appId) => void removeFromLinked(view.id, appId) : undefined}
       />
@@ -503,6 +510,26 @@ export function Collections() {
   }
 
   /** Drop one game from a linked collection, writing straight to Steam. */
+  async function cleanUpLinked(id: string) {
+    const before = staleCount;
+    setStaleCount(0);
+    try {
+      const result = (await call("pruneLinked", id)) as { removed: number; kept: number };
+      notify(
+        result.removed === 0
+          ? "Nothing left to clean up"
+          : `Removed ${result.removed} dead ${result.removed === 1 ? "entry" : "entries"}`,
+        { kind: "success" },
+      );
+      await loadGrid();
+    } catch (err) {
+      setStaleCount(before);
+      notify(err instanceof Error ? err.message : "Couldn't clean that collection up", {
+        kind: "error",
+      });
+    }
+  }
+
   async function addToLinked(id: string, label: string, appIds: string[]) {
     const before = games ?? [];
     const nameOf = new Map((snapshot?.games ?? []).map((g) => [g.appId, g.name] as const));
