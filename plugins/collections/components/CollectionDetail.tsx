@@ -14,7 +14,15 @@
  */
 
 import { useRef } from "react";
-import { GameCardGrid, GameCard, IconButton, PluginHeader, Spinner, Text } from "@loadout/ui";
+import {
+  Button,
+  GameCard,
+  GameCardGrid,
+  IconButton,
+  PluginHeader,
+  Spinner,
+  Text,
+} from "@loadout/ui";
 import { FaChevronLeft } from "react-icons/fa6";
 import { useVisibleRows } from "../hooks/useVisibleRows";
 
@@ -24,12 +32,20 @@ export interface CollectionDetailProps {
   games: Array<{ appId: string; name: string }> | null;
   onBack: () => void;
   onPickGame: (appId: string) => void;
+  /** Managed collections only — a linked one has no rules to edit. */
+  onEditRules?: () => void;
 }
 
 const artUrl = (appId: string, kind: "capsule" | "header") =>
   `http://localhost:33820/api/steam-grid/${appId}/${kind}`;
 
-export function CollectionDetail({ label, games, onBack, onPickGame }: CollectionDetailProps) {
+export function CollectionDetail({
+  label,
+  games,
+  onBack,
+  onPickGame,
+  onEditRules,
+}: CollectionDetailProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const gridWrapperRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -60,9 +76,16 @@ export function CollectionDetail({ label, games, onBack, onPickGame }: Collectio
               {games === null ? "Loading…" : `${games.length} games`}
             </span>
           </div>
-          <IconButton onClick={onBack} title="Back" ariaLabel="Back" size={26}>
-            <FaChevronLeft size={11} />
-          </IconButton>
+          <div className="flex items-center gap-2 shrink-0">
+            {onEditRules ? (
+              <Button variant="neutral" onClick={onEditRules}>
+                Edit rules
+              </Button>
+            ) : null}
+            <IconButton onClick={onBack} title="Back" ariaLabel="Back" size={26}>
+              <FaChevronLeft size={11} />
+            </IconButton>
+          </div>
         </div>
       </PluginHeader>
 

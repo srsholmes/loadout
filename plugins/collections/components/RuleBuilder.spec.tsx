@@ -29,7 +29,7 @@ function renderBuilder(t: ManagedCollection) {
   const onSave = mock((_: ManagedCollection) => {});
   const onCancel = mock(() => {});
   const view = render(
-    <RuleBuilder tab={t} games={games} onSave={onSave} onCancel={onCancel} now={NOW} />,
+    <RuleBuilder collection={t} games={games} onSave={onSave} onCancel={onCancel} now={NOW} />,
   );
   return { onSave, onCancel, view };
 }
@@ -223,7 +223,7 @@ describe("RuleBuilder — the palette", () => {
   it("prices a fact-backed rule once its fact is available", () => {
     render(
       <RuleBuilder
-        tab={tab([])}
+        collection={tab([])}
         games={games}
         onSave={() => {}}
         onCancel={() => {}}

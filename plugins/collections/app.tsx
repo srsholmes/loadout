@@ -30,8 +30,12 @@ import {
   useBackend,
 } from "@loadout/ui";
 import { FaGear, FaLayerGroup } from "react-icons/fa6";
+import type { GameMetadataSnapshot } from "@loadout/types";
 import { CollectionCard } from "./components/CollectionCard";
 import { CollectionDetail } from "./components/CollectionDetail";
+import { RuleBuilder } from "./components/RuleBuilder";
+import { buildEvalGames } from "./lib/facts";
+import type { ManagedCollection } from "./lib/types";
 
 export { FaLayerGroup as icon };
 
@@ -46,7 +50,10 @@ interface CollectionSummary {
 
 /** Where we are. A tagged union rather than a pile of booleans, so the header
  *  and the body can never disagree about which screen is showing. */
-type View = { kind: "grid" } | { kind: "detail"; id: string; label: string };
+type View =
+  | { kind: "grid" }
+  | { kind: "detail"; id: string; label: string }
+  | { kind: "rules"; id: string };
 
 /** Exported for tests: `mount` wraps this in the real `PluginProvider`,
  *  which opens a WebSocket the specs have no use for. */
@@ -59,6 +66,18 @@ export function Collections() {
   const [search, setSearch] = useState("");
 
   const [games, setGames] = useState<Array<{ appId: string; name: string }> | null>(null);
+
+  /**
+   * The whole library, held in the webview.
+   *
+   * The rule builder prices every candidate rule and every row on each
+   * keystroke, which is only affordable because evaluation happens here rather
+   * than over RPC. Fetched once and reused; the grid does not need it.
+   */
+  const [snapshot, setSnapshot] = useState<GameMetadataSnapshot | null>(null);
+  const [collections, setCollections] = useState<ManagedCollection[]>([]);
+
+  const evalGames = useMemo(() => buildEvalGames(snapshot?.games ?? []), [snapshot]);
 
   const loadGrid = useCallback(async () => {
     try {
@@ -77,8 +96,21 @@ export function Collections() {
   }, [call]);
 
   useEffect(() => {
-    if (ready) void loadGrid();
-  }, [ready, loadGrid]);
+    if (!ready) return;
+    void loadGrid();
+    void (async () => {
+      try {
+        const [snap, cfg] = await Promise.all([
+          call("getSnapshot") as Promise<GameMetadataSnapshot>,
+          call("getConfig") as Promise<{ config: { collections: ManagedCollection[] } }>,
+        ]);
+        setSnapshot(snap);
+        setCollections(cfg.config.collections);
+      } catch {
+        // The grid still works without these; only rule editing needs them.
+      }
+    })();
+  }, [ready, loadGrid, call]);
 
   const openCollection = useCallback(
     async (summary: CollectionSummary) => {
@@ -125,6 +157,29 @@ export function Collections() {
     return q ? summaries.filter((c) => c.label.toLowerCase().includes(q)) : summaries;
   }, [summaries, search]);
 
+  // ── Rule builder ───────────────────────────────────────────────────
+  if (view.kind === "rules") {
+    const editing = collections.find((c) => c.id === view.id);
+    if (!editing) {
+      // Deleted from under us, or the config has not arrived yet.
+      return (
+        <div className="p-7">
+          <Spinner />
+        </div>
+      );
+    }
+    return (
+      <div className="p-7 h-full overflow-y-auto" style={{ overflowX: "hidden" }}>
+        <RuleBuilder
+          collection={editing}
+          games={evalGames}
+          onCancel={() => setView({ kind: "grid" })}
+          onSave={(next) => void saveCollection(next)}
+        />
+      </div>
+    );
+  }
+
   // ── Detail ─────────────────────────────────────────────────────────
   if (view.kind === "detail") {
     return (
@@ -133,6 +188,11 @@ export function Collections() {
         games={games}
         onBack={() => setView({ kind: "grid" })}
         onPickGame={(appId) => void openGame(appId)}
+        onEditRules={
+          collections.some((c) => c.id === view.id)
+            ? () => setView({ kind: "rules", id: view.id })
+            : undefined
+        }
       />
     );
   }
@@ -203,10 +263,32 @@ export function Collections() {
     </div>
   );
 
+  async function saveCollection(next: ManagedCollection) {
+    try {
+      const updated = collections.map((c) => (c.id === next.id ? next : c));
+      await call("setCollections", updated);
+      setCollections(updated);
+      setView({ kind: "grid" });
+      await loadGrid();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Couldn't save those rules", {
+        kind: "error",
+      });
+    }
+  }
+
   async function createCollection() {
     try {
-      await call("createCollection", "New collection");
+      const config = (await call("createCollection", "New collection")) as {
+        collections: ManagedCollection[];
+      };
+      setCollections(config.collections);
       await loadGrid();
+      // Straight into the builder: a new collection matches the whole library,
+      // and leaving the user on the grid in front of a 4000-game card with no
+      // obvious next step is the wrong place to stop.
+      const made = config.collections[config.collections.length - 1];
+      if (made) setView({ kind: "rules", id: made.id });
     } catch (err) {
       notify(err instanceof Error ? err.message : "Couldn't create that collection", {
         kind: "error",

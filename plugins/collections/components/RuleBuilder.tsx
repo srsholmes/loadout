@@ -13,7 +13,7 @@
  * design possible at all. TabMaster cannot do it: its data layer is
  * synchronous and its counts require a save.
  *
- * Editing happens on a **draft** tab. Nothing reaches storage until Save, so
+ * Editing happens on a **draft** collection. Nothing reaches storage until Save, so
  * Cancel is a real escape and an experiment costs nothing.
  */
 
@@ -57,9 +57,9 @@ function isInverted(rule: Rule): boolean {
 }
 
 export interface RuleBuilderProps {
-  tab: ManagedCollection;
+  collection: ManagedCollection;
   games: readonly EvalGame[];
-  onSave: (tab: ManagedCollection) => void;
+  onSave: (collection: ManagedCollection) => void;
   onCancel: () => void;
   pickerOptions?: {
     game?: readonly ParamOption[];
@@ -92,7 +92,7 @@ function collectGroups(rule: Rule, into: GroupRule[] = []): GroupRule[] {
 }
 
 export function RuleBuilder({
-  tab,
+  collection,
   games,
   onSave,
   onCancel,
@@ -100,7 +100,7 @@ export function RuleBuilder({
   availableFacts = NO_FACTS,
   now,
 }: RuleBuilderProps) {
-  const [draft, setDraft] = useState<ManagedCollection>(tab);
+  const [draft, setDraft] = useState<ManagedCollection>(collection);
   const [editing, setEditing] = useState<Rule | null>(null);
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   /** Group the palette will insert into, or null when it's closed. */

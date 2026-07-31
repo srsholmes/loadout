@@ -6,12 +6,36 @@ const calls: Array<{ method: string; args: unknown[] }> = [];
 let summaries: unknown[] = [];
 let steamReachable = true;
 let games: string[] = [];
+let managedCollections: unknown[] = [];
+
+/** A managed collection with every field the rule builder reads. */
+function fullCollection(id: string, label: string) {
+  return {
+    id,
+    label,
+    root: { kind: "group", id: `${id}-root`, combinator: "all", children: [] },
+    sort: [],
+    limit: null,
+    display: { tileWidth: 150, showLabels: true, badges: [] },
+    indeterminatePolicy: "pass",
+  };
+}
 
 const callMock = mock((method: string, ...args: unknown[]) => {
   calls.push({ method, args });
   switch (method) {
     case "listAll":
       return Promise.resolve({ collections: summaries, steamReachable });
+    case "getSnapshot":
+      return Promise.resolve({ games: [], providers: {}, generatedAt: 0 });
+    case "getConfig":
+      return Promise.resolve({ config: { collections: managedCollections }, warnings: [], readOnly: false });
+    case "createCollection":
+      return Promise.resolve({
+        collections: [...managedCollections, fullCollection("made", "New collection")],
+      });
+    case "setCollections":
+      return Promise.resolve({ collections: managedCollections });
     case "listGames":
       return Promise.resolve({ games: games.map((appId) => ({ appId, name: `Game ${appId}` })), kind: "linked" });
     default:
@@ -25,6 +49,26 @@ mock.module("@loadout/ui", () => ({
 }));
 
 const { Collections } = await import("./app");
+
+/**
+ * Render with a real header slot.
+ *
+ * `PluginHeader` portals into the shell's topbar and renders nothing when no
+ * slot is wired, so without this every header control — search, New, Edit
+ * rules — is invisible to the tests. `PluginHeaderSlotProvider` is the same
+ * seam `PluginProvider` uses.
+ */
+function renderApp() {
+  const slot = document.createElement("div");
+  document.body.appendChild(slot);
+  const view = render(
+    <actualUi.PluginHeaderSlotProvider slot={slot}>
+      <Collections />
+    </actualUi.PluginHeaderSlotProvider>,
+    { container },
+  );
+  return { ...view, unmount: () => { view.unmount(); slot.remove(); } };
+}
 
 function summary(over: Record<string, unknown> = {}) {
   return {
@@ -46,6 +90,7 @@ beforeEach(() => {
   summaries = [];
   steamReachable = true;
   games = [];
+  managedCollections = [];
   container = document.createElement("div");
   document.body.appendChild(container);
 });
@@ -60,7 +105,7 @@ describe("the collections grid", () => {
     // The whole reason this rework happened: EmuDeck's ROM sets were invisible
     // to the plugin, so it could not honestly claim to manage collections.
     summaries = [summary(), summary({ id: "srm-2", label: "Nintendo 64", count: 316 })];
-    ({ unmount } = render(<Collections />, { container }));
+    ({ unmount } = renderApp());
 
     await waitFor(() => expect(screen.getByText("Sega Genesis")).toBeTruthy());
     expect(screen.getByText("Nintendo 64")).toBeTruthy();
@@ -72,7 +117,7 @@ describe("the collections grid", () => {
     // That is correct, and only jarring when it is a surprise — so the card
     // says so before you open it.
     summaries = [summary({ kind: "managed", autoMaintained: true, label: "Backlog" })];
-    ({ unmount } = render(<Collections />, { container }));
+    ({ unmount } = renderApp());
     await waitFor(() => expect(screen.getByText("Rules · updates itself")).toBeTruthy());
   });
 
@@ -81,12 +126,12 @@ describe("the collections grid", () => {
     // the plugin lost them.
     steamReachable = false;
     summaries = [summary({ kind: "managed", label: "Backlog" })];
-    ({ unmount } = render(<Collections />, { container }));
+    ({ unmount } = renderApp());
     await waitFor(() => expect(screen.getByText(/Steam isn't reachable/)).toBeTruthy());
   });
 
   it("offers a starting point when there is nothing at all", async () => {
-    ({ unmount } = render(<Collections />, { container }));
+    ({ unmount } = renderApp());
     await waitFor(() => expect(screen.getByText(/No collections yet/)).toBeTruthy());
   });
 
@@ -101,7 +146,7 @@ describe("opening a collection", () => {
     // not try to compute it.
     summaries = [summary()];
     games = ["10", "20"];
-    ({ unmount } = render(<Collections />, { container }));
+    ({ unmount } = renderApp());
     await waitFor(() => expect(screen.getByText("Sega Genesis")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: /Sega Genesis/ }));
@@ -113,10 +158,49 @@ describe("opening a collection", () => {
     // A new collection starts here, and seeing it empty is the preview working.
     summaries = [summary({ count: 0, previewAppIds: [] })];
     games = [];
-    ({ unmount } = render(<Collections />, { container }));
+    ({ unmount } = renderApp());
     await waitFor(() => expect(screen.getByText("Sega Genesis")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: /Sega Genesis/ }));
     await waitFor(() => expect(screen.getByText(/Nothing in this collection yet/)).toBeTruthy());
+  });
+});
+
+describe("editing a collection's rules", () => {
+  /** A managed collection with the shape the rule builder needs. */
+  const managed = fullCollection;
+
+  it("offers Edit rules on a managed collection", async () => {
+    managedCollections = [managed("backlog", "Backlog")];
+    summaries = [summary({ id: "backlog", label: "Backlog", kind: "managed", autoMaintained: true })];
+    ({ unmount } = renderApp());
+
+    await waitFor(() => expect(screen.getByText("Backlog")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /Backlog/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Edit rules" })).toBeTruthy());
+  });
+
+  it("does not offer it on a collection that came from Steam", async () => {
+    // A linked collection has no rules. Offering the builder would imply we
+    // could take over a set EmuDeck curated.
+    summaries = [summary()];
+    ({ unmount } = renderApp());
+
+    await waitFor(() => expect(screen.getByText("Sega Genesis")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /Sega Genesis/ }));
+    await waitFor(() => expect(screen.getByText(/Nothing in this collection/)).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "Edit rules" })).toBeNull();
+  });
+
+  it("opens the builder straight after creating one", async () => {
+    // A new collection matches the whole library, so leaving the user on the
+    // grid in front of a 4000-game card is the wrong place to stop.
+    ({ unmount } = renderApp());
+    await waitFor(() => expect(screen.getByText(/No collections yet/)).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "New" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "createCollection")).toBe(true));
+    // And lands in the builder rather than back on the grid.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeTruthy());
   });
 });
