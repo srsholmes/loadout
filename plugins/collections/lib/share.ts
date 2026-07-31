@@ -21,10 +21,15 @@
  * into a URL, a YAML file or a chat client without escaping.
  */
 
-import type { Tab } from "./types";
+import type { Rule, Tab } from "./types";
 import type { CollectionsConfig } from "./config";
 import { COLLECTIONS_SCHEMA_VERSION, uniqueTabId } from "./config";
 import { migrate } from "./migrations";
+import { RULE_KINDS, ruleDef } from "./rules";
+import { MAX_RULE_DEPTH } from "./rule-tree";
+
+/** Rule kinds this build can evaluate. */
+const KNOWN_KINDS = new Set<string>(RULE_KINDS);
 
 /** Discriminator, so we can reject a code meant for something else. */
 export const SHARE_KIND = "loadout.collections";
@@ -121,6 +126,45 @@ export function decodeShareString(text: string): ShareEnvelope {
   };
 }
 
+/**
+ * Reject a tab whose rule tree this build cannot evaluate.
+ *
+ * A share code is input from another person, and `decodeShareString` casts
+ * `env.tabs` straight to `Tab[]`. Two things got through, both fatal *after*
+ * the import had been persisted:
+ *
+ *   - **An unknown rule kind.** `DEFS[rule.kind]` is `undefined`, so
+ *     `evaluateLeaf`, `isRuleComplete` and `requiredFacts` all throw. The tab
+ *     imports cleanly and then breaks the plugin permanently — exactly the
+ *     forward-compat case `migrations.ts` refuses a whole file for.
+ *   - **Unbounded depth.** `MAX_RULE_DEPTH` is 4 and the builder enforces it,
+ *     but nothing did on this path: a 39 KB code imports a tree 501 deep, and
+ *     a larger one blows the stack inside `ruleProblems` — a `RangeError`, not
+ *     one of this module's user-facing errors.
+ */
+function unsupportedReason(rule: Rule, depth = 1): string | null {
+  if (depth > MAX_RULE_DEPTH) {
+    return `Its rules are nested deeper than ${MAX_RULE_DEPTH} levels`;
+  }
+  if (rule.kind === "group") {
+    for (const child of rule.children) {
+      const reason = unsupportedReason(child, depth + 1);
+      if (reason) return reason;
+    }
+    return null;
+  }
+  if (!KNOWN_KINDS.has(rule.kind)) {
+    return `It uses a rule this version doesn't know about ("${rule.kind}")`;
+  }
+  // `invert` on a kind the registry says cannot be inverted is TabMaster's
+  // issue #277 — an invisible toggle that silently changes what matches,
+  // with no UI to discover or clear it.
+  if ("invert" in rule && rule.invert === true && ruleDef(rule.kind)?.invertible === false) {
+    return `One of its rules can't be inverted ("${rule.kind}")`;
+  }
+  return null;
+}
+
 export interface ImportResult {
   config: CollectionsConfig;
   /** Ids of tabs actually added. */
@@ -167,6 +211,28 @@ export function importTabs(
     tabOrder: env.tabs.map((t) => t?.id).filter((id) => typeof id === "string"),
   });
 
+  // `migrate` refuses a file from the future rather than coercing it, and that
+  // verdict must be honoured here too. Ignoring it silently downgraded the
+  // code — stripping the very fields a newer build added — which is the
+  // `removeUnknownTypes` behaviour `migrations.ts` names as the thing not to
+  // do.
+  if (shell.refused) {
+    throw new Error(
+      "That share code was made by a newer version of Loadout. Update Loadout to import it.",
+    );
+  }
+
+  // A share code whose tabs were all dropped leaves `coerceConfig` to
+  // substitute the *current* config's tabs, so iterating them would report the
+  // importer's own built-ins as rejected — five tabs the code never contained.
+  const incomingIds = new Set(
+    env.tabs.map((t) => (t as { id?: unknown } | null)?.id).filter((id) => typeof id === "string"),
+  );
+  const salvaged = shell.config.tabs.filter((t) => incomingIds.has(t.id));
+  if (salvaged.length === 0) {
+    return { config: current, added, renamed, rejected };
+  }
+
   let config: CollectionsConfig = {
     ...current,
     tabs: [...current.tabs],
@@ -179,7 +245,13 @@ export function importTabs(
   // An earlier version skipped entries matching a current tab by id+label,
   // which meant importing the same code twice silently did nothing instead
   // of creating "Mine (2)".
-  for (const incoming of shell.config.tabs) {
+  for (const incoming of salvaged) {
+    const unsupported = unsupportedReason(incoming.root);
+    if (unsupported) {
+      rejected.push({ label: incoming.label, reason: unsupported });
+      continue;
+    }
+
     if (incoming.builtin !== undefined) {
       // Builtins are defined by this build, not by a share code — importing
       // one would create a second "Installed" the user can't edit.

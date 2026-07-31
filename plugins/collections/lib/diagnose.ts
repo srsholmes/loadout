@@ -154,6 +154,10 @@ function findSingleCulprit(
   result: EvalResult,
 ): { rule: Rule; trace: RuleNodeTrace } | null {
   const children = result.trace.children;
+  // Two or more, deliberately. With a single rule, removing it always yields
+  // the whole library, so "remove X and 4356 games match" is trivially true
+  // and tells the user nothing — the genuinely-empty wording is the honest
+  // one there.
   if (!children || children.length < 2) return null;
 
   const candidates = children
@@ -292,10 +296,16 @@ export function diagnoseTab(
   }
 
   // 7. The rules are fine; the library just doesn't contain such a game.
+  //
+  // Only suggest widening when there is something to widen. A tab whose one
+  // rule is `familyShared` has no range anywhere in the tree, and telling its
+  // owner to widen one sends them looking for a control that isn't there.
+  const hasRange = leafRules(tab.root).some((r) => "range" in r || "epochSec" in r);
   return {
     kind: "genuinely-empty",
-    message:
-      "These rules are valid — no game in your library matches. Try widening a range",
+    message: hasRange
+      ? "These rules are valid — no game in your library matches. Try widening a range"
+      : "These rules are valid — no game in your library matches. Try removing a rule",
     fixes: leafRules(tab.root).length > 0
       ? [fixRemoveRule(leafRules(tab.root).at(-1)!.id, "Remove the last rule")]
       : [],

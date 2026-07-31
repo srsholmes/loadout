@@ -257,9 +257,14 @@ function ruleBody(rule: Rule): string {
         ? "has a friend playing right now"
         : `has ${rule.minCount} or more friends playing right now`;
     case "friendsOwn":
+      // The mode is the whole meaning — `.some` versus `.every` — and every
+      // other set rule renders it. Dropping it made "any of these two friends"
+      // and "both of these friends" read identically.
       return rule.steamIds.length === 0
         ? "is owned by a friend…"
-        : `is owned by ${rule.steamIds.length} specific friend${rule.steamIds.length === 1 ? "" : "s"}`;
+        : rule.steamIds.length === 1
+          ? "is owned by 1 specific friend"
+          : `is owned by ${rule.mode === "allOf" ? "all" : "any"} of ${rule.steamIds.length} specific friends`;
 
     case "whitelist":
       return rule.appIds.length === 0

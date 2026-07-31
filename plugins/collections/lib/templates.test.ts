@@ -182,13 +182,40 @@ describe("templates", () => {
     }
   });
 
-  it("does not declare `needs` for templates the live providers can satisfy", () => {
-    // `backlog` and `pick-up-again` briefly declared `needs: ["lastPlayed"]`
-    // while nothing populated that field. The appstore provider populates it
-    // now, so declaring it again would grey out a template that works.
-    for (const id of ["space-hogs", "emulation", "blank", "backlog", "pick-up-again"]) {
+  it("declares nothing for templates that read only always-present fields", () => {
+    for (const id of ["space-hogs", "emulation", "blank"]) {
       expect(templates(NOW).find((t) => t.id === id)!.needs).toBeUndefined();
     }
+  });
+
+  it("declares `needs` for every template that reads play history", () => {
+    // These used to declare nothing, so with the playtime source absent they
+    // sat undimmed at the head of the gallery and matched zero games — and
+    // `backlog` is the template the module doc calls the lead.
+    //
+    // Declaring it is safe now that `blockedReason` intersects: it greys a
+    // template only when the provider owning *that* field is unavailable, not
+    // whenever any provider is down. An earlier over-eager version is why this
+    // test once asserted the opposite.
+    for (const id of ["backlog", "pick-up-again"]) {
+      const needs = templates(NOW).find((t) => t.id === id)!.needs;
+      expect(needs).toContain("playtime");
+      expect(needs).toContain("lastPlayed");
+    }
+  });
+
+  it("declares every field a template reads, not just one of them", () => {
+    // A partial declaration leaves the template offered when only half its
+    // data is there — which is the same failure with extra steps.
+    expect(templates(NOW).find((t) => t.id === "hidden-gems")!.needs).toEqual([
+      "reviewScore",
+      "playtime",
+    ]);
+    // `on-this-device` filters on `streamable` alone; without it the tab
+    // matches the whole library while claiming to hide remote copies.
+    expect(templates(NOW).find((t) => t.id === "on-this-device")!.needs).toEqual([
+      "streamable",
+    ]);
   });
 
   it("declares `needs` for templates whose data still has no provider", () => {

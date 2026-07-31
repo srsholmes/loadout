@@ -6,7 +6,7 @@ import {
   exportTabs,
   importTabs,
 } from "./share";
-import { defaultConfig, validateConfig } from "./config";
+import { COLLECTIONS_SCHEMA_VERSION, defaultConfig, validateConfig } from "./config";
 import { templates } from "./templates";
 import type { Tab } from "./types";
 import { epoch } from "../test/fixtures/library";
@@ -236,5 +236,80 @@ describe("importTabs — safety rails", () => {
     const result = importTabs(defaultConfig(), envelope);
     expect(result.added).toEqual(["good"]);
     expect(validateConfig(result.config)).toEqual([]);
+  });
+});
+
+describe("importTabs — a share code is input from a stranger", () => {
+  function codeFor(tabs: unknown[], schemaVersion = COLLECTIONS_SCHEMA_VERSION): string {
+    return encodeShareString({
+      kind: SHARE_KIND,
+      schemaVersion,
+      exportedAt: 0,
+      tabs: tabs as Tab[],
+    });
+  }
+
+  function tabWithRoot(root: unknown): unknown {
+    return { ...templates(NOW)[0]!.build("mine"), id: "mine", label: "Mine", root };
+  }
+
+  it("rejects a rule kind this build cannot evaluate", () => {
+    // It used to import cleanly and then break the plugin permanently:
+    // `DEFS[rule.kind]` is undefined, so evaluateLeaf / isRuleComplete /
+    // requiredFacts all throw, and `evaluateTab` on that tab throws with it.
+    const code = codeFor([
+      tabWithRoot({
+        kind: "group",
+        id: "g",
+        combinator: "all",
+        children: [{ id: "x", kind: "quantumCompat" }],
+      }),
+    ]);
+    const result = importTabs(defaultConfig(), code);
+    expect(result.added).toEqual([]);
+    expect(result.rejected[0]!.reason).toMatch(/doesn't know about/);
+  });
+
+  it("rejects a rule tree nested deeper than the builder allows", () => {
+    // The builder enforces MAX_RULE_DEPTH; this path did not, so a crafted
+    // code imported a tree hundreds deep and a larger one blew the stack
+    // inside ruleProblems — a RangeError, not a user-facing error.
+    let root: unknown = { kind: "installed", id: "leaf" };
+    for (let i = 0; i < 50; i++) {
+      root = { kind: "group", id: `g${i}`, combinator: "all", children: [root] };
+    }
+    const result = importTabs(defaultConfig(), codeFor([tabWithRoot(root)]));
+    expect(result.added).toEqual([]);
+    expect(result.rejected[0]!.reason).toMatch(/nested deeper/);
+  });
+
+  it("rejects an invert flag on a rule that cannot be inverted", () => {
+    // TabMaster's #277: an invisible toggle that changes what matches, with no
+    // UI to discover or clear it.
+    const code = codeFor([
+      tabWithRoot({
+        kind: "group",
+        id: "g",
+        combinator: "all",
+        children: [{ id: "x", kind: "whitelist", appIds: ["1"], invert: true }],
+      }),
+    ]);
+    const result = importTabs(defaultConfig(), code);
+    expect(result.rejected[0]!.reason).toMatch(/can't be inverted/);
+  });
+
+  it("refuses a code from a newer build rather than silently downgrading it", () => {
+    expect(() =>
+      importTabs(defaultConfig(), codeFor([tabWithRoot({ kind: "group", id: "g", combinator: "all", children: [] })], 999)),
+    ).toThrow(/newer version/);
+  });
+
+  it("does not report the importer's own tabs as rejected", () => {
+    // When every incoming tab is dropped, coerceConfig substitutes the current
+    // config's tabs — so iterating them named five built-ins the code never
+    // contained.
+    const result = importTabs(defaultConfig(), codeFor([null, 5, "x"]));
+    expect(result.added).toEqual([]);
+    expect(result.rejected).toEqual([]);
   });
 });

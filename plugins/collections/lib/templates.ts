@@ -176,6 +176,9 @@ export function templates(now: number = Math.floor(Date.now() / 1000)): TabTempl
       label: "Installed & unplayed",
       description: "Games you've installed but never started — your actual backlog",
       icon: "FaSeedling",
+      // Both rules read play history. Without it this matched nothing while
+      // sitting undimmed at the head of the gallery.
+      needs: ["playtime", "lastPlayed"],
       build: (id) =>
         makeTab(
           id,
@@ -220,6 +223,7 @@ export function templates(now: number = Math.floor(Date.now() / 1000)): TabTempl
       label: "Pick up again",
       description: "Played before, but not in the last three months",
       icon: "FaRotateLeft",
+      needs: ["playtime", "lastPlayed"],
       build: (id) =>
         makeTab(
           id,
@@ -254,6 +258,9 @@ export function templates(now: number = Math.floor(Date.now() / 1000)): TabTempl
       label: "On this device",
       description: "Hides copies that live on another PC you stream from",
       icon: "FaLaptop",
+      // Without `streamable` this filters nothing at all — it matched the
+      // entire library while claiming to hide the remote copies.
+      needs: ["streamable"],
       build: (id) =>
         makeTab(
           id,
@@ -333,7 +340,9 @@ export function templates(now: number = Math.floor(Date.now() / 1000)): TabTempl
       label: "Hidden gems",
       description: "Very well reviewed, and you haven't played them yet",
       icon: "FaGem",
-      needs: ["reviewScore"],
+      // Uses playtime as well as the score; a partial declaration leaves the
+      // template offered when only half its data is there.
+      needs: ["reviewScore", "playtime"],
       build: (id) =>
         makeTab(
           id,
@@ -348,7 +357,7 @@ export function templates(now: number = Math.floor(Date.now() / 1000)): TabTempl
     {
       id: "declutter",
       label: "Hide the clutter",
-      description: "Everything that is not a demo, soundtrack, tool or video",
+      description: "Everything that is not a demo, DLC, soundtrack, tool or video",
       icon: "FaBroom",
       needs: ["appKind"],
       build: (id) =>

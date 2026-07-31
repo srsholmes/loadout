@@ -121,6 +121,10 @@ const SPECS: Partial<Record<RuleKind, ParamSpec[]>> = {
         { value: "config", label: "Config" },
         { value: "beta", label: "Beta" },
         { value: "shortcut", label: "Shortcut" },
+        // ROMs were 1878 of 2295 apps on the development device, so leaving
+        // this out meant no rule could name the largest kind in the library,
+        // and "Shortcut" does not catch them.
+        { value: "rom", label: "ROM" },
         { value: "unknown", label: "Unknown" },
       ],
     },
@@ -137,7 +141,7 @@ const SPECS: Partial<Record<RuleKind, ParamSpec[]>> = {
       options: [
         { value: "contains", label: "Contains", hint: "A plain substring — usually what you want" },
         { value: "startsWith", label: "Starts with" },
-        { value: "regex", label: "Regular expression", hint: "An invalid pattern matches nothing rather than erroring" },
+        { value: "regex", label: "Regular expression", hint: "An invalid pattern can't be checked, so it won't narrow the tab" },
       ],
     },
     { key: "value", control: "text", label: "Text", placeholder: "e.g. Halo" },
@@ -203,7 +207,10 @@ const SPECS: Partial<Record<RuleKind, ParamSpec[]>> = {
       control: "picker",
       label: "Always include",
       source: "game",
-      helper: "These games match regardless of the other rules in this group.",
+      helper:
+        "Adds these games to what this group matches. Under ALL they must " +
+        "still satisfy the other rules — put them in their own ANY group to " +
+        "include them outright.",
     },
   ],
   blacklist: [
@@ -212,7 +219,9 @@ const SPECS: Partial<Record<RuleKind, ParamSpec[]>> = {
       control: "picker",
       label: "Never include",
       source: "game",
-      helper: "These games are excluded even when the other rules match them.",
+      helper:
+        "Excludes these games. Under ALL that beats the other rules; under " +
+        "ANY another rule can still let them back in.",
     },
   ],
   friendsPlaying: [

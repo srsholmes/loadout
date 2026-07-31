@@ -122,7 +122,8 @@ describe("writeBackup", () => {
   it("writes a config that reloads intact", async () => {
     const original = configWithTabs(["Alpha", "Beta"]);
     const info = await writeBackup(original, "manual");
-    const restored = await readBackup(info.file);
+    const { config: restored, dropped } = await readBackup(info.file);
+    expect(dropped).toEqual([]);
     expect(restored.tabs.map((t) => t.label)).toEqual(["Alpha", "Beta"]);
     expect(validateConfig(restored)).toEqual([]);
   });
@@ -208,8 +209,12 @@ describe("readBackup", () => {
     const damaged = { ...defaultConfig(), tabs: [{ label: "Broken" }] };
     writeFileSync(join(backupDir(), file), JSON.stringify(damaged));
 
-    const restored = await readBackup(file);
+    const { config: restored, dropped } = await readBackup(file);
     expect(validateConfig(restored)).toEqual([]);
+    // The salvage must be *reported*. These sentences exist so a restore that
+    // quietly drops a hand-built tab cannot happen in silence; `readBackup`
+    // used to discard them.
+    expect(dropped.length).toBeGreaterThan(0);
   });
 });
 
@@ -269,5 +274,30 @@ describe("pruneBackups", () => {
     await seedManual(4);
     await pruneBackups(1);
     expect(readdirSync(backupDir()).filter((f) => f.endsWith(".json"))).toHaveLength(1);
+  });
+});
+
+describe("writeBackup — a name the reader can parse", () => {
+  it("refuses a config whose schema version isn't a number", async () => {
+    // The name embeds the version raw, so NaN produced `…-vNaN-manual.json`,
+    // which FILENAME_RE rejects. The file lands on disk, `listBackups` skips
+    // it, and `readBackup` refuses it — a backup that exists and is
+    // unreachable is worse than none.
+    const bad = { ...defaultConfig(), schemaVersion: Number.NaN };
+    await expect(writeBackup(bad, "manual")).rejects.toThrow(/schema version/);
+  });
+
+  it("refuses a timestamp that would produce an expanded year", async () => {
+    // A year >= 10000 serialises as `+010000-01-01T…`, which the pattern also
+    // rejects.
+    await expect(
+      writeBackup(defaultConfig(), "manual", Date.UTC(10000, 0, 1)),
+    ).rejects.toThrow(/timestamped/);
+  });
+
+  it("still writes, and can read back, an ordinary backup", async () => {
+    const info = await writeBackup(defaultConfig(), "manual", T("2026-07-30T09:14:22.123Z"));
+    const { config } = await readBackup(info.file);
+    expect(validateConfig(config)).toEqual([]);
   });
 });

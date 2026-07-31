@@ -119,6 +119,15 @@ export async function writeBackup(
   const dir = backupDir();
   await mkdir(dir, { recursive: true });
 
+  // A name the reader cannot parse is worse than no backup at all: the file
+  // lands on disk, `listBackups` skips it, and `readBackup` refuses it.
+  if (!Number.isInteger(config.schemaVersion) || config.schemaVersion < 0) {
+    throw new Error(`Refusing to write a backup with schema version ${config.schemaVersion}`);
+  }
+  if (!Number.isFinite(at) || at < 0 || new Date(at).getUTCFullYear() > 9999) {
+    throw new Error(`Refusing to write a backup timestamped ${at}`);
+  }
+
   const file = backupFilename(at, config.schemaVersion, reason);
   const path = join(dir, file);
   const tmp = `${path}.${randomUUID()}.tmp`;
@@ -179,7 +188,9 @@ export async function listBackups(): Promise<BackupInfo[]> {
  * caller is a restore button, and "that backup is damaged" is what the user
  * needs to hear.
  */
-export async function readBackup(file: string): Promise<CollectionsConfig> {
+export async function readBackup(
+  file: string,
+): Promise<{ config: CollectionsConfig; dropped: string[] }> {
   if (parseBackupFilename(file) === null) {
     throw new Error("That isn't a Collections backup file");
   }
@@ -195,7 +206,8 @@ export async function readBackup(file: string): Promise<CollectionsConfig> {
   } catch {
     throw new Error("That backup is damaged and couldn't be read");
   }
-  return coerceConfig(parsed).config;
+  const coerced = coerceConfig(parsed);
+  return { config: coerced.config, dropped: coerced.dropped };
 }
 
 /**

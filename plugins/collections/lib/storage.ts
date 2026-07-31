@@ -257,6 +257,14 @@ export async function restoreBackup(
   now: number = Date.now(),
 ): Promise<LoadResult> {
   const restored = await readBackup(file); // throws user-facing on damage
-  await saveWithBackup(restored, current, "pre-restore", now);
-  return { config: restored, warnings: [], seeded: false, readOnly: false };
+  await saveWithBackup(restored.config, current, "pre-restore", now);
+  // Surface what the backup lost on the way in. `coerceConfig` writes these
+  // sentences precisely so a restore that silently drops a hand-built tab
+  // cannot happen quietly — discarding them defeated the point.
+  return {
+    config: restored.config,
+    warnings: restored.dropped,
+    seeded: false,
+    readOnly: false,
+  };
 }
