@@ -633,39 +633,3 @@ export function factUnavailableReason(fact: FactKey): string {
   }
 }
 
-/**
- * Which `GameMetadata` field each rule kind reads.
- *
- * `ProviderState.ownsFields` is keyed by field, while a tab's `needs` is keyed
- * by rule kind. Without this map the two vocabularies cannot be intersected,
- * and the UI is reduced to "some provider is down, so grey out anything with a
- * `needs`" — which greys a Deck Verified template because *genres* are
- * unavailable. Kinds absent from the map read no single field (structural
- * rules, and the fact-backed ones, which report through `factKey` instead).
- */
-export const RULE_FIELD: Partial<Record<RuleKind, string>> = {
-  installed: "installed",
-  owned: "owned",
-  appKind: "kind",
-  collection: "collections",
-  title: "name",
-  lastPlayed: "lastPlayed",
-  playtime: "playtimeMinutes",
-  reviewScore: "reviewPercentage",
-  metacritic: "metacritic",
-  deckCompat: "deckCompat",
-  steamOsCompat: "steamOsCompat",
-  releaseDate: "releaseDate",
-  purchaseDate: "purchasedAt",
-  storeTags: "storeTags",
-  genres: "genres",
-  developer: "developers",
-  publisher: "publishers",
-  feature: "features",
-  comingSoon: "comingSoon",
-  familyShared: "familyShared",
-  streamable: "streamable",
-  sizeOnDisk: "sizeOnDisk",
-  installFolder: "installPath",
-  source: "source",
-};

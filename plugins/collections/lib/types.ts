@@ -252,7 +252,6 @@ export interface MirrorLedger {
  * two modules don't form an import cycle. `evaluate.ts` owns rule
  * semantics; `group.ts` owns partitioning and only needs a yes/no.
  */
-export type RuleMatcher = (rule: Rule, game: EvalGame) => boolean;
 
 // ── Facts ──────────────────────────────────────────────────────────────
 

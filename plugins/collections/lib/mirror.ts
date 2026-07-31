@@ -303,7 +303,7 @@ export function mirrorAffecting(
 export interface MirrorRelevantConfig {
   collections: readonly ManagedCollection[];
   gameOverrides: Record<string, unknown>;
-  settings: { mirrorPrefix: string };
+  settings: { namePrefix: string };
   mirror: { autoSync: boolean };
 }
 
@@ -321,7 +321,7 @@ function project(config: MirrorRelevantConfig) {
     })),
     // Whitelists and blacklists live here, so they change membership.
     overrides: config.gameOverrides,
-    prefix: config.settings.mirrorPrefix,
+    prefix: config.settings.namePrefix,
     autoSync: config.mirror.autoSync,
   };
 }

@@ -112,7 +112,7 @@ describe("RuleBuilder — editing is a draft", () => {
     const { onSave } = renderBuilder(tab([{ id: "a", kind: "installed" }]));
     openRowMenu(/Actions for Installed/);
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     expect(onSave).toHaveBeenCalledTimes(1);
     const saved = onSave.mock.calls[0]?.[0] as ManagedCollection;
@@ -137,7 +137,7 @@ describe("RuleBuilder — row actions", () => {
     );
     openRowMenu(/Actions for Installed/);
     fireEvent.click(screen.getByRole("button", { name: "Move down" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     const saved = onSave.mock.calls[0]?.[0] as ManagedCollection;
     expect(saved.root.children.map((c) => c.id)).toEqual(["b", "a"]);
@@ -159,7 +159,7 @@ describe("RuleBuilder — row actions", () => {
     const { onSave } = renderBuilder(tab([{ id: "a", kind: "installed" }], "all"));
     openRowMenu(/Actions for Installed/);
     fireEvent.click(screen.getByRole("button", { name: "Wrap in group" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     const saved = onSave.mock.calls[0]?.[0] as ManagedCollection;
     const wrapper = saved.root.children[0] as GroupRule;
@@ -171,7 +171,7 @@ describe("RuleBuilder — row actions", () => {
     const { onSave } = renderBuilder(tab([{ id: "a", kind: "installed" }]));
     openRowMenu(/Actions for Installed/);
     fireEvent.click(screen.getByRole("button", { name: "Duplicate" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     const saved = onSave.mock.calls[0]?.[0] as ManagedCollection;
     const ids = saved.root.children.map((c) => c.id);
@@ -243,7 +243,7 @@ describe("RuleBuilder — the palette", () => {
     const dialog = screen.getByRole("region", { name: "Add a rule" });
     fireEvent.click(within(dialog).getByText("Installed").closest("button") as HTMLElement);
 
-    fireEvent.click(screen.getByRole("button", { name: "Save tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     const saved = onSave.mock.calls[0]?.[0] as ManagedCollection;
     expect(saved.root.children).toHaveLength(1);
     expect(saved.root.children[0]?.kind).toBe("installed");
@@ -251,37 +251,13 @@ describe("RuleBuilder — the palette", () => {
 });
 
 describe("RuleBuilder — diagnostics", () => {
-  it("explains an empty tab instead of rendering a blank tree", () => {
-    renderBuilder(
-      tab([
-        { id: "a", kind: "installed" },
-        { id: "b", kind: "installed", invert: true },
-      ]),
-    );
-    // `diagnoseCollection` finds the contradiction empirically from the leaf masks.
-    // Asserted on the alert's whole text, since the message is composed of
-    // several spans and no single node carries the sentence.
-    const alert = screen.getByRole("alert");
-    expect(alert.textContent ?? "").toMatch(/never both|ANY|remove|empty/i);
+  it("explains an empty collection instead of rendering a blank tree", () => {
+    // The one-tap fixes moved out with TabDiagnostics; the builder still has
+    // to say *why* nothing matches, or an empty result looks like a bug.
+    renderBuilder(tab([{ id: "a", kind: "installed" }, { id: "b", kind: "installed", invert: true }]));
+    expect(screen.getByText(/never both be true/i)).toBeTruthy();
   });
 
-  it("offers a one-tap fix that actually repairs the tab", () => {
-    const { onSave } = renderBuilder(
-      tab([
-        { id: "a", kind: "installed" },
-        { id: "b", kind: "installed", invert: true },
-      ]),
-    );
-    // Fixes render beside the alert, not inside it.
-    fireEvent.click(screen.getByRole("button", { name: /^Switch to ANY/ }));
-
-    fireEvent.click(screen.getByRole("button", { name: "Save tab" }));
-    const saved = onSave.mock.calls[0]?.[0] as ManagedCollection;
-    // Whatever the fix did, the tab must no longer be self-contradictory.
-    const stillBoth =
-      saved.root.combinator === "all" && saved.root.children.length === 2;
-    expect(stillBoth).toBe(false);
-  });
 });
 
 describe("RuleBuilder — generated rule ids", () => {
@@ -306,7 +282,7 @@ describe("RuleBuilder — generated rule ids", () => {
     fireEvent.click(screen.getByRole("button", { name: "Wrap in group" }));
     openRowMenu(/Actions for group/);
     fireEvent.click(screen.getByRole("button", { name: "Duplicate" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     const saved = onSave.mock.calls[0]?.[0] as ManagedCollection;
     const ids = idsOf(saved.root);
@@ -324,7 +300,7 @@ describe("RuleBuilder — generated rule ids", () => {
       fireEvent.click(screen.getAllByRole("button", { name: /Actions for Installed/ })[0]!);
       fireEvent.click(screen.getAllByRole("button", { name: "Duplicate" })[0]!);
     }
-    fireEvent.click(screen.getByRole("button", { name: "Save tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     const saved = onSave.mock.calls[0]?.[0] as ManagedCollection;
     const ids = idsOf(saved.root);

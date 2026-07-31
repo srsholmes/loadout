@@ -1,0 +1,238 @@
+/**
+ * Collections — the overlay UI.
+ *
+ * Two screens. The **grid** lists every collection you have: the ones this
+ * plugin maintains from rules, and the ones already in Steam (EmuDeck's ROM
+ * sets, anything hand-made). Opening one shows the games inside it. That is
+ * the whole point — the grid is a preview of what Steam has, so there is never
+ * a question of what syncing will produce.
+ *
+ * Game membership is computed on the backend rather than here. The rule
+ * evaluator is fast enough to run in the webview and does for the rule
+ * builder, but a linked collection's membership only exists in Steam, so both
+ * kinds are asked for over one RPC and the UI stays agnostic about which it
+ * has.
+ */
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Button,
+  GameCardGrid,
+  IconButton,
+  PluginHeader,
+  SearchField,
+  Spinner,
+  Text,
+  hideOverlay,
+  mountComponent,
+  mountHeaderStub,
+  notify,
+  useBackend,
+} from "@loadout/ui";
+import { FaGear, FaLayerGroup } from "react-icons/fa6";
+import { CollectionCard } from "./components/CollectionCard";
+import { CollectionDetail } from "./components/CollectionDetail";
+
+export { FaLayerGroup as icon };
+
+interface CollectionSummary {
+  id: string;
+  label: string;
+  count: number;
+  previewAppIds: string[];
+  kind: "managed" | "linked";
+  autoMaintained: boolean;
+}
+
+/** Where we are. A tagged union rather than a pile of booleans, so the header
+ *  and the body can never disagree about which screen is showing. */
+type View = { kind: "grid" } | { kind: "detail"; id: string; label: string };
+
+/** Exported for tests: `mount` wraps this in the real `PluginProvider`,
+ *  which opens a WebSocket the specs have no use for. */
+export function Collections() {
+  const { call, ready } = useBackend("collections");
+
+  const [view, setView] = useState<View>({ kind: "grid" });
+  const [summaries, setSummaries] = useState<CollectionSummary[] | null>(null);
+  const [steamReachable, setSteamReachable] = useState(true);
+  const [search, setSearch] = useState("");
+
+  const [games, setGames] = useState<string[] | null>(null);
+
+  const loadGrid = useCallback(async () => {
+    try {
+      const result = (await call("listAll")) as {
+        collections: CollectionSummary[];
+        steamReachable: boolean;
+      };
+      setSummaries(result.collections);
+      setSteamReachable(result.steamReachable);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Couldn't read your collections", {
+        kind: "error",
+      });
+      setSummaries([]);
+    }
+  }, [call]);
+
+  useEffect(() => {
+    if (ready) void loadGrid();
+  }, [ready, loadGrid]);
+
+  const openCollection = useCallback(
+    async (summary: CollectionSummary) => {
+      setView({ kind: "detail", id: summary.id, label: summary.label });
+      setGames(null);
+      try {
+        const result = (await call("listGames", summary.id)) as { appIds: string[] };
+        setGames(result.appIds);
+      } catch (err) {
+        notify(err instanceof Error ? err.message : "Couldn't open that collection", {
+          kind: "error",
+        });
+        setGames([]);
+      }
+    },
+    [call],
+  );
+
+  /**
+   * Open a game's Steam page rather than launching it.
+   *
+   * Launching straight from a tile is a lot of consequence for one press,
+   * especially on a grid where a mis-tap starts a download. Hide first, then
+   * navigate: the overlay is its own window over Gamescope, so leaving it up
+   * means Steam moves behind it and the press looks like it did nothing.
+   */
+  const openGame = useCallback(
+    async (appId: string) => {
+      void hideOverlay().catch(() => {});
+      try {
+        await call("showGameInSteam", appId);
+      } catch (err) {
+        notify(err instanceof Error ? err.message : "Couldn't open that game", { kind: "error" });
+      }
+    },
+    [call],
+  );
+
+  const shown = useMemo(() => {
+    if (!summaries) return [];
+    const q = search.trim().toLowerCase();
+    return q ? summaries.filter((c) => c.label.toLowerCase().includes(q)) : summaries;
+  }, [summaries, search]);
+
+  // ── Detail ─────────────────────────────────────────────────────────
+  if (view.kind === "detail") {
+    return (
+      <CollectionDetail
+        label={view.label}
+        games={games}
+        onBack={() => setView({ kind: "grid" })}
+        onPickGame={(appId) => void openGame(appId)}
+      />
+    );
+  }
+
+  // ── Grid ───────────────────────────────────────────────────────────
+  return (
+    <div className="p-7 h-full overflow-y-auto flex flex-col gap-3" style={{ overflowX: "hidden" }}>
+      <PluginHeader>
+        <div className="flex items-center justify-between gap-4 w-full min-w-0">
+          <div className="flex flex-col gap-0.5 min-w-0">
+            <h1 className="text-xl font-semibold m-0 leading-tight">Collections</h1>
+            <span className="text-[11.5px] text-base-content/55 truncate leading-tight">
+              {summaries === null
+                ? "Reading your library…"
+                : `${summaries.length} collections`}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <SearchField
+              value={search}
+              onChange={setSearch}
+              onClear={() => setSearch("")}
+              placeholder="Search collections…"
+              width={220}
+            />
+            <Button variant="neutral" onClick={() => void createCollection()}>
+              New
+            </Button>
+            <IconButton onClick={() => void sync()} title="Sync with Steam" ariaLabel="Sync with Steam" size={26}>
+              <FaGear size={11} />
+            </IconButton>
+          </div>
+        </div>
+      </PluginHeader>
+
+      {!steamReachable ? (
+        <Text variant="secondary">
+          Steam isn&apos;t reachable, so only the collections this plugin maintains are
+          shown. Start Steam to see the rest.
+        </Text>
+      ) : null}
+
+      {summaries === null ? (
+        <div className="flex items-center justify-center" style={{ padding: "4rem 0" }}>
+          <Spinner />
+        </div>
+      ) : shown.length === 0 ? (
+        <Text variant="secondary">
+          {search.trim()
+            ? `No collection matches “${search.trim()}”.`
+            : "No collections yet. Press New to build one from rules."}
+        </Text>
+      ) : (
+        <GameCardGrid minTileWidth={190}>
+          {shown.map((c) => (
+            <CollectionCard
+              key={c.id}
+              label={c.label}
+              count={c.count}
+              previewAppIds={c.previewAppIds}
+              kind={c.kind}
+              autoMaintained={c.autoMaintained}
+              onOpen={() => void openCollection(c)}
+            />
+          ))}
+        </GameCardGrid>
+      )}
+    </div>
+  );
+
+  async function createCollection() {
+    try {
+      await call("createCollection", "New collection");
+      await loadGrid();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Couldn't create that collection", {
+        kind: "error",
+      });
+    }
+  }
+
+  async function sync() {
+    try {
+      const result = (await call("syncMirror")) as {
+        created: number;
+        updated: number;
+        renamed: number;
+        deleted: number;
+        failures: unknown[];
+      };
+      const wrote = result.created + result.updated + result.renamed + result.deleted;
+      notify(wrote === 0 ? "Already up to date" : `Synced ${wrote} collections`, {
+        kind: result.failures.length > 0 ? "error" : "success",
+      });
+      await loadGrid();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Couldn't reach Steam", { kind: "error" });
+    }
+  }
+}
+
+// `mountComponent` wraps in `PluginProvider` itself and returns the mounter.
+export const mount = mountComponent(Collections);
+
+export const mountHeader = mountHeaderStub;

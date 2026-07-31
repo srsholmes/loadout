@@ -532,7 +532,7 @@ describe("mirrorAffecting — when auto-sync should fire", () => {
     return {
       collections: [managed()],
       gameOverrides: {},
-      settings: { mirrorPrefix: "" },
+      settings: { namePrefix: "" },
       mirror: { autoSync: true },
       ...overrides,
     };
@@ -576,7 +576,7 @@ describe("mirrorAffecting — when auto-sync should fire", () => {
   });
 
   it("fires when the collection-name prefix changes", () => {
-    expect(mirrorAffecting(config(), config({ settings: { mirrorPrefix: "▸ " } }))).toBe(true);
+    expect(mirrorAffecting(config(), config({ settings: { namePrefix: "▸ " } }))).toBe(true);
   });
 
   it("does NOT fire when only the ledger changed", () => {
