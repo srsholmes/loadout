@@ -1,0 +1,599 @@
+{
+  "id": "theme-loader",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "disableTheme",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Disable a theme by id — removes its CSS from all targeted Steam tabs.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "enableTheme",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Enable a theme by id — injects its CSS into all targeted Steam tabs.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "getActiveThemes",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "description": "Return list of currently active theme ids.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getCommunityThemesStatus",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "error",
+              "pending",
+              "ready"
+            ]
+          },
+          "syncedAt": {
+            "type": "number",
+            "nullable": true,
+            "description": "ms epoch of the last successful sync, or null."
+          },
+          "entryCount": {
+            "type": "number",
+            "description": "Number of themes currently in memory."
+          },
+          "lastError": {
+            "type": "string",
+            "nullable": true,
+            "description": "Last fetch error message, if any."
+          }
+        },
+        "required": [
+          "state",
+          "syncedAt",
+          "entryCount",
+          "lastError"
+        ]
+      },
+      "description": "Current state of the community-themes registry sync.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getStatus",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "connected": {
+            "type": "boolean"
+          },
+          "tabCount": {
+            "type": "number"
+          },
+          "activeThemeCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "connected",
+          "tabCount",
+          "activeThemeCount"
+        ]
+      },
+      "description": "Check if we're connected to Steam's CEF debug port.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getThemes",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Stable ID used by enable/disable/setThemePackVariant."
+            },
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "pack"
+              ]
+            },
+            "active": {
+              "type": "boolean"
+            },
+            "thumbnailUrl": {
+              "type": "string",
+              "nullable": true,
+              "description": "For packs: hotlink URL to the upstream thumbnail (if known)."
+            },
+            "patches": {
+              "type": "object",
+              "description": "For packs: parsed theme.json patches for the variant picker"
+            },
+            "variants": {
+              "type": "object",
+              "description": "For packs: per-patch selected variant"
+            },
+            "meta": {
+              "type": "object",
+              "properties": {
+                "author": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "description": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "version": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "sourceUrl": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "license": {
+                  "type": "object",
+                  "properties": {
+                    "fileName": {
+                      "type": "string"
+                    },
+                    "content": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fileName",
+                    "content"
+                  ],
+                  "nullable": true
+                }
+              },
+              "required": [
+                "author",
+                "description",
+                "version",
+                "sourceUrl",
+                "license"
+              ],
+              "nullable": true,
+              "description": "For packs: attribution metadata captured at install time."
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "kind",
+            "active"
+          ]
+        }
+      },
+      "description": "Return all installed theme packs.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getTranslationStatus",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "error",
+              "pending",
+              "ready"
+            ]
+          },
+          "syncedAt": {
+            "type": "number",
+            "nullable": true,
+            "description": "ms epoch of the last successful sync (cache mtime), or null."
+          },
+          "entryCount": {
+            "type": "number",
+            "description": "Number of (oldName → currentName) entries currently in memory."
+          },
+          "lastError": {
+            "type": "string",
+            "nullable": true,
+            "description": "Last fetch error message, if any."
+          }
+        },
+        "required": [
+          "state",
+          "syncedAt",
+          "entryCount",
+          "lastError"
+        ]
+      },
+      "description": "Current state of the class-translation cache. UI uses this to show a status badge and gate the Apply button for pack themes.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "installCommunityTheme",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Download and install a community theme. Fetches the zip from deckthemes' blob endpoint, extracts, locates the theme root (directory containing theme.json), and copies it to `~/.local/share/loadout/theme-loader/css-themes/{id}/`.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "listCommunityThemes",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "author": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            },
+            "downloadBlobId": {
+              "type": "string",
+              "description": "deckthemes blob id for the theme zip (canonical install source)."
+            },
+            "githubRepo": {
+              "type": "string",
+              "nullable": true
+            },
+            "githubUrl": {
+              "type": "string",
+              "nullable": true
+            },
+            "thumbnailUrl": {
+              "type": "string",
+              "nullable": true,
+              "description": "Hotlink URL for the theme thumbnail, served by the upstream"
+            },
+            "downloadCount": {
+              "type": "number"
+            },
+            "starCount": {
+              "type": "number"
+            },
+            "updated": {
+              "type": "string"
+            },
+            "target": {
+              "type": "string"
+            },
+            "installed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "author",
+            "description",
+            "version",
+            "downloadBlobId",
+            "githubRepo",
+            "githubUrl",
+            "thumbnailUrl",
+            "downloadCount",
+            "starCount",
+            "updated",
+            "target",
+            "installed"
+          ]
+        }
+      },
+      "description": "List community themes from the live registry, with install status.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "openThemeGithub",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Open the GitHub repo for an installed community theme in the user's default browser via xdg-open.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "reconnect",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Manually trigger a reconnection attempt.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "refreshCommunityThemesCache",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "error",
+              "pending",
+              "ready"
+            ]
+          },
+          "syncedAt": {
+            "type": "number",
+            "nullable": true,
+            "description": "ms epoch of the last successful sync, or null."
+          },
+          "entryCount": {
+            "type": "number",
+            "description": "Number of themes currently in memory."
+          },
+          "lastError": {
+            "type": "string",
+            "nullable": true,
+            "description": "Last fetch error message, if any."
+          }
+        },
+        "required": [
+          "state",
+          "syncedAt",
+          "entryCount",
+          "lastError"
+        ]
+      },
+      "description": "Force a refresh of the community-themes registry from upstream.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "refreshTranslationCache",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "error",
+              "pending",
+              "ready"
+            ]
+          },
+          "syncedAt": {
+            "type": "number",
+            "nullable": true,
+            "description": "ms epoch of the last successful sync (cache mtime), or null."
+          },
+          "entryCount": {
+            "type": "number",
+            "description": "Number of (oldName → currentName) entries currently in memory."
+          },
+          "lastError": {
+            "type": "string",
+            "nullable": true,
+            "description": "Last fetch error message, if any."
+          }
+        },
+        "required": [
+          "state",
+          "syncedAt",
+          "entryCount",
+          "lastError"
+        ]
+      },
+      "description": "Force a refresh of the class-translation cache from upstream.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setThemePackVariant",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "patchName",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "value",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Change a variant selection on an installed theme pack.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "uninstallCommunityTheme",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Uninstall a community theme by removing its directory.",
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "stateChanged"
+    },
+    {
+      "event": "themesChanged"
+    }
+  ]
+}

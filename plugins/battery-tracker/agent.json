@@ -1,0 +1,161 @@
+{
+  "id": "battery-tracker",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "getBatteryInfo",
+      "args": [],
+      "returns": {
+        "type": "unknown",
+        "tsType": "BatteryInfo | { error: string; }"
+      },
+      "description": "RPC: Get current battery info",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getChargeControl",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "supportsChargeLimit": {
+            "type": "boolean"
+          },
+          "chargeLimitPercent": {
+            "type": "number",
+            "nullable": true,
+            "description": "Current threshold from sysfs; null when unsupported or unlimited (100)."
+          },
+          "supportsBypass": {
+            "type": "boolean"
+          },
+          "supportsBypassAwake": {
+            "type": "boolean",
+            "description": "Whether the \"bypass only while awake\" variant is available."
+          },
+          "bypassMode": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "awake",
+              "always"
+            ]
+          }
+        },
+        "required": [
+          "supportsChargeLimit",
+          "chargeLimitPercent",
+          "supportsBypass",
+          "supportsBypassAwake",
+          "bypassMode"
+        ]
+      },
+      "description": "RPC: capability + current state of charge limit and bypass charging.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getHistory",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "timestamp": {
+              "type": "number"
+            },
+            "percentage": {
+              "type": "number"
+            },
+            "powerWatts": {
+              "type": "number"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "timestamp",
+            "percentage",
+            "powerWatts",
+            "status"
+          ]
+        }
+      },
+      "description": "RPC: Get charge history buffer",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "setBypassMode",
+      "args": [
+        {
+          "name": "mode",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "awake",
+              "always"
+            ]
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "RPC: set the bypass-charging mode. \"always\" inhibits charging whenever on AC; \"awake\" resumes normal charging while asleep or off (only on hardware that supports it); \"disabled\" restores normal charging.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setChargeLimit",
+      "args": [
+        {
+          "name": "percent",
+          "schema": {
+            "type": "number",
+            "nullable": true
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "RPC: set (or clear, with null) the battery charge limit. Persisted and reapplied at every service start.",
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "batteryUpdate"
+    }
+  ]
+}

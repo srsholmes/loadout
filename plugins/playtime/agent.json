@@ -1,0 +1,425 @@
+{
+  "id": "playtime",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "getCurrentSession",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "appId": {
+            "type": "string"
+          },
+          "gameName": {
+            "type": "string"
+          },
+          "startTime": {
+            "type": "number"
+          },
+          "elapsedMs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "appId",
+          "gameName",
+          "startTime",
+          "elapsedMs"
+        ],
+        "nullable": true
+      },
+      "description": "Return the currently running game session, or null.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getDailyBreakdown",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "day": {
+              "type": "string",
+              "description": "Short day label, e.g. \"Mon\"."
+            },
+            "dayStart": {
+              "type": "number",
+              "description": "Epoch ms at local start-of-day — stable React key + filter id."
+            },
+            "totalMs": {
+              "type": "number",
+              "description": "Sum of all game time on this day."
+            },
+            "games": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "appId": {
+                    "type": "string"
+                  },
+                  "gameName": {
+                    "type": "string"
+                  },
+                  "totalMs": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "appId",
+                  "gameName",
+                  "totalMs"
+                ]
+              },
+              "description": "Per-game totals for this day, sorted by totalMs descending."
+            }
+          },
+          "required": [
+            "day",
+            "dayStart",
+            "totalMs",
+            "games"
+          ]
+        }
+      },
+      "description": "Return the rolling 7-day breakdown with per-game totals per day. Drives the day-filter bars and the day-filtered \"All games\" grid in the UI (which `getStats().weeklyBreakdown` can't, as it only carries per-day totals — no per-game split).",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getGameSessions",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": true
+        }
+      ],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "appId": {
+              "type": "string"
+            },
+            "gameName": {
+              "type": "string"
+            },
+            "startTime": {
+              "type": "number"
+            },
+            "endTime": {
+              "type": "number",
+              "nullable": true
+            }
+          },
+          "required": [
+            "appId",
+            "gameName",
+            "startTime",
+            "endTime"
+          ]
+        }
+      },
+      "description": "Return recent game sessions, optionally filtered by appId.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getStats",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "today": {
+            "type": "object",
+            "properties": {
+              "totalMs": {
+                "type": "number"
+              },
+              "gamesPlayed": {
+                "type": "number"
+              },
+              "games": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "appId": {
+                      "type": "string"
+                    },
+                    "gameName": {
+                      "type": "string"
+                    },
+                    "totalMs": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "appId",
+                    "gameName",
+                    "totalMs"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "totalMs",
+              "gamesPlayed",
+              "games"
+            ]
+          },
+          "week": {
+            "type": "object",
+            "properties": {
+              "totalMs": {
+                "type": "number"
+              },
+              "gamesPlayed": {
+                "type": "number"
+              },
+              "games": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "appId": {
+                      "type": "string"
+                    },
+                    "gameName": {
+                      "type": "string"
+                    },
+                    "totalMs": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "appId",
+                    "gameName",
+                    "totalMs"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "totalMs",
+              "gamesPlayed",
+              "games"
+            ]
+          },
+          "month": {
+            "type": "object",
+            "properties": {
+              "totalMs": {
+                "type": "number"
+              },
+              "gamesPlayed": {
+                "type": "number"
+              },
+              "games": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "appId": {
+                      "type": "string"
+                    },
+                    "gameName": {
+                      "type": "string"
+                    },
+                    "totalMs": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "appId",
+                    "gameName",
+                    "totalMs"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "totalMs",
+              "gamesPlayed",
+              "games"
+            ]
+          },
+          "allTime": {
+            "type": "object",
+            "properties": {
+              "totalMs": {
+                "type": "number"
+              },
+              "gamesPlayed": {
+                "type": "number"
+              },
+              "games": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "appId": {
+                      "type": "string"
+                    },
+                    "gameName": {
+                      "type": "string"
+                    },
+                    "totalMs": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "appId",
+                    "gameName",
+                    "totalMs"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "totalMs",
+              "gamesPlayed",
+              "games"
+            ]
+          },
+          "weeklyBreakdown": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "day": {
+                  "type": "string"
+                },
+                "totalMs": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "day",
+                "totalMs"
+              ]
+            }
+          },
+          "daysInRange": {
+            "type": "object",
+            "properties": {
+              "today": {
+                "type": "number"
+              },
+              "week": {
+                "type": "number"
+              },
+              "month": {
+                "type": "number"
+              },
+              "allTime": {
+                "type": "number",
+                "nullable": true
+              }
+            },
+            "required": [
+              "today",
+              "week",
+              "month",
+              "allTime"
+            ],
+            "description": "Per-range divisor for the UI's AVG/DAY metric. `allTime` is `null`"
+          }
+        },
+        "required": [
+          "today",
+          "week",
+          "month",
+          "allTime",
+          "weeklyBreakdown",
+          "daysInRange"
+        ]
+      },
+      "description": "Return playtime stats: today, this week, this month, all time, weekly breakdown.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getSteamPlaytime",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "appId": {
+              "type": "string"
+            },
+            "gameName": {
+              "type": "string"
+            },
+            "totalMs": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "appId",
+            "gameName",
+            "totalMs"
+          ]
+        }
+      },
+      "description": "Return Steam's own lifetime playtime per game, parsed from each user's `localconfig.vdf`. No login/API key needed — Steam keeps this locally. Powers the all-time \"All Games\" grid so it reflects real library history, not just sessions since this plugin was installed. Returns minutes-as-ms totals, sorted most-played first.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "handleGameExit",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "handleGameLaunch",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "gameName",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "sessionUpdate"
+    }
+  ]
+}

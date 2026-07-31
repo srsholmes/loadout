@@ -1,0 +1,176 @@
+{
+  "id": "disable-controller-input",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "forgetController",
+      "args": [
+        {
+          "name": "hash",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "listControllers",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "unavailable": {
+            "type": "boolean"
+          },
+          "controllers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "hash": {
+                  "type": "number"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "connected": {
+                  "type": "boolean"
+                },
+                "disabled": {
+                  "type": "boolean"
+                },
+                "savedKinds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "hash",
+                "name",
+                "connected",
+                "disabled",
+                "savedKinds"
+              ]
+            }
+          }
+        },
+        "required": [
+          "unavailable",
+          "controllers"
+        ]
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "refreshControllers",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "unavailable": {
+            "type": "boolean"
+          },
+          "controllers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "hash": {
+                  "type": "number"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "connected": {
+                  "type": "boolean"
+                },
+                "disabled": {
+                  "type": "boolean"
+                },
+                "savedKinds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "hash",
+                "name",
+                "connected",
+                "disabled",
+                "savedKinds"
+              ]
+            }
+          }
+        },
+        "required": [
+          "unavailable",
+          "controllers"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setDisabled",
+      "args": [
+        {
+          "name": "hash",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "disabled",
+          "schema": {
+            "type": "boolean"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "controllersChanged"
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "id": "network-info",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "getConnectionInfo",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "ssid": {
+            "type": "string",
+            "nullable": true
+          },
+          "signal": {
+            "type": "number",
+            "nullable": true
+          },
+          "frequency": {
+            "type": "string",
+            "nullable": true
+          },
+          "bitRate": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "ssid",
+          "signal",
+          "frequency",
+          "bitRate"
+        ]
+      },
+      "description": "Get WiFi connection details: SSID, signal strength, frequency, bit rate. Tries nmcli first, falls back to iwconfig, then /proc/net/wireless.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getNetworkInfo",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "ip": {
+              "type": "string"
+            },
+            "mac": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "ip",
+            "mac",
+            "state",
+            "type"
+          ]
+        }
+      },
+      "description": "Gather network interface information.",
+      "safety": "read",
+      "safetyInferred": true
+    }
+  ]
+}

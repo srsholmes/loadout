@@ -1,0 +1,525 @@
+{
+  "id": "lsfg-vk",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "clearCustomDllPath",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "found": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string",
+            "nullable": true
+          },
+          "isCustom": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "found",
+          "path",
+          "isCustom"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "copyToClipboard",
+      "args": [
+        {
+          "name": "text",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Write `text` to the system clipboard via `wl-copy` (Wayland) or `xclip` (X11). Routed through the host because `navigator.clipboard` is undefined inside the CEF webview (no secure context).",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "getLaunchOptionsString",
+      "args": [],
+      "returns": {
+        "type": "string"
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getSettings",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "multiplier": {
+            "type": "number"
+          },
+          "flow_scale": {
+            "type": "number"
+          },
+          "performance_mode": {
+            "type": "boolean"
+          },
+          "hdr_mode": {
+            "type": "boolean"
+          },
+          "experimental_present_mode": {
+            "type": "string",
+            "enum": [
+              "fifo",
+              "mailbox",
+              "immediate"
+            ]
+          },
+          "verbose_logging": {
+            "type": "boolean",
+            "description": "When true, the wrapper exports LSFG_LOG=1 + VK_LOADER_DEBUG=layer"
+          }
+        },
+        "required": [
+          "multiplier",
+          "flow_scale",
+          "performance_mode",
+          "hdr_mode",
+          "experimental_present_mode",
+          "verbose_logging"
+        ]
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getStatus",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "install": {
+            "type": "object",
+            "properties": {
+              "installed": {
+                "type": "boolean"
+              },
+              "layerSoExists": {
+                "type": "boolean"
+              },
+              "layerJsonExists": {
+                "type": "boolean"
+              },
+              "wrapperExists": {
+                "type": "boolean"
+              },
+              "wrapperPath": {
+                "type": "string",
+                "description": "Absolute filesystem path to the wrapper script (e.g. `/home/u/lsfg`)."
+              },
+              "wrapperToken": {
+                "type": "string",
+                "description": "Tilde-form token to put into Steam launch options (e.g. `~/lsfg`)."
+              },
+              "layerSoPath": {
+                "type": "string"
+              },
+              "layerJsonPath": {
+                "type": "string"
+              },
+              "tomlPath": {
+                "type": "string"
+              },
+              "layerVersion": {
+                "type": "string",
+                "enum": [
+                  "latest",
+                  "compat"
+                ]
+              },
+              "installedVersion": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "installed",
+              "layerSoExists",
+              "layerJsonExists",
+              "wrapperExists",
+              "wrapperPath",
+              "wrapperToken",
+              "layerSoPath",
+              "layerJsonPath",
+              "tomlPath",
+              "layerVersion",
+              "installedVersion"
+            ]
+          },
+          "dll": {
+            "type": "object",
+            "properties": {
+              "found": {
+                "type": "boolean"
+              },
+              "path": {
+                "type": "string",
+                "nullable": true
+              },
+              "isCustom": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "found",
+              "path",
+              "isCustom"
+            ]
+          },
+          "settings": {
+            "type": "object",
+            "properties": {
+              "multiplier": {
+                "type": "number"
+              },
+              "flow_scale": {
+                "type": "number"
+              },
+              "performance_mode": {
+                "type": "boolean"
+              },
+              "hdr_mode": {
+                "type": "boolean"
+              },
+              "experimental_present_mode": {
+                "type": "string",
+                "enum": [
+                  "fifo",
+                  "mailbox",
+                  "immediate"
+                ]
+              },
+              "verbose_logging": {
+                "type": "boolean",
+                "description": "When true, the wrapper exports LSFG_LOG=1 + VK_LOADER_DEBUG=layer"
+              }
+            },
+            "required": [
+              "multiplier",
+              "flow_scale",
+              "performance_mode",
+              "hdr_mode",
+              "experimental_present_mode",
+              "verbose_logging"
+            ]
+          },
+          "customDllPath": {
+            "type": "string",
+            "nullable": true
+          },
+          "launchOptions": {
+            "type": "string",
+            "description": "Single launch-option string the user copies into Steam."
+          }
+        },
+        "required": [
+          "install",
+          "dll",
+          "settings",
+          "customDllPath",
+          "launchOptions"
+        ]
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "install",
+      "args": [
+        {
+          "name": "requested",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "latest",
+              "compat"
+            ]
+          },
+          "optional": true
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "launchVkcube",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "pid": {
+            "type": "number"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Spawn `vkcube` with LSFG_PROCESS exported, so the user can see the effective FPS in the title bar. We detach so the picker doesn't block the RPC waiting for the user to close the window.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "runVulkanCheck",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "layerLoaded": {
+            "type": "boolean"
+          },
+          "jsonExists": {
+            "type": "boolean"
+          },
+          "excerpt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "available",
+          "layerLoaded",
+          "jsonExists",
+          "excerpt"
+        ]
+      },
+      "description": "Run `vulkaninfo --summary` and grep for the lsfg-vk layer name. This is the canonical \"is the implicit layer actually getting picked up by the Vulkan loader?\" check — independent of whether any game is running. If `vulkaninfo` is missing we flag that separately so the UI can tell the user to install vulkan-tools.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setCustomDllPath",
+      "args": [
+        {
+          "name": "path",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "found": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string",
+            "nullable": true
+          },
+          "isCustom": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "found",
+          "path",
+          "isCustom"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setLayerVersion",
+      "args": [
+        {
+          "name": "version",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "latest",
+              "compat"
+            ]
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Switch which layer build is installed. Persists the choice; if a layer is already installed, re-installs the newly-selected build in place (this is the only way switching takes effect, since the build is a binary on disk).",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "uninstall",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Remove the layer .so, layer JSON, and wrapper script. Preserves the TOML so a re-install restores user tweaks.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "updateSettings",
+      "args": [
+        {
+          "name": "updates",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "multiplier": {
+                "type": "number"
+              },
+              "flow_scale": {
+                "type": "number"
+              },
+              "performance_mode": {
+                "type": "boolean"
+              },
+              "hdr_mode": {
+                "type": "boolean"
+              },
+              "experimental_present_mode": {
+                "type": "string",
+                "enum": [
+                  "fifo",
+                  "mailbox",
+                  "immediate"
+                ]
+              },
+              "verbose_logging": {
+                "type": "boolean",
+                "description": "When true, the wrapper exports LSFG_LOG=1 + VK_LOADER_DEBUG=layer"
+              }
+            }
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "multiplier": {
+            "type": "number"
+          },
+          "flow_scale": {
+            "type": "number"
+          },
+          "performance_mode": {
+            "type": "boolean"
+          },
+          "hdr_mode": {
+            "type": "boolean"
+          },
+          "experimental_present_mode": {
+            "type": "string",
+            "enum": [
+              "fifo",
+              "mailbox",
+              "immediate"
+            ]
+          },
+          "verbose_logging": {
+            "type": "boolean",
+            "description": "When true, the wrapper exports LSFG_LOG=1 + VK_LOADER_DEBUG=layer"
+          }
+        },
+        "required": [
+          "multiplier",
+          "flow_scale",
+          "performance_mode",
+          "hdr_mode",
+          "experimental_present_mode",
+          "verbose_logging"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "dllChanged"
+    },
+    {
+      "event": "installChanged"
+    },
+    {
+      "event": "installProgress"
+    },
+    {
+      "event": "settingsChanged"
+    }
+  ]
+}

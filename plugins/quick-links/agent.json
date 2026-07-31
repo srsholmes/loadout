@@ -1,0 +1,2005 @@
+{
+  "id": "quick-links",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "addCustomLink",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "link",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "url"
+            ]
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Stable id. Built-in templates use well-known ids (\"youtube\","
+                },
+                "name": {
+                  "type": "string"
+                },
+                "urlTemplate": {
+                  "type": "string",
+                  "description": "URL with placeholders:"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Short, human description shown under the title on the landing"
+                },
+                "suffixGroup": {
+                  "type": "string",
+                  "description": "Optional suffix-group key into `suffixes`."
+                },
+                "steamOnly": {
+                  "type": "boolean",
+                  "description": "If true, only render when the running game is a Steam-app"
+                },
+                "builtin": {
+                  "type": "boolean",
+                  "description": "Shipped with the plugin. Built-ins can't be deleted, only"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "urlTemplate",
+                "builtin",
+                "enabled"
+              ]
+            }
+          },
+          "suffixes": {
+            "type": "object"
+          },
+          "perGame": {
+            "type": "object"
+          },
+          "hidden": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Built-in template ids the user has hidden."
+          },
+          "selectedBrowserId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Browser shortcut to use when launching links. Maps to a"
+          },
+          "installedBrowsers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "browserId": {
+                  "type": "string",
+                  "description": "Which candidate id was registered (e.g. \"firefox-native\")."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Display name written to `shortcuts.vdf` — needed for the AddShortcut"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "native",
+                    "flatpak"
+                  ]
+                },
+                "appId": {
+                  "type": "number",
+                  "description": "32-bit Steam-allocated appid (the `appid` field in `shortcuts.vdf`)."
+                },
+                "gameId64": {
+                  "type": "string",
+                  "description": "64-bit gameid (`steam://rungameid/<gameId64>`)."
+                },
+                "exe": {
+                  "type": "string",
+                  "description": "Path that ended up as the shortcut's `Exe`."
+                },
+                "launchOptionsBase": {
+                  "type": "string",
+                  "description": "Static launch-options prefix; see `BrowserCandidate.launchOptionsBase`."
+                }
+              },
+              "required": [
+                "browserId",
+                "name",
+                "kind",
+                "appId",
+                "gameId64",
+                "exe",
+                "launchOptionsBase"
+              ]
+            },
+            "description": "All registered browser shortcuts. Order is install order; the"
+          }
+        },
+        "required": [
+          "version",
+          "templates",
+          "suffixes",
+          "perGame",
+          "hidden",
+          "installedBrowsers"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "addCustomTemplate",
+      "args": [
+        {
+          "name": "t",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Stable id. Built-in templates use well-known ids (\"youtube\","
+              },
+              "name": {
+                "type": "string"
+              },
+              "urlTemplate": {
+                "type": "string",
+                "description": "URL with placeholders:"
+              },
+              "description": {
+                "type": "string",
+                "description": "Short, human description shown under the title on the landing"
+              },
+              "suffixGroup": {
+                "type": "string",
+                "description": "Optional suffix-group key into `suffixes`."
+              },
+              "steamOnly": {
+                "type": "boolean",
+                "description": "If true, only render when the running game is a Steam-app"
+              },
+              "enabled": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "urlTemplate",
+              "enabled"
+            ]
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Stable id. Built-in templates use well-known ids (\"youtube\","
+                },
+                "name": {
+                  "type": "string"
+                },
+                "urlTemplate": {
+                  "type": "string",
+                  "description": "URL with placeholders:"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Short, human description shown under the title on the landing"
+                },
+                "suffixGroup": {
+                  "type": "string",
+                  "description": "Optional suffix-group key into `suffixes`."
+                },
+                "steamOnly": {
+                  "type": "boolean",
+                  "description": "If true, only render when the running game is a Steam-app"
+                },
+                "builtin": {
+                  "type": "boolean",
+                  "description": "Shipped with the plugin. Built-ins can't be deleted, only"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "urlTemplate",
+                "builtin",
+                "enabled"
+              ]
+            }
+          },
+          "suffixes": {
+            "type": "object"
+          },
+          "perGame": {
+            "type": "object"
+          },
+          "hidden": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Built-in template ids the user has hidden."
+          },
+          "selectedBrowserId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Browser shortcut to use when launching links. Maps to a"
+          },
+          "installedBrowsers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "browserId": {
+                  "type": "string",
+                  "description": "Which candidate id was registered (e.g. \"firefox-native\")."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Display name written to `shortcuts.vdf` — needed for the AddShortcut"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "native",
+                    "flatpak"
+                  ]
+                },
+                "appId": {
+                  "type": "number",
+                  "description": "32-bit Steam-allocated appid (the `appid` field in `shortcuts.vdf`)."
+                },
+                "gameId64": {
+                  "type": "string",
+                  "description": "64-bit gameid (`steam://rungameid/<gameId64>`)."
+                },
+                "exe": {
+                  "type": "string",
+                  "description": "Path that ended up as the shortcut's `Exe`."
+                },
+                "launchOptionsBase": {
+                  "type": "string",
+                  "description": "Static launch-options prefix; see `BrowserCandidate.launchOptionsBase`."
+                }
+              },
+              "required": [
+                "browserId",
+                "name",
+                "kind",
+                "appId",
+                "gameId64",
+                "exe",
+                "launchOptionsBase"
+              ]
+            },
+            "description": "All registered browser shortcuts. Order is install order; the"
+          }
+        },
+        "required": [
+          "version",
+          "templates",
+          "suffixes",
+          "perGame",
+          "hidden",
+          "installedBrowsers"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "deleteTemplate",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Stable id. Built-in templates use well-known ids (\"youtube\","
+                },
+                "name": {
+                  "type": "string"
+                },
+                "urlTemplate": {
+                  "type": "string",
+                  "description": "URL with placeholders:"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Short, human description shown under the title on the landing"
+                },
+                "suffixGroup": {
+                  "type": "string",
+                  "description": "Optional suffix-group key into `suffixes`."
+                },
+                "steamOnly": {
+                  "type": "boolean",
+                  "description": "If true, only render when the running game is a Steam-app"
+                },
+                "builtin": {
+                  "type": "boolean",
+                  "description": "Shipped with the plugin. Built-ins can't be deleted, only"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "urlTemplate",
+                "builtin",
+                "enabled"
+              ]
+            }
+          },
+          "suffixes": {
+            "type": "object"
+          },
+          "perGame": {
+            "type": "object"
+          },
+          "hidden": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Built-in template ids the user has hidden."
+          },
+          "selectedBrowserId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Browser shortcut to use when launching links. Maps to a"
+          },
+          "installedBrowsers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "browserId": {
+                  "type": "string",
+                  "description": "Which candidate id was registered (e.g. \"firefox-native\")."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Display name written to `shortcuts.vdf` — needed for the AddShortcut"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "native",
+                    "flatpak"
+                  ]
+                },
+                "appId": {
+                  "type": "number",
+                  "description": "32-bit Steam-allocated appid (the `appid` field in `shortcuts.vdf`)."
+                },
+                "gameId64": {
+                  "type": "string",
+                  "description": "64-bit gameid (`steam://rungameid/<gameId64>`)."
+                },
+                "exe": {
+                  "type": "string",
+                  "description": "Path that ended up as the shortcut's `Exe`."
+                },
+                "launchOptionsBase": {
+                  "type": "string",
+                  "description": "Static launch-options prefix; see `BrowserCandidate.launchOptionsBase`."
+                }
+              },
+              "required": [
+                "browserId",
+                "name",
+                "kind",
+                "appId",
+                "gameId64",
+                "exe",
+                "launchOptionsBase"
+              ]
+            },
+            "description": "All registered browser shortcuts. Order is install order; the"
+          }
+        },
+        "required": [
+          "version",
+          "templates",
+          "suffixes",
+          "perGame",
+          "hidden",
+          "installedBrowsers"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "detectBrowsers",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Stable id used in storage and the UI radio group."
+            },
+            "name": {
+              "type": "string",
+              "description": "Display name shown in the picker."
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "native",
+                "flatpak"
+              ]
+            },
+            "exe": {
+              "type": "string",
+              "description": "Absolute path to the executable Steam will launch."
+            },
+            "launchOptionsBase": {
+              "type": "string",
+              "description": "Static prefix prepended to per-launch URLs. For native browsers"
+            },
+            "flatpakAppId": {
+              "type": "string",
+              "description": "Only set for flatpak entries — the flatpak application id."
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "kind",
+            "exe",
+            "launchOptionsBase"
+          ]
+        }
+      },
+      "description": "Return every browser candidate the user has actually installed. Native and flatpak entries can coexist (a user who has both `firefox` and `org.mozilla.firefox` sees both — they pick).",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "getAllInstalledBrowsers",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "browserId": {
+              "type": "string",
+              "description": "Which candidate id was registered (e.g. \"firefox-native\")."
+            },
+            "name": {
+              "type": "string",
+              "description": "Display name written to `shortcuts.vdf` — needed for the AddShortcut"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "native",
+                "flatpak"
+              ]
+            },
+            "appId": {
+              "type": "number",
+              "description": "32-bit Steam-allocated appid (the `appid` field in `shortcuts.vdf`)."
+            },
+            "gameId64": {
+              "type": "string",
+              "description": "64-bit gameid (`steam://rungameid/<gameId64>`)."
+            },
+            "exe": {
+              "type": "string",
+              "description": "Path that ended up as the shortcut's `Exe`."
+            },
+            "launchOptionsBase": {
+              "type": "string",
+              "description": "Static launch-options prefix; see `BrowserCandidate.launchOptionsBase`."
+            }
+          },
+          "required": [
+            "browserId",
+            "name",
+            "kind",
+            "appId",
+            "gameId64",
+            "exe",
+            "launchOptionsBase"
+          ]
+        }
+      },
+      "description": "All registered browser shortcuts. Used by the settings UI to populate its \"open in\" dropdown. Order is install order (oldest first); the last entry is the implicit default.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getInstalledBrowser",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "browserId": {
+            "type": "string",
+            "description": "Which candidate id was registered (e.g. \"firefox-native\")."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name written to `shortcuts.vdf` — needed for the AddShortcut"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "native",
+              "flatpak"
+            ]
+          },
+          "appId": {
+            "type": "number",
+            "description": "32-bit Steam-allocated appid (the `appid` field in `shortcuts.vdf`)."
+          },
+          "gameId64": {
+            "type": "string",
+            "description": "64-bit gameid (`steam://rungameid/<gameId64>`)."
+          },
+          "exe": {
+            "type": "string",
+            "description": "Path that ended up as the shortcut's `Exe`."
+          },
+          "launchOptionsBase": {
+            "type": "string",
+            "description": "Static launch-options prefix; see `BrowserCandidate.launchOptionsBase`."
+          }
+        },
+        "required": [
+          "browserId",
+          "name",
+          "kind",
+          "appId",
+          "gameId64",
+          "exe",
+          "launchOptionsBase"
+        ],
+        "nullable": true
+      },
+      "description": "What's currently the default browser (the most-recently-installed one). Used by launchUrl when the caller doesn't specify a browserId. Returns null if nothing installed.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getState",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Stable id. Built-in templates use well-known ids (\"youtube\","
+                },
+                "name": {
+                  "type": "string"
+                },
+                "urlTemplate": {
+                  "type": "string",
+                  "description": "URL with placeholders:"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Short, human description shown under the title on the landing"
+                },
+                "suffixGroup": {
+                  "type": "string",
+                  "description": "Optional suffix-group key into `suffixes`."
+                },
+                "steamOnly": {
+                  "type": "boolean",
+                  "description": "If true, only render when the running game is a Steam-app"
+                },
+                "builtin": {
+                  "type": "boolean",
+                  "description": "Shipped with the plugin. Built-ins can't be deleted, only"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "urlTemplate",
+                "builtin",
+                "enabled"
+              ]
+            }
+          },
+          "suffixes": {
+            "type": "object"
+          },
+          "perGame": {
+            "type": "object"
+          },
+          "hidden": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Built-in template ids the user has hidden."
+          },
+          "selectedBrowserId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Browser shortcut to use when launching links. Maps to a"
+          },
+          "installedBrowsers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "browserId": {
+                  "type": "string",
+                  "description": "Which candidate id was registered (e.g. \"firefox-native\")."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Display name written to `shortcuts.vdf` — needed for the AddShortcut"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "native",
+                    "flatpak"
+                  ]
+                },
+                "appId": {
+                  "type": "number",
+                  "description": "32-bit Steam-allocated appid (the `appid` field in `shortcuts.vdf`)."
+                },
+                "gameId64": {
+                  "type": "string",
+                  "description": "64-bit gameid (`steam://rungameid/<gameId64>`)."
+                },
+                "exe": {
+                  "type": "string",
+                  "description": "Path that ended up as the shortcut's `Exe`."
+                },
+                "launchOptionsBase": {
+                  "type": "string",
+                  "description": "Static launch-options prefix; see `BrowserCandidate.launchOptionsBase`."
+                }
+              },
+              "required": [
+                "browserId",
+                "name",
+                "kind",
+                "appId",
+                "gameId64",
+                "exe",
+                "launchOptionsBase"
+              ]
+            },
+            "description": "All registered browser shortcuts. Order is install order; the"
+          }
+        },
+        "required": [
+          "version",
+          "templates",
+          "suffixes",
+          "perGame",
+          "hidden",
+          "installedBrowsers"
+        ]
+      },
+      "description": "Snapshot of the entire stored state. UI reads this once on mount and subscribes to `stateChanged` for live updates.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "hasChromeOrFirefoxShortcut",
+      "args": [],
+      "returns": {
+        "type": "boolean"
+      },
+      "description": "Convenience for the gaming-mode banner: true if any installed shortcut is Chrome or Firefox (any flavour). The issue specifically calls out Chrome/Firefox; users with Brave/Edge as their primary still trigger the banner so they know they need to register one.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "installBrowserShortcut",
+      "args": [
+        {
+          "name": "browserId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "browserId": {
+            "type": "string",
+            "description": "Which candidate id was registered (e.g. \"firefox-native\")."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name written to `shortcuts.vdf` — needed for the AddShortcut"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "native",
+              "flatpak"
+            ]
+          },
+          "appId": {
+            "type": "number",
+            "description": "32-bit Steam-allocated appid (the `appid` field in `shortcuts.vdf`)."
+          },
+          "gameId64": {
+            "type": "string",
+            "description": "64-bit gameid (`steam://rungameid/<gameId64>`)."
+          },
+          "exe": {
+            "type": "string",
+            "description": "Path that ended up as the shortcut's `Exe`."
+          },
+          "launchOptionsBase": {
+            "type": "string",
+            "description": "Static launch-options prefix; see `BrowserCandidate.launchOptionsBase`."
+          }
+        },
+        "required": [
+          "browserId",
+          "name",
+          "kind",
+          "appId",
+          "gameId64",
+          "exe",
+          "launchOptionsBase"
+        ]
+      },
+      "description": "Register the picked browser as a non-Steam shortcut. Persists the install record to plugin storage. Throws if Steam isn't reachable or the chosen `browserId` isn't currently detected.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "isGamingMode",
+      "args": [],
+      "returns": {
+        "type": "boolean"
+      },
+      "description": "Are we currently running under gamescope (i.e. Gaming Mode)? Used by the UI to decide whether to show the \"install a browser\" banner — outside Gaming Mode the user can just open URLs in their normal desktop browser, so the banner would just be noise.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "isSteamReachable",
+      "args": [],
+      "returns": {
+        "type": "boolean"
+      },
+      "description": "Is the Steam JS API reachable? Plugin UIs gate the Install button on this so users see an actionable empty state rather than a cryptic CDP error.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "launchUrl",
+      "args": [
+        {
+          "name": "url",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "browserId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": true
+        }
+      ],
+      "returns": {
+        "type": "unknown",
+        "tsType": "{ launched: true; } | { launched: false; reason: \"not-installed\" | \"steam-unreachable\" | \"launch-failed\"; message: string; }"
+      },
+      "description": "Open `url` in the registered browser shortcut, going through Steam so the launch is part of the BPM session. Other plugins (store-bridge, etc.) call this directly via cross-plugin RPC.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "removeCustomLink",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "index",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Stable id. Built-in templates use well-known ids (\"youtube\","
+                },
+                "name": {
+                  "type": "string"
+                },
+                "urlTemplate": {
+                  "type": "string",
+                  "description": "URL with placeholders:"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Short, human description shown under the title on the landing"
+                },
+                "suffixGroup": {
+                  "type": "string",
+                  "description": "Optional suffix-group key into `suffixes`."
+                },
+                "steamOnly": {
+                  "type": "boolean",
+                  "description": "If true, only render when the running game is a Steam-app"
+                },
+                "builtin": {
+                  "type": "boolean",
+                  "description": "Shipped with the plugin. Built-ins can't be deleted, only"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "urlTemplate",
+                "builtin",
+                "enabled"
+              ]
+            }
+          },
+          "suffixes": {
+            "type": "object"
+          },
+          "perGame": {
+            "type": "object"
+          },
+          "hidden": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Built-in template ids the user has hidden."
+          },
+          "selectedBrowserId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Browser shortcut to use when launching links. Maps to a"
+          },
+          "installedBrowsers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "browserId": {
+                  "type": "string",
+                  "description": "Which candidate id was registered (e.g. \"firefox-native\")."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Display name written to `shortcuts.vdf` — needed for the AddShortcut"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "native",
+                    "flatpak"
+                  ]
+                },
+                "appId": {
+                  "type": "number",
+                  "description": "32-bit Steam-allocated appid (the `appid` field in `shortcuts.vdf`)."
+                },
+                "gameId64": {
+                  "type": "string",
+                  "description": "64-bit gameid (`steam://rungameid/<gameId64>`)."
+                },
+                "exe": {
+                  "type": "string",
+                  "description": "Path that ended up as the shortcut's `Exe`."
+                },
+                "launchOptionsBase": {
+                  "type": "string",
+                  "description": "Static launch-options prefix; see `BrowserCandidate.launchOptionsBase`."
+                }
+              },
+              "required": [
+                "browserId",
+                "name",
+                "kind",
+                "appId",
+                "gameId64",
+                "exe",
+                "launchOptionsBase"
+              ]
+            },
+            "description": "All registered browser shortcuts. Order is install order; the"
+          }
+        },
+        "required": [
+          "version",
+          "templates",
+          "suffixes",
+          "perGame",
+          "hidden",
+          "installedBrowsers"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "resetToDefaults",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Stable id. Built-in templates use well-known ids (\"youtube\","
+                },
+                "name": {
+                  "type": "string"
+                },
+                "urlTemplate": {
+                  "type": "string",
+                  "description": "URL with placeholders:"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Short, human description shown under the title on the landing"
+                },
+                "suffixGroup": {
+                  "type": "string",
+                  "description": "Optional suffix-group key into `suffixes`."
+                },
+                "steamOnly": {
+                  "type": "boolean",
+                  "description": "If true, only render when the running game is a Steam-app"
+                },
+                "builtin": {
+                  "type": "boolean",
+                  "description": "Shipped with the plugin. Built-ins can't be deleted, only"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "urlTemplate",
+                "builtin",
+                "enabled"
+              ]
+            }
+          },
+          "suffixes": {
+            "type": "object"
+          },
+          "perGame": {
+            "type": "object"
+          },
+          "hidden": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Built-in template ids the user has hidden."
+          },
+          "selectedBrowserId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Browser shortcut to use when launching links. Maps to a"
+          },
+          "installedBrowsers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "browserId": {
+                  "type": "string",
+                  "description": "Which candidate id was registered (e.g. \"firefox-native\")."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Display name written to `shortcuts.vdf` — needed for the AddShortcut"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "native",
+                    "flatpak"
+                  ]
+                },
+                "appId": {
+                  "type": "number",
+                  "description": "32-bit Steam-allocated appid (the `appid` field in `shortcuts.vdf`)."
+                },
+                "gameId64": {
+                  "type": "string",
+                  "description": "64-bit gameid (`steam://rungameid/<gameId64>`)."
+                },
+                "exe": {
+                  "type": "string",
+                  "description": "Path that ended up as the shortcut's `Exe`."
+                },
+                "launchOptionsBase": {
+                  "type": "string",
+                  "description": "Static launch-options prefix; see `BrowserCandidate.launchOptionsBase`."
+                }
+              },
+              "required": [
+                "browserId",
+                "name",
+                "kind",
+                "appId",
+                "gameId64",
+                "exe",
+                "launchOptionsBase"
+              ]
+            },
+            "description": "All registered browser shortcuts. Order is install order; the"
+          }
+        },
+        "required": [
+          "version",
+          "templates",
+          "suffixes",
+          "perGame",
+          "hidden",
+          "installedBrowsers"
+        ]
+      },
+      "description": "Reset templates + suffixes only. Browser shortcuts are not touched — those represent on-disk Steam library entries, and wiping them here would orphan the shortcut entries in shortcuts.vdf without removing them. Use uninstallBrowserShortcut for that.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setPinnedTemplateIds",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "ids",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Stable id. Built-in templates use well-known ids (\"youtube\","
+                },
+                "name": {
+                  "type": "string"
+                },
+                "urlTemplate": {
+                  "type": "string",
+                  "description": "URL with placeholders:"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Short, human description shown under the title on the landing"
+                },
+                "suffixGroup": {
+                  "type": "string",
+                  "description": "Optional suffix-group key into `suffixes`."
+                },
+                "steamOnly": {
+                  "type": "boolean",
+                  "description": "If true, only render when the running game is a Steam-app"
+                },
+                "builtin": {
+                  "type": "boolean",
+                  "description": "Shipped with the plugin. Built-ins can't be deleted, only"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "urlTemplate",
+                "builtin",
+                "enabled"
+              ]
+            }
+          },
+          "suffixes": {
+            "type": "object"
+          },
+          "perGame": {
+            "type": "object"
+          },
+          "hidden": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Built-in template ids the user has hidden."
+          },
+          "selectedBrowserId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Browser shortcut to use when launching links. Maps to a"
+          },
+          "installedBrowsers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "browserId": {
+                  "type": "string",
+                  "description": "Which candidate id was registered (e.g. \"firefox-native\")."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Display name written to `shortcuts.vdf` — needed for the AddShortcut"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "native",
+                    "flatpak"
+                  ]
+                },
+                "appId": {
+                  "type": "number",
+                  "description": "32-bit Steam-allocated appid (the `appid` field in `shortcuts.vdf`)."
+                },
+                "gameId64": {
+                  "type": "string",
+                  "description": "64-bit gameid (`steam://rungameid/<gameId64>`)."
+                },
+                "exe": {
+                  "type": "string",
+                  "description": "Path that ended up as the shortcut's `Exe`."
+                },
+                "launchOptionsBase": {
+                  "type": "string",
+                  "description": "Static launch-options prefix; see `BrowserCandidate.launchOptionsBase`."
+                }
+              },
+              "required": [
+                "browserId",
+                "name",
+                "kind",
+                "appId",
+                "gameId64",
+                "exe",
+                "launchOptionsBase"
+              ]
+            },
+            "description": "All registered browser shortcuts. Order is install order; the"
+          }
+        },
+        "required": [
+          "version",
+          "templates",
+          "suffixes",
+          "perGame",
+          "hidden",
+          "installedBrowsers"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setSelectedBrowserId",
+      "args": [
+        {
+          "name": "browserId",
+          "schema": {
+            "type": "string",
+            "nullable": true
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Stable id. Built-in templates use well-known ids (\"youtube\","
+                },
+                "name": {
+                  "type": "string"
+                },
+                "urlTemplate": {
+                  "type": "string",
+                  "description": "URL with placeholders:"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Short, human description shown under the title on the landing"
+                },
+                "suffixGroup": {
+                  "type": "string",
+                  "description": "Optional suffix-group key into `suffixes`."
+                },
+                "steamOnly": {
+                  "type": "boolean",
+                  "description": "If true, only render when the running game is a Steam-app"
+                },
+                "builtin": {
+                  "type": "boolean",
+                  "description": "Shipped with the plugin. Built-ins can't be deleted, only"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "urlTemplate",
+                "builtin",
+                "enabled"
+              ]
+            }
+          },
+          "suffixes": {
+            "type": "object"
+          },
+          "perGame": {
+            "type": "object"
+          },
+          "hidden": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Built-in template ids the user has hidden."
+          },
+          "selectedBrowserId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Browser shortcut to use when launching links. Maps to a"
+          },
+          "installedBrowsers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "browserId": {
+                  "type": "string",
+                  "description": "Which candidate id was registered (e.g. \"firefox-native\")."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Display name written to `shortcuts.vdf` — needed for the AddShortcut"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "native",
+                    "flatpak"
+                  ]
+                },
+                "appId": {
+                  "type": "number",
+                  "description": "32-bit Steam-allocated appid (the `appid` field in `shortcuts.vdf`)."
+                },
+                "gameId64": {
+                  "type": "string",
+                  "description": "64-bit gameid (`steam://rungameid/<gameId64>`)."
+                },
+                "exe": {
+                  "type": "string",
+                  "description": "Path that ended up as the shortcut's `Exe`."
+                },
+                "launchOptionsBase": {
+                  "type": "string",
+                  "description": "Static launch-options prefix; see `BrowserCandidate.launchOptionsBase`."
+                }
+              },
+              "required": [
+                "browserId",
+                "name",
+                "kind",
+                "appId",
+                "gameId64",
+                "exe",
+                "launchOptionsBase"
+              ]
+            },
+            "description": "All registered browser shortcuts. Order is install order; the"
+          }
+        },
+        "required": [
+          "version",
+          "templates",
+          "suffixes",
+          "perGame",
+          "hidden",
+          "installedBrowsers"
+        ]
+      },
+      "description": "Pick which browser shortcut Quick Links should use to open URLs. Pass `null` to fall back to the default (most-recently-installed). The chosen id maps to a `BrowserCandidate.id`; if it later gets uninstalled, launchUrl silently degrades to the default rather than failing.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setSuffixes",
+      "args": [
+        {
+          "name": "group",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "suffixes",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Stable id. Built-in templates use well-known ids (\"youtube\","
+                },
+                "name": {
+                  "type": "string"
+                },
+                "urlTemplate": {
+                  "type": "string",
+                  "description": "URL with placeholders:"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Short, human description shown under the title on the landing"
+                },
+                "suffixGroup": {
+                  "type": "string",
+                  "description": "Optional suffix-group key into `suffixes`."
+                },
+                "steamOnly": {
+                  "type": "boolean",
+                  "description": "If true, only render when the running game is a Steam-app"
+                },
+                "builtin": {
+                  "type": "boolean",
+                  "description": "Shipped with the plugin. Built-ins can't be deleted, only"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "urlTemplate",
+                "builtin",
+                "enabled"
+              ]
+            }
+          },
+          "suffixes": {
+            "type": "object"
+          },
+          "perGame": {
+            "type": "object"
+          },
+          "hidden": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Built-in template ids the user has hidden."
+          },
+          "selectedBrowserId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Browser shortcut to use when launching links. Maps to a"
+          },
+          "installedBrowsers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "browserId": {
+                  "type": "string",
+                  "description": "Which candidate id was registered (e.g. \"firefox-native\")."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Display name written to `shortcuts.vdf` — needed for the AddShortcut"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "native",
+                    "flatpak"
+                  ]
+                },
+                "appId": {
+                  "type": "number",
+                  "description": "32-bit Steam-allocated appid (the `appid` field in `shortcuts.vdf`)."
+                },
+                "gameId64": {
+                  "type": "string",
+                  "description": "64-bit gameid (`steam://rungameid/<gameId64>`)."
+                },
+                "exe": {
+                  "type": "string",
+                  "description": "Path that ended up as the shortcut's `Exe`."
+                },
+                "launchOptionsBase": {
+                  "type": "string",
+                  "description": "Static launch-options prefix; see `BrowserCandidate.launchOptionsBase`."
+                }
+              },
+              "required": [
+                "browserId",
+                "name",
+                "kind",
+                "appId",
+                "gameId64",
+                "exe",
+                "launchOptionsBase"
+              ]
+            },
+            "description": "All registered browser shortcuts. Order is install order; the"
+          }
+        },
+        "required": [
+          "version",
+          "templates",
+          "suffixes",
+          "perGame",
+          "hidden",
+          "installedBrowsers"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "unhideTemplate",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Stable id. Built-in templates use well-known ids (\"youtube\","
+                },
+                "name": {
+                  "type": "string"
+                },
+                "urlTemplate": {
+                  "type": "string",
+                  "description": "URL with placeholders:"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Short, human description shown under the title on the landing"
+                },
+                "suffixGroup": {
+                  "type": "string",
+                  "description": "Optional suffix-group key into `suffixes`."
+                },
+                "steamOnly": {
+                  "type": "boolean",
+                  "description": "If true, only render when the running game is a Steam-app"
+                },
+                "builtin": {
+                  "type": "boolean",
+                  "description": "Shipped with the plugin. Built-ins can't be deleted, only"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "urlTemplate",
+                "builtin",
+                "enabled"
+              ]
+            }
+          },
+          "suffixes": {
+            "type": "object"
+          },
+          "perGame": {
+            "type": "object"
+          },
+          "hidden": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Built-in template ids the user has hidden."
+          },
+          "selectedBrowserId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Browser shortcut to use when launching links. Maps to a"
+          },
+          "installedBrowsers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "browserId": {
+                  "type": "string",
+                  "description": "Which candidate id was registered (e.g. \"firefox-native\")."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Display name written to `shortcuts.vdf` — needed for the AddShortcut"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "native",
+                    "flatpak"
+                  ]
+                },
+                "appId": {
+                  "type": "number",
+                  "description": "32-bit Steam-allocated appid (the `appid` field in `shortcuts.vdf`)."
+                },
+                "gameId64": {
+                  "type": "string",
+                  "description": "64-bit gameid (`steam://rungameid/<gameId64>`)."
+                },
+                "exe": {
+                  "type": "string",
+                  "description": "Path that ended up as the shortcut's `Exe`."
+                },
+                "launchOptionsBase": {
+                  "type": "string",
+                  "description": "Static launch-options prefix; see `BrowserCandidate.launchOptionsBase`."
+                }
+              },
+              "required": [
+                "browserId",
+                "name",
+                "kind",
+                "appId",
+                "gameId64",
+                "exe",
+                "launchOptionsBase"
+              ]
+            },
+            "description": "All registered browser shortcuts. Order is install order; the"
+          }
+        },
+        "required": [
+          "version",
+          "templates",
+          "suffixes",
+          "perGame",
+          "hidden",
+          "installedBrowsers"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "uninstallBrowserShortcut",
+      "args": [
+        {
+          "name": "browserId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": true
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "description": "Remove a registered shortcut from Steam and the plugin's storage. Pass `browserId` to remove a specific entry; pass `undefined` (or call with no args) to remove ALL entries.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "updateTemplate",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "patch",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "urlTemplate": {
+                "type": "string",
+                "description": "URL with placeholders:"
+              },
+              "description": {
+                "type": "string",
+                "description": "Short, human description shown under the title on the landing"
+              },
+              "suffixGroup": {
+                "type": "string",
+                "description": "Optional suffix-group key into `suffixes`."
+              },
+              "steamOnly": {
+                "type": "boolean",
+                "description": "If true, only render when the running game is a Steam-app"
+              },
+              "enabled": {
+                "type": "boolean"
+              }
+            }
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Stable id. Built-in templates use well-known ids (\"youtube\","
+                },
+                "name": {
+                  "type": "string"
+                },
+                "urlTemplate": {
+                  "type": "string",
+                  "description": "URL with placeholders:"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Short, human description shown under the title on the landing"
+                },
+                "suffixGroup": {
+                  "type": "string",
+                  "description": "Optional suffix-group key into `suffixes`."
+                },
+                "steamOnly": {
+                  "type": "boolean",
+                  "description": "If true, only render when the running game is a Steam-app"
+                },
+                "builtin": {
+                  "type": "boolean",
+                  "description": "Shipped with the plugin. Built-ins can't be deleted, only"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "urlTemplate",
+                "builtin",
+                "enabled"
+              ]
+            }
+          },
+          "suffixes": {
+            "type": "object"
+          },
+          "perGame": {
+            "type": "object"
+          },
+          "hidden": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Built-in template ids the user has hidden."
+          },
+          "selectedBrowserId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Browser shortcut to use when launching links. Maps to a"
+          },
+          "installedBrowsers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "browserId": {
+                  "type": "string",
+                  "description": "Which candidate id was registered (e.g. \"firefox-native\")."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Display name written to `shortcuts.vdf` — needed for the AddShortcut"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "native",
+                    "flatpak"
+                  ]
+                },
+                "appId": {
+                  "type": "number",
+                  "description": "32-bit Steam-allocated appid (the `appid` field in `shortcuts.vdf`)."
+                },
+                "gameId64": {
+                  "type": "string",
+                  "description": "64-bit gameid (`steam://rungameid/<gameId64>`)."
+                },
+                "exe": {
+                  "type": "string",
+                  "description": "Path that ended up as the shortcut's `Exe`."
+                },
+                "launchOptionsBase": {
+                  "type": "string",
+                  "description": "Static launch-options prefix; see `BrowserCandidate.launchOptionsBase`."
+                }
+              },
+              "required": [
+                "browserId",
+                "name",
+                "kind",
+                "appId",
+                "gameId64",
+                "exe",
+                "launchOptionsBase"
+              ]
+            },
+            "description": "All registered browser shortcuts. Order is install order; the"
+          }
+        },
+        "required": [
+          "version",
+          "templates",
+          "suffixes",
+          "perGame",
+          "hidden",
+          "installedBrowsers"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "browserInstalled"
+    },
+    {
+      "event": "browserUninstalled"
+    },
+    {
+      "event": "launched"
+    },
+    {
+      "event": "stateChanged"
+    }
+  ]
+}

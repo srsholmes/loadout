@@ -1,0 +1,614 @@
+{
+  "id": "fan-control",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "applyCustomCurve",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Makes the saved custom curve the active control mode. Same shape as applyPreset — switch to manual, apply once, then run the curve loop.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "applyPreset",
+      "args": [
+        {
+          "name": "name",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "silent",
+              "balanced",
+              "performance"
+            ]
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Applies a fan curve preset. Starts a loop that adjusts speed based on temperature.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "getCustomCurve",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "tempC": {
+              "type": "number"
+            },
+            "percent": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "tempC",
+            "percent"
+          ]
+        }
+      },
+      "description": "Returns the user's saved custom fan curve (always a valid curve).",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getFanInfo",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "fans": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "type": "number"
+                },
+                "rpm": {
+                  "type": "number"
+                },
+                "pwm": {
+                  "type": "number"
+                },
+                "percent": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "index",
+                "rpm",
+                "pwm",
+                "percent"
+              ]
+            },
+            "description": "Per-fan RPM readings"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "auto",
+              "manual",
+              "full"
+            ],
+            "description": "Overall fan mode"
+          },
+          "temps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "zone": {
+                  "type": "string"
+                },
+                "tempC": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "label",
+                "zone",
+                "tempC"
+              ]
+            },
+            "description": "All detected temperature readings"
+          },
+          "cpuTempC": {
+            "type": "number",
+            "description": "Primary (CPU) temperature for quick display"
+          },
+          "chipName": {
+            "type": "string",
+            "description": "Detected chip name that owns the fans"
+          },
+          "fanCount": {
+            "type": "number",
+            "description": "Total number of controllable fans"
+          },
+          "available": {
+            "type": "boolean",
+            "description": "Whether fan control is available at all"
+          },
+          "activePreset": {
+            "type": "string",
+            "enum": [
+              "silent",
+              "balanced",
+              "performance"
+            ],
+            "nullable": true,
+            "description": "Active preset name, if any"
+          },
+          "customCurveActive": {
+            "type": "boolean",
+            "description": "Whether the user's custom fan curve is the active control mode."
+          },
+          "usingEctool": {
+            "type": "boolean",
+            "description": "Whether ectool fallback is being used"
+          },
+          "warning": {
+            "type": "string",
+            "nullable": true,
+            "description": "Safety warning message, if any"
+          },
+          "safetyEngaged": {
+            "type": "boolean",
+            "description": "True while the safety watchdog has overridden user fan control."
+          }
+        },
+        "required": [
+          "fans",
+          "mode",
+          "temps",
+          "cpuTempC",
+          "chipName",
+          "fanCount",
+          "available",
+          "activePreset",
+          "customCurveActive",
+          "usingEctool",
+          "warning",
+          "safetyEngaged"
+        ]
+      },
+      "description": "Returns comprehensive fan status.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getGameProfile",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "appId": {
+            "type": "number"
+          },
+          "gameName": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "manual"
+            ]
+          },
+          "speed": {
+            "type": "number",
+            "description": "Manual fan speed percent (0–100). Ignored when mode is \"auto\"."
+          }
+        },
+        "required": [
+          "appId",
+          "gameName",
+          "mode"
+        ],
+        "nullable": true
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getGameProfiles",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "appId": {
+              "type": "number"
+            },
+            "gameName": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "manual"
+              ]
+            },
+            "speed": {
+              "type": "number",
+              "description": "Manual fan speed percent (0–100). Ignored when mode is \"auto\"."
+            }
+          },
+          "required": [
+            "appId",
+            "gameName",
+            "mode"
+          ]
+        }
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getPerGameEnabled",
+      "args": [],
+      "returns": {
+        "type": "boolean"
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getTemperatures",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "zone": {
+              "type": "string"
+            },
+            "tempC": {
+              "type": "number"
+            },
+            "chipName": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "zone",
+            "tempC",
+            "chipName"
+          ]
+        }
+      },
+      "description": "Returns all detected temperature sensors with current readings.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "handleGameExit",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "handleGameLaunch",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "gameName",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "removeGameProfile",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setCustomCurve",
+      "args": [
+        {
+          "name": "points",
+          "schema": {
+            "type": "unknown",
+            "tsType": "unknown"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          },
+          "curve": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "tempC": {
+                  "type": "number"
+                },
+                "percent": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "tempC",
+                "percent"
+              ]
+            }
+          }
+        },
+        "required": [
+          "success",
+          "curve"
+        ]
+      },
+      "description": "Persists a new custom curve. Input is sanitised (untrusted UI/storage shape) before it's stored, so the returned curve is the canonical one the caller should render. If the custom curve is the active control mode, the curve loop is restarted so edits take effect immediately.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setFanMode",
+      "args": [
+        {
+          "name": "mode",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "manual"
+            ]
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Sets fan mode: \"auto\" (kernel-controlled) or \"manual\" (user-controlled).",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setFanSpeed",
+      "args": [
+        {
+          "name": "percent",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Sets fan speed as a percentage (0-100). Enforces safety limits.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setGameProfile",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "gameName",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "profile",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "manual"
+                ]
+              },
+              "speed": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setPerGameEnabled",
+      "args": [
+        {
+          "name": "enabled",
+          "schema": {
+            "type": "boolean"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "fan-safety-critical"
+    },
+    {
+      "event": "fan-update"
+    },
+    {
+      "event": "gameProfileChanged"
+    },
+    {
+      "event": "perGameEnabledChanged"
+    }
+  ]
+}

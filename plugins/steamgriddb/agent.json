@@ -1,0 +1,1102 @@
+{
+  "id": "steamgriddb",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "applyArt",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "url",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "type",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "source",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "steam",
+              "shortcut"
+            ]
+          },
+          "optional": true
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "instant": {
+            "type": "boolean"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "success",
+          "instant",
+          "paths"
+        ]
+      },
+      "description": "Download an image from a URL and apply it as the user's custom artwork for `appId`. Two paths in priority order:",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "clearArt",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "type",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "source",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "steam",
+              "shortcut"
+            ]
+          },
+          "optional": true
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "instant": {
+            "type": "boolean"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "success",
+          "instant",
+          "paths"
+        ]
+      },
+      "description": "Reset a single asset type back to Steam's default art. Mirrors `applyArt`:",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "clearCache",
+      "args": [],
+      "returns": {
+        "type": "null"
+      },
+      "description": "Wipe the on-disk SGDB API response cache. Exposed as `clearCache` for the plugin's per-plugin \"Clear Cache\" button and as `clearExternalCache` for the loader-level \"Clear all data caches\" broadcast. The two share an implementation so either entry point produces the same result.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "clearExternalCache",
+      "args": [],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "getGrids",
+      "args": [
+        {
+          "name": "steamAppId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "number"
+            },
+            "score": {
+              "type": "number"
+            },
+            "style": {
+              "type": "string"
+            },
+            "width": {
+              "type": "number"
+            },
+            "height": {
+              "type": "number"
+            },
+            "nsfw": {
+              "type": "boolean"
+            },
+            "humor": {
+              "type": "boolean"
+            },
+            "language": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            },
+            "thumb": {
+              "type": "string"
+            },
+            "lock": {
+              "type": "boolean"
+            },
+            "epilepsy": {
+              "type": "boolean"
+            },
+            "notes": {
+              "type": "string",
+              "nullable": true
+            },
+            "author": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "steam64": {
+                  "type": "string"
+                },
+                "avatar": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "steam64",
+                "avatar"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "score",
+            "style",
+            "width",
+            "height",
+            "nsfw",
+            "humor",
+            "language",
+            "url",
+            "thumb",
+            "lock",
+            "epilepsy",
+            "notes",
+            "author"
+          ]
+        }
+      },
+      "description": "Fetch grid images for a Steam app id.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getGridsByGameId",
+      "args": [
+        {
+          "name": "sgdbId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "number"
+            },
+            "score": {
+              "type": "number"
+            },
+            "style": {
+              "type": "string"
+            },
+            "width": {
+              "type": "number"
+            },
+            "height": {
+              "type": "number"
+            },
+            "nsfw": {
+              "type": "boolean"
+            },
+            "humor": {
+              "type": "boolean"
+            },
+            "language": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            },
+            "thumb": {
+              "type": "string"
+            },
+            "lock": {
+              "type": "boolean"
+            },
+            "epilepsy": {
+              "type": "boolean"
+            },
+            "notes": {
+              "type": "string",
+              "nullable": true
+            },
+            "author": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "steam64": {
+                  "type": "string"
+                },
+                "avatar": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "steam64",
+                "avatar"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "score",
+            "style",
+            "width",
+            "height",
+            "nsfw",
+            "humor",
+            "language",
+            "url",
+            "thumb",
+            "lock",
+            "epilepsy",
+            "notes",
+            "author"
+          ]
+        }
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getHeroes",
+      "args": [
+        {
+          "name": "steamAppId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "number"
+            },
+            "score": {
+              "type": "number"
+            },
+            "style": {
+              "type": "string"
+            },
+            "width": {
+              "type": "number"
+            },
+            "height": {
+              "type": "number"
+            },
+            "nsfw": {
+              "type": "boolean"
+            },
+            "humor": {
+              "type": "boolean"
+            },
+            "language": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            },
+            "thumb": {
+              "type": "string"
+            },
+            "lock": {
+              "type": "boolean"
+            },
+            "epilepsy": {
+              "type": "boolean"
+            },
+            "notes": {
+              "type": "string",
+              "nullable": true
+            },
+            "author": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "steam64": {
+                  "type": "string"
+                },
+                "avatar": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "steam64",
+                "avatar"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "score",
+            "style",
+            "width",
+            "height",
+            "nsfw",
+            "humor",
+            "language",
+            "url",
+            "thumb",
+            "lock",
+            "epilepsy",
+            "notes",
+            "author"
+          ]
+        }
+      },
+      "description": "Fetch hero images for a Steam app id.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getHeroesByGameId",
+      "args": [
+        {
+          "name": "sgdbId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "number"
+            },
+            "score": {
+              "type": "number"
+            },
+            "style": {
+              "type": "string"
+            },
+            "width": {
+              "type": "number"
+            },
+            "height": {
+              "type": "number"
+            },
+            "nsfw": {
+              "type": "boolean"
+            },
+            "humor": {
+              "type": "boolean"
+            },
+            "language": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            },
+            "thumb": {
+              "type": "string"
+            },
+            "lock": {
+              "type": "boolean"
+            },
+            "epilepsy": {
+              "type": "boolean"
+            },
+            "notes": {
+              "type": "string",
+              "nullable": true
+            },
+            "author": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "steam64": {
+                  "type": "string"
+                },
+                "avatar": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "steam64",
+                "avatar"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "score",
+            "style",
+            "width",
+            "height",
+            "nsfw",
+            "humor",
+            "language",
+            "url",
+            "thumb",
+            "lock",
+            "epilepsy",
+            "notes",
+            "author"
+          ]
+        }
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getIcons",
+      "args": [
+        {
+          "name": "steamAppId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "number"
+            },
+            "score": {
+              "type": "number"
+            },
+            "style": {
+              "type": "string"
+            },
+            "width": {
+              "type": "number"
+            },
+            "height": {
+              "type": "number"
+            },
+            "nsfw": {
+              "type": "boolean"
+            },
+            "humor": {
+              "type": "boolean"
+            },
+            "language": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            },
+            "thumb": {
+              "type": "string"
+            },
+            "lock": {
+              "type": "boolean"
+            },
+            "epilepsy": {
+              "type": "boolean"
+            },
+            "notes": {
+              "type": "string",
+              "nullable": true
+            },
+            "author": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "steam64": {
+                  "type": "string"
+                },
+                "avatar": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "steam64",
+                "avatar"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "score",
+            "style",
+            "width",
+            "height",
+            "nsfw",
+            "humor",
+            "language",
+            "url",
+            "thumb",
+            "lock",
+            "epilepsy",
+            "notes",
+            "author"
+          ]
+        }
+      },
+      "description": "Fetch icon images for a Steam app id.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getIconsByGameId",
+      "args": [
+        {
+          "name": "sgdbId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "number"
+            },
+            "score": {
+              "type": "number"
+            },
+            "style": {
+              "type": "string"
+            },
+            "width": {
+              "type": "number"
+            },
+            "height": {
+              "type": "number"
+            },
+            "nsfw": {
+              "type": "boolean"
+            },
+            "humor": {
+              "type": "boolean"
+            },
+            "language": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            },
+            "thumb": {
+              "type": "string"
+            },
+            "lock": {
+              "type": "boolean"
+            },
+            "epilepsy": {
+              "type": "boolean"
+            },
+            "notes": {
+              "type": "string",
+              "nullable": true
+            },
+            "author": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "steam64": {
+                  "type": "string"
+                },
+                "avatar": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "steam64",
+                "avatar"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "score",
+            "style",
+            "width",
+            "height",
+            "nsfw",
+            "humor",
+            "language",
+            "url",
+            "thumb",
+            "lock",
+            "epilepsy",
+            "notes",
+            "author"
+          ]
+        }
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getLogos",
+      "args": [
+        {
+          "name": "steamAppId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "number"
+            },
+            "score": {
+              "type": "number"
+            },
+            "style": {
+              "type": "string"
+            },
+            "width": {
+              "type": "number"
+            },
+            "height": {
+              "type": "number"
+            },
+            "nsfw": {
+              "type": "boolean"
+            },
+            "humor": {
+              "type": "boolean"
+            },
+            "language": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            },
+            "thumb": {
+              "type": "string"
+            },
+            "lock": {
+              "type": "boolean"
+            },
+            "epilepsy": {
+              "type": "boolean"
+            },
+            "notes": {
+              "type": "string",
+              "nullable": true
+            },
+            "author": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "steam64": {
+                  "type": "string"
+                },
+                "avatar": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "steam64",
+                "avatar"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "score",
+            "style",
+            "width",
+            "height",
+            "nsfw",
+            "humor",
+            "language",
+            "url",
+            "thumb",
+            "lock",
+            "epilepsy",
+            "notes",
+            "author"
+          ]
+        }
+      },
+      "description": "Fetch logo images for a Steam app id.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getLogosByGameId",
+      "args": [
+        {
+          "name": "sgdbId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "number"
+            },
+            "score": {
+              "type": "number"
+            },
+            "style": {
+              "type": "string"
+            },
+            "width": {
+              "type": "number"
+            },
+            "height": {
+              "type": "number"
+            },
+            "nsfw": {
+              "type": "boolean"
+            },
+            "humor": {
+              "type": "boolean"
+            },
+            "language": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            },
+            "thumb": {
+              "type": "string"
+            },
+            "lock": {
+              "type": "boolean"
+            },
+            "epilepsy": {
+              "type": "boolean"
+            },
+            "notes": {
+              "type": "string",
+              "nullable": true
+            },
+            "author": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "steam64": {
+                  "type": "string"
+                },
+                "avatar": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "steam64",
+                "avatar"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "score",
+            "style",
+            "width",
+            "height",
+            "nsfw",
+            "humor",
+            "language",
+            "url",
+            "thumb",
+            "lock",
+            "epilepsy",
+            "notes",
+            "author"
+          ]
+        }
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getSavedSgdbMatch",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "sgdbId": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sgdbId",
+          "name"
+        ],
+        "nullable": true
+      },
+      "description": "Return the SGDB-game-id we previously resolved for an appId, if any.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "hasApiKey",
+      "args": [],
+      "returns": {
+        "type": "boolean"
+      },
+      "description": "Check whether an API key is configured.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "pruneMatches",
+      "args": [
+        {
+          "name": "validAppIds",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "removed"
+        ]
+      },
+      "description": "GC saved matches against the user's current library. Frontend calls this once after pulling `getGames` from game-browser so shortcuts the user has since removed from `shortcuts.vdf` don't hang around in plugin storage forever.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "saveSgdbMatch",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "sgdbId",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        },
+        {
+          "name": "name",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "description": "Persist a chosen SGDB-game-id for a given local appId.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "searchGames",
+      "args": [
+        {
+          "name": "query",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "number"
+            },
+            "name": {
+              "type": "string"
+            },
+            "types": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "verified": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "types",
+            "verified"
+          ]
+        }
+      },
+      "description": "Search SteamGridDB for games matching a query. Returns an array of { id, name, types, verified } objects.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "setApiKey",
+      "args": [
+        {
+          "name": "key",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Set the API key at runtime, validating it against SGDB before persisting. Returns `{ success: true }` on accept, or `{ success: false, error }` if SGDB rejects the key — in which case the in-memory key and the on-disk file are left unchanged.",
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "cdpPartialFailure"
+    }
+  ]
+}

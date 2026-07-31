@@ -1,0 +1,223 @@
+{
+  "id": "storage",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "detectDrives",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "drives": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "uuid": {
+                  "type": "string"
+                },
+                "fstype": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "number"
+                },
+                "mounted": {
+                  "type": "boolean"
+                },
+                "mountpoint": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "suggestedMountpoint": {
+                  "type": "string",
+                  "description": "Where we'd mount it if asked (Steam-visible path)."
+                },
+                "steamLibraryFound": {
+                  "type": "boolean"
+                },
+                "inFstab": {
+                  "type": "boolean",
+                  "description": "A persistent /etc/fstab entry for this UUID exists."
+                }
+              },
+              "required": [
+                "path",
+                "label",
+                "uuid",
+                "fstype",
+                "size",
+                "mounted",
+                "mountpoint",
+                "suggestedMountpoint",
+                "steamLibraryFound",
+                "inFstab"
+              ]
+            }
+          }
+        },
+        "required": [
+          "drives"
+        ]
+      },
+      "description": "Re-scan for unmounted/mounted data drives (the \"Detect drives\" button). `getStorageStatus` already enumerates every managed drive (including the unmounted ones the UI offers to mount), so a separate candidate scan would just be a second redundant `lsblk`.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "getStatus",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "drives": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "uuid": {
+                  "type": "string"
+                },
+                "fstype": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "number"
+                },
+                "mounted": {
+                  "type": "boolean"
+                },
+                "mountpoint": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "suggestedMountpoint": {
+                  "type": "string",
+                  "description": "Where we'd mount it if asked (Steam-visible path)."
+                },
+                "steamLibraryFound": {
+                  "type": "boolean"
+                },
+                "inFstab": {
+                  "type": "boolean",
+                  "description": "A persistent /etc/fstab entry for this UUID exists."
+                }
+              },
+              "required": [
+                "path",
+                "label",
+                "uuid",
+                "fstype",
+                "size",
+                "mounted",
+                "mountpoint",
+                "suggestedMountpoint",
+                "steamLibraryFound",
+                "inFstab"
+              ]
+            }
+          }
+        },
+        "required": [
+          "drives"
+        ]
+      },
+      "description": "Full storage view for the UI: every managed data drive + its state.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "mountDrive",
+      "args": [
+        {
+          "name": "uuid",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "mountpoint": {
+            "type": "string"
+          },
+          "steamLibraryFound": {
+            "type": "boolean",
+            "description": "A SteamLibrary/steamapps folder was found on the mounted drive."
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success",
+          "mountpoint",
+          "steamLibraryFound"
+        ]
+      },
+      "description": "Mount the data drive with the given UUID at its Steam-visible mount point. Only ever mounts an existing filesystem — never formats or repairs it.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setDriveAutoMount",
+      "args": [
+        {
+          "name": "uuid",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "enabled",
+          "schema": {
+            "type": "boolean"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Persist (or remove) an /etc/fstab entry so the drive auto-mounts on boot and a future update can't silently un-mount it. Backed up + idempotent.",
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "statusChanged"
+    }
+  ]
+}

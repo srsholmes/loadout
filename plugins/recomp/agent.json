@@ -1,0 +1,1342 @@
+{
+  "id": "recomp",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "addInstalledToSteam",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "description": "Repair path: re-add a previously-installed game to Steam (e.g. after Steam ate the shortcut, or the user installed with `autoAddToSteam: false`). Also re-applies artwork.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "checkBuildEnv",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": "string"
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "installHint": {
+            "type": "string"
+          },
+          "distroId": {
+            "type": "string"
+          },
+          "hasRecipe": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "label",
+          "missing",
+          "hasRecipe"
+        ]
+      },
+      "description": "Live readiness check for the build environment. Detail page calls this on mount for any `build_from_source` entry so it can render either: - \"Ready: distrobox: recomp-build\" (green), or - \"Install distrobox + podman first: <one-line install command>\" (red, with the per-distro install hint pre-filled).",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "getCatalogArt",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "string",
+        "nullable": true
+      },
+      "description": "Look up the SGDB capsule URL for a catalog entry. Each tile in the browse grid fires this once on mount to populate its cover art (installed games already have art via the loader-local `/api/steam-grid/...` route; this fills in the uninstalled case). Cached 24 h on disk so subsequent catalog opens are instant. Returns null when no SGDB key is configured or no match exists.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getDetailHero",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "string",
+        "nullable": true
+      },
+      "description": "Look up the SGDB landscape hero URL for a catalog entry. Used by the detail page's hero banner. Null when no SGDB key or no match; the frontend falls back to a flat gradient. Cached 24h via the shared sgdb-art cache.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getGameDetail",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "installedVersion": {
+            "type": "string"
+          },
+          "hasUpdate": {
+            "type": "boolean"
+          },
+          "gameStatus": {
+            "type": "string",
+            "enum": [
+              "available",
+              "installed",
+              "update_available",
+              "installing",
+              "updating",
+              "unavailable",
+              "in_progress"
+            ]
+          },
+          "hasNativeBuild": {
+            "type": "boolean"
+          },
+          "addedToSteam": {
+            "type": "boolean"
+          },
+          "steamAppId": {
+            "type": "number"
+          },
+          "steamGameId64": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "n64",
+              "ps1",
+              "ps2",
+              "gc",
+              "xbox360",
+              "gb",
+              "gba",
+              "gbc",
+              "nes",
+              "snes",
+              "nds",
+              "3ds",
+              "wii",
+              "wiiu",
+              "switch",
+              "pc",
+              "mobile",
+              "multi",
+              "arcade",
+              "dreamcast",
+              "saturn",
+              "xbox",
+              "xboxone",
+              "other"
+            ]
+          },
+          "repo": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "installType": {
+            "type": "string",
+            "enum": [
+              "prebuilt",
+              "rom_extract",
+              "toolchain",
+              "build_from_source",
+              "custom"
+            ]
+          },
+          "releaseAssets": {
+            "type": "object",
+            "properties": {
+              "windows": {
+                "type": "string",
+                "description": "Windows binary — run via Proton on the Linux host."
+              },
+              "linux": {
+                "type": "string"
+              }
+            }
+          },
+          "launchCommand": {
+            "type": "object",
+            "properties": {
+              "windows": {
+                "type": "string",
+                "description": "Windows launch command — run via Proton on the Linux host."
+              },
+              "linux": {
+                "type": "string"
+              }
+            }
+          },
+          "romInfo": {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "validChecksums": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "extractionCommand": {
+                "type": "string"
+              },
+              "fileType": {
+                "type": "string"
+              },
+              "extensions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "placeRomAs": {
+                "type": "string",
+                "description": "When set, the pipeline copies the user-picked ROM into"
+              },
+              "sourceFormat": {
+                "type": "string",
+                "enum": [
+                  "raw",
+                  "xgd-iso",
+                  "stfs"
+                ],
+                "description": "How the user's dump is structured, when it isn't a single flat"
+              },
+              "extractTo": {
+                "type": "string",
+                "description": "Directory (relative to the install dir) that receives the"
+              },
+              "anchorFile": {
+                "type": "string",
+                "description": "File (relative to `extractTo`) whose presence proves the dump was"
+              },
+              "anchorChecksums": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Known-good SHA-1s of `anchorFile`. Mismatch is a WARNING, not an"
+              }
+            },
+            "required": [
+              "description",
+              "validChecksums",
+              "extractionCommand"
+            ]
+          },
+          "toolchain": {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "setupCommand": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "description",
+              "setupCommand"
+            ]
+          },
+          "requiresRom": {
+            "type": "boolean",
+            "description": "True when the entry needs a user-supplied ROM. Sourced from"
+          },
+          "coverArt": {
+            "type": "string"
+          },
+          "steamGridDbId": {
+            "type": "number"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "website": {
+            "type": "string"
+          },
+          "versionPattern": {
+            "type": "string"
+          },
+          "preservePaths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "releaseChecksums": {
+            "type": "object"
+          },
+          "releaseSha256": {
+            "type": "object",
+            "properties": {
+              "windows": {
+                "type": "string",
+                "description": "Windows binary — run via Proton on the Linux host."
+              },
+              "linux": {
+                "type": "string"
+              }
+            },
+            "description": "Optional expected SHA-256 of the release asset, per platform."
+          },
+          "status": {
+            "type": "string"
+          },
+          "latestVersion": {
+            "type": "string"
+          },
+          "latestAssetUrl": {
+            "type": "object",
+            "properties": {
+              "windows": {
+                "type": "string",
+                "description": "Windows binary — run via Proton on the Linux host."
+              },
+              "linux": {
+                "type": "string"
+              }
+            }
+          },
+          "downloadHosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Extra hostnames the download pipeline accepts as the FINAL"
+          },
+          "downloadFilename": {
+            "type": "string",
+            "description": "Local filename to save the downloaded asset as, overriding the"
+          },
+          "manualImport": {
+            "type": "object",
+            "properties": {
+              "pageUrl": {
+                "type": "string",
+                "description": "URL the \"Open download page\" button hands to quick-links so the"
+              },
+              "acceptExtensions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Archive extensions the import file picker filters to. Defaults to"
+              }
+            },
+            "required": [
+              "pageUrl"
+            ],
+            "description": "When set, the game has no headless-downloadable asset; the user"
+          },
+          "userDataDir": {
+            "type": "string",
+            "description": "Engine's per-user data dir on Linux. See `Manifest.userDataDir`."
+          },
+          "mods": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Stable kebab-case id. Primary key per game; the install state"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "author": {
+                  "type": "string"
+                },
+                "credit": {
+                  "type": "string",
+                  "description": "Longer attribution string rendered as small print under the card."
+                },
+                "source": {
+                  "type": "unknown",
+                  "tsType": "ModSource"
+                },
+                "version": {
+                  "type": "string",
+                  "description": "Catalog-declared version. Used as the source-of-truth for"
+                },
+                "installSubdir": {
+                  "type": "string",
+                  "description": "Default destination for the copy-files path. Ignored when"
+                },
+                "setupModule": {
+                  "type": "string",
+                  "description": "Optional path (relative to"
+                },
+                "externalUrl": {
+                  "type": "string",
+                  "description": "Required when `source.kind === \"manual-import\"` — the URL the"
+                },
+                "previewImageUrl": {
+                  "type": "string",
+                  "description": "Optional URL for the card thumbnail. Placeholder shown otherwise."
+                },
+                "sizeBytes": {
+                  "type": "number",
+                  "description": "Optional pre-known size in bytes. Direct-URL / github-release"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "description",
+                "source"
+              ]
+            },
+            "description": "Optional mods/extras catalog for this game (see `Manifest.mods`)."
+          }
+        },
+        "required": [
+          "hasUpdate",
+          "gameStatus",
+          "hasNativeBuild",
+          "addedToSteam",
+          "id",
+          "name",
+          "project",
+          "platform",
+          "repo",
+          "description",
+          "installType",
+          "releaseAssets",
+          "launchCommand",
+          "tags"
+        ],
+        "nullable": true
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getGames",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "installedVersion": {
+              "type": "string"
+            },
+            "hasUpdate": {
+              "type": "boolean"
+            },
+            "gameStatus": {
+              "type": "string",
+              "enum": [
+                "available",
+                "installed",
+                "update_available",
+                "installing",
+                "updating",
+                "unavailable",
+                "in_progress"
+              ]
+            },
+            "hasNativeBuild": {
+              "type": "boolean"
+            },
+            "addedToSteam": {
+              "type": "boolean"
+            },
+            "steamAppId": {
+              "type": "number"
+            },
+            "steamGameId64": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "platform": {
+              "type": "string",
+              "enum": [
+                "n64",
+                "ps1",
+                "ps2",
+                "gc",
+                "xbox360",
+                "gb",
+                "gba",
+                "gbc",
+                "nes",
+                "snes",
+                "nds",
+                "3ds",
+                "wii",
+                "wiiu",
+                "switch",
+                "pc",
+                "mobile",
+                "multi",
+                "arcade",
+                "dreamcast",
+                "saturn",
+                "xbox",
+                "xboxone",
+                "other"
+              ]
+            },
+            "repo": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "installType": {
+              "type": "string",
+              "enum": [
+                "prebuilt",
+                "rom_extract",
+                "toolchain",
+                "build_from_source",
+                "custom"
+              ]
+            },
+            "releaseAssets": {
+              "type": "object",
+              "properties": {
+                "windows": {
+                  "type": "string",
+                  "description": "Windows binary — run via Proton on the Linux host."
+                },
+                "linux": {
+                  "type": "string"
+                }
+              }
+            },
+            "launchCommand": {
+              "type": "object",
+              "properties": {
+                "windows": {
+                  "type": "string",
+                  "description": "Windows launch command — run via Proton on the Linux host."
+                },
+                "linux": {
+                  "type": "string"
+                }
+              }
+            },
+            "romInfo": {
+              "type": "object",
+              "properties": {
+                "description": {
+                  "type": "string"
+                },
+                "validChecksums": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "extractionCommand": {
+                  "type": "string"
+                },
+                "fileType": {
+                  "type": "string"
+                },
+                "extensions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "placeRomAs": {
+                  "type": "string",
+                  "description": "When set, the pipeline copies the user-picked ROM into"
+                },
+                "sourceFormat": {
+                  "type": "string",
+                  "enum": [
+                    "raw",
+                    "xgd-iso",
+                    "stfs"
+                  ],
+                  "description": "How the user's dump is structured, when it isn't a single flat"
+                },
+                "extractTo": {
+                  "type": "string",
+                  "description": "Directory (relative to the install dir) that receives the"
+                },
+                "anchorFile": {
+                  "type": "string",
+                  "description": "File (relative to `extractTo`) whose presence proves the dump was"
+                },
+                "anchorChecksums": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Known-good SHA-1s of `anchorFile`. Mismatch is a WARNING, not an"
+                }
+              },
+              "required": [
+                "description",
+                "validChecksums",
+                "extractionCommand"
+              ]
+            },
+            "toolchain": {
+              "type": "object",
+              "properties": {
+                "description": {
+                  "type": "string"
+                },
+                "setupCommand": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "description",
+                "setupCommand"
+              ]
+            },
+            "requiresRom": {
+              "type": "boolean",
+              "description": "True when the entry needs a user-supplied ROM. Sourced from"
+            },
+            "coverArt": {
+              "type": "string"
+            },
+            "steamGridDbId": {
+              "type": "number"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "website": {
+              "type": "string"
+            },
+            "versionPattern": {
+              "type": "string"
+            },
+            "preservePaths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "releaseChecksums": {
+              "type": "object"
+            },
+            "releaseSha256": {
+              "type": "object",
+              "properties": {
+                "windows": {
+                  "type": "string",
+                  "description": "Windows binary — run via Proton on the Linux host."
+                },
+                "linux": {
+                  "type": "string"
+                }
+              },
+              "description": "Optional expected SHA-256 of the release asset, per platform."
+            },
+            "status": {
+              "type": "string"
+            },
+            "latestVersion": {
+              "type": "string"
+            },
+            "latestAssetUrl": {
+              "type": "object",
+              "properties": {
+                "windows": {
+                  "type": "string",
+                  "description": "Windows binary — run via Proton on the Linux host."
+                },
+                "linux": {
+                  "type": "string"
+                }
+              }
+            },
+            "downloadHosts": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Extra hostnames the download pipeline accepts as the FINAL"
+            },
+            "downloadFilename": {
+              "type": "string",
+              "description": "Local filename to save the downloaded asset as, overriding the"
+            },
+            "manualImport": {
+              "type": "object",
+              "properties": {
+                "pageUrl": {
+                  "type": "string",
+                  "description": "URL the \"Open download page\" button hands to quick-links so the"
+                },
+                "acceptExtensions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Archive extensions the import file picker filters to. Defaults to"
+                }
+              },
+              "required": [
+                "pageUrl"
+              ],
+              "description": "When set, the game has no headless-downloadable asset; the user"
+            },
+            "userDataDir": {
+              "type": "string",
+              "description": "Engine's per-user data dir on Linux. See `Manifest.userDataDir`."
+            },
+            "mods": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "Stable kebab-case id. Primary key per game; the install state"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "author": {
+                    "type": "string"
+                  },
+                  "credit": {
+                    "type": "string",
+                    "description": "Longer attribution string rendered as small print under the card."
+                  },
+                  "source": {
+                    "type": "unknown",
+                    "tsType": "ModSource"
+                  },
+                  "version": {
+                    "type": "string",
+                    "description": "Catalog-declared version. Used as the source-of-truth for"
+                  },
+                  "installSubdir": {
+                    "type": "string",
+                    "description": "Default destination for the copy-files path. Ignored when"
+                  },
+                  "setupModule": {
+                    "type": "string",
+                    "description": "Optional path (relative to"
+                  },
+                  "externalUrl": {
+                    "type": "string",
+                    "description": "Required when `source.kind === \"manual-import\"` — the URL the"
+                  },
+                  "previewImageUrl": {
+                    "type": "string",
+                    "description": "Optional URL for the card thumbnail. Placeholder shown otherwise."
+                  },
+                  "sizeBytes": {
+                    "type": "number",
+                    "description": "Optional pre-known size in bytes. Direct-URL / github-release"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "description",
+                  "source"
+                ]
+              },
+              "description": "Optional mods/extras catalog for this game (see `Manifest.mods`)."
+            }
+          },
+          "required": [
+            "hasUpdate",
+            "gameStatus",
+            "hasNativeBuild",
+            "addedToSteam",
+            "id",
+            "name",
+            "project",
+            "platform",
+            "repo",
+            "description",
+            "installType",
+            "releaseAssets",
+            "launchCommand",
+            "tags"
+          ]
+        }
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getMods",
+      "args": [
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "installed",
+                "installing",
+                "not_installed"
+              ]
+            },
+            "installedAt": {
+              "type": "string"
+            },
+            "installedVersion": {
+              "type": "string",
+              "description": "Version recorded on disk for the installed copy — may be the"
+            },
+            "id": {
+              "type": "string",
+              "description": "Stable kebab-case id. Primary key per game; the install state"
+            },
+            "name": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "author": {
+              "type": "string"
+            },
+            "credit": {
+              "type": "string",
+              "description": "Longer attribution string rendered as small print under the card."
+            },
+            "source": {
+              "type": "unknown",
+              "tsType": "ModSource"
+            },
+            "version": {
+              "type": "string",
+              "description": "Catalog-declared version. Used as the source-of-truth for"
+            },
+            "installSubdir": {
+              "type": "string",
+              "description": "Default destination for the copy-files path. Ignored when"
+            },
+            "setupModule": {
+              "type": "string",
+              "description": "Optional path (relative to"
+            },
+            "externalUrl": {
+              "type": "string",
+              "description": "Required when `source.kind === \"manual-import\"` — the URL the"
+            },
+            "previewImageUrl": {
+              "type": "string",
+              "description": "Optional URL for the card thumbnail. Placeholder shown otherwise."
+            },
+            "sizeBytes": {
+              "type": "number",
+              "description": "Optional pre-known size in bytes. Direct-URL / github-release"
+            }
+          },
+          "required": [
+            "status",
+            "id",
+            "name",
+            "description",
+            "source"
+          ]
+        }
+      },
+      "description": "Return the catalog of mods for `gameId`, enriched with per-mod install state from `state.games[gameId].installedMods`. Returns `[]` for games with no mod catalog or that aren't in the registry.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getModUrl",
+      "args": [
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "modId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "string",
+        "nullable": true
+      },
+      "description": "Resolve a mod's external URL (gamebanana page, MediaFire folder, Drive file). Frontend hands the returned URL to `useBackend(\"quick-links\").call(\"launchUrl\", url)` so the user's configured browser shortcut opens it in Gaming Mode.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getRomPath",
+      "args": [
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "string",
+        "nullable": true
+      },
+      "description": "Read the saved ROM path for `gameId`, or null if none.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getSettings",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "autoAddToSteam": {
+            "type": "boolean"
+          },
+          "updateCheckInterval": {
+            "type": "number"
+          },
+          "romDirectory": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "autoAddToSteam",
+          "updateCheckInterval"
+        ]
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "importGameFromDisk",
+      "args": [
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "filePath",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "description": "Install a `manualImport` game from a user-picked local archive. The upstream (IndieDB / ModDB) gates downloads behind a browser challenge + expiring signed URLs we can't fetch headless, so the user downloads the zip in their browser (via the detail page's \"Open download page\" button → quick-links) and imports it here. Mirrors `importModFromDisk`'s realpath + allow-root + extension gate, then runs the normal install pipeline with the archive supplied in place of a download URL.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "importModFromDisk",
+      "args": [
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "modId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "filePath",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "description": "Import a `manual-import` mod from a user-picked local archive. Mirrors `installMod` apart from skipping the download step.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "installGame",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "romPath",
+          "schema": {
+            "type": "string"
+          },
+          "optional": true
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "installMod",
+      "args": [
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "modId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "description": "Auto-install a `github-release` / `direct-url` mod. Rejects manual-import (UI should never route a manual-import through here — `importModFromDisk` is its path).",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "launchGame",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "listDirectory",
+      "args": [
+        {
+          "name": "path",
+          "schema": {
+            "type": "string"
+          },
+          "optional": true
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "currentPath": {
+            "type": "string"
+          },
+          "parent": {
+            "type": "string",
+            "nullable": true
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "isDir": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "name",
+                "isDir"
+              ]
+            }
+          }
+        },
+        "required": [
+          "currentPath",
+          "parent",
+          "entries"
+        ]
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "pickRomFile",
+      "args": [
+        {
+          "name": "extensions",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "optional": true
+        }
+      ],
+      "returns": {
+        "type": "string",
+        "nullable": true
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setRomPath",
+      "args": [
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "path",
+          "schema": {
+            "type": "string",
+            "nullable": true
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "string",
+        "nullable": true
+      },
+      "description": "Persist a user-picked ROM path for `gameId` so the detail page can re-populate the input on next visit and the install pipeline can use it for retries / updates without prompting again. Pass `null` to forget the saved path (e.g. user cleared the input). Returns the saved path (or null after removal) so callers can confirm.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "suggestRomFiles",
+      "args": [
+        {
+          "name": "gameId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Absolute path on disk."
+            },
+            "basename": {
+              "type": "string",
+              "description": "Just the filename, for the headline line of the UI tile."
+            },
+            "score": {
+              "type": "number",
+              "description": "fuzzysort score (closer to 0 = better; we filter the obviously"
+            }
+          },
+          "required": [
+            "path",
+            "basename",
+            "score"
+          ]
+        }
+      },
+      "description": "Suggest ROM files for `gameId` by fuzzy-matching the game title against ROM filenames. Detail page calls this on mount when the game requires a ROM and no path is yet saved, so the user gets one-click suggestions instead of drilling the file picker.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "uninstallGame",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "updateGame",
+      "args": [
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "updateSettings",
+      "args": [
+        {
+          "name": "settings",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "autoAddToSteam": {
+                "type": "boolean"
+              },
+              "updateCheckInterval": {
+                "type": "number"
+              },
+              "romDirectory": {
+                "type": "string"
+              }
+            }
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "gameStatusChanged"
+    },
+    {
+      "event": "pipelineEvent"
+    }
+  ]
+}

@@ -1,0 +1,110 @@
+{
+  "id": "display-settings",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "getDisplayInfo",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "gamescope",
+              "none"
+            ]
+          },
+          "backlightPath": {
+            "type": "string",
+            "nullable": true
+          },
+          "ranges": {
+            "type": "object",
+            "properties": {
+              "saturation": {
+                "type": "array",
+                "items": {
+                  "type": "unknown"
+                }
+              },
+              "brightness": {
+                "type": "array",
+                "items": {
+                  "type": "unknown"
+                }
+              }
+            },
+            "required": [
+              "saturation",
+              "brightness"
+            ]
+          },
+          "saturation": {
+            "type": "number"
+          },
+          "brightness": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "method",
+          "backlightPath",
+          "ranges",
+          "saturation",
+          "brightness"
+        ]
+      },
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "resetDefaults",
+      "args": [],
+      "returns": {
+        "type": "null"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setBrightness",
+      "args": [
+        {
+          "name": "value",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "boolean"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setSaturation",
+      "args": [
+        {
+          "name": "value",
+          "schema": {
+            "type": "number"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "boolean"
+      },
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "stateChanged"
+    }
+  ]
+}

@@ -1,0 +1,321 @@
+{
+  "id": "apex",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "getStatus",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "unsupported": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "object",
+            "properties": {
+              "pciDeviceExists": {
+                "type": "boolean",
+                "description": "PCI device node exists under /sys/bus/pci/devices."
+              },
+              "driverBound": {
+                "type": "boolean",
+                "description": "Driver symlink present — xhci_hcd is currently bound."
+              },
+              "gamepadPresent": {
+                "type": "boolean",
+                "description": "Both internal gamepad USB IDs enumerate via lsusb."
+              },
+              "controller": {
+                "type": "string",
+                "description": "The controller we'd act on (detected-dead, else default)."
+              },
+              "deadInLog": {
+                "type": "boolean",
+                "description": "True if the kernel log shows this controller recently died."
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "pciDeviceExists",
+              "driverBound",
+              "gamepadPresent",
+              "controller",
+              "deadInLog",
+              "summary"
+            ]
+          },
+          "hidOxp": {
+            "type": "object",
+            "properties": {
+              "blacklisted": {
+                "type": "boolean",
+                "description": "The modprobe.d drop-in is present and contains the blacklist line."
+              },
+              "moduleLoaded": {
+                "type": "boolean",
+                "description": "`hid_oxp` is currently loaded (still resident until the next boot)."
+              },
+              "rebootRequired": {
+                "type": "boolean",
+                "description": "The desired state is set but a reboot is needed to reach it: blacklisted"
+              }
+            },
+            "required": [
+              "blacklisted",
+              "moduleLoaded",
+              "rebootRequired"
+            ]
+          },
+          "fingerprint": {
+            "type": "object",
+            "properties": {
+              "supported": {
+                "type": "boolean",
+                "description": "The fingerprint reader is present on this machine."
+              },
+              "controller": {
+                "type": "string",
+                "nullable": true,
+                "description": "Resolved xHCI controller hosting the reader (path 2 target), or null."
+              },
+              "controllerWakeDisabled": {
+                "type": "boolean",
+                "description": "Controller wake currently disabled (path 2 closed at runtime)."
+              },
+              "udevRuleInstalled": {
+                "type": "boolean",
+                "description": "Persisting udev rule installed."
+              },
+              "kargActive": {
+                "type": "boolean",
+                "description": "Karg present on the live kernel command line (path 1 active)."
+              },
+              "kargStaged": {
+                "type": "boolean",
+                "description": "Karg staged in the bootloader config but not yet booted."
+              },
+              "applied": {
+                "type": "boolean",
+                "description": "Both paths fully closed and active right now."
+              },
+              "rebootPending": {
+                "type": "boolean",
+                "description": "A reboot is needed to finish applying/reverting (the karg changed)."
+              },
+              "distro": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "supported",
+              "controller",
+              "controllerWakeDisabled",
+              "udevRuleInstalled",
+              "kargActive",
+              "kargStaged",
+              "applied",
+              "rebootPending",
+              "distro"
+            ]
+          },
+          "autoRecoverOnWake": {
+            "type": "boolean"
+          },
+          "listenerRunning": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "unsupported"
+        ]
+      },
+      "description": "Snapshot the controller/gamepad state for the UI.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "recover",
+      "args": [],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "controller": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "gamepadPresent": {
+            "type": "boolean"
+          },
+          "alreadyHealthy": {
+            "type": "boolean",
+            "description": "True when recover() found the gamepad already enumerating and did"
+          },
+          "error": {
+            "type": "string"
+          },
+          "unsupported": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "controller",
+          "steps",
+          "gamepadPresent"
+        ]
+      },
+      "description": "Run the rebind recovery. Returns a structured result for the UI.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setAutoRecoverOnWake",
+      "args": [
+        {
+          "name": "enabled",
+          "schema": {
+            "type": "boolean"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "unsupported": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Enable/disable running the recovery automatically on resume. Persists the choice and starts/stops the logind wake listener to match.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setFingerprintBlock",
+      "args": [
+        {
+          "name": "enabled",
+          "schema": {
+            "type": "boolean"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "rebootRequired": {
+            "type": "boolean"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "manualKarg": {
+            "type": "string",
+            "description": "Set when the karg couldn't be automated on this distro — manual hint."
+          },
+          "error": {
+            "type": "string"
+          },
+          "unsupported": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "rebootRequired",
+          "steps"
+        ]
+      },
+      "description": "Block / unblock the fingerprint reader as a wake source. Closes both wake paths (controller PME at runtime + the GPIO kernel arg); the karg change needs a reboot, signalled via `rebootRequired`.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setHidOxpBlacklist",
+      "args": [
+        {
+          "name": "enabled",
+          "schema": {
+            "type": "boolean"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "unsupported": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          },
+          "hidOxp": {
+            "type": "object",
+            "properties": {
+              "blacklisted": {
+                "type": "boolean",
+                "description": "The modprobe.d drop-in is present and contains the blacklist line."
+              },
+              "moduleLoaded": {
+                "type": "boolean",
+                "description": "`hid_oxp` is currently loaded (still resident until the next boot)."
+              },
+              "rebootRequired": {
+                "type": "boolean",
+                "description": "The desired state is set but a reboot is needed to reach it: blacklisted"
+              }
+            },
+            "required": [
+              "blacklisted",
+              "moduleLoaded",
+              "rebootRequired"
+            ]
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "description": "Enable/disable the hid-oxp driver blacklist — the OneXPlayer HID driver implicated in the xHCI controller dying on wake. Writes/removes a modprobe.d drop-in; takes effect on the next reboot (the returned status flags `rebootRequired` while the change is staged). See ./lib/hid-oxp.ts.",
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ],
+  "events": [
+    {
+      "event": "statusChanged"
+    }
+  ]
+}

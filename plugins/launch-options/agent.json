@@ -1,0 +1,242 @@
+{
+  "id": "launch-options",
+  "generatorVersion": 1,
+  "methods": [
+    {
+      "name": "appendLaunchToken",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "token",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "opts",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "description": "Idempotency key. If a token whose canonical form starts with `key`"
+              },
+              "position": {
+                "type": "string",
+                "enum": [
+                  "before",
+                  "after"
+                ],
+                "description": "Where to insert relative to `%command%`. Default `\"before\"` — the"
+              },
+              "ensureCommand": {
+                "type": "boolean",
+                "description": "If the existing string has no `%command%` marker, add one. Default"
+              }
+            }
+          },
+          "optional": true
+        }
+      ],
+      "returns": {
+        "type": "string"
+      },
+      "description": "Append a wrapper token to a game's launch options without overwriting what the user (or another plugin) already has there.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "deletePreset",
+      "args": [
+        {
+          "name": "name",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "description": "Delete a custom preset.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "getGames",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "appId": {
+              "type": "string"
+            },
+            "launchOptions": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "appId",
+            "launchOptions"
+          ]
+        }
+      },
+      "description": "Get all games that have LaunchOptions set across all userdata dirs.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getLaunchOptions",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "string"
+      },
+      "description": "Get the current launch options for a specific appId. Checks both `localconfig.vdf` (Steam apps) and `shortcuts.vdf` (non-Steam apps) so the merge in `appendLaunchToken` doesn't wipe an existing string.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "getPresets",
+      "args": [],
+      "returns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "options": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "options"
+          ]
+        }
+      },
+      "description": "Return all presets (built-in defaults merged with user-saved ones).",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "hasLaunchToken",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "key",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "boolean"
+      },
+      "description": "True if `key` is already present in this game's launch options. Useful for plugins that want to render an Apply / Remove toggle for a specific appId.",
+      "safety": "read",
+      "safetyInferred": true
+    },
+    {
+      "name": "removeLaunchToken",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "key",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "string"
+      },
+      "description": "Counterpart to `appendLaunchToken` — remove a previously-injected token by its idempotency key. No-op if the token isn't present.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "savePreset",
+      "args": [
+        {
+          "name": "name",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "options",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "description": "Save a custom preset.",
+      "safety": "write",
+      "safetyInferred": true
+    },
+    {
+      "name": "setLaunchOptions",
+      "args": [
+        {
+          "name": "appId",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        },
+        {
+          "name": "options",
+          "schema": {
+            "type": "string"
+          },
+          "optional": false
+        }
+      ],
+      "returns": {
+        "type": "null"
+      },
+      "description": "Set or update the LaunchOptions for a given appId.",
+      "safety": "write",
+      "safetyInferred": true
+    }
+  ]
+}
