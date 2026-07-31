@@ -82,6 +82,46 @@ describe("presets", () => {
   });
 });
 
+describe("while a collection is being built", () => {
+  const spinner = () => document.body.querySelector(".loading");
+
+  it("puts a spinner in the header and names what it is building", () => {
+    // Creating one takes a beat — reading the library, writing the rules,
+    // opening the result — and the page is inert for all of it.
+    renderPage();
+    expect(spinner()).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Never played/ }));
+    expect(spinner()).toBeTruthy();
+    expect(screen.getByText(/Building “Never played”/)).toBeTruthy();
+  });
+
+  it("locks every other preset too, not just the one pressed", () => {
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: /Never played/ }));
+    expect(screen.getByRole("button", { name: /Most played/ }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("does the same for one created from scratch", () => {
+    const h = renderPage();
+    fireEvent.change(nameField(), { target: { value: "Backlog" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(h.onCreate).toHaveBeenCalledWith("Backlog");
+    expect(spinner()).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Creating…" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("won't create the same one twice from a second press", () => {
+    const h = renderPage();
+    fireEvent.change(nameField(), { target: { value: "Backlog" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Creating…" }));
+    fireEvent.keyDown(nameField(), { key: "Enter" });
+    expect(h.onCreate).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("naming one yourself", () => {
   it("won't create one without a name, and says how to get a keyboard", () => {
     // A disabled button that gives no reason is indistinguishable from a

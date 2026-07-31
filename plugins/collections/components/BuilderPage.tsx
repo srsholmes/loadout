@@ -23,7 +23,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import type { ReactNode } from "react";
-import { IconButton, PluginHeader, pushBackInterceptor } from "@loadout/ui";
+import { IconButton, PluginHeader, Spinner, pushBackInterceptor } from "@loadout/ui";
 import { FaChevronLeft } from "react-icons/fa6";
 
 export interface BuilderPageProps {
@@ -37,6 +37,14 @@ export interface BuilderPageProps {
   footer?: ReactNode;
   /** Label for the back control. */
   backLabel?: string;
+  /**
+   * Work is in flight and the page is inert.
+   *
+   * Puts a spinner in the topbar, because the alternative is a page that stops
+   * responding with nothing to say why — and a press that shows no sign of
+   * having registered gets pressed again.
+   */
+  busy?: boolean;
 }
 
 /** Interactive descendants, in DOM order. */
@@ -50,6 +58,7 @@ export function BuilderPage({
   children,
   footer,
   backLabel = "Back",
+  busy = false,
 }: BuilderPageProps) {
   const contentRef = useRef<HTMLDivElement | null>(null);
 
@@ -102,9 +111,12 @@ export function BuilderPage({
               </span>
             ) : null}
           </div>
-          <IconButton onClick={back} title={backLabel} ariaLabel={backLabel} size={26}>
-            <FaChevronLeft size={11} />
-          </IconButton>
+          <div className="flex items-center gap-2 shrink-0">
+            {busy ? <Spinner size={16} /> : null}
+            <IconButton onClick={back} title={backLabel} ariaLabel={backLabel} size={26}>
+              <FaChevronLeft size={11} />
+            </IconButton>
+          </div>
         </div>
       </PluginHeader>
 

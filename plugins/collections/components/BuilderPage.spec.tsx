@@ -28,6 +28,19 @@ function open(props: Partial<Parameters<typeof BuilderPage>[0]> = {}) {
 }
 
 describe("BuilderPage", () => {
+  it("shows a spinner in the topbar while work is in flight", () => {
+    // The alternative is a page that stops responding with nothing to say why
+    // — and a press that shows no sign of having registered gets pressed
+    // again.
+    const { view } = open({ busy: true });
+    expect(view.baseElement.querySelector(".loading")).toBeTruthy();
+  });
+
+  it("has no spinner when it is idle", () => {
+    const { view } = open();
+    expect(view.baseElement.querySelector(".loading")).toBeNull();
+  });
+
   it("is a labelled region, not a dialog — the app is already an overlay", () => {
     open();
     expect(screen.getByRole("region", { name: "Add a rule" })).toBeTruthy();

@@ -68,6 +68,11 @@ export function NewCollectionPage({
    * collections got made.
    */
   const [picked, setPicked] = useState<string | null>(null);
+  /** The from-scratch Create has been pressed. Same beat, same lock. */
+  const [creating, setCreating] = useState(false);
+
+  /** Something is being built: the page is inert until it lands. */
+  const busy = picked !== null || creating;
 
   const priced = useMemo<PricedPreset[]>(() => {
     const nowSec = now ?? Math.floor(Date.now() / 1000);
@@ -86,6 +91,9 @@ export function NewCollectionPage({
   }, [games, availableFacts, now]);
 
   const trimmed = name.trim();
+  /** What is being built, for the header to name while it happens. */
+  const busyLabel =
+    picked === null ? trimmed : (priced.find((p) => p.preset.id === picked)?.preset.label ?? "");
   // Case-insensitive: Steam's sidebar shows "Backlog" and "backlog" as two
   // entries that look identical, which is nobody's intent.
   const taken = (label: string) =>
@@ -99,9 +107,14 @@ export function NewCollectionPage({
       // show is on screen in the place it will appear, rather than only in the
       // field you are typing into.
       title={trimmed.length > 0 ? trimmed : "New collection"}
-      description="Name one of your own, or start from a preset."
+      description={
+        busy
+          ? `Building “${busyLabel}” — reading your library and writing the rules.`
+          : "Name one of your own, or start from a preset."
+      }
       onBack={onBack}
       backLabel="Cancel"
+      busy={busy}
     >
       <section className="flex flex-col gap-2">
         <Text variant="secondary">Name your own</Text>
@@ -111,13 +124,21 @@ export function NewCollectionPage({
             onChange={setName}
             placeholder="e.g. Backlog, Short games, Couch co-op"
             onKeyDown={(event) => {
-              if (event.key !== "Enter" || !ready) return;
+              if (event.key !== "Enter" || !ready || busy) return;
               event.preventDefault();
+              setCreating(true);
               onCreate(trimmed);
             }}
           />
-          <Button variant="primary" disabled={!ready} onClick={() => onCreate(trimmed)}>
-            Create
+          <Button
+            variant="primary"
+            disabled={!ready || busy}
+            onClick={() => {
+              setCreating(true);
+              onCreate(trimmed);
+            }}
+          >
+            {creating ? "Creating…" : "Create"}
           </Button>
         </div>
         {clash ? (
@@ -148,7 +169,7 @@ export function NewCollectionPage({
               priced={p}
               alreadyExists={taken(p.preset.label)}
               busy={picked === p.preset.id}
-              locked={picked !== null}
+              locked={busy}
               onPick={() => {
                 setPicked(p.preset.id);
                 onPickPreset(p.preset);
