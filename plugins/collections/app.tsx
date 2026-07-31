@@ -279,7 +279,7 @@ export function Collections() {
           autoMaintained={summaryFor.autoMaintained}
           onBack={() => void openCollection(summaryFor)}
           onRename={(label) => void renameCollection(summaryFor, label)}
-          onDelete={() => void removeCollection(summaryFor)}
+          onDelete={() => void removeCollection(summaryFor.id)}
         />
       </div>
     );
@@ -303,10 +303,7 @@ export function Collections() {
           games={evalGames}
           onCancel={() => void openCollection(editing)}
           onSave={(next) => void saveCollection(next)}
-          onDelete={() => {
-            const summary = summaries?.find((c) => c.id === editing.id);
-            if (summary) void removeCollection(summary);
-          }}
+          onDelete={() => void removeCollection(editing.id)}
         />
       </div>
     );
@@ -335,10 +332,7 @@ export function Collections() {
               : { kind: "actions", id: view.id },
           )
         }
-        onDelete={() => {
-          const summary = summaries?.find((c) => c.id === view.id);
-          if (summary) void removeCollection(summary);
-        }}
+        onDelete={() => void removeCollection(view.id)}
         onAddGames={handEditable ? () => setView({ kind: "add", id: view.id, label: view.label }) : undefined}
         onRemoveGame={handEditable ? (appId) => void removeFromLinked(view.id, appId) : undefined}
       />
@@ -456,19 +450,37 @@ export function Collections() {
     }
   }
 
-  async function removeCollection(c: CollectionSummary) {
+  /**
+   * Delete a collection and land back on the grid without it.
+   *
+   * Takes an id rather than a summary. It used to need the row from
+   * `summaries`, and did nothing at all when it could not find one — so a
+   * confirmed delete could be a silent no-op, which is the worst possible
+   * answer to "did that work?". The kind comes from `collections`, which is
+   * what actually decides it: ours if we hold it, Steam's otherwise.
+   *
+   * The card goes immediately rather than after the grid reload. Re-reading
+   * the grid means a full library evaluation plus a Steam round trip, and a
+   * collection that lingers for that long after you confirmed its deletion
+   * reads as a delete that did not take.
+   */
+  async function removeCollection(id: string) {
+    const managed = collections.some((c) => c.id === id);
+    const before = summaries;
+    setSummaries((prev) => prev?.filter((c) => c.id !== id) ?? prev);
+    setView({ kind: "grid" });
     try {
-      if (c.kind === "managed") {
-        const config = (await call("deleteCollection", c.id)) as {
+      if (managed) {
+        const config = (await call("deleteCollection", id)) as {
           collections: ManagedCollection[];
         };
         setCollections(config.collections);
       } else {
-        await call("deleteLinked", c.id);
+        await call("deleteLinked", id);
       }
-      setView({ kind: "grid" });
       await loadGrid();
     } catch (err) {
+      setSummaries(before);
       notify(err instanceof Error ? err.message : "Couldn't delete that collection", {
         kind: "error",
       });

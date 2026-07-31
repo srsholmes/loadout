@@ -322,6 +322,46 @@ describe("editing a collection's rules", () => {
     expect(screen.queryByRole("button", { name: "Add games" })).toBeNull();
   });
 
+  it("drops the card and lands on the grid before Steam has answered", async () => {
+    // Re-reading the grid is a full library evaluation plus a Steam round
+    // trip. A collection that lingers for that long after you confirmed its
+    // deletion reads as a delete that did not take.
+    summaries = [summary(), summary({ id: "srm-2", label: "Nintendo 64" })];
+    ({ unmount } = renderApp());
+    await waitFor(() => expect(screen.getByText("Sega Genesis")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /Sega Genesis/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Remove collection" })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove collection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove collection" }));
+
+    await waitFor(() => expect(screen.queryByText("Sega Genesis")).toBeNull());
+    // Back on the grid, with everything else still there.
+    expect(screen.getByText("Nintendo 64")).toBeTruthy();
+  });
+
+  it("deletes even when the grid rows haven't arrived", async () => {
+    // It used to look the collection up in the loaded summaries and do nothing
+    // at all when it couldn't find one — a confirmed delete as a silent no-op,
+    // which is the worst possible answer to "did that work?".
+    managedCollections = [managed("backlog", "Backlog")];
+    summaries = [summary({ id: "backlog", label: "Backlog", kind: "managed" })];
+    ({ unmount } = renderApp());
+    await waitFor(() => expect(screen.getByText("Backlog")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /Backlog/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Options" })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Options" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Delete this collection" })).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete this collection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(calls.some((c) => c.method === "deleteCollection")).toBe(true));
+    expect(calls.find((c) => c.method === "deleteCollection")!.args).toEqual(["backlog"]);
+  });
+
   it("removes a collection from the detail header, but only on the second press", async () => {
     summaries = [summary()];
     ({ unmount } = renderApp());
