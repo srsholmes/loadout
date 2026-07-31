@@ -139,7 +139,7 @@ done
 # byte-level parsers / provider merges where an untested edge case is a
 # silently-wrong library rather than a crash. The `[ -d ]` guard below
 # makes listing them before they exist a no-op.
-SPEC_SCOPED_PACKAGES="packages/steam-appinfo/src packages/game-metadata/src"
+SPEC_SCOPED_PACKAGES="packages/steam-cdp/src packages/steam-appinfo/src packages/game-metadata/src"
 for dir in $SPEC_SCOPED_PACKAGES; do
   [ -d "$dir" ] || continue
   for src in $(find "$dir" -type f -name '*.ts' 2>/dev/null); do

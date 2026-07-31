@@ -65,9 +65,9 @@ plugins/*/_deps/
 docs/superpowers/
 docs/plugin-migration.md
 
-# Captured library corpus for library-tabs' Tier-B tests. It is a dump of a
+# Captured library corpus for the collections plugin's Tier-B tests. It is a dump of a
 # real Steam library, so it is deliberately NOT published — it normally lives
 # in ~/.cache/loadout/. These patterns only matter if someone points
-# LIBRARY_TABS_CORPUS at a path inside the repo.
+# COLLECTIONS_CORPUS at a path inside the repo.
 *.corpus.ndjson
 test/corpus/

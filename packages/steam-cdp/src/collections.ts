@@ -11,7 +11,8 @@
  * recomp, which drops a shortcut into a bucket and never looks again, and it
  * is exactly wrong for a mirror, which must own a specific collection by id
  * across renames and must be able to remove apps. Changing it in place would
- * break `plugins/protondb-badges` and recomp both, so this is a sibling.
+ * break its existing callers — `packages/steam-shortcut` uses it for the
+ * add-to-Steam flow in `recomp` and `store-bridge` — so this is a sibling.
  *
  * Every write goes through `SaveCollection`. Without it a collection exists
  * only in memory, looks completely correct in Steam's UI, and is gone on the

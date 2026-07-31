@@ -7,7 +7,7 @@
  * library is fetched once per change and filtered locally. That is what makes
  * a live match count on every keystroke affordable.
  *
- * The same evaluator is imported here (not duplicated) for the Phase-4 Steam
+ * The same evaluator is imported here (not duplicated) for the Steam
  * collection mirror, so a tab can never mean one thing on screen and another
  * in Steam.
  *
