@@ -33,11 +33,43 @@ import { FaGear, FaLayerGroup } from "react-icons/fa6";
 import type { GameMetadataSnapshot } from "@loadout/types";
 import { CollectionCard } from "./components/CollectionCard";
 import { CollectionDetail } from "./components/CollectionDetail";
+import { CollectionActionsPage } from "./components/CollectionActionsPage";
 import { RuleBuilder } from "./components/RuleBuilder";
 import { buildEvalGames } from "./lib/facts";
 import type { ManagedCollection } from "./lib/types";
 
 export { FaLayerGroup as icon };
+
+interface SyncChange {
+  label: string;
+  kind: "created" | "updated" | "deleted";
+  added: string[];
+  removed: string[];
+  addedCount: number;
+  removedCount: number;
+}
+
+/**
+ * One sync change as a sentence.
+ *
+ * Names up to a couple of games rather than counts alone — "Portal 2 left"
+ * answers the question a bare "1 removed" provokes.
+ */
+function describeChange(c: SyncChange): string {
+  if (c.kind === "created") return `${c.label} — created with ${c.addedCount} games`;
+  if (c.kind === "deleted") return `${c.label} — removed from Steam`;
+
+  const parts: string[] = [];
+  if (c.addedCount > 0) parts.push(`${c.addedCount} added${listOf(c.added)}`);
+  if (c.removedCount > 0) parts.push(`${c.removedCount} removed${listOf(c.removed)}`);
+  return `${c.label} — ${parts.join(", ")}`;
+}
+
+function listOf(names: string[]): string {
+  if (names.length === 0) return "";
+  const shown = names.slice(0, 2).join(", ");
+  return names.length > 2 ? ` (${shown}, …)` : ` (${shown})`;
+}
 
 interface CollectionSummary {
   id: string;
@@ -53,7 +85,8 @@ interface CollectionSummary {
 type View =
   | { kind: "grid" }
   | { kind: "detail"; id: string; label: string }
-  | { kind: "rules"; id: string };
+  | { kind: "rules"; id: string }
+  | { kind: "actions"; id: string };
 
 /** Exported for tests: `mount` wraps this in the real `PluginProvider`,
  *  which opens a WebSocket the specs have no use for. */
@@ -76,6 +109,15 @@ export function Collections() {
    */
   const [snapshot, setSnapshot] = useState<GameMetadataSnapshot | null>(null);
   const [collections, setCollections] = useState<ManagedCollection[]>([]);
+  /**
+   * What the last sync changed.
+   *
+   * Shown on the grid rather than as a toast: a rules-driven collection
+   * dropping a game is correct behaviour, and the only thing that makes it
+   * feel arbitrary is finding out by accident. A toast is gone before you
+   * have read it.
+   */
+  const [lastSync, setLastSync] = useState<SyncChange[] | null>(null);
 
   const evalGames = useMemo(() => buildEvalGames(snapshot?.games ?? []), [snapshot]);
 
@@ -157,6 +199,36 @@ export function Collections() {
     return q ? summaries.filter((c) => c.label.toLowerCase().includes(q)) : summaries;
   }, [summaries, search]);
 
+  // ── Options ────────────────────────────────────────────────────────
+  if (view.kind === "actions") {
+    const summaryFor = summaries?.find((c) => c.id === view.id);
+    if (!summaryFor) {
+      return (
+        <div className="p-7">
+          <Spinner />
+        </div>
+      );
+    }
+    return (
+      <div className="p-7 h-full overflow-y-auto" style={{ overflowX: "hidden" }}>
+        <CollectionActionsPage
+          label={summaryFor.label}
+          kind={summaryFor.kind}
+          count={summaryFor.count}
+          autoMaintained={summaryFor.autoMaintained}
+          onBack={() => setView({ kind: "grid" })}
+          onRename={(label) => void renameCollection(summaryFor, label)}
+          onDelete={() => void removeCollection(summaryFor)}
+          onEditRules={
+            summaryFor.kind === "managed"
+              ? () => setView({ kind: "rules", id: view.id })
+              : undefined
+          }
+        />
+      </div>
+    );
+  }
+
   // ── Rule builder ───────────────────────────────────────────────────
   if (view.kind === "rules") {
     const editing = collections.find((c) => c.id === view.id);
@@ -191,6 +263,16 @@ export function Collections() {
         onEditRules={
           collections.some((c) => c.id === view.id)
             ? () => setView({ kind: "rules", id: view.id })
+            : undefined
+        }
+        onOptions={() => setView({ kind: "actions", id: view.id })}
+        onRemoveGame={
+          // Only a linked, non-dynamic collection can have games removed by
+          // hand: a managed one would get them straight back on the next sync,
+          // and Steam recomputes a dynamic one.
+          summaries?.find((c) => c.id === view.id)?.kind === "linked" &&
+          !summaries.find((c) => c.id === view.id)?.autoMaintained
+            ? (appId) => void removeFromLinked(view.id, appId)
             : undefined
         }
       />
@@ -228,6 +310,19 @@ export function Collections() {
         </div>
       </PluginHeader>
 
+      {lastSync && lastSync.length > 0 ? (
+        <div className="flex flex-col gap-1">
+          <Text variant="secondary">Last sync</Text>
+          <ul style={{ margin: 0, paddingLeft: "1.25rem" }}>
+            {lastSync.map((c) => (
+              <li key={`${c.kind}-${c.label}`}>
+                <Text variant="secondary">{describeChange(c)}</Text>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       {!steamReachable ? (
         <Text variant="secondary">
           Steam isn&apos;t reachable, so only the collections this plugin maintains are
@@ -262,6 +357,62 @@ export function Collections() {
       )}
     </div>
   );
+
+  async function renameCollection(c: CollectionSummary, label: string) {
+    try {
+      if (c.kind === "managed") {
+        const config = (await call("renameCollection", c.id, label)) as {
+          collections: ManagedCollection[];
+        };
+        setCollections(config.collections);
+      } else {
+        await call("renameLinked", c.id, label);
+      }
+      setView({ kind: "grid" });
+      await loadGrid();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Couldn't rename that collection", {
+        kind: "error",
+      });
+    }
+  }
+
+  async function removeCollection(c: CollectionSummary) {
+    try {
+      if (c.kind === "managed") {
+        const config = (await call("deleteCollection", c.id)) as {
+          collections: ManagedCollection[];
+        };
+        setCollections(config.collections);
+      } else {
+        await call("deleteLinked", c.id);
+      }
+      setView({ kind: "grid" });
+      await loadGrid();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Couldn't delete that collection", {
+        kind: "error",
+      });
+    }
+  }
+
+  /** Drop one game from a linked collection, writing straight to Steam. */
+  async function removeFromLinked(id: string, appId: string) {
+    const before = games ?? [];
+    const next = before.filter((g) => g.appId !== appId);
+    // Optimistic: the write is a Steam round trip, and a tile that lingers for
+    // a second reads as a failed press.
+    setGames(next);
+    try {
+      await call("setLinkedApps", id, next.map((g) => g.appId));
+      await loadGrid();
+    } catch (err) {
+      setGames(before);
+      notify(err instanceof Error ? err.message : "Couldn't update that collection", {
+        kind: "error",
+      });
+    }
+  }
 
   async function saveCollection(next: ManagedCollection) {
     try {
@@ -304,8 +455,10 @@ export function Collections() {
         renamed: number;
         deleted: number;
         failures: unknown[];
+        changes: SyncChange[];
       };
       const wrote = result.created + result.updated + result.renamed + result.deleted;
+      setLastSync(result.changes);
       notify(wrote === 0 ? "Already up to date" : `Synced ${wrote} collections`, {
         kind: result.failures.length > 0 ? "error" : "success",
       });

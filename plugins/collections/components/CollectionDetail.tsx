@@ -34,6 +34,14 @@ export interface CollectionDetailProps {
   onPickGame: (appId: string) => void;
   /** Managed collections only — a linked one has no rules to edit. */
   onEditRules?: () => void;
+  /** Rename / delete, on their own page. */
+  onOptions: () => void;
+  /**
+   * Drop one game. Offered only for a linked, non-dynamic collection: a
+   * managed one would get the game straight back on the next sync, and Steam
+   * recomputes a dynamic one.
+   */
+  onRemoveGame?: (appId: string) => void;
 }
 
 const artUrl = (appId: string, kind: "capsule" | "header") =>
@@ -45,6 +53,8 @@ export function CollectionDetail({
   onBack,
   onPickGame,
   onEditRules,
+  onOptions,
+  onRemoveGame,
 }: CollectionDetailProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const gridWrapperRef = useRef<HTMLDivElement | null>(null);
@@ -82,6 +92,9 @@ export function CollectionDetail({
                 Edit rules
               </Button>
             ) : null}
+            <Button variant="neutral" onClick={onOptions}>
+              Options
+            </Button>
             <IconButton onClick={onBack} title="Back" ariaLabel="Back" size={26}>
               <FaChevronLeft size={11} />
             </IconButton>
@@ -111,6 +124,13 @@ export function CollectionDetail({
                   fallbackImageUrl={artUrl(g.appId, "header")}
                   title={g.name}
                   onPick={() => onPickGame(g.appId)}
+                  action={
+                    onRemoveGame ? (
+                      <Button variant="neutral" size="sm" onClick={() => onRemoveGame(g.appId)}>
+                        Remove
+                      </Button>
+                    ) : undefined
+                  }
                 />
               ))}
             </GameCardGrid>

@@ -59,6 +59,27 @@ const PLAYTIME_PLUGIN = "playtime";
  */
 const AUTO_SYNC_DEBOUNCE_MS = 2500;
 
+/** What a sync did to one collection, for reporting it back. */
+export interface SyncChange {
+  label: string;
+  kind: "created" | "updated" | "deleted";
+  /** Up to five names, so the report reads as prose rather than a dump. */
+  added: string[];
+  removed: string[];
+  addedCount: number;
+  removedCount: number;
+}
+
+export interface SyncReport {
+  summary: string;
+  created: number;
+  updated: number;
+  renamed: number;
+  deleted: number;
+  failures: MirrorSyncResult["failures"];
+  changes: SyncChange[];
+}
+
 /** One card on the grid, whichever kind it is. */
 export interface CollectionSummary {
   id: string;
@@ -184,6 +205,19 @@ export default class CollectionsBackend implements PluginBackend {
       ...this.config,
       collections: [...this.config.collections, collection],
       collectionOrder: [...this.config.collectionOrder, id],
+    });
+  }
+
+  /** Rename a managed collection. Its Steam collection follows on next sync. */
+  async renameCollection(id: string, label: string): Promise<CollectionsConfig> {
+    this._assertWritable();
+    const trimmed = label.trim();
+    if (!trimmed) throw new Error("A collection needs a name");
+    return this.setConfig({
+      ...this.config,
+      collections: this.config.collections.map((c) =>
+        c.id === id ? { ...c, label: trimmed } : c,
+      ),
     });
   }
 
@@ -424,14 +458,7 @@ export default class CollectionsBackend implements PluginBackend {
     };
   }
 
-  async syncMirror(): Promise<{
-    summary: string;
-    created: number;
-    updated: number;
-    renamed: number;
-    deleted: number;
-    failures: MirrorSyncResult["failures"];
-  }> {
+  async syncMirror(): Promise<SyncReport> {
     const run = this.syncChain.then(
       () => this._syncOnce(),
       () => this._syncOnce(),
@@ -440,14 +467,7 @@ export default class CollectionsBackend implements PluginBackend {
     return run;
   }
 
-  private async _syncOnce(): Promise<{
-    summary: string;
-    created: number;
-    updated: number;
-    renamed: number;
-    deleted: number;
-    failures: MirrorSyncResult["failures"];
-  }> {
+  private async _syncOnce(): Promise<SyncReport> {
     this._assertWritable();
 
     let plan: MirrorPlan;
@@ -485,7 +505,71 @@ export default class CollectionsBackend implements PluginBackend {
           failures.map((f) => `${f.managedId}/${f.step}: ${f.message}`).join("; "),
       );
     }
-    return { summary: summarizePlan(plan), created, updated, renamed, deleted, failures };
+
+    return {
+      summary: summarizePlan(plan),
+      created,
+      updated,
+      renamed,
+      deleted,
+      failures,
+      changes: await this._describeChanges(plan),
+    };
+  }
+
+  /**
+   * What the sync actually did to each collection, in words.
+   *
+   * `planMirror` already computes these add/remove sets and they were thrown
+   * away. Surfacing them is the whole answer to "why did that game disappear":
+   * a rules-driven collection dropping a game is correct, and only feels
+   * arbitrary when it happens in silence.
+   */
+  private async _describeChanges(plan: MirrorPlan): Promise<SyncChange[]> {
+    const label = new Map(this.config.collections.map((c) => [c.id, c.label] as const));
+    const changes: SyncChange[] = [];
+
+    // Only resolve names if something actually moved — this is a full library
+    // read, and most syncs are no-ops.
+    const needsNames = plan.updates.some((u) => u.add.length + u.remove.length > 0);
+    const nameOf = needsNames
+      ? new Map((await this.getSnapshot()).games.map((g) => [g.appId, g.name] as const))
+      : new Map<string, string>();
+    const names = (ids: readonly string[]) =>
+      ids.slice(0, 5).map((id) => nameOf.get(id) ?? id);
+
+    for (const c of plan.creates) {
+      changes.push({
+        label: label.get(c.managedId) ?? c.name,
+        kind: "created",
+        added: [],
+        removed: [],
+        addedCount: c.appIds.length,
+        removedCount: 0,
+      });
+    }
+    for (const u of plan.updates) {
+      if (u.add.length === 0 && u.remove.length === 0) continue;
+      changes.push({
+        label: label.get(u.managedId) ?? u.name,
+        kind: "updated",
+        added: names(u.add),
+        removed: names(u.remove),
+        addedCount: u.add.length,
+        removedCount: u.remove.length,
+      });
+    }
+    for (const d of plan.deletes) {
+      changes.push({
+        label: d.name,
+        kind: "deleted",
+        added: [],
+        removed: [],
+        addedCount: 0,
+        removedCount: 0,
+      });
+    }
+    return changes;
   }
 
   private async _rememberPendingSync(): Promise<void> {

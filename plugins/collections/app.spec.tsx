@@ -34,6 +34,13 @@ const callMock = mock((method: string, ...args: unknown[]) => {
       return Promise.resolve({
         collections: [...managedCollections, fullCollection("made", "New collection")],
       });
+    case "syncMirror":
+      return Promise.resolve({
+        created: 0, updated: 1, renamed: 0, deleted: 0, failures: [],
+        changes: [
+          { label: "Backlog", kind: "updated", added: [], removed: ["Portal 2"], addedCount: 0, removedCount: 1 },
+        ],
+      });
     case "setCollections":
       return Promise.resolve({ collections: managedCollections });
     case "listGames":
@@ -202,5 +209,19 @@ describe("editing a collection's rules", () => {
     await waitFor(() => expect(calls.some((c) => c.method === "createCollection")).toBe(true));
     // And lands in the builder rather than back on the grid.
     await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeTruthy());
+  });
+});
+
+describe("sync reporting", () => {
+  it("names what left a collection, on the page rather than in a toast", async () => {
+    // A rules-driven collection dropping a game is correct; finding out by
+    // accident is what makes it feel arbitrary. A toast is gone before you
+    // have read it.
+    summaries = [summary({ kind: "managed", label: "Backlog", autoMaintained: true })];
+    ({ unmount } = renderApp());
+    await waitFor(() => expect(screen.getByText("Backlog")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Sync with Steam" }));
+    await waitFor(() => expect(screen.getByText(/Backlog — 1 removed \(Portal 2\)/)).toBeTruthy());
   });
 });
