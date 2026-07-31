@@ -2,7 +2,7 @@
   "name": "loadout",
   "version": "0.7.2",
   "private": true,
-  "description": "An open, hackable plugin overlay for Steam Deck and Linux gaming handhelds — TDP, RGB, frame-gen, recompiled games, and more, in-game over Steam Big Picture.",
+  "description": "An open, hackable plugin overlay for Steam Deck and Linux gaming handhelds \u2014 TDP, RGB, frame-gen, recompiled games, and more, in-game over Steam Big Picture.",
   "license": "BSD-3-Clause",
   "author": "Simon Holmes",
   "repository": {
@@ -48,11 +48,15 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "check:specs": "sh scripts/check-plugin-specs.sh",
+    "agent-docs": "bun scripts/generate-agent-docs.ts",
+    "check:agent-docs": "bun scripts/generate-agent-docs.ts --check",
     "check:dead-code": "knip-bun --no-progress --no-config-hints",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
   "dependencies": {
+    "@loadout/agent-docs": "workspace:*",
+    "@loadout/types": "workspace:*",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "react-icons": "^5.6.0"

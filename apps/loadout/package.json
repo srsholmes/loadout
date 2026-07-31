@@ -4,6 +4,7 @@
   "type": "module",
   "dependencies": {
     "@loadout/types": "workspace:*",
+    "@loadout/agent-docs": "workspace:*",
     "@loadout/steam-paths": "workspace:*",
     "@loadout/exec": "workspace:*",
     "@loadout/game-library": "workspace:*",
