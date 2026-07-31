@@ -204,6 +204,71 @@ describe("webpack patcher — re-injection", () => {
     new Function("window", "globalThis", "console", script)(win, win, console_);
     expect((win.webpackChunksteamui as FakeChunk[]).push).toBe(afterFirst);
   });
+
+  it("re-arms the unmatched-patch report for the reloaded set", () => {
+    // The reload path exists so a just-fixed patch takes effect on daemon
+    // restart. If the 15s report is armed only when the hook is installed, the
+    // reloaded set never gets one — so the developer editing a patch is back to
+    // silence, which is the exact failure this whole path is about.
+    const win: Record<string, unknown> = { webpackChunksteamui: [] as FakeChunk[] };
+    const warnings: string[] = [];
+    const console_ = {
+      log() {},
+      warn: (...a: unknown[]) => warnings.push(a.join(" ")),
+      error() {},
+    };
+
+    // Capture the armed callbacks instead of waiting 15 real seconds.
+    const armed: Array<() => void> = [];
+    const fakeSetTimeout = (fn: () => void) => {
+      armed.push(fn);
+      return armed.length;
+    };
+    const run = (script: string) =>
+      new Function("window", "globalThis", "console", "setTimeout", "clearTimeout", script)(
+        win,
+        win,
+        console_,
+        fakeSetTimeout,
+        () => {},
+      );
+
+    run(buildWebpackPatcherScript([{ ...patch({ find: "NEVER_A" }), pluginId: "first-plugin" }]));
+    run(buildWebpackPatcherScript([{ ...patch({ find: "NEVER_B" }), pluginId: "second-plugin" }]));
+
+    expect(armed.length).toBeGreaterThan(1);
+
+    // Fire the most recently armed report: it must name the reloaded plugin.
+    armed[armed.length - 1]!();
+    expect(warnings.some((w) => w.includes("second-plugin"))).toBe(true);
+  });
+
+  it("declines rather than double-hooking when an older build is already installed", () => {
+    // Builds before `reload` existed set this global to a bare `true`, and
+    // their push hook is still live in the page. Falling through would leave
+    // two interceptors applying two different patch sets to every chunk.
+    const chunks: FakeChunk[] = [];
+    const win: Record<string, unknown> = {
+      webpackChunksteamui: chunks,
+      __LOADOUT_WEBPACK_PATCHER: true,
+    };
+    const warnings: string[] = [];
+    const console_ = {
+      log() {},
+      warn: (...a: unknown[]) => warnings.push(a.join(" ")),
+      error() {},
+    };
+
+    const pristinePush = chunks.push;
+    new Function("window", "globalThis", "console", buildWebpackPatcherScript([patch()]))(
+      win,
+      win,
+      console_,
+    );
+
+    expect(chunks.push).toBe(pristinePush);
+    expect(warnings.some((w) => w.includes("Restart Steam"))).toBe(true);
+  });
 });
 
 describe("webpack patcher — $self", () => {

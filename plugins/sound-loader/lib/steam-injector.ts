@@ -31,8 +31,15 @@ const WEBPACK_READY_TIMEOUT_MS = 5000;
  * path in this plugin is already lazy for the same reason.
  */
 export function steamSoundsCustomDir(): string {
+  // `||`, not `??`: an empty HOME has to fall back too. `??` only catches
+  // null/undefined, so `HOME=""` would join onto nothing and produce a
+  // relative path — staging sound files into the process CWD, which is a poor
+  // failure mode for the function whose whole bug was writing to the wrong
+  // place. Loadout ships a systemd unit, and units are exactly where
+  // empty-vs-unset HOME bites. Same guard `packages/external-cache` applies
+  // to XDG_CACHE_HOME.
   return join(
-    process.env.HOME ?? homedir(),
+    process.env.HOME || homedir(),
     ".local/share/Steam/steamui/sounds_custom/loadout",
   );
 }

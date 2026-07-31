@@ -22,8 +22,9 @@ import type { PluginPatch } from "@loadout/types";
  * Largest module source we will stringify and scan, in characters.
  *
  * Sized from the real client rather than guessed: Steam's library module is
- * ~646 KB and is the one every UI patch cares about, so anything under about
- * 1 MB excludes the whole point of having a patcher.
+ * ~646 KB and is the one every UI patch cares about, so any ceiling below
+ * ~650 KB excludes the whole point of having a patcher. 2 MB leaves room for
+ * that module to grow without putting us back in the same hole.
  */
 export const MAX_MODULE_SOURCE = 2_000_000;
 
@@ -63,8 +64,22 @@ export function buildWebpackPatcherScript(patches: WebpackPatchEntry[]): string 
   // page. The old guard returned early, so the running client kept the patch
   // set it booted with — and a freshly-fixed patch appeared to do nothing,
   // which is a genuinely baffling thing to debug.
-  if (window.__LOADOUT_WEBPACK_PATCHER && window.__LOADOUT_WEBPACK_PATCHER.reload) {
-    return window.__LOADOUT_WEBPACK_PATCHER.reload(${patchesJson});
+  if (window.__LOADOUT_WEBPACK_PATCHER) {
+    var installed = window.__LOADOUT_WEBPACK_PATCHER;
+    if (typeof installed.reload === "function") {
+      return installed.reload(${patchesJson});
+    }
+    // A build from before \`reload\` existed left a bare \`true\` here, and its
+    // push hook is still live in this page. We cannot reach that closure to
+    // swap its patch set, and installing a second hook would leave two
+    // interceptors scanning every chunk and applying two different patch sets
+    // — with __LOADOUT_PATCH_LOG pointing at only one of them. Decline, which
+    // is what the old guard did anyway, but say why.
+    console.warn(
+      "[loadout:wp] A patcher from an older Loadout build is already installed " +
+      "in this page. Restart Steam to pick up the current patch set."
+    );
+    return;
   }
 
   var PATCHES = ${patchesJson};
@@ -323,8 +338,23 @@ export function buildWebpackPatcherScript(patches: WebpackPatchEntry[]): string 
     if (hooked) return;
     hooked = true;
     installHook();
-    // Check for unmatched patches after Steam finishes loading
-    setTimeout(checkUnmatchedPatches, 15000);
+  }
+
+  var unmatchedTimer = null;
+
+  /**
+   * Report unmatched patches once Steam has finished loading.
+   *
+   * Armed per *patch set*, not per hook: a reload adopts different patches and
+   * those need their own report. Keeping this inside \`ensureHooked\` meant it
+   * fired exactly once per page, so after a daemon restart a patch that matched
+   * nothing went back to being silent — the precise failure the reload path
+   * exists to fix. Re-arming replaces any pending check so two reloads in
+   * quick succession produce one report, not two.
+   */
+  function armUnmatchedCheck() {
+    if (unmatchedTimer !== null) clearTimeout(unmatchedTimer);
+    unmatchedTimer = setTimeout(checkUnmatchedPatches, 15000);
   }
 
   window.__LOADOUT_WEBPACK_PATCHER = {
@@ -344,6 +374,7 @@ export function buildWebpackPatcherScript(patches: WebpackPatchEntry[]): string 
       patchLog.length = 0;
       if (PATCHES.length === 0) return "no-patches";
       ensureHooked();
+      armUnmatchedCheck();
       var chunkArray = window.webpackChunksteamui;
       if (chunkArray) {
         for (var i = 0; i < chunkArray.length; i++) {
@@ -358,6 +389,7 @@ export function buildWebpackPatcherScript(patches: WebpackPatchEntry[]): string 
   if (PATCHES.length > 0) {
     console.log("[loadout:wp] Installing webpack patcher with " + PATCHES.length + " patch(es)...");
     ensureHooked();
+    armUnmatchedCheck();
   } else {
     console.log("[loadout:wp] No patches registered, skipping webpack patcher");
   }
