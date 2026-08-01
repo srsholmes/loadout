@@ -59,6 +59,16 @@ function isInverted(rule: Rule): boolean {
 export interface RuleBuilderProps {
   collection: ManagedCollection;
   games: readonly EvalGame[];
+  /**
+   * Whether `games` is the whole library or whatever had arrived.
+   *
+   * Everything on this screen is a number priced against it — "→ 30 games",
+   * "Nothing in your library matches this rule", "try widening a range". Said
+   * about a half-read library they are all wrong, and wrong in the direction
+   * that sends somebody editing rules that were fine. The counts go quiet
+   * until the library is there.
+   */
+  libraryLoaded?: boolean;
   onSave: (collection: ManagedCollection) => void;
   onCancel: () => void;
   /**
@@ -100,6 +110,7 @@ function collectGroups(rule: Rule, into: GroupRule[] = []): GroupRule[] {
 export function RuleBuilder({
   collection,
   games,
+  libraryLoaded = true,
   onSave,
   onCancel,
   onDelete,
@@ -182,28 +193,36 @@ export function RuleBuilder({
     () =>
       diagnoseCollection(draft, result, {
         librarySize: games.length,
+        libraryLoaded,
         flippedCombinatorCount:
           groupCounts.get(draft.root.id)?.[
             draft.root.combinator === "all" ? "any" : "all"
           ] ?? 0,
       }),
-    [draft, result, games.length, groupCounts],
+    [draft, result, games.length, groupCounts, libraryLoaded],
   );
 
-  /** Count the collection would show with `rule` swapped in — used by the editor. */
+  /**
+   * Count the collection would show with `rule` swapped in — used by the
+   * editor. `null` while the library is still arriving: the editor turns a
+   * zero into "saving this will empty the collection", which is a claim about
+   * the user's library rather than about their rule.
+   */
   const countFor = useCallback(
     (rule: Rule) =>
-      countMatches(
-        {
-          root: asRoot({
-            candidate: replaceRule({ root: draft.root, id: rule.id, next: rule }),
-            fallback: draft.root,
-          }),
-          indeterminatePolicy: draft.indeterminatePolicy,
-        },
-        games,
-      ),
-    [draft.root, draft.indeterminatePolicy, games],
+      libraryLoaded
+        ? countMatches(
+            {
+              root: asRoot({
+                candidate: replaceRule({ root: draft.root, id: rule.id, next: rule }),
+                fallback: draft.root,
+              }),
+              indeterminatePolicy: draft.indeterminatePolicy,
+            },
+            games,
+          )
+        : null,
+    [draft.root, draft.indeterminatePolicy, games, libraryLoaded],
   );
 
   // The palette prices ~32 candidates. Deferring keeps the tree interactive
@@ -230,6 +249,10 @@ export function RuleBuilder({
       }
 
       if (candidate.needsInput) return candidate;
+      // Unpriced rather than priced against a partial library: "→ 0 games" is
+      // read as a fact about the rule, and `PricedCandidate` already renders
+      // an absent total as no claim at all.
+      if (!libraryLoaded) return candidate;
       const withCandidate = insertRule({
         root: deferredRoot,
         parentId: paletteParent,
@@ -246,7 +269,16 @@ export function RuleBuilder({
         ),
       };
     });
-  }, [paletteParent, deferredRoot, draft.root, draft.indeterminatePolicy, games, now, availableFacts]);
+  }, [
+    paletteParent,
+    deferredRoot,
+    draft.root,
+    draft.indeterminatePolicy,
+    games,
+    libraryLoaded,
+    now,
+    availableFacts,
+  ]);
 
   // ── Actions ────────────────────────────────────────────────────────
 

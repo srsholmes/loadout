@@ -309,6 +309,23 @@ describe("entries Steam can no longer resolve", () => {
     expect(fakeCollections[0]!.appIds).toHaveLength(2);
   });
 
+  it("doesn't tell somebody to wait for a shortcut list that is never coming", async () => {
+    // The shortcut guard cannot tell a shortcut source that failed from a
+    // library that genuinely has none — somebody who removed EmuDeck and kept
+    // the collection. Refusing is still the right way round, since pruning is
+    // the only irreversible move here; promising that waiting fixes it is not,
+    // because for that user it never does.
+    withDeadIds();
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    const err = await backend.pruneLinked("uc-rh").catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/lists none at all/);
+    expect((err as Error).message).not.toMatch(/in a moment|hasn't listed .* yet/);
+    // And it names the way out, rather than leaving the collection stuck.
+    expect((err as Error).message).toMatch(/delete/i);
+    expect(fakeCollections[0]!.appIds).toHaveLength(3);
+  });
+
   it("prunes them on request, naming the dead ids rather than rewriting the list", async () => {
     withDeadIds();
     const backend = await loaded([

@@ -193,19 +193,31 @@ export function Collections() {
       // and one fetch would leave every screen priced against it for the rest
       // of the session. Bounded: this is a webview waiting on a library, not a
       // poller.
+      let haveConfig = false;
       for (let attempt = 0; attempt < SNAPSHOT_ATTEMPTS && !cancelled; attempt++) {
         if (attempt > 0) {
           await new Promise((r) => setTimeout(r, SNAPSHOT_RETRY_MS * attempt));
           if (cancelled) return;
         }
+        // Separately, so one failing doesn't discard the other's answer. They
+        // used to share a `Promise.all`: a config read that threw dropped a
+        // library that had arrived perfectly well, and — once this became a
+        // loop — the config was never asked for again, leaving the rules
+        // screen on a spinner for the rest of the session.
+        if (!haveConfig) {
+          try {
+            await loadConfig();
+            haveConfig = true;
+          } catch {
+            // Retried on the next pass, like the snapshot.
+          }
+        }
+        if (cancelled) return;
         try {
-          const [snap] = await Promise.all([
-            call("getSnapshot") as Promise<GameMetadataSnapshot>,
-            attempt === 0 ? loadConfig() : Promise.resolve(),
-          ]);
+          const snap = (await call("getSnapshot")) as GameMetadataSnapshot;
           if (cancelled) return;
           setSnapshot(snap);
-          if (snapshotIsUsable(snap)) return;
+          if (haveConfig && snapshotIsUsable(snap)) return;
         } catch {
           // The grid still works without these; only rule editing needs them.
         }
@@ -373,6 +385,7 @@ export function Collections() {
         <RuleBuilder
           collection={editing}
           games={evalGames}
+          libraryLoaded={snapshotIsUsable(snapshot)}
           onCancel={() => void openCollection(editing)}
           onSave={(next) => void saveCollection(next)}
           onDelete={() => void removeCollection(editing.id)}

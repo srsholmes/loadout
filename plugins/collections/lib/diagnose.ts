@@ -172,6 +172,17 @@ export interface DiagnoseContext {
   /** Total games in the library, before any rule ran. */
   librarySize: number;
   /**
+   * Whether that library can be believed.
+   *
+   * `librarySize` alone cannot tell a small library from a half-read one:
+   * Steam's own read degrades to *some* games — the installed ones — long
+   * before it has the owned set, so a thin snapshot arrives non-empty and
+   * every diagnosis below becomes a confident claim about somebody's library
+   * built on a partial read of it. Defaults to `true` for callers that have no
+   * way of knowing; the ones that do should pass it.
+   */
+  libraryLoaded?: boolean;
+  /**
    * Match count the tab would have with the root combinator flipped.
    * Supplied by the caller because computing it needs another evaluation
    * pass, and only the editor needs it.
@@ -218,11 +229,17 @@ export function diagnoseCollection(
     return { kind: "ok" };
   }
 
-  // 1. Nothing to filter.
-  if (ctx.librarySize === 0) {
+  // 1. Nothing to filter, or nothing we can trust. Both outrank every rule
+  //    diagnosis below: those all read "your rules are wrong", and saying that
+  //    about a library we haven't finished reading sends people editing rules
+  //    that were fine.
+  if (ctx.librarySize === 0 || ctx.libraryLoaded === false) {
     return {
       kind: "empty-library",
-      message: "Your library hasn't been scanned yet",
+      message:
+        ctx.librarySize === 0
+          ? "Your library hasn't been scanned yet"
+          : "Still reading your library — counts and warnings arrive with it",
       fixes: [],
     };
   }

@@ -26,6 +26,8 @@ let summaries: unknown[] = [];
 let steamReachable = true;
 /** The library read comes back empty, as it does while Steam hydrates. */
 let libraryDegraded = false;
+/** Make the *next* `getConfig` reject, once. */
+let failNextGetConfig = false;
 let games: string[] = [];
 let managedCollections: unknown[] = [];
 
@@ -64,6 +66,13 @@ const callMock = mock((method: string, ...args: unknown[]) => {
           : { games: LIBRARY, providers: appStoreProviders(true), generatedAt: 0 },
       );
     case "getConfig":
+      // Fails once, on demand: the config and the library are fetched by the
+      // same effect, and a config that threw used to take the library's answer
+      // down with it and never be asked for again.
+      if (failNextGetConfig) {
+        failNextGetConfig = false;
+        return Promise.reject(new Error("config read failed (test stub)"));
+      }
       // A *whole* config, built from the real default. It used to be
       // `{collections, mirror}` alone — a shape the real `setConfig` rejects
       // outright ("settings are missing", "collectionOrder must be a list of
@@ -173,6 +182,7 @@ beforeEach(() => {
   summaries = [];
   steamReachable = true;
   libraryDegraded = false;
+  failNextGetConfig = false;
   games = [];
   managedCollections = [];
   container = document.createElement("div");
@@ -288,6 +298,32 @@ describe("editing a collection's rules", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "New collection" }));
     await waitFor(() => expect(screen.queryByText(/Reading your library/)).toBeNull());
+  }, 10_000);
+
+  it("asks for the config again when its first read fails", async () => {
+    // The config and the library are fetched by the same effect. They shared a
+    // `Promise.all`, so a config that threw discarded a library that had
+    // arrived perfectly well — and once the library gained a retry, the config
+    // was left outside it and never asked for again, leaving the rules screen
+    // on a spinner for the rest of the session.
+    managedCollections = [managed("backlog", "Backlog")];
+    summaries = [
+      summary({ id: "backlog", label: "Backlog", kind: "managed", autoMaintained: true }),
+    ];
+    failNextGetConfig = true;
+    ({ unmount } = renderApp());
+
+    await waitFor(
+      () => expect(calls.filter((c) => c.method === "getConfig").length).toBeGreaterThan(1),
+      { timeout: 4000 },
+    );
+    // And the rules screen has what it needs, rather than the spinner it shows
+    // when `collections` never arrived.
+    await waitFor(() => expect(screen.getByText("Backlog")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /Backlog/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Options" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Options" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeTruthy());
   }, 10_000);
 
   it("locks the gallery while a preset is being built", async () => {

@@ -37,11 +37,18 @@ function withHeader(ui: React.ReactElement) {
   return render(<PluginHeaderSlotProvider slot={slot}>{ui}</PluginHeaderSlotProvider>);
 }
 
-function renderBuilder(t: ManagedCollection) {
+function renderBuilder(t: ManagedCollection, props: { libraryLoaded?: boolean } = {}) {
   const onSave = mock((_: ManagedCollection) => {});
   const onCancel = mock(() => {});
   const view = withHeader(
-    <RuleBuilder collection={t} games={games} onSave={onSave} onCancel={onCancel} now={NOW} />,
+    <RuleBuilder
+      collection={t}
+      games={games}
+      onSave={onSave}
+      onCancel={onCancel}
+      now={NOW}
+      {...props}
+    />,
   );
   return { onSave, onCancel, view };
 }
@@ -333,6 +340,32 @@ describe("RuleBuilder — diagnostics", () => {
     expect(screen.getByText(/never both be true/i)).toBeTruthy();
   });
 
+  it("won't diagnose the rules against a library that is still arriving", () => {
+    // Every diagnosis on this screen reads "your rules are wrong". Said about
+    // a half-read library they are all wrong themselves, and wrong in the
+    // direction that sends somebody editing rules that were fine — the same
+    // "reported as facts about the user's library" mistake the pages beside
+    // it were fixed for.
+    renderBuilder(
+      tab([{ id: "a", kind: "installed" }, { id: "b", kind: "installed", invert: true }]),
+      { libraryLoaded: false },
+    );
+    expect(screen.queryByText(/never both be true/i)).toBeNull();
+    expect(screen.getByText(/Still reading your library/i)).toBeTruthy();
+  });
+
+  it("leaves the palette unpriced until then, rather than pricing it at zero", () => {
+    // "→ 0 games" is read as a fact about the rule, not about the read.
+    renderBuilder(tab([]), { libraryLoaded: false });
+    fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+    expect(screen.queryByText(/→ \d+ games?/)).toBeNull();
+  });
+
+  it("prices it once the library is there", () => {
+    renderBuilder(tab([]));
+    fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+    expect(screen.getAllByText(/→ \d+ games?/).length).toBeGreaterThan(0);
+  });
 });
 
 describe("RuleBuilder — generated rule ids", () => {

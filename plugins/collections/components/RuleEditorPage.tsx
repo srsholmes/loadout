@@ -24,9 +24,13 @@ export interface RuleEditorPageProps {
   onSave: (next: Rule) => void;
   /**
    * Live count for a candidate rule. The builder supplies this because only
-   * it knows the surrounding tab and library.
+   * it knows the surrounding collection and library.
+   *
+   * `null` means *not knowable yet* — the library is still arriving — which is
+   * a different thing from zero, and has to stay different: zero is what turns
+   * into "saving this will empty the collection".
    */
-  countFor: (rule: Rule) => number;
+  countFor: (rule: Rule) => number | null;
   /** Options for `picker` params, keyed by source. */
   pickerOptions?: {
     game?: readonly ParamOption[];
@@ -128,7 +132,11 @@ export function RuleEditorPage({
           </label>
         ) : null}
 
-        {count === 0 && complete ? (
+        {count === null && complete ? (
+          <p className="text-xs text-base-content/55">
+            Still reading your library — the match count arrives with it.
+          </p>
+        ) : count === 0 && complete ? (
           <p className="text-xs text-warning">
             Nothing in your library matches this rule on its own. Saving it
             will empty the collection unless the group uses ANY.

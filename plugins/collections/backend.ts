@@ -636,13 +636,27 @@ export default class CollectionsBackend implements PluginBackend {
     // EmuDeck collection reads dead. If the ids being dropped are
     // shortcut-shaped, the snapshot has to show it knows about shortcuts at
     // all before we act on that.
+    //
+    // What this cannot do is tell that apart from a library that genuinely has
+    // no shortcuts — somebody who removed EmuDeck and kept the collection. Two
+    // independent sources feed `source: "shortcut"` (the on-disk
+    // `shortcuts.vdf` scan and Steam's own `type-shortcut`/`type-rom` sets),
+    // so both would have to be wrong at once for the guard to fire on a real
+    // library; but when it does fire, refusing is still the right way round —
+    // the ids are inert either way, and pruning them is the only irreversible
+    // move available. So the message says what is true and what to do, rather
+    // than promising that waiting will fix it. It said "yet" and "in a
+    // moment", which for that user is never.
     const looksLikeShortcut = (appId: string) => Number(appId) > 2 ** 31;
     if (
       staleAppIds.some(looksLikeShortcut) &&
       !snapshot.games.some((g) => g.source === "shortcut")
     ) {
       throw new Error(
-        "Steam hasn't listed your non-Steam shortcuts yet, and most of what looks dead here is one. Try again in a moment.",
+        "Most of what looks dead here is a non-Steam shortcut, and your library lists none at all — " +
+          "so this can't tell entries left behind by a removed shortcut from a shortcut list that " +
+          "didn't load. If Steam is still starting up, try again once it has. If you removed those " +
+          "shortcuts for good, the collection itself is what to delete.",
       );
     }
     // Everything unknown and nothing known is what a broken read looks like,
