@@ -14,6 +14,13 @@ let mirrorState = { autoSync: false, pendingSync: false };
  */
 let releaseListGames: (() => void) | null = null;
 let holdListGames = false;
+/**
+ * Make `editLinked` reject — but only when released, so the rollback can be
+ * made to land *after* the user has moved to another collection. Rejecting
+ * immediately resolves the race before it exists.
+ */
+let failEditLinked = false;
+let rejectEditLinked: (() => void) | null = null;
 let summaries: unknown[] = [];
 let steamReachable = true;
 let games: string[] = [];
@@ -75,9 +82,17 @@ const callMock = mock((method: string, ...args: unknown[]) => {
       });
     case "setCollections":
       return Promise.resolve({ collections: managedCollections });
+    case "editLinked":
+      if (!failEditLinked) return Promise.resolve({ count: 0 });
+      return new Promise((_resolve, reject) => {
+        rejectEditLinked = () => reject(new Error("Steam went away (test stub)"));
+      });
     case "listGames": {
+      // Per-collection, so a response landing in the wrong collection is
+      // visible rather than coincidentally identical.
+      const forId = String((args as string[])[0] ?? "");
       const answer = {
-        games: games.map((appId) => ({ appId, name: `Game ${appId}` })),
+        games: games.map((appId) => ({ appId, name: `${forId} game ${appId}` })),
         kind: "linked",
         staleAppIds: [],
       };
@@ -139,6 +154,8 @@ beforeEach(() => {
   mirrorState = { autoSync: false, pendingSync: false };
   releaseListGames = null;
   holdListGames = false;
+  failEditLinked = false;
+  rejectEditLinked = null;
   summaries = [];
   steamReachable = true;
   games = [];
@@ -333,6 +350,38 @@ describe("editing a collection's rules", () => {
     fireEvent.click(screen.getByRole("button", { name: "Options" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Rename" })).toBeTruthy());
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  });
+
+  it("doesn't paint one collection's games under another's header", async () => {
+    // Every edit path writes `games` after an await. Without a request token a
+    // rollback lands in whichever collection is open by then — and the edit
+    // paths write against what is on screen, so the next removal would aim at
+    // the wrong collection's members.
+    summaries = [summary(), summary({ id: "srm-2", label: "Nintendo 64" })];
+    games = ["10", "20"];
+    failEditLinked = true;
+    ({ unmount } = renderApp());
+    await waitFor(() => expect(screen.getByText("Sega Genesis")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: /Sega Genesis/ }));
+    await waitFor(() => expect(screen.getByText("srm-1 game 10")).toBeTruthy());
+
+    // Start a removal, then leave for the other collection before it fails.
+    fireEvent.click(screen.getByRole("button", { name: "Edit collection" }));
+    fireEvent.click(screen.getByText("srm-1 game 10"));
+    fireEvent.click(screen.getByText(/Remove 1 from collection/));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() => expect(screen.getByText("Nintendo 64")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /Nintendo 64/ }));
+
+    await waitFor(() => expect(screen.getByText("srm-2 game 10")).toBeTruthy());
+
+    // Only now does the earlier edit fail. Its rollback belongs to the
+    // collection we left, and must not land in this one.
+    rejectEditLinked?.();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText("srm-1 game 10")).toBeNull();
+    expect(screen.getByText("srm-2 game 10")).toBeTruthy();
   });
 
   it("won't offer adding until it knows what is already in the collection", async () => {

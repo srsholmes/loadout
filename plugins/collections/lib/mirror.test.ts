@@ -637,7 +637,9 @@ describe("mirrorAffecting — when auto-sync should fire", () => {
 
   it("fires when a game override changes", () => {
     // Whitelists and blacklists live here and change membership directly.
-    expect(mirrorAffecting(config(), config({ gameOverrides: { "440": { pin: true } } }))).toBe(
+    expect(
+      mirrorAffecting(config(), config({ gameOverrides: { "440": { hidden: true } } })),
+    ).toBe(
       true,
     );
   });
@@ -653,10 +655,31 @@ describe("mirrorAffecting — when auto-sync should fire", () => {
     expect(mirrorAffecting(config(), config())).toBe(false);
   });
 
-  it("does not fire when a tab is merely hidden from the strip", () => {
-    // A concealed tab still evaluates and still mirrors — hiding it must not
-    // empty its Steam collection.
-    expect(mirrorAffecting(config(), config({ collections: [managed({ visible: false })] }))).toBe(false);
+  it("watches every field of a collection that could change its membership", () => {
+    // The projection is a whitelist, and its doc comment used to claim the
+    // opposite ("a new field is included by default"). A field added to
+    // `ManagedCollection` and forgotten here means editing it never marks a
+    // sync owed, and Steam goes quietly stale. Fail here rather than there.
+    const watched = new Set([
+      "id",
+      "label",
+      "root",
+      "sort",
+      "limit",
+      "manualOrder",
+      "indeterminatePolicy",
+    ]);
+    // Fields that genuinely cannot change what Steam holds.
+    const cosmetic = new Set(["display", "icon"]);
+
+    const sample = managed();
+    for (const key of Object.keys(sample)) {
+      expect(
+        watched.has(key) || cosmetic.has(key),
+        `\`${key}\` is neither watched by project() nor listed as cosmetic — ` +
+          "if it can change membership, add it to the projection",
+      ).toBe(true);
+    }
   });
 
   it("does not fire when only the tile size changed", () => {

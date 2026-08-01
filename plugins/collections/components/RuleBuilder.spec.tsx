@@ -211,6 +211,23 @@ describe("RuleBuilder — row actions", () => {
     openRowMenu(/Actions for Only these games/);
     expect(screen.queryByRole("button", { name: "Invert" })).toBeNull();
   });
+
+  it("offers no invert on a range rule, where it would match the unknowns", () => {
+    // `matchRange` resolves the -1 "unknown" sentinel to a definite false, and
+    // invert flips it to true — so "NOT played 2 hours or less" would collect
+    // every game whose playtime couldn't be read. The registry marks these
+    // non-invertible and the rule editor honoured it; the row menu used its
+    // own guess (`kind !== whitelist && kind !== blacklist`).
+    renderBuilder(tab([{ id: "p", kind: "playtime", minutes: { max: 120 } }]));
+    openRowMenu(/Actions for /);
+    expect(screen.queryByRole("button", { name: "Invert" })).toBeNull();
+  });
+
+  it("still offers invert where the registry allows it", () => {
+    renderBuilder(tab([{ id: "i", kind: "installed" }]));
+    openRowMenu(/Actions for /);
+    expect(screen.getByRole("button", { name: "Invert" })).toBeTruthy();
+  });
 });
 
 describe("RuleBuilder — the palette", () => {
@@ -262,6 +279,22 @@ describe("RuleBuilder — the palette", () => {
     const dialog = screen.getByRole("region", { name: "Test tab" });
     const card = within(dialog).getByText("Friends playing now").closest("button");
     expect(card?.textContent).not.toContain("Needs Steam friends data");
+  });
+
+  it("won't add a rule whose data nothing supplies", () => {
+    // The card is dimmed and says why, but pressing it used to insert the rule
+    // anyway — and a rule reading a fact no resolver answers evaluates to
+    // `indeterminate`, which the default policy counts as a match. The
+    // collection silently became the whole library.
+    const { onSave } = renderBuilder(tab([]));
+    fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+
+    const blocked = screen.getAllByRole("button", { name: /How long to beat/ })[0]!;
+    fireEvent.click(blocked);
+
+    // Still on the palette, nothing inserted.
+    expect(screen.getByRole("button", { name: /How long to beat/ })).toBeTruthy();
+    expect(onSave).not.toHaveBeenCalled();
   });
 
   it("adds the picked rule to the tree", () => {

@@ -348,9 +348,16 @@ export function planMirror(args: PlanMirrorArgs): MirrorPlan {
  * ledger through the same config setter that triggers auto-sync, so without a
  * check on *what* changed the mirror would sync itself in a loop forever.
  *
- * Compared as a projection rather than field-by-field, so a new field on `Tab`
- * is included by default. Being too eager here costs a redundant sync; being
- * too lazy leaves Steam silently stale, which is the failure users can't see.
+ * Compared as a **projection**, which means the field list below is a
+ * whitelist, not a default. A new membership-affecting field on
+ * {@link ManagedCollection} — an exclude list, a per-collection cap — will not
+ * mark a sync owed until it is added to `project()`, and Steam then goes
+ * silently stale, which is the failure users can't see. `mirror.test.ts`
+ * enumerates the type's keys against the projection so adding one fails the
+ * build rather than the user's library.
+ *
+ * Being too eager costs a redundant sync; being too lazy costs correctness, so
+ * when in doubt, include the field.
  */
 export function mirrorAffecting(
   before: MirrorRelevantConfig,

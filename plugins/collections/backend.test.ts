@@ -32,6 +32,19 @@ let holdWrite = false;
 /** Hold the *read* open, to land an edit between evaluating and planning. */
 let releaseSteamRead: (() => void) | null = null;
 let hangSteamOnce = false;
+
+/**
+ * Wait until a latch has actually been reached, rather than sleeping and
+ * hoping. A missed latch used to hang the test to the suite timeout instead of
+ * saying what it was waiting for.
+ */
+async function until(what: string, ready: () => boolean, ms = 2000) {
+  const deadline = Date.now() + ms;
+  while (!ready()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
 let fakeCollections: Array<{
   id: string;
   name: string;
@@ -354,7 +367,7 @@ describe("editing a Steam collection by hand", () => {
 
     holdWrite = true;
     const editing = backend.editLinked("uc-rh", { add: ["400"] });
-    await new Promise((r) => setTimeout(r, 10));
+    await until("the edit's Steam write", () => releaseWrite !== null);
     fakeCollections[0]!.appIds.push("999999"); // EmuDeck, mid-write
     releaseWrite?.();
     await editing;
@@ -446,7 +459,7 @@ describe("state the UI depends on", () => {
 
     holdWrite = true;
     const syncing = backend.syncMirror();
-    await new Promise((r) => setTimeout(r, 10));
+    await until("the sync's Steam write", () => releaseWrite !== null);
     // Deliberately not awaited, so the edit's own "a sync is owed" write races
     // the sync's ledger write. This pins the invariant rather than proving the
     // ordering — the interleaving that used to clobber the ledger needs the
@@ -571,7 +584,7 @@ describe("things happening at once", () => {
     // evaluation and the planning — the exact window.
     hangSteamOnce = true;
     const syncing = backend.syncMirror();
-    await new Promise((r) => setTimeout(r, 10));
+    await until("the plan's Steam read", () => releaseSteamRead !== null);
     await backend.setCollections([ruled]);
     releaseSteamRead?.();
     await syncing;
@@ -593,7 +606,7 @@ describe("things happening at once", () => {
     // whenever the scheduler happens to run it.
     holdWrite = true;
     const syncing = backend.syncMirror();
-    await new Promise((r) => setTimeout(r, 10));
+    await until("the sync's Steam write", () => releaseWrite !== null);
     await backend.createCollection("Made mid-sync");
     releaseWrite?.();
     await syncing;
