@@ -264,10 +264,11 @@ export function Collections() {
     // row windowing measures against.
     return (
       <AddGamesPage
-          label={view.label}
-          candidates={(snapshot?.games ?? [])
-            .filter((g) => !already.has(g.appId))
-            .map((g) => ({ appId: g.appId, name: g.name, installed: g.installed }))}
+        libraryLoaded={snapshot !== null}
+        label={view.label}
+        candidates={(snapshot?.games ?? [])
+          .filter((g) => !already.has(g.appId))
+          .map((g) => ({ appId: g.appId, name: g.name, installed: g.installed }))}
         onBack={() => setView({ kind: "detail", id: view.id, label: view.label })}
         onAdd={(appIds) => void addToLinked(view.id, view.label, appIds)}
       />

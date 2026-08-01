@@ -122,6 +122,15 @@ describe("what the library can answer", () => {
     );
   });
 
+  it("doesn't count Deck compatibility as known when every game says 'unknown'", () => {
+    // `deckCompat` is non-nullable and the no-AppStore fallback hard-codes
+    // "unknown", so a presence test was true on a library that knows nothing —
+    // "Deck Verified" was offered, priced, and came back empty.
+    const blank = LIBRARY.map((g) => ({ ...g, deckCompat: "unknown" }));
+    expect(metadataNeedsMet(blank).has("deckCompat")).toBe(false);
+    expect(metadataNeedsMet(LIBRARY).has("deckCompat")).toBe(true);
+  });
+
   it("only offers HowLongToBeat when its plugin is supplying the fact", () => {
     expect(metadataNeedsMet(LIBRARY).has("hltb")).toBe(false);
     expect(metadataNeedsMet(LIBRARY, new Set(["hltbMain" as const])).has("hltb")).toBe(true);

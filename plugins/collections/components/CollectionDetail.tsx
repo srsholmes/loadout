@@ -125,10 +125,13 @@ export function CollectionDetail({
 
   const selectedSet = useMemo(() => new Set(selected), [selected]);
   /** Picked, but filtered out of view — the removals you cannot see. */
-  const hiddenPicked = useMemo(
-    () => (shown ? selected.filter((id) => !shown.some((g) => g.appId === id)).length : 0),
-    [selected, shown],
-  );
+  const hiddenPicked = useMemo(() => {
+    if (!shown) return 0;
+    // A set, not a scan per pick: this recomputes on every keystroke, and the
+    // collection this component exists for holds 700 entries.
+    const visible = new Set(shown.map((g) => g.appId));
+    return selected.filter((id) => !visible.has(id)).length;
+  }, [selected, shown]);
 
   const rowWindow = useVisibleRows({
     total: shown?.length ?? 0,
@@ -213,10 +216,12 @@ export function CollectionDetail({
             {onRemoveGames && !editing ? (
               <IconButton
                 onClick={() => {
-                  // Disarm: the confirm is hidden while editing, and coming
-                  // back to a live delete button from an intent expressed
-                  // several interactions ago is one press from disaster.
+                  // Disarm both: the confirms are hidden while editing, and
+                  // coming back to a live destructive button from an intent
+                  // expressed several interactions ago is one press from
+                  // disaster.
                   setConfirmingDelete(false);
+                  setConfirmingCleanUp(false);
                   setEditing(true);
                 }}
                 title="Edit collection"

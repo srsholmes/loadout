@@ -22,6 +22,10 @@ let hangSteam = false;
  * in every test and the "half the sync landed" branch had no coverage at all.
  */
 let failNextWrite: string | null = null;
+/** The library read comes back empty, as it does while Steam hydrates. */
+let emptyLibrary = false;
+/** Which Steam write primitive was last used — a whole-list write is a bug. */
+let steamWrites: string[] = [];
 /** Hold a write open so an edit can provably land mid-sync. */
 let releaseWrite: (() => void) | null = null;
 let holdWrite = false;
@@ -86,6 +90,7 @@ mock.module("@loadout/steam-cdp", () => ({
     _c: unknown,
     { collectionId, add = [], remove = [] }: { collectionId: string; add?: string[]; remove?: string[] },
   ) => {
+    steamWrites.push("editCollectionApps");
     if (failNextWrite === "setApps") {
       failNextWrite = null;
       throw new Error("Steam went away mid-write (test stub)");
@@ -105,6 +110,13 @@ mock.module("@loadout/steam-cdp", () => ({
     return { ...found, appIds: [...found.appIds] };
   },
   setCollectionApps: async (_c: unknown, { collectionId, appIds }: { collectionId: string; appIds: string[] }) => {
+    steamWrites.push("setCollectionApps");
+    if (holdWrite) {
+      holdWrite = false;
+      await new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+    }
     if (failNextWrite === "setApps") {
       failNextWrite = null;
       throw new Error("Steam went away mid-write (test stub)");
@@ -136,6 +148,12 @@ beforeEach(() => {
   steamUp = true;
   hangSteam = false;
   failNextWrite = null;
+  emptyLibrary = false;
+  steamWrites = [];
+  releaseWrite = null;
+  holdWrite = false;
+  releaseSteamRead = null;
+  hangSteamOnce = false;
   fakeCollections = [];
   prevXdg = process.env.XDG_CONFIG_HOME;
   tempDir = mkdtempSync(join(tmpdir(), "collections-backend-"));
@@ -153,7 +171,7 @@ afterEach(() => {
  * real one is — through `callPlugin` to the game-library service — so
  * `listGames` and the rule engine see it exactly as they would on a device.
  */
-function libraryOf(games: Array<{ appId: string; name: string }>) {
+function libraryOf(games: Array<{ appId: string; name: string; source?: string }>) {
   return async (_plugin: string, method: string) =>
     method === "getGames"
       ? games.map((g) => ({
@@ -163,15 +181,20 @@ function libraryOf(games: Array<{ appId: string; name: string }>) {
           headerUrl: "",
           capsuleUrl: "",
           installed: true,
-          source: "steam",
+          // Shortcuts matter: pruning refuses to drop shortcut-shaped ids
+          // unless the library proves it has listed shortcuts at all.
+          source: g.source ?? "steam",
           tags: [],
         }))
       : null;
 }
 
-async function loaded(games: Array<{ appId: string; name: string }> = []) {
+async function loaded(games: Array<{ appId: string; name: string; source?: string }> = []) {
   const backend = new CollectionsBackend();
-  (backend as unknown as { callPlugin: unknown }).callPlugin = libraryOf(games);
+  (backend as unknown as { callPlugin: unknown }).callPlugin = (
+    plugin: string,
+    method: string,
+  ) => libraryOf(emptyLibrary ? [] : games)(plugin, method);
   await backend.onLoad();
   return backend;
 }
@@ -249,26 +272,29 @@ describe("entries Steam can no longer resolve", () => {
     // empty a collection somebody else built.
     // A library that answered with *something*, but nothing this collection
     // holds — the shape of a half-loaded read rather than a dead collection.
-    withDeadIds();
+    // Ordinary ids, so the shortcut guard doesn't fire first.
+    fakeCollections = [
+      { id: "uc-rh", name: "Recomp Hub", appIds: ["10", "20"], isDynamic: false, isEditable: true },
+    ];
     const backend = await loaded([{ appId: "999", name: "Something else" }]);
     await expect(backend.pruneLinked("uc-rh")).rejects.toThrow(/unreadable/);
-    expect(fakeCollections[0]!.appIds).toHaveLength(3);
+    expect(fakeCollections[0]!.appIds).toHaveLength(2);
   });
 
-  it("removes only the dead ids, naming them rather than rewriting the list", async () => {
+  it("prunes them on request, naming the dead ids rather than rewriting the list", async () => {
     withDeadIds();
-    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    const backend = await loaded([
+      { appId: "620", name: "Portal 2" },
+      { appId: "3000000001", name: "Some ROM", source: "shortcut" },
+    ]);
     const result = await backend.pruneLinked("uc-rh");
     expect(result).toEqual({ removed: 2, kept: 1 });
     expect(fakeCollections[0]!.appIds).toEqual(["620"]);
-  });
-
-  it("prunes them on request, keeping everything real", async () => {
-    withDeadIds();
-    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
-    const result = await backend.pruneLinked("uc-rh");
-    expect(result).toEqual({ removed: 2, kept: 1 });
-    expect(fakeCollections[0]!.appIds).toEqual(["620"]);
+    // A targeted removal, not a membership rewrite. Both land on the same
+    // list here, so the primitive is the only thing that distinguishes them —
+    // and a rewrite takes the collection's unresolvable ids with it, which is
+    // exactly what this is meant to avoid.
+    expect(steamWrites).toEqual(["editCollectionApps"]);
   });
 
   it("does nothing when there is nothing dead", async () => {
@@ -276,7 +302,7 @@ describe("entries Steam can no longer resolve", () => {
       { id: "uc-rh", name: "Recomp Hub", appIds: ["620"], isDynamic: false, isEditable: true },
     ];
     const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
-    expect(await backend.pruneLinked("uc-rh")).toEqual({ removed: 0, kept: 0 });
+    expect(await backend.pruneLinked("uc-rh")).toEqual({ removed: 0, kept: 1 });
     expect(fakeCollections[0]!.appIds).toEqual(["620"]);
   });
 
@@ -336,6 +362,10 @@ describe("editing a Steam collection by hand", () => {
     expect(fakeCollections[0]!.appIds).toContain("999999");
     expect(fakeCollections[0]!.appIds).toContain("400");
     expect(fakeCollections[0]!.appIds).toContain("620");
+    // Named explicitly: with only the *delta* fake honouring the latch, a
+    // reverted `editLinked` finishes before the concurrent push and the
+    // assertions above hold anyway. The primitive is the thing under test.
+    expect(steamWrites).toEqual(["editCollectionApps"]);
   });
 
   it("won't add the same game twice", async () => {
@@ -387,6 +417,74 @@ describe("a sync that writes nothing", () => {
     const report = await backend.syncMirror();
     expect(report.created).toBe(0);
     expect(report.blocked[0]!.reason).toMatch(/whole library/);
+  });
+});
+
+describe("state the UI depends on", () => {
+  // Each of these was changed in response to a review and shipped without a
+  // test that fails when the change is reverted.
+
+  it("keeps a ledger written mid-sync, rather than restoring the pre-sync one", async () => {
+    // `_markSyncOwed` captures the mirror before its own disk write and
+    // enqueues after it. Handing `_setMirrorState` a finished object let that
+    // late write restore a ledger the sync had just replaced — orphaning the
+    // collection it had created in Steam.
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    await backend.createCollection("Backlog");
+    const { config } = await backend.getConfig();
+    await backend.setCollections([
+      {
+        ...config.collections[0]!,
+        root: {
+          kind: "group",
+          id: "backlog-root",
+          combinator: "all",
+          children: [{ id: "r1", kind: "installed" }],
+        },
+      },
+    ]);
+
+    holdWrite = true;
+    const syncing = backend.syncMirror();
+    await new Promise((r) => setTimeout(r, 10));
+    // Deliberately not awaited, so the edit's own "a sync is owed" write races
+    // the sync's ledger write. This pins the invariant rather than proving the
+    // ordering — the interleaving that used to clobber the ledger needs the
+    // two writes to land in one specific order, which a test can't force here.
+    // The fix (an updater, resolved inside the lock) makes the order moot.
+    const editing = backend.createCollection("Made mid-sync");
+    releaseWrite?.();
+    await Promise.all([syncing, editing]);
+    await new Promise((r) => setTimeout(r, 20));
+
+    const after = (await backend.getConfig()).config.mirror.ledger.entries;
+    expect(after.map((e) => e.managedId)).toContain("backlog");
+  });
+
+  it("reports the membership a created collection was given", async () => {
+    // The fake used to drop `appIds` on create, so a plan that created a
+    // collection holding the wrong games was indistinguishable from one that
+    // got it right.
+    const backend = await loaded([
+      { appId: "620", name: "Portal 2" },
+      { appId: "400", name: "Portal" },
+    ]);
+    await backend.createCollection("Installed");
+    const { config } = await backend.getConfig();
+    await backend.setCollections([
+      {
+        ...config.collections[0]!,
+        root: {
+          kind: "group",
+          id: "installed-root",
+          combinator: "all",
+          children: [{ id: "r1", kind: "installed" }],
+        },
+      },
+    ]);
+
+    await backend.syncMirror();
+    expect(fakeCollections[0]!.appIds.sort()).toEqual(["400", "620"]);
   });
 });
 
@@ -501,6 +599,69 @@ describe("things happening at once", () => {
     await syncing;
 
     expect((await backend.getConfig()).config.mirror.pendingSync).toBe(true);
+  });
+});
+
+describe("a sync against a library that didn't load", () => {
+  // Both library sources degrade to empty on failure, and a sync rewrites
+  // whole memberships — so a half-loaded library doesn't produce a smaller
+  // sync, it empties every collection we own. Every sync test in this file
+  // used to run in exactly that state without anyone noticing.
+  it("refuses rather than emptying every mirrored collection", async () => {
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    await backend.createCollection("Backlog");
+    const { config } = await backend.getConfig();
+    await backend.setCollections([
+      {
+        ...config.collections[0]!,
+        root: {
+          kind: "group",
+          id: "backlog-root",
+          combinator: "all",
+          children: [{ id: "r1", kind: "installed" }],
+        },
+      },
+    ]);
+    await backend.syncMirror();
+    expect(fakeCollections[0]!.appIds).toEqual(["620"]);
+
+    // Now the library read comes back empty, the way it does while Steam is
+    // still hydrating — the moment `onLoad`'s owed sync fires.
+    emptyLibrary = true;
+    await expect(backend.syncMirror()).rejects.toThrow(/library isn't loaded/);
+
+    expect(fakeCollections[0]!.appIds).toEqual(["620"]);
+    expect((await backend.getConfig()).config.mirror.pendingSync).toBe(true);
+  });
+});
+
+describe("a collection whose rules this build can't check", () => {
+  it("is refused rather than mirrored as the whole library", async () => {
+    // An unresolvable fact evaluates to `indeterminate`, which the default
+    // policy counts as a match — so the collection matches everything and,
+    // without this, Steam gets a copy of the library.
+    const backend = await loaded([
+      { appId: "620", name: "Portal 2" },
+      { appId: "400", name: "Portal" },
+    ]);
+    await backend.createCollection("Short games");
+    const { config } = await backend.getConfig();
+    await backend.setCollections([
+      {
+        ...config.collections[0]!,
+        root: {
+          kind: "group",
+          id: "short-games-root",
+          combinator: "all",
+          children: [{ id: "r1", kind: "hltbMain", hours: { max: 10 } }],
+        },
+      },
+    ]);
+
+    const report = await backend.syncMirror();
+    expect(report.created).toBe(0);
+    expect(fakeCollections).toHaveLength(0);
+    expect(report.blocked[0]!.reason).toMatch(/can't check/);
   });
 });
 
@@ -688,7 +849,7 @@ describe("editing never syncs on its own", () => {
   it("still writes when asked to", async () => {
     // The manual path is the whole point of the above: the work is the same,
     // it just happens when nobody is waiting on it.
-    const backend = await loaded();
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
     await backend.createCollection("Backlog");
     await backend.setCollections([
       {
@@ -740,7 +901,7 @@ describe("deleteCollection", () => {
     // batch of writes. A delete is one targeted call, and leaving it to the
     // next sync meant the collection vanished from the plugin while Steam
     // still listed it — which reads exactly like a delete that did not work.
-    const backend = await loaded();
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
     await mirrored(backend);
     expect(fakeCollections).toHaveLength(1);
 
@@ -750,7 +911,7 @@ describe("deleteCollection", () => {
   });
 
   it("keeps the ledger row when Steam can't be reached, so the sync finishes it", async () => {
-    const backend = await loaded();
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
     await mirrored(backend);
 
     steamUp = false;

@@ -221,16 +221,22 @@ export async function editCollectionApps(
       // what it doesn't hold, or add what it does, is a write for nothing.
       const toRemove = ${JSON.stringify([...remove].map(String))}.filter((id) => have.has(id));
       const toAdd = ${JSON.stringify([...add].map(String))}.filter((id) => !have.has(id));
+      if (!toRemove.length && !toAdd.length) return { tag: "ok", value: info };
+
+      // Missing either primitive is reported, not saved over: saving an
+      // unmodified collection and returning ok tells the caller an edit landed
+      // that never happened.
+      if (toRemove.length && typeof col.RemoveApps !== "function") {
+        return { tag: "error", error: "this Steam build has no RemoveApps" };
+      }
+      if (toAdd.length && typeof col.AddApps !== "function") {
+        return { tag: "error", error: "this Steam build has no AddApps" };
+      }
 
       // Remove first: on a collection at Steam's size limit, adding before
       // removing can throw and leave the write half-applied.
-      if (toRemove.length && typeof col.RemoveApps === "function") {
-        col.RemoveApps(toRemove.map((id) => ({ appid: Number(id) })));
-      }
-      if (toAdd.length && typeof col.AddApps === "function") {
-        col.AddApps(toAdd.map((id) => ({ appid: Number(id) })));
-      }
-      if (!toRemove.length && !toAdd.length) return { tag: "ok", value: info };
+      if (toRemove.length) col.RemoveApps(toRemove.map((id) => ({ appid: Number(id) })));
+      if (toAdd.length) col.AddApps(toAdd.map((id) => ({ appid: Number(id) })));
 
       await cs.SaveCollection(col);
       return { tag: "ok", value: infoOf(col) };

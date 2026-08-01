@@ -94,6 +94,43 @@ describe("diagnoseCollection — over-capped", () => {
   });
 });
 
+describe("diagnoseCollection — the advice it gives", () => {
+  it("tells you to widen a range rule, not to delete it", () => {
+    // The check was `"range" in r`, and no rule variant has a `range`
+    // property — only the three date kinds were recognised, so every other
+    // range rule was told to remove itself when widening was the fix.
+    const collection = collectionWith([
+      { id: "a", kind: "playtime", minutes: { min: 999_999 } },
+    ]);
+    const diagnosis = diagnose(collection);
+    expect(diagnosis.message + JSON.stringify(diagnosis)).toMatch(/widen/i);
+  });
+
+  it("does not claim an unchecked rule matches everything under a fail policy", () => {
+    // Under "fail" an unchecked rule matches *nothing* — the collection is
+    // narrower, not wider, and the fix offered alongside says exactly that.
+    // Two rules under ANY: the unchecked one contributes nothing, the other
+    // matches — so the collection has games *and* a blocked fact, which is the
+    // only combination where the sentence gets appended at all.
+    const collection = {
+      // Combinator is the *third* argument; passing it second silently made
+      // this an ALL group, where the unchecked rule zeroes the collection and
+      // the sentence is never appended — so the test proved nothing.
+      ...collectionWith(
+        [
+          { id: "a", kind: "hltbMain", hours: { max: 10 } },
+          { id: "b", kind: "installed" },
+        ],
+        {},
+        "any",
+      ),
+      indeterminatePolicy: "fail" as const,
+    };
+    const diagnosis = diagnose(collection);
+    expect(diagnosis.message).not.toMatch(/wider than it looks/);
+  });
+});
+
 describe("diagnoseCollection — blocked-facts", () => {
   it("still reports them when the collection looks full", () => {
     // The dangerous case, and the one that used to return `ok`: an

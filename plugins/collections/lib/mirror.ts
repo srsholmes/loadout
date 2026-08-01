@@ -90,6 +90,17 @@ export interface PlanMirrorArgs {
   steamCollections: readonly SteamCollection[];
   /** Optional prefix for the collection name. Empty by default. */
   namePrefix?: string;
+  /**
+   * Managed ids whose rules this build cannot actually evaluate — a rule
+   * reading a fact no resolver supplies.
+   *
+   * Such a rule returns `indeterminate`, which the default policy counts as a
+   * match, so the collection quietly matches the **whole library**. Writing
+   * that to Steam is the same accident `unbuilt` exists to prevent, reached by
+   * a different door: the rule looks built, and the membership looks huge
+   * because it is.
+   */
+  unevaluable?: ReadonlySet<string>;
 }
 
 function emptyPlan(): MirrorPlan {
@@ -132,7 +143,14 @@ export function collectionNameFor(
  * a collection and reusing the old name in the same sync doesn't collide.
  */
 export function planMirror(args: PlanMirrorArgs): MirrorPlan {
-  const { collections, evaluated, ledger, steamCollections, namePrefix = "" } = args;
+  const {
+    collections,
+    evaluated,
+    ledger,
+    steamCollections,
+    namePrefix = "",
+    unevaluable = new Set<string>(),
+  } = args;
   const plan = emptyPlan();
 
   const steamById = new Map(steamCollections.map((c) => [c.id, c]));
@@ -156,6 +174,20 @@ export function planMirror(args: PlanMirrorArgs): MirrorPlan {
    */
   const unbuilt = (collection: ManagedCollection) => collection.root.children.length === 0;
 
+  /** Why this collection must not be written, or null if it may be. */
+  const refuse = (collection: ManagedCollection): string | null => {
+    if (unbuilt(collection)) {
+      return `"${collection.label}" has no rules yet, so it would match your whole library.`;
+    }
+    if (unevaluable.has(collection.id)) {
+      return (
+        `"${collection.label}" has a rule this build can't check, and an unchecked rule ` +
+        `matches everything — so syncing it would put your whole library in Steam.`
+      );
+    }
+    return null;
+  };
+
   // Two passes, because a create has to know what the renames will free.
   // Swapping two collections' names is otherwise reported as a conflict
   // forever: the new one's name is held by a collection that is, in this very
@@ -165,11 +197,9 @@ export function planMirror(args: PlanMirrorArgs): MirrorPlan {
   for (const collection of collections) {
     const entry = ledgerByManaged.get(collection.id);
     if (!entry) continue;
-    if (unbuilt(collection)) {
-      plan.skipped.push({
-        managedId: collection.id,
-        reason: `"${collection.label}" has no rules yet, so it would match your whole library.`,
-      });
+    const refusal = refuse(collection);
+    if (refusal) {
+      plan.skipped.push({ managedId: collection.id, reason: refusal });
       continue;
     }
 
@@ -272,11 +302,9 @@ export function planMirror(args: PlanMirrorArgs): MirrorPlan {
   // Pass 2 — collections with no Steam collection yet.
   for (const collection of collections) {
     if (ledgerByManaged.has(collection.id)) continue;
-    if (unbuilt(collection)) {
-      plan.skipped.push({
-        managedId: collection.id,
-        reason: `"${collection.label}" has no rules yet, so it would match your whole library.`,
-      });
+    const refusal = refuse(collection);
+    if (refusal) {
+      plan.skipped.push({ managedId: collection.id, reason: refusal });
       continue;
     }
 

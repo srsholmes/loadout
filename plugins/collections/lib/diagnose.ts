@@ -250,7 +250,7 @@ export function diagnoseCollection(
         `${ruleCount} rule${ruleCount === 1 ? "" : "s"} couldn't be checked: ` +
         // The resolver's own sentence, verbatim — it knows why.
         reasons.join(" ") +
-        (result.matched.length > 0
+        (result.matched.length > 0 && tab.indeterminatePolicy !== "fail"
           ? ` Until that data arrives ${ruleCount === 1 ? "it matches" : "they match"} everything, so this is wider than it looks.`
           : ""),
       fixes:

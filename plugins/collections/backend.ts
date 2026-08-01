@@ -543,10 +543,14 @@ export default class CollectionsBackend implements PluginBackend {
     const found = steamCollections.find((c) => c.id === id);
     if (!found) throw new Error("That collection no longer exists");
 
+    if (found.isDynamic || !found.isEditable) {
+      throw new Error("Steam works this collection out for itself, so its contents can't be edited here.");
+    }
+
     const known = new Set(snapshot.games.map((g) => g.appId));
     const staleAppIds = found.appIds.filter((appId) => !known.has(appId));
     const live = found.appIds.filter((appId) => known.has(appId));
-    if (staleAppIds.length === 0) return { removed: 0, kept: 0 };
+    if (staleAppIds.length === 0) return { removed: 0, kept: live.length };
 
     // "Stale" means *the library doesn't know this id* — which is only a safe
     // thing to act on when the library itself is trustworthy. Both sources
@@ -561,6 +565,20 @@ export default class CollectionsBackend implements PluginBackend {
     if (snapshot.providers.appstore?.status !== "ok" || snapshot.games.length === 0) {
       throw new Error(
         "Steam's library isn't fully loaded, so this can't tell a dead entry from an unread one. Try again in a moment.",
+      );
+    }
+    // A *partly* loaded library is the dangerous one: real Steam games present
+    // so the check above passes, non-Steam shortcuts absent so every ROM in an
+    // EmuDeck collection reads dead. If the ids being dropped are
+    // shortcut-shaped, the snapshot has to show it knows about shortcuts at
+    // all before we act on that.
+    const looksLikeShortcut = (appId: string) => Number(appId) > 2 ** 31;
+    if (
+      staleAppIds.some(looksLikeShortcut) &&
+      !snapshot.games.some((g) => g.source === "shortcut")
+    ) {
+      throw new Error(
+        "Steam hasn't listed your non-Steam shortcuts yet, and most of what looks dead here is one. Try again in a moment.",
       );
     }
     // Everything unknown and nothing known is what a broken read looks like,
@@ -712,6 +730,21 @@ export default class CollectionsBackend implements PluginBackend {
   private async _syncOnce(): Promise<SyncReport> {
     this._assertWritable();
     const editsBefore = this.editSeq;
+
+    // Both library sources degrade to empty on failure, and a sync rewrites
+    // whole memberships across every mirrored collection at once — so a
+    // half-loaded library doesn't produce a smaller sync, it produces one that
+    // empties every collection we own. `pruneLinked` refuses on the same
+    // signal for a far more targeted write; this is the path that needed it
+    // most, and the automatic owed-sync at load fires at exactly the moment
+    // Steam is least likely to have finished hydrating.
+    const snapshot = await this.getSnapshot();
+    if (snapshot.providers.appstore?.status !== "ok" || snapshot.games.length === 0) {
+      await this._rememberPendingSync();
+      throw new Error(
+        "Steam's library isn't loaded yet, so syncing now would empty your collections. It stays owed and will run once the library is there.",
+      );
+    }
 
     let plan: MirrorPlan;
     let result: MirrorSyncResult;
@@ -874,11 +907,15 @@ export default class CollectionsBackend implements PluginBackend {
     const namePrefix = this.config.settings.namePrefix;
 
     const evaluated = new Map<string, string[]>();
+    // Collections whose rules this build cannot answer. An unresolvable fact
+    // evaluates to `indeterminate`, which the default policy counts as a
+    // match, so the collection matches everything — the planner refuses those
+    // rather than writing a copy of the library into Steam.
+    const unevaluable = new Set<string>();
     for (const c of collections) {
-      evaluated.set(
-        c.id,
-        evaluateCollection(c, evalGames, { now }).matched.map((g) => g.appId),
-      );
+      const result = evaluateCollection(c, evalGames, { now });
+      evaluated.set(c.id, result.matched.map((g) => g.appId));
+      if (result.blockedFacts.length > 0) unevaluable.add(c.id);
     }
 
     const steamCollections: SteamCollectionInfo[] = await withSteamClient((client) =>
@@ -887,7 +924,10 @@ export default class CollectionsBackend implements PluginBackend {
 
     // The ledger travels with the plan. Applying against a second, later read
     // meant `applyToLedger` patched a ledger the plan was never built from.
-    return { plan: planMirror({ collections, evaluated, ledger, steamCollections, namePrefix }), ledger };
+    return {
+      plan: planMirror({ collections, evaluated, ledger, steamCollections, namePrefix, unevaluable }),
+      ledger,
+    };
   }
 
   // ── Internals ────────────────────────────────────────────────────────
