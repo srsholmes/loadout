@@ -368,12 +368,10 @@ export function evaluateCollection(
 }
 
 /**
- * Count matches for a tab without sorting, grouping or tracing. Used by the
- * rule palette, which needs ~30 counts per keystroke and cares only about
- * the number.
- */
-/**
  * How many games the rules match, **before** `limit`.
+ *
+ * No sorting, grouping or tracing: the rule palette needs ~30 of these per
+ * keystroke and cares only about the number.
  *
  * Deliberately uncapped: the builder prices candidates with this, and a
  * palette that said "→ 30 games" because a cap is set would be describing the

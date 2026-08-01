@@ -30,7 +30,7 @@ function managed(overrides: Partial<ManagedCollection> = {}): ManagedCollection 
     display: { tileWidth: 150, showLabels: true, badges: [] },
     indeterminatePolicy: "pass",
     ...overrides,
-  } as ManagedCollection;
+  };
 }
 
 function collection(overrides: Partial<SteamCollection> = {}): SteamCollection {
@@ -149,6 +149,22 @@ describe("planMirror — a collection with no rules", () => {
       steamCollections: [collection({ appIds: ["1"] })],
     });
     expect(plan.deletes).toHaveLength(1);
+  });
+
+  it("tells one already in Steam what its state actually is", () => {
+    // The refusal for an unmirrored collection describes an accident being
+    // prevented. For one Steam already holds — mirrored by a build that had no
+    // such guard, so its Steam collection *is* the whole library right now —
+    // "would put your whole library in Steam" describes a thing that has
+    // already happened, and offers nothing to do about it.
+    const plan = planMirror({
+      collections: [empty()],
+      evaluated: new Map([["t1", ["1", "2"]]]),
+      ledger: ledger(entry({ appIds: ["1"] })),
+      steamCollections: [collection({ appIds: ["1"] })],
+    });
+    expect(plan.skipped[0]?.reason).not.toMatch(/would match/);
+    expect(plan.skipped[0]?.reason).toMatch(/left exactly as it is|delete it/i);
   });
 
   it("does not hold the name against a real collection", () => {
@@ -658,27 +674,53 @@ describe("mirrorAffecting — when auto-sync should fire", () => {
   it("watches every field of a collection that could change its membership", () => {
     // The projection is a whitelist, and its doc comment used to claim the
     // opposite ("a new field is included by default"). A field added to
-    // `ManagedCollection` and forgotten here means editing it never marks a
+    // `ManagedCollection` and forgotten there means editing it never marks a
     // sync owed, and Steam goes quietly stale. Fail here rather than there.
-    const watched = new Set([
-      "id",
-      "label",
-      "root",
-      "sort",
-      "limit",
-      "manualOrder",
-      "indeterminatePolicy",
-    ]);
-    // Fields that genuinely cannot change what Steam holds.
-    const cosmetic = new Set(["display", "icon"]);
+    //
+    // The *existence* of a classification for every field is enforced by
+    // `COLLECTION_FIELDS` in `mirror.ts` — a `Record<keyof
+    // ManagedCollection, …>` in a compiled module, so a new field fails the
+    // build. It has to live there rather than here: `tsconfig.json` excludes
+    // `*.test.ts`, so the same map in this file would never be typechecked and
+    // would prove nothing at all.
+    //
+    // What's left for a test is whether the classification is *true* — that
+    // every field called membership-affecting really does move the projection,
+    // and every cosmetic one really doesn't.
+    const FIELDS: Record<string, "watched" | "cosmetic"> = {
+      id: "watched",
+      label: "watched",
+      root: "watched",
+      sort: "watched",
+      limit: "watched",
+      manualOrder: "watched",
+      indeterminatePolicy: "watched",
+      // Fields that genuinely cannot change what Steam holds.
+      display: "cosmetic",
+      icon: "cosmetic",
+    };
 
-    const sample = managed();
-    for (const key of Object.keys(sample)) {
+    const changed: Partial<Record<keyof ManagedCollection, ManagedCollection>> = {
+      id: managed({ id: "t2" }),
+      label: managed({ label: "Later" }),
+      root: managed({ root: { kind: "group", id: "g", combinator: "any", children: [] } }),
+      sort: managed({ sort: [{ field: "name", dir: "asc" }] }),
+      limit: managed({ limit: 10 }),
+      manualOrder: managed({ manualOrder: ["440"] }),
+      indeterminatePolicy: managed({ indeterminatePolicy: "fail" }),
+      display: managed({ display: { tileWidth: 200, showLabels: false, badges: [] } }),
+      icon: managed({ icon: "FaStar" }),
+    };
+
+    for (const [key, role] of Object.entries(FIELDS)) {
+      const after = changed[key as keyof ManagedCollection];
+      expect(after, `no sample edit for \`${key}\``).toBeDefined();
       expect(
-        watched.has(key) || cosmetic.has(key),
-        `\`${key}\` is neither watched by project() nor listed as cosmetic — ` +
-          "if it can change membership, add it to the projection",
-      ).toBe(true);
+        mirrorAffecting(config(), config({ collections: [after!] })),
+        role === "watched"
+          ? `changing \`${key}\` must mark a sync owed — add it to project()`
+          : `\`${key}\` is listed as cosmetic but changing it marks a sync owed`,
+      ).toBe(role === "watched");
     }
   });
 

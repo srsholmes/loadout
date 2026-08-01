@@ -133,6 +133,16 @@ export function CollectionDetail({
     return selected.filter((id) => !visible.has(id)).length;
   }, [selected, shown]);
 
+  /**
+   * The name as it appears *inside* the delete confirm, bounded.
+   *
+   * That button already carries a whole sentence, and it sits in a `shrink-0`
+   * header row — so an EmuDeck-style "Nintendo 64 (ROMs, no-intro)" pushes the
+   * part that matters ("…stay in your library") off the edge. The full name is
+   * in the heading directly above it, which is where it belongs.
+   */
+  const shortLabel = label.length > 24 ? `${label.slice(0, 23)}…` : label;
+
   const rowWindow = useVisibleRows({
     total: shown?.length ?? 0,
     gridWrapperRef,
@@ -176,7 +186,12 @@ export function CollectionDetail({
           <div className="flex items-center gap-2 shrink-0">
             {/* A long ROM collection is unusable without this: 700+ tiles is
                 not something you scroll to the middle of with a thumbstick. */}
-            {games !== null && games.length > 0 ? (
+            {/* Hidden while the delete confirm is up: that confirm is a
+                sentence, not an icon, and this row is `shrink-0` — 180px of
+                filter beside it is what pushes a long collection name off the
+                edge of a handheld's header. Filtering is not the task at that
+                moment anyway. */}
+            {games !== null && games.length > 0 && !confirmingDelete ? (
               <SearchField
                 value={filter}
                 onChange={setFilter}
@@ -187,20 +202,25 @@ export function CollectionDetail({
             ) : null}
             {editing ? (
               <>
-                <Button
-                  variant="danger"
-                  disabled={selected.length === 0 || !onRemoveGames}
-                  onClick={() => {
-                    if (!onRemoveGames) return;
-                    onRemoveGames([...selected]);
-                    setSelected([]);
-                    setEditing(false);
-                  }}
-                >
-                  {selected.length === 0
-                    ? "Remove from collection"
-                    : `Remove ${selected.length} from collection`}
-                </Button>
+                {/* Gated on the handler rather than disabled by it: a disabled
+                    button that could never have been reached is a branch no
+                    test can cover, and the Done button below has to stay
+                    outside the gate so edit mode always has an exit. */}
+                {onRemoveGames ? (
+                  <Button
+                    variant="danger"
+                    disabled={selected.length === 0}
+                    onClick={() => {
+                      onRemoveGames([...selected]);
+                      setSelected([]);
+                      setEditing(false);
+                    }}
+                  >
+                    {selected.length === 0
+                      ? "Remove from collection"
+                      : `Remove ${selected.length} from collection`}
+                  </Button>
+                ) : null}
                 <IconButton
                   onClick={() => {
                     setEditing(false);
@@ -247,8 +267,8 @@ export function CollectionDetail({
                 </Button>
                 <Button variant="danger" onClick={onDelete}>
                   {games === null
-                    ? `Delete “${label}”`
-                    : `Delete “${label}” (${games.length} games stay in your library)`}
+                    ? `Delete “${shortLabel}”`
+                    : `Delete “${shortLabel}” (${games.length} games stay in your library)`}
                 </Button>
               </>
             ) : (

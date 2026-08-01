@@ -24,6 +24,13 @@ let hangSteam = false;
 let failNextWrite: string | null = null;
 /** The library read comes back empty, as it does while Steam hydrates. */
 let emptyLibrary = false;
+/** Library reads so far — `getSnapshot` is uncached, so this counts them. */
+let libraryReads = 0;
+/**
+ * Degrade the library from this read onward (1-based), so a test can put a
+ * failure *between* two reads inside one operation. `null` never degrades.
+ */
+let degradeLibraryFromRead: number | null = null;
 /** Which Steam write primitive was last used — a whole-list write is a bug. */
 let steamWrites: string[] = [];
 /** Hold a write open so an edit can provably land mid-sync. */
@@ -162,6 +169,8 @@ beforeEach(() => {
   hangSteam = false;
   failNextWrite = null;
   emptyLibrary = false;
+  libraryReads = 0;
+  degradeLibraryFromRead = null;
   steamWrites = [];
   releaseWrite = null;
   holdWrite = false;
@@ -207,7 +216,13 @@ async function loaded(games: Array<{ appId: string; name: string; source?: strin
   (backend as unknown as { callPlugin: unknown }).callPlugin = (
     plugin: string,
     method: string,
-  ) => libraryOf(emptyLibrary ? [] : games)(plugin, method);
+  ) => {
+    if (method !== "getGames") return libraryOf(games)(plugin, method);
+    libraryReads += 1;
+    const degraded =
+      emptyLibrary || (degradeLibraryFromRead !== null && libraryReads >= degradeLibraryFromRead);
+    return libraryOf(degraded ? [] : games)(plugin, method);
+  };
   await backend.onLoad();
   return backend;
 }
@@ -325,6 +340,16 @@ describe("entries Steam can no longer resolve", () => {
     const backend = await loaded();
     await backend.createCollection("Backlog");
     expect((await backend.listGames("backlog")).staleAppIds).toEqual([]);
+  });
+
+  it("has nothing to do for one built from rules either", async () => {
+    // Reading Steam directly rather than going through `listGames` lost the
+    // managed case, and a managed id then reached the "no collection with that
+    // id in Steam" error — reporting a collection the user is looking at as
+    // gone. Nothing in the UI asks for this, and it still must not lie.
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    await backend.createCollection("Backlog");
+    expect(await backend.pruneLinked("backlog")).toEqual({ removed: 0, kept: 0 });
   });
 });
 
@@ -646,6 +671,43 @@ describe("a sync against a library that didn't load", () => {
     expect(fakeCollections[0]!.appIds).toEqual(["620"]);
     expect((await backend.getConfig()).config.mirror.pendingSync).toBe(true);
   });
+
+  it("plans against the very reading its guard checked, not a later one", async () => {
+    // `getSnapshot` is uncached, and the guard and the plan used to call it
+    // separately. A `getGames` failure or a CDP timeout between the two left
+    // the guard inspecting a healthy read while every membership was computed
+    // from a broken one — the same two-reads mistake `pruneLinked` had, in the
+    // one path that rewrites every mirrored collection at once. Measured: the
+    // guard passed, the sync reported success, and the collection came back
+    // empty.
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    await backend.createCollection("Backlog");
+    const { config } = await backend.getConfig();
+    await backend.setCollections([
+      {
+        ...config.collections[0]!,
+        root: {
+          kind: "group",
+          id: "backlog-root",
+          combinator: "all",
+          children: [{ id: "r1", kind: "installed" }],
+        },
+      },
+    ]);
+    await backend.syncMirror();
+    expect(fakeCollections[0]!.appIds).toEqual(["620"]);
+
+    // Healthy for the first read of the sync, empty for every read after it.
+    libraryReads = 0;
+    degradeLibraryFromRead = 2;
+    await backend.syncMirror();
+
+    expect(fakeCollections[0]!.appIds).toEqual(["620"]);
+    // And one read is all a sync should take: three full library reads per
+    // sync — guard, plan, and naming the changes — is both the bug above and
+    // two extra `getGames` round trips on a handheld.
+    expect(libraryReads).toBe(1);
+  });
 });
 
 describe("a collection whose rules this build can't check", () => {
@@ -675,6 +737,43 @@ describe("a collection whose rules this build can't check", () => {
     expect(report.created).toBe(0);
     expect(fakeCollections).toHaveLength(0);
     expect(report.blocked[0]!.reason).toMatch(/can't check/);
+  });
+
+  it("syncs one whose policy already excludes what it can't check", async () => {
+    // Under `"fail"` an unchecked rule matches *nothing*, so the collection
+    // cannot be the whole library — it is narrower than intended, not wider.
+    // Refusing it anyway would contradict `diagnoseCollection`, which offers
+    // exactly this policy as the fix for the refusal above: the user would
+    // apply the suggested fix and the sync would go on refusing.
+    const backend = await loaded([
+      { appId: "620", name: "Portal 2" },
+      { appId: "400", name: "Portal" },
+    ]);
+    await backend.createCollection("Short or installed");
+    const { config } = await backend.getConfig();
+    await backend.setCollections([
+      {
+        ...config.collections[0]!,
+        indeterminatePolicy: "fail",
+        root: {
+          kind: "group",
+          id: "short-games-root",
+          // ANY, so the collection still has members once the unchecked rule
+          // contributes nothing — the case where refusing costs the user a
+          // collection that was perfectly correct.
+          combinator: "any",
+          children: [
+            { id: "r1", kind: "hltbMain", hours: { max: 10 } },
+            { id: "r2", kind: "installed" },
+          ],
+        },
+      },
+    ]);
+
+    const report = await backend.syncMirror();
+    expect(report.blocked).toEqual([]);
+    expect(report.created).toBe(1);
+    expect(fakeCollections[0]!.appIds.sort()).toEqual(["400", "620"]);
   });
 });
 
@@ -826,6 +925,96 @@ describe("createCollection", () => {
     const backend = await loaded();
     const config = await backend.createCollection("New");
     expect(config.collections[0]!.root.children).toEqual([]);
+  });
+});
+
+describe("the sync owed from a previous session", () => {
+  it("waits for the library rather than giving up in the first seconds of boot", async () => {
+    // Plugin load is the earliest moment Steam could be up, which makes it the
+    // moment the library is least likely to have hydrated — exactly what the
+    // sync guard refuses on. Load is also the only automatic sync left, so
+    // without a retry the owed one gives up at every boot and waits for the
+    // user to open the plugin and press the button.
+    const first = await loaded([{ appId: "620", name: "Portal 2" }]);
+    await first.setConfig({
+      ...(await first.getConfig()).config,
+      mirror: { ...(await first.getConfig()).config.mirror, autoSync: true },
+    });
+    await first.createCollection("Backlog");
+    await first.setCollections([
+      {
+        ...(await first.getConfig()).config.collections[0]!,
+        root: {
+          kind: "group",
+          id: "backlog-root",
+          combinator: "all",
+          children: [{ id: "r1", kind: "installed" }],
+        },
+      },
+    ]);
+    expect((await first.getConfig()).config.mirror.pendingSync).toBe(true);
+    expect(fakeCollections).toEqual([]);
+
+    // A fresh backend over the same config on disk — a reboot, with Steam's
+    // library not there yet.
+    emptyLibrary = true;
+    const second = new CollectionsBackend();
+    (second as unknown as { callPlugin: unknown }).callPlugin = (
+      plugin: string,
+      method: string,
+    ) => libraryOf(emptyLibrary ? [] : [{ appId: "620", name: "Portal 2" }])(plugin, method);
+    (second as unknown as { owedRetryDelays: readonly number[] }).owedRetryDelays = [10, 10, 10];
+    await second.onLoad();
+
+    // Refused, and still owed.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(fakeCollections).toEqual([]);
+    expect((await second.getConfig()).config.mirror.pendingSync).toBe(true);
+
+    // Steam finishes loading. The retry is what turns that into a sync.
+    emptyLibrary = false;
+    await until("the owed sync to land", () => fakeCollections.length === 1);
+    expect(fakeCollections[0]!.appIds).toEqual(["620"]);
+    await second.onUnload();
+  });
+
+  it("gives up rather than retrying for the life of the session", async () => {
+    // A backend that keeps retrying forever is one quietly writing to Steam
+    // long after anybody expected it to.
+    const first = await loaded([{ appId: "620", name: "Portal 2" }]);
+    await first.setConfig({
+      ...(await first.getConfig()).config,
+      mirror: { ...(await first.getConfig()).config.mirror, autoSync: true },
+    });
+    await first.createCollection("Backlog");
+    await first.setCollections([
+      {
+        ...(await first.getConfig()).config.collections[0]!,
+        root: {
+          kind: "group",
+          id: "backlog-root",
+          combinator: "all",
+          children: [{ id: "r1", kind: "installed" }],
+        },
+      },
+    ]);
+
+    emptyLibrary = true;
+    const second = new CollectionsBackend();
+    (second as unknown as { callPlugin: unknown }).callPlugin = (
+      plugin: string,
+      method: string,
+    ) => libraryOf(emptyLibrary ? [] : [{ appId: "620", name: "Portal 2" }])(plugin, method);
+    (second as unknown as { owedRetryDelays: readonly number[] }).owedRetryDelays = [5, 5];
+    await second.onLoad();
+
+    // Well past the last delay, with the library still absent.
+    await new Promise((r) => setTimeout(r, 60));
+    emptyLibrary = false;
+    await new Promise((r) => setTimeout(r, 40));
+    expect(fakeCollections).toEqual([]);
+    expect((await second.getConfig()).config.mirror.pendingSync).toBe(true);
+    await second.onUnload();
   });
 });
 

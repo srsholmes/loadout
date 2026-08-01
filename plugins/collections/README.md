@@ -35,10 +35,22 @@ So it happens where nothing is waiting on it:
 
 - the sync button in the header, whenever you want it;
 - when you leave the plugin, if **Sync when I leave** is on;
-- at startup, if a sync was owed from a session where Steam was closed.
+- at startup, if a sync was owed from a session where Steam was closed. That
+  one is the earliest Steam could be up, so it is also the most likely to find
+  the library still loading — it waits and tries again a few times rather than
+  syncing against a library that isn't there.
 
 A collection with no rules yet is never written — an empty rule tree matches
-your whole library, and nobody wants that in Steam.
+your whole library, and nobody wants that in Steam. Nor is one whose rules this
+build can't answer: a rule reading data no plugin supplies matches *everything*
+under the default policy, so it is refused for the same reason. Setting the
+collection to exclude what it can't check makes it narrower rather than wider,
+and it syncs normally after that.
+
+A sync never runs against a library that came back empty or half-loaded either.
+Both sources degrade to empty on failure, and because a sync rewrites whole
+memberships across every mirrored collection at once, a thin read wouldn't
+produce a smaller sync — it would empty all of them.
 
 Editing a collection that is **already in Steam** is the other way round: adding
 or removing games, renaming, deleting and cleaning up all write immediately,

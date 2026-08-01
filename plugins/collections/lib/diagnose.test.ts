@@ -146,7 +146,6 @@ describe("diagnoseCollection — blocked-facts", () => {
     expect(diagnosis.message).toMatch(/wider than it looks/);
   });
 
-
   const blocked = buildEvalGames(LIBRARY, {
     protonTier: new Map(
       LIBRARY.map((g) => [

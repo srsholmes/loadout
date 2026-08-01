@@ -174,16 +174,32 @@ export function planMirror(args: PlanMirrorArgs): MirrorPlan {
    */
   const unbuilt = (collection: ManagedCollection) => collection.root.children.length === 0;
 
-  /** Why this collection must not be written, or null if it may be. */
-  const refuse = (collection: ManagedCollection): string | null => {
+  /**
+   * Why this collection must not be written, or null if it may be.
+   *
+   * `mirrored` changes what the refusal is *about*. For a collection Steam has
+   * never seen, refusing prevents the accident. For one already in Steam —
+   * mirrored by an earlier build that had no such guard, so its Steam
+   * collection is the whole library right now — refusing only stops it getting
+   * worse, and saying "would put your whole library in Steam" describes a
+   * thing that has already happened. Say what is actually true, and what to do
+   * about it: this planner never deletes on the user's behalf.
+   */
+  const refuse = (collection: ManagedCollection, mirrored: boolean): string | null => {
     if (unbuilt(collection)) {
-      return `"${collection.label}" has no rules yet, so it would match your whole library.`;
+      return mirrored
+        ? `"${collection.label}" has no rules, so it is left exactly as it is in Steam. ` +
+            `Add a rule to sync it, or delete it to remove it from Steam.`
+        : `"${collection.label}" has no rules yet, so it would match your whole library.`;
     }
     if (unevaluable.has(collection.id)) {
-      return (
+      const why =
         `"${collection.label}" has a rule this build can't check, and an unchecked rule ` +
-        `matches everything — so syncing it would put your whole library in Steam.`
-      );
+        `matches every game.`;
+      return mirrored
+        ? `${why} Its Steam collection is left as it is — which may be your whole library, ` +
+            `if it was synced before. Delete it, or change the rule.`
+        : `${why} Syncing it would put your whole library in Steam.`;
     }
     return null;
   };
@@ -197,7 +213,7 @@ export function planMirror(args: PlanMirrorArgs): MirrorPlan {
   for (const collection of collections) {
     const entry = ledgerByManaged.get(collection.id);
     if (!entry) continue;
-    const refusal = refuse(collection);
+    const refusal = refuse(collection, true);
     if (refusal) {
       plan.skipped.push({ managedId: collection.id, reason: refusal });
       continue;
@@ -302,7 +318,7 @@ export function planMirror(args: PlanMirrorArgs): MirrorPlan {
   // Pass 2 — collections with no Steam collection yet.
   for (const collection of collections) {
     if (ledgerByManaged.has(collection.id)) continue;
-    const refusal = refuse(collection);
+    const refusal = refuse(collection, false);
     if (refusal) {
       plan.skipped.push({ managedId: collection.id, reason: refusal });
       continue;
@@ -348,16 +364,15 @@ export function planMirror(args: PlanMirrorArgs): MirrorPlan {
  * ledger through the same config setter that triggers auto-sync, so without a
  * check on *what* changed the mirror would sync itself in a loop forever.
  *
- * Compared as a **projection**, which means the field list below is a
- * whitelist, not a default. A new membership-affecting field on
- * {@link ManagedCollection} — an exclude list, a per-collection cap — will not
- * mark a sync owed until it is added to `project()`, and Steam then goes
- * silently stale, which is the failure users can't see. `mirror.test.ts`
- * enumerates the type's keys against the projection so adding one fails the
- * build rather than the user's library.
+ * Compared as a **projection**, which means the field list is a whitelist, not
+ * a default. A new membership-affecting field on {@link ManagedCollection} —
+ * an exclude list, a per-collection cap — would not mark a sync owed until
+ * somebody remembered to add it, and Steam then goes silently stale, which is
+ * the failure users can't see. {@link COLLECTION_FIELDS} is what stops that
+ * being a matter of remembering.
  *
  * Being too eager costs a redundant sync; being too lazy costs correctness, so
- * when in doubt, include the field.
+ * when in doubt, classify the field as `membership`.
  */
 export function mirrorAffecting(
   before: MirrorRelevantConfig,
@@ -374,18 +389,41 @@ export interface MirrorRelevantConfig {
   mirror: { autoSync: boolean };
 }
 
+/**
+ * Every field of a managed collection, classified by whether changing it can
+ * change what Steam ends up holding.
+ *
+ * Keyed on `keyof ManagedCollection` and **in a compiled module**, not a test:
+ * `tsconfig.json` excludes `*.test.ts`, so the same map in a spec file would
+ * never be typechecked and a new field would sail past it. Here, adding one to
+ * the type fails the build until somebody classifies it — which is the whole
+ * point, since the alternative failure is silent and lands on the user's Steam
+ * library.
+ */
+const COLLECTION_FIELDS: Record<keyof ManagedCollection, "membership" | "cosmetic"> = {
+  id: "membership",
+  // The name reaches Steam, so a rename is a sync-worthy change.
+  label: "membership",
+  root: "membership",
+  sort: "membership",
+  limit: "membership",
+  manualOrder: "membership",
+  indeterminatePolicy: "membership",
+  display: "cosmetic",
+  icon: "cosmetic",
+};
+
+const MEMBERSHIP_FIELDS = (Object.keys(COLLECTION_FIELDS) as Array<keyof ManagedCollection>).filter(
+  (key) => COLLECTION_FIELDS[key] === "membership",
+);
+
 function project(config: MirrorRelevantConfig) {
   return {
-    collections: config.collections.map((c) => ({
-      id: c.id,
-      // The name reaches Steam, so a rename is a sync-worthy change.
-      label: c.label,
-      root: c.root,
-      sort: c.sort,
-      limit: c.limit,
-      manualOrder: c.manualOrder,
-      policy: c.indeterminatePolicy,
-    })),
+    // Derived from the classification rather than restating it: two lists that
+    // have to agree eventually don't.
+    collections: config.collections.map((c) =>
+      Object.fromEntries(MEMBERSHIP_FIELDS.map((key) => [key, c[key]])),
+    ),
     // Whitelists and blacklists live here, so they change membership.
     overrides: config.gameOverrides,
     prefix: config.settings.namePrefix,
