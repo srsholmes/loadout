@@ -233,12 +233,12 @@ export function presets(now: number = Math.floor(Date.now() / 1000)): Collection
       label: "Recently added",
       description: "Everything that arrived in your library this month",
       needs: ["purchaseDate"],
+      // Sorted by release date rather than purchase date: `SortField` has no
+      // `purchasedAt`, and newest-released is the closest honest proxy for
+      // "what just arrived".
       build: (id) =>
         make(id, "Recently added", [
           { id: rid(id, 1), kind: "purchaseDate", epochSec: { min: now - 30 * DAY } },
-          // Sorted by release date rather than purchase date: `SortField` has
-          // no `purchasedAt`, and newest-released is the closest honest proxy
-          // for "what just arrived".
         ], { sort: [{ field: "releaseDate", dir: "desc" }] }),
     },
     {

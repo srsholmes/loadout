@@ -3,6 +3,7 @@ import * as actualUi from "@loadout/ui";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { LIBRARY } from "./test/fixtures/library";
 import { defaultConfig, validateConfig } from "./lib/config";
+import { appStoreProviders, phase1Providers } from "./lib/adapt";
 
 const calls: Array<{ method: string; args: unknown[] }> = [];
 let mirrorState = { autoSync: false, pendingSync: false };
@@ -23,6 +24,8 @@ let failEditLinked = false;
 let rejectEditLinked: (() => void) | null = null;
 let summaries: unknown[] = [];
 let steamReachable = true;
+/** The library read comes back empty, as it does while Steam hydrates. */
+let libraryDegraded = false;
 let games: string[] = [];
 let managedCollections: unknown[] = [];
 
@@ -48,7 +51,18 @@ const callMock = mock((method: string, ...args: unknown[]) => {
       // A real library, not an empty one: the preset gallery greys out any
       // preset whose data source is missing, so with no games every preset
       // would be unpickable.
-      return Promise.resolve({ games: LIBRARY, providers: {}, generatedAt: 0 });
+      //
+      // Providers come from the real helpers rather than a hand-written `{}`.
+      // That field is how the UI tells "the library is loaded" from "the call
+      // returned" — `getSnapshot` never rejects, since both its sources
+      // degrade to empty — so a fake that omitted it described a snapshot the
+      // backend cannot produce, and every screen under test believed a
+      // library it should have been waiting for.
+      return Promise.resolve(
+        libraryDegraded
+          ? { games: [], providers: phase1Providers(false), generatedAt: 0 }
+          : { games: LIBRARY, providers: appStoreProviders(true), generatedAt: 0 },
+      );
     case "getConfig":
       // A *whole* config, built from the real default. It used to be
       // `{collections, mirror}` alone — a shape the real `setConfig` rejects
@@ -158,6 +172,7 @@ beforeEach(() => {
   rejectEditLinked = null;
   summaries = [];
   steamReachable = true;
+  libraryDegraded = false;
   games = [];
   managedCollections = [];
   container = document.createElement("div");
@@ -238,6 +253,42 @@ describe("opening a collection", () => {
 describe("editing a collection's rules", () => {
   /** A managed collection with the shape the rule builder needs. */
   const managed = fullCollection;
+
+  it("won't price the presets against a library that hasn't loaded", async () => {
+    // `getSnapshot` never rejects — both its sources degrade to empty — so a
+    // Steam still hydrating answers with a well-formed snapshot of nothing.
+    // Deciding on `snapshot !== null` treats that as a loaded library, and the
+    // page then greys out every preset blaming the user's play history for an
+    // outage of ours. The backend refuses to sync or prune on this same
+    // signal; the UI has to read it the same way.
+    libraryDegraded = true;
+    ({ unmount } = renderApp());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "New collection" })).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "New collection" }));
+    await waitFor(() => expect(screen.getByText("Or start from a preset")).toBeTruthy());
+
+    expect(screen.getByText(/Reading your library/)).toBeTruthy();
+    expect(screen.queryByText(/Needs play history/)).toBeNull();
+  });
+
+  it("asks again rather than settling for the empty answer", async () => {
+    // One fetch would leave every screen priced against that empty snapshot
+    // for the rest of the session, and nothing else re-reads the library.
+    libraryDegraded = true;
+    ({ unmount } = renderApp());
+    await waitFor(() => expect(calls.some((c) => c.method === "getSnapshot")).toBe(true));
+
+    libraryDegraded = false;
+    await waitFor(
+      () => expect(calls.filter((c) => c.method === "getSnapshot").length).toBeGreaterThan(1),
+      { timeout: 4000 },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "New collection" }));
+    await waitFor(() => expect(screen.queryByText(/Reading your library/)).toBeNull());
+  }, 10_000);
 
   it("locks the gallery while a preset is being built", async () => {
     // Creating one takes a beat, and a press that shows no sign of having

@@ -60,6 +60,17 @@ describe("browsing the library", () => {
     expect(screen.getAllByText("Installed").length).toBe(2);
   });
 
+  it("won't claim the library is exhausted before it has been read", () => {
+    // The empty list and the unread library look identical from here, and
+    // "every game in your library is already in this collection" is a
+    // confident statement of fact about somebody's library. `getSnapshot`
+    // never rejects — both its sources degrade to empty — so the unread case
+    // arrives as an ordinary empty candidate list and needs saying apart.
+    renderPage({ candidates: [], libraryLoaded: false });
+    expect(screen.queryByText(/already in this collection/)).toBeNull();
+    expect(screen.getByText(/Reading your library/)).toBeTruthy();
+  });
+
   it("says when there is nothing left to add", () => {
     renderPage({ candidates: [] });
     expect(screen.getByText(/already in this collection/)).toBeTruthy();

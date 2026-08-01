@@ -96,6 +96,26 @@ describe("while a collection is being built", () => {
     expect(screen.getByText(/Building “Never played”/)).toBeTruthy();
   });
 
+  it("doesn't blame the library for a read that hasn't finished", () => {
+    // Until the snapshot lands nothing can be priced, and `metadataNeedsMet`
+    // sees an empty library — so every preset that reads anything came back
+    // "Needs play history", which blames the user's library for an outage of
+    // ours. It also left the D-pad with nothing to reach on the page.
+    renderPage({ libraryLoaded: false });
+    expect(screen.queryByText(/Needs play history/)).toBeNull();
+    expect(screen.getByText(/Reading your library/)).toBeTruthy();
+    // Blocked while it arrives, rather than pickable against nothing.
+    expect(screen.getByRole("button", { name: /Most played/ }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("prices and offers them once it has", () => {
+    renderPage();
+    expect(screen.queryByText(/Reading your library/)).toBeNull();
+    expect(screen.getByRole("button", { name: /Most played/ }).hasAttribute("disabled")).toBe(
+      false,
+    );
+  });
+
   it("locks every other preset too, not just the one pressed", () => {
     renderPage();
     fireEvent.click(screen.getByRole("button", { name: /Never played/ }));

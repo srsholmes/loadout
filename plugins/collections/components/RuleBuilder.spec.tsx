@@ -297,6 +297,21 @@ describe("RuleBuilder — the palette", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  it("takes the card the D-pad can't use out of the way", () => {
+    // Refusing the press is only half of it: a control the stick stops on and
+    // A does nothing to reads as the plugin having hung. `PresetRow` gates its
+    // focus the same way and says so.
+    renderBuilder(tab([]));
+    fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+
+    const blocked = screen.getAllByRole("button", { name: /How long to beat/ })[0]!;
+    expect(blocked.hasAttribute("disabled")).toBe(true);
+    // And a rule that simply matches nothing right now is still pickable —
+    // "0 games" is information, not a broken rule.
+    const installed = screen.getAllByRole("button", { name: /Installed/ })[0]!;
+    expect(installed.hasAttribute("disabled")).toBe(false);
+  });
+
   it("adds the picked rule to the tree", () => {
     const { onSave } = renderBuilder(tab([]));
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }));

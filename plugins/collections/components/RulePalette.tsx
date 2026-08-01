@@ -162,8 +162,17 @@ function CandidateCard({
   currentTotal: number;
   onPick: () => void;
 }) {
-  const { ref, focused } = useFocusable({ onEnterPress: onPick });
-  const zero = candidate.total === 0 || candidate.unavailable !== undefined;
+  // A rule whose data nothing supplies cannot be added at all — `RuleBuilder`
+  // refuses the pick, because such a rule matches every game and would mirror
+  // the whole library into Steam. Taking it out of the focus tree matters as
+  // much as the refusal: a control the D-pad stops on and A does nothing to
+  // reads as the plugin having hung. `PresetRow` gates the same way, for the
+  // same reason.
+  const unavailable = candidate.unavailable !== undefined;
+  const { ref, focused } = useFocusable({ onEnterPress: onPick, focusable: !unavailable });
+  // Dimmed for either reason; only the unavailable one is unpickable. A rule
+  // that currently matches nothing is still a rule you may want.
+  const zero = candidate.total === 0 || unavailable;
 
   const consequence = (() => {
     if (candidate.unavailable) return candidate.unavailable;
@@ -177,6 +186,7 @@ function CandidateCard({
     <button
       ref={ref as React.Ref<HTMLButtonElement>}
       type="button"
+      disabled={unavailable}
       onClick={onPick}
       className={[
         "flex w-full min-h-[44px] flex-col items-start gap-1 rounded-lg border p-3 text-left",

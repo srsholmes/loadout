@@ -263,12 +263,12 @@ function PresetRow({
     : !libraryLoaded
       ? "…"
       : unavailable
-      ? `Needs ${missing.join(" and ")}`
-      : alreadyExists
-        ? "You have this one"
-        : count === 0
-          ? "Nothing matches — yet"
-          : `→ ${count} game${count === 1 ? "" : "s"}`;
+        ? `Needs ${missing.join(" and ")}`
+        : alreadyExists
+          ? "You have this one"
+          : count === 0
+            ? "Nothing matches — yet"
+            : `→ ${count} game${count === 1 ? "" : "s"}`;
 
   return (
     <button

@@ -3,9 +3,9 @@
  *
  * Type-only by design — every runtime concern lives in a sibling module
  * (`rules.ts` for predicates, `evaluate.ts` for the tree walk, `sort.ts`).
- * Keeping this file declaration-only means both the overlay
- * bundle and the backend bundle can import it for free, and the spec gate
- * correctly treats it as having no runtime to test.
+ * Keeping this file declaration-only means both the overlay bundle and the
+ * backend bundle can import it for free, and the spec gate correctly treats
+ * it as having no runtime to test.
  *
  * ## Why three-valued logic
  *
@@ -16,10 +16,10 @@
  *
  * TabMaster has no such state, so a cold achievement cache makes its
  * achievements filter return `false` and the games silently vanish — you
- * cannot tell a wrong rule from a missing data source. Here the tab's
- * {@link ManagedCollection.indeterminatePolicy} decides (defaulting to `"pass"`, so an
- * outage degrades a tab rather than emptying it), and the UI can always
- * name which rules it couldn't check and why.
+ * cannot tell a wrong rule from a missing data source. Here the collection's
+ * {@link ManagedCollection.indeterminatePolicy} decides (defaulting to
+ * `"pass"`, so an outage degrades a collection rather than emptying it), and
+ * the UI can always name which rules it couldn't check and why.
  *
  * Note the deliberate boundary: *missing metadata for one game* — no known
  * release date, no Metacritic score — is **not** indeterminate. That is
@@ -94,7 +94,7 @@ export type FactKey =
   | "onSdCard";
 
 /**
- * One node in a tab's rule tree.
+ * One node in a collection's rule tree.
  *
  * Every variant carries a stable `id` (used as a React key, as the
  * addressing scheme for edits, and as the key into
@@ -241,8 +241,6 @@ export interface MirrorLedger {
   version: 1;
   entries: MirrorLedgerEntry[];
 }
-
-// ── Evaluation output ──────────────────────────────────────────────────
 
 // ── Facts ──────────────────────────────────────────────────────────────
 

@@ -43,6 +43,28 @@ import type { ManagedCollection } from "./lib/types";
 
 export { FaLayerGroup as icon };
 
+/** How many times to ask for the library before settling for what we got. */
+const SNAPSHOT_ATTEMPTS = 4;
+/** Multiplied by the attempt number, so 1s, 2s, 3s. */
+const SNAPSHOT_RETRY_MS = 1000;
+
+/**
+ * Whether the library snapshot can be *believed* — not merely whether the call
+ * came back.
+ *
+ * `getSnapshot` never rejects on a bad read: both its sources degrade to empty,
+ * so a Steam that hasn't finished hydrating answers with a well-formed snapshot
+ * of nothing. Testing `snapshot !== null` treats that as a loaded library and
+ * the screens priced against it then state it as fact — "every game in your
+ * library is already in this collection", twelve presets greyed out blaming
+ * play history. This is the same condition the backend refuses to sync or
+ * prune on, for the same reason.
+ */
+function snapshotIsUsable(snapshot: GameMetadataSnapshot | null): boolean {
+  if (snapshot === null) return false;
+  return snapshot.providers.appstore?.status === "ok" && snapshot.games.length > 0;
+}
+
 interface CollectionSummary {
   id: string;
   label: string;
@@ -163,17 +185,35 @@ export function Collections() {
   useEffect(() => {
     if (!ready) return;
     void loadGrid();
+    let cancelled = false;
     void (async () => {
-      try {
-        const [snap] = await Promise.all([
-          call("getSnapshot") as Promise<GameMetadataSnapshot>,
-          loadConfig(),
-        ]);
-        setSnapshot(snap);
-      } catch {
-        // The grid still works without these; only rule editing needs them.
+      // Retried while the answer is one we can't believe. `getSnapshot` never
+      // *fails* — both its sources degrade to empty — so a Steam that hasn't
+      // finished hydrating returns a perfectly well-formed snapshot of nothing,
+      // and one fetch would leave every screen priced against it for the rest
+      // of the session. Bounded: this is a webview waiting on a library, not a
+      // poller.
+      for (let attempt = 0; attempt < SNAPSHOT_ATTEMPTS && !cancelled; attempt++) {
+        if (attempt > 0) {
+          await new Promise((r) => setTimeout(r, SNAPSHOT_RETRY_MS * attempt));
+          if (cancelled) return;
+        }
+        try {
+          const [snap] = await Promise.all([
+            call("getSnapshot") as Promise<GameMetadataSnapshot>,
+            attempt === 0 ? loadConfig() : Promise.resolve(),
+          ]);
+          if (cancelled) return;
+          setSnapshot(snap);
+          if (snapshotIsUsable(snap)) return;
+        } catch {
+          // The grid still works without these; only rule editing needs them.
+        }
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [ready, loadGrid, loadConfig, call]);
 
   /**
@@ -264,7 +304,7 @@ export function Collections() {
     // row windowing measures against.
     return (
       <AddGamesPage
-        libraryLoaded={snapshot !== null}
+        libraryLoaded={snapshotIsUsable(snapshot)}
         label={view.label}
         candidates={(snapshot?.games ?? [])
           .filter((g) => !already.has(g.appId))
@@ -282,7 +322,7 @@ export function Collections() {
         <NewCollectionPage
           existingNames={(summaries ?? []).map((c) => c.label)}
           games={evalGames}
-          libraryLoaded={snapshot !== null}
+          libraryLoaded={snapshotIsUsable(snapshot)}
           onBack={() => setView({ kind: "grid" })}
           onPickPreset={(preset) => void createCollection(preset.label, preset)}
           onCreate={(label) => void createCollection(label)}
