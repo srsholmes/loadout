@@ -95,6 +95,21 @@ describe("diagnoseCollection — over-capped", () => {
 });
 
 describe("diagnoseCollection — blocked-facts", () => {
+  it("still reports them when the collection looks full", () => {
+    // The dangerous case, and the one that used to return `ok`: an
+    // unanswerable rule passes every game under the default policy, so the
+    // collection matches the whole library and reads as healthy — then gets
+    // mirrored into Steam that way.
+    const collection = collectionWith([{ id: "a", kind: "hltbMain", hours: { max: 10 } }]);
+    const result = evaluateCollection(collection, evalLibrary, { trace: true });
+    expect(result.matched.length).toBe(evalLibrary.length);
+
+    const diagnosis = diagnose(collection);
+    expect(diagnosis.kind).toBe("blocked-facts");
+    expect(diagnosis.message).toMatch(/wider than it looks/);
+  });
+
+
   const blocked = buildEvalGames(LIBRARY, {
     protonTier: new Map(
       LIBRARY.map((g) => [

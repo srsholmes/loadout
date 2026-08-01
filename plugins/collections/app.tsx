@@ -281,6 +281,7 @@ export function Collections() {
         <NewCollectionPage
           existingNames={(summaries ?? []).map((c) => c.label)}
           games={evalGames}
+          libraryLoaded={snapshot !== null}
           onBack={() => setView({ kind: "grid" })}
           onPickPreset={(preset) => void createCollection(preset.label, preset)}
           onCreate={(label) => void createCollection(label)}
@@ -548,6 +549,7 @@ export function Collections() {
 
   /** Drop every entry Steam can no longer resolve — see `listGames`. */
   async function cleanUpLinked(id: string) {
+    const request = openRequest.current;
     const before = staleCount;
     setStaleCount(0);
     try {
@@ -560,7 +562,10 @@ export function Collections() {
       );
       await loadGrid();
     } catch (err) {
-      setStaleCount(before);
+      // Same token as `openCollection`: by the time this lands the user may be
+      // looking at a different collection, and painting this one's state under
+      // that one's header is how an edit gets aimed at the wrong thing.
+      if (request === openRequest.current) setStaleCount(before);
       notify(err instanceof Error ? err.message : "Couldn't clean that collection up", {
         kind: "error",
       });
@@ -568,6 +573,7 @@ export function Collections() {
   }
 
   async function addToLinked(id: string, label: string, appIds: string[]) {
+    const request = openRequest.current;
     const before = games ?? [];
     const nameOf = new Map((snapshot?.games ?? []).map((g) => [g.appId, g.name] as const));
     const added = appIds.map((appId) => ({ appId, name: nameOf.get(appId) ?? appId }));
@@ -581,7 +587,7 @@ export function Collections() {
       await call("editLinked", id, { add: appIds });
       await loadGrid();
     } catch (err) {
-      setGames(before);
+      if (request === openRequest.current) setGames(before);
       notify(err instanceof Error ? err.message : "Couldn't update that collection", {
         kind: "error",
       });
@@ -589,6 +595,7 @@ export function Collections() {
   }
 
   async function removeFromLinked(id: string, appIds: readonly string[]) {
+    const request = openRequest.current;
     const before = games ?? [];
     const dropped = new Set(appIds);
     const next = before.filter((g) => !dropped.has(g.appId));
@@ -599,7 +606,7 @@ export function Collections() {
       await call("editLinked", id, { remove: [...appIds] });
       await loadGrid();
     } catch (err) {
-      setGames(before);
+      if (request === openRequest.current) setGames(before);
       notify(err instanceof Error ? err.message : "Couldn't update that collection", {
         kind: "error",
       });

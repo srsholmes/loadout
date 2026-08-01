@@ -131,7 +131,7 @@ export function RuleEditorPage({
         {count === 0 && complete ? (
           <p className="text-xs text-warning">
             Nothing in your library matches this rule on its own. Saving it
-            will empty the tab unless the group uses ANY.
+            will empty the collection unless the group uses ANY.
           </p>
         ) : null}
       </div>

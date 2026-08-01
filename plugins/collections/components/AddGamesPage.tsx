@@ -29,6 +29,7 @@ import {
   IconButton,
   PluginHeader,
   SearchField,
+  Spinner,
   Text,
   pushBackInterceptor,
 } from "@loadout/ui";
@@ -47,6 +48,15 @@ export interface AddGamesPageProps {
   label: string;
   /** Everything in the library, already excluding current members. */
   candidates: readonly AddGamesCandidate[];
+  /**
+   * Whether the library snapshot has arrived.
+   *
+   * Without it, a snapshot that failed or hadn't landed produced an empty
+   * candidate list and the page said "every game in your library is already in
+   * this collection" — a confident, false statement about the user's library,
+   * dressed as an ordinary empty state.
+   */
+  libraryLoaded?: boolean;
   onBack: () => void;
   onAdd: (appIds: string[]) => void;
 }
@@ -54,7 +64,13 @@ export interface AddGamesPageProps {
 const artUrl = (appId: string, kind: "capsule" | "header") =>
   `http://localhost:33820/api/steam-grid/${appId}/${kind}`;
 
-export function AddGamesPage({ label, candidates, onBack, onAdd }: AddGamesPageProps) {
+export function AddGamesPage({
+  label,
+  candidates,
+  libraryLoaded = true,
+  onBack,
+  onAdd,
+}: AddGamesPageProps) {
   const [filter, setFilter] = useState("");
   const [chosen, setChosen] = useState<readonly string[]>([]);
 
@@ -141,7 +157,12 @@ export function AddGamesPage({ label, candidates, onBack, onAdd }: AddGamesPageP
         </div>
       </PluginHeader>
 
-      {candidates.length === 0 ? (
+      {!libraryLoaded ? (
+        <div className="flex items-center gap-2">
+          <Spinner size={16} />
+          <Text variant="secondary">Reading your library…</Text>
+        </div>
+      ) : candidates.length === 0 ? (
         <Text variant="secondary">
           Every game in your library is already in this collection.
         </Text>

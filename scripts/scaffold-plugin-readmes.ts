@@ -73,7 +73,7 @@ const DISPLAY_NAME_OVERRIDES: Record<string, string> = {
  * hand-tuned files (200+ lines on quick-links) can't be regenerated
  * from a template.
  */
-const HAND_TUNED: ReadonlySet<string> = new Set(["quick-links"]);
+const HAND_TUNED: ReadonlySet<string> = new Set(["quick-links", "collections"]);
 const FORCE_ALL = process.argv.includes("--force-all");
 
 /** Convert `quick-links` → "Quick Links". Override table wins for

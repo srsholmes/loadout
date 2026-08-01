@@ -37,7 +37,7 @@ export interface HeaderBackButtonProps {
   title?: string;
   ariaLabel?: string;
   /** Optional icon-size override. Matches the existing inline pattern
-   *  (13, matching `IconButton`) by default. */
+   *  (13, matching the glyphs plugin headers put inside `IconButton`) by default. */
   iconSize?: number;
 }
 

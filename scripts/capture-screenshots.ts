@@ -96,11 +96,22 @@ const PAGE_RECIPES: Record<string, PageShot[]> = {
   collections: [
     { name: "games", steps: [{ kind: "card" }, { kind: "wait", ms: 400 }, { kind: "scrollTop" }] },
     { name: "new", steps: [{ kind: "aria", label: "New collection" }] },
-    { name: "rules", steps: [{ kind: "card" }, { kind: "aria", label: "Options" }] },
+    // Targeted by the card's own subtitle rather than by position: the first
+    // card is only a rule-built collection if the user has one, and on a fresh
+    // install `listAll` returns Steam's first — whose Options is the short
+    // page, so the shot would quietly capture the wrong screen instead of
+    // skipping.
+    {
+      name: "rules",
+      steps: [
+        { kind: "text", label: "Rules · updates itself" },
+        { kind: "aria", label: "Options" },
+      ],
+    },
     {
       name: "rule-palette",
       steps: [
-        { kind: "card" },
+        { kind: "text", label: "Rules · updates itself" },
         { kind: "aria", label: "Options" },
         { kind: "text", label: "Add rule" },
       ],
@@ -333,7 +344,15 @@ const GRID_TILE_THRESHOLD = 6;
 // Plugins whose grid we keep pinned to the top instead of random-
 // scrolling: their hero/top row is the intended look (RecompHub's hero
 // row, TDP's controls, PlayTime's headline + day filters).
-const NO_SCROLL = new Set(["recomp", "tdp-control", "playtime"]);
+const NO_SCROLL = new Set([
+  // Its recipes position the page deliberately (scroll to top after opening a
+  // sub-page whose windowed grid inherited the previous view's offset), and
+  // `varyGridView` would undo that a moment later.
+  "collections",
+  "recomp",
+  "tdp-control",
+  "playtime",
+]);
 
 /**
  * Before a shot, randomly scroll grid views so each capture shows a

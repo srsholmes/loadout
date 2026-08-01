@@ -12,10 +12,11 @@ Manages your Steam collections from the overlay — the ones you already have, a
 | What's in it | whatever the rules match, re-evaluated on every sync | an explicit list of games |
 | Rules | yes | **never** — pointing rules at a set somebody else curated would replace their work |
 | Editing its contents | change the rules | add and remove games directly |
-| Rename / delete | yes | yes, behind a two-step confirm |
+| Rename / delete | yes, behind a two-step confirm | yes, behind a two-step confirm |
 
-Everything on the grid syncs. There is no per-collection opt-in: what you see
-here is what Steam has.
+Every rule-built collection syncs — there is no per-collection opt-in, so what
+you see here is what Steam gets. The ones that already live in Steam are not
+"synced" at all: they *are* Steam's, and editing one writes to it directly.
 
 ## A rule collection can drop a game, and that's the point
 
@@ -27,10 +28,10 @@ it, and a sync reports what changed by name: *"Barely started — 1 removed
 
 ## Syncing
 
-Editing never writes to Steam on its own. A sync is a full library evaluation
-plus a batch of Cloud writes, and this runs on a handheld — doing that while
-you are still working made the plugin look frozen. So it happens where nothing
-is waiting on it:
+Editing a **rule-built** collection never writes to Steam on its own. A sync is
+a full library evaluation plus a batch of Cloud writes, and this runs on a
+handheld — doing that while you are still working made the plugin look frozen.
+So it happens where nothing is waiting on it:
 
 - the sync button in the header, whenever you want it;
 - when you leave the plugin, if **Sync when I leave** is on;
@@ -38,6 +39,12 @@ is waiting on it:
 
 A collection with no rules yet is never written — an empty rule tree matches
 your whole library, and nobody wants that in Steam.
+
+Editing a collection that is **already in Steam** is the other way round: adding
+or removing games, renaming, deleting and cleaning up all write immediately,
+because there is nothing to compute — Steam already holds the answer. Deleting a
+rule-built collection also removes its Steam collection on the spot, rather than
+leaving it there until the next sync.
 
 ## Entries Steam can no longer resolve
 
@@ -82,9 +89,12 @@ collection somebody else built.
 
 - **Steam's library tabs are a different thing.** This manages collections —
   the data. The tab strip along the top of Steam's library is built inline in
-  Steam's own bundle and isn't data-driven, so it can only be changed by
-  patching Steam at runtime. That was tried and abandoned as too fragile to
-  maintain; collections reach the same place through a supported door.
+  Steam's own bundle rather than from data, so reaching it means patching Steam
+  at runtime. That was tried: the patch applied but the tabs never rendered,
+  most likely because webpack had already executed and cached the module —
+  unproven, and other explanations were left unexamined. It was abandoned on
+  cost rather than impossibility; collections reach the same place through a
+  supported door.
 - Collections Steam derives for itself (Uncategorized, Favorites, Locally
   Installed, the `type-*` sets) are left out. Steam already provides them.
 - Dynamic collections — the ones Steam recomputes from a filter — are shown but

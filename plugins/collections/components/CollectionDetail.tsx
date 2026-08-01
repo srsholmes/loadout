@@ -124,6 +124,11 @@ export function CollectionDetail({
   }, [games, filter]);
 
   const selectedSet = useMemo(() => new Set(selected), [selected]);
+  /** Picked, but filtered out of view — the removals you cannot see. */
+  const hiddenPicked = useMemo(
+    () => (shown ? selected.filter((id) => !shown.some((g) => g.appId === id)).length : 0),
+    [selected, shown],
+  );
 
   const rowWindow = useVisibleRows({
     total: shown?.length ?? 0,
@@ -153,7 +158,13 @@ export function CollectionDetail({
                 : editing
                   ? selected.length === 0
                     ? "Pick the ones to remove"
-                    : `${selected.length} picked`
+                    : hiddenPicked > 0
+                      ? // The count that matters when a filter is on: picks
+                        // survive it, so confirming can remove games that are
+                        // not on screen. Saying only "3 picked" while showing
+                        // one tile is how that goes unnoticed.
+                        `${selected.length} picked · ${hiddenPicked} not shown`
+                      : `${selected.length} picked`
                   : shown && shown.length !== games.length
                     ? `${shown.length} of ${games.length} games`
                     : `${games.length} games`}
@@ -175,9 +186,10 @@ export function CollectionDetail({
               <>
                 <Button
                   variant="danger"
-                  disabled={selected.length === 0}
+                  disabled={selected.length === 0 || !onRemoveGames}
                   onClick={() => {
-                    onRemoveGames?.([...selected]);
+                    if (!onRemoveGames) return;
+                    onRemoveGames([...selected]);
                     setSelected([]);
                     setEditing(false);
                   }}
@@ -200,7 +212,13 @@ export function CollectionDetail({
             ) : null}
             {onRemoveGames && !editing ? (
               <IconButton
-                onClick={() => setEditing(true)}
+                onClick={() => {
+                  // Disarm: the confirm is hidden while editing, and coming
+                  // back to a live delete button from an intent expressed
+                  // several interactions ago is one press from disaster.
+                  setConfirmingDelete(false);
+                  setEditing(true);
+                }}
                 title="Edit collection"
                 ariaLabel="Edit collection"
               >
@@ -214,16 +232,19 @@ export function CollectionDetail({
                 press is the one that acts. */}
             {editing ? null : confirmingDelete ? (
               <>
-                <Button variant="danger" onClick={onDelete}>
-                  Remove collection
+                {/* "Keep it" first, and the destructive button renamed and
+                    told to say what it destroys: the trigger and its
+                    confirmation used to share an accessible name *and* a
+                    screen position, so two quick presses on what reads as one
+                    control deleted a 700-entry collection. */}
+                <Button variant="neutral" onClick={() => setConfirmingDelete(false)}>
+                  Keep it
                 </Button>
-                <IconButton
-                  onClick={() => setConfirmingDelete(false)}
-                  title="Keep it"
-                  ariaLabel="Keep it"
-                >
-                  <FaXmark size={13} />
-                </IconButton>
+                <Button variant="danger" onClick={onDelete}>
+                  {games === null
+                    ? `Delete “${label}”`
+                    : `Delete “${label}” (${games.length} games stay in your library)`}
+                </Button>
               </>
             ) : (
               <IconButton

@@ -141,7 +141,7 @@ const SPECS: Partial<Record<RuleKind, ParamSpec[]>> = {
       options: [
         { value: "contains", label: "Contains", hint: "A plain substring — usually what you want" },
         { value: "startsWith", label: "Starts with" },
-        { value: "regex", label: "Regular expression", hint: "An invalid pattern can't be checked, so it won't narrow the tab" },
+        { value: "regex", label: "Regular expression", hint: "An invalid pattern can't be checked, so it won't narrow the collection" },
       ],
     },
     { key: "value", control: "text", label: "Text", placeholder: "e.g. Halo" },
@@ -258,7 +258,7 @@ export function paramSpecs(kind: RuleKind): readonly ParamSpec[] {
 /**
  * Per-kind starting parameters. `now` is passed in rather than read from the
  * clock so date defaults are deterministic under test — the same discipline
- * `evaluateTab` already uses.
+ * `evaluateCollection` already uses.
  */
 function defaultParams(kind: RuleKind, now: number): Record<string, unknown> {
   const anyOf: SetMode = "anyOf";

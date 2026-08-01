@@ -406,8 +406,10 @@ describe("editing a collection's rules", () => {
     fireEvent.click(screen.getByRole("button", { name: /Sega Genesis/ }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Remove collection" })).toBeTruthy());
 
+    // Arm, then confirm on the *renamed* button: the two used to share a name
+    // and a slot, so a double-press deleted.
     fireEvent.click(screen.getByRole("button", { name: "Remove collection" }));
-    fireEvent.click(screen.getByRole("button", { name: "Remove collection" }));
+    fireEvent.click(screen.getByText(/Delete .*Sega Genesis/));
 
     await waitFor(() => expect(screen.queryByText("Sega Genesis")).toBeNull());
     // Back on the grid, with everything else still there.
@@ -444,12 +446,14 @@ describe("editing a collection's rules", () => {
     fireEvent.click(screen.getByRole("button", { name: /Sega Genesis/ }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Remove collection" })).toBeTruthy());
 
-    // The bin spells out what it would do rather than doing it: an icon cannot
-    // name the collection it is about to destroy.
+    // The bin spells out what it would do rather than doing it — and the
+    // confirmation is a differently named button in a different place, so
+    // pressing twice in the same spot cannot delete.
     fireEvent.click(screen.getByRole("button", { name: "Remove collection" }));
     expect(calls.some((c) => c.method === "deleteLinked")).toBe(false);
+    expect(screen.queryByRole("button", { name: "Remove collection" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove collection" }));
+    fireEvent.click(screen.getByText(/Delete .*Sega Genesis/));
     await waitFor(() => expect(calls.some((c) => c.method === "deleteLinked")).toBe(true));
   });
 

@@ -1,11 +1,12 @@
 /**
  * What syncing the mirror *would* do.
  *
- * This is the whole reason tabs can appear in Steam's own UI without patching
- * Steam. TabMaster injects itself into the library's React tree by hot-swapping
- * the `useMemo` dispatcher; when that breaks, the library becomes unreachable
- * and users report rebooting nineteen times. We write real Steam collections
- * instead, which Steam renders natively and which survive us being uninstalled.
+ * This is the whole reason a collection built here appears in Steam's own UI
+ * without patching Steam. TabMaster injects itself into the library's React
+ * tree by hot-swapping the `useMemo` dispatcher; when that breaks, the library
+ * becomes unreachable and users report rebooting nineteen times. We write real
+ * Steam collections instead, which Steam renders natively and which survive us
+ * being uninstalled.
  *
  * The planner is **pure and CDP-free** for two reasons. It is the part that can
  * destroy user data — a wrong id here deletes a collection someone spent an
@@ -14,8 +15,8 @@
  * possible if planning and executing are separate steps.
  *
  * Identity comes from the ledger, never from a collection's name. Names are the
- * user's; matching on them would let a tab called "Backlog" quietly take over a
- * collection the user made by hand years ago.
+ * user's; matching on them would let a collection called "Backlog" quietly take
+ * over one the user made by hand years ago.
  */
 
 import type { MirrorLedger, MirrorLedgerEntry, ManagedCollection } from "./types";

@@ -576,7 +576,7 @@ function ThemeLoader() {
               ariaLabel="Reapply themes"
             >
               <FaArrowsRotate
-                size={11}
+                size={13}
                 className={loading === "reconnect" ? "animate-spin" : ""}
               />
             </IconButton>

@@ -144,7 +144,7 @@ export function presets(now: number = Math.floor(Date.now() / 1000)): Collection
     {
       id: "barely-started",
       label: "Barely started",
-      description: "Opened once, played under 20 minutes — did they deserve longer?",
+      description: "Opened once, 20 minutes or less — did they deserve longer?",
       needs: ["playHistory"],
       build: (id) =>
         // `min: 1` matters: without it every never-played game qualifies, and
@@ -177,7 +177,7 @@ export function presets(now: number = Math.floor(Date.now() / 1000)): Collection
     {
       id: "most-played",
       label: "Most played",
-      description: "The ones you keep coming back to — over 10 hours in",
+      description: "The ones you keep coming back to — 10 hours or more",
       needs: ["playHistory"],
       build: (id) =>
         make(id, "Most played", [
@@ -236,12 +236,15 @@ export function presets(now: number = Math.floor(Date.now() / 1000)): Collection
       build: (id) =>
         make(id, "Recently added", [
           { id: rid(id, 1), kind: "purchaseDate", epochSec: { min: now - 30 * DAY } },
+          // Sorted by release date rather than purchase date: `SortField` has
+          // no `purchasedAt`, and newest-released is the closest honest proxy
+          // for "what just arrived".
         ], { sort: [{ field: "releaseDate", dir: "desc" }] }),
     },
     {
       id: "space-hogs",
       label: "Space hogs",
-      description: "Installed and over 20 GB — start here when you're short on space",
+      description: "Installed and 20 GB or more — start here when you're short on space",
       needs: ["sizeOnDisk"],
       build: (id) =>
         make(id, "Space hogs", [
@@ -313,7 +316,13 @@ export function metadataNeedsMet(
   if (some((g) => (g.sizeOnDisk ?? -1) > 0)) met.add("sizeOnDisk");
   if (some((g) => (g.reviewPercentage ?? -1) >= 0)) met.add("reviewScore");
   if (some((g) => (g.metacritic ?? -1) >= 0)) met.add("metacritic");
-  if (some((g) => typeof g.deckCompat === "string" && g.deckCompat.length > 0)) met.add("deckCompat");
+  // `deckCompat` is non-nullable and the no-AppStore fallback hard-codes
+  // "unknown", so a presence test was true even on a library that knows
+  // nothing — and "Deck Verified" was offered, priced, and came back empty.
+  // Every other need here tests a sentinel; this one has to test the value.
+  if (some((g) => typeof g.deckCompat === "string" && g.deckCompat !== "unknown")) {
+    met.add("deckCompat");
+  }
   if (some((g) => (g.purchasedAt ?? -1) > 0)) met.add("purchaseDate");
   if (some((g) => (g.storeTags ?? []).length > 0)) met.add("storeTags");
   if (availableFacts.has("hltbMain")) met.add("hltb");

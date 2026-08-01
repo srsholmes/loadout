@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Button, Text, TextInput, useFocusable } from "@loadout/ui";
+import { Button, Spinner, Text, TextInput, useFocusable } from "@loadout/ui";
 import { BuilderPage } from "./BuilderPage";
 import { evaluateCollection } from "../lib/evaluate";
 import { NEED_LABELS, metadataNeedsMet, presets, unmetNeeds } from "../lib/presets";
@@ -30,6 +30,14 @@ export interface NewCollectionPageProps {
   existingNames: readonly string[];
   /** The library, for pricing each preset. Empty until the snapshot lands. */
   games: readonly EvalGame[];
+  /**
+   * Whether the library snapshot has arrived.
+   *
+   * Until it has, `metadataNeedsMet` sees nothing and every preset that reads
+   * anything is greyed out with "Needs play history" — blaming the user's
+   * library for an outage of ours, and leaving the D-pad nothing to reach.
+   */
+  libraryLoaded?: boolean;
   /** Facts a resolver can supply — decides whether HowLongToBeat is offered. */
   availableFacts?: ReadonlySet<FactKey>;
   onBack: () => void;
@@ -60,6 +68,7 @@ interface PricedPreset {
 export function NewCollectionPage({
   existingNames,
   games,
+  libraryLoaded = true,
   availableFacts,
   onBack,
   onPickPreset,
@@ -179,11 +188,20 @@ export function NewCollectionPage({
 
       <section className="flex flex-col gap-2 border-t border-base-300 pt-3">
         <Text variant="secondary">Or start from a preset</Text>
+        {!libraryLoaded ? (
+          <div className="flex items-center gap-2">
+            <Spinner size={16} />
+            <Text variant="secondary">
+              Reading your library — presets are priced against it, so they arrive in a moment.
+            </Text>
+          </div>
+        ) : null}
         <div className="flex flex-col gap-1.5">
           {priced.map((p) => (
             <PresetRow
               key={p.preset.id}
               priced={p}
+              libraryLoaded={libraryLoaded}
               alreadyExists={taken(p.preset.label)}
               busy={picked === p.preset.id}
               locked={busy}
@@ -206,12 +224,15 @@ export function NewCollectionPage({
  */
 function PresetRow({
   priced,
+  libraryLoaded,
   alreadyExists,
   busy,
   locked,
   onPick,
 }: {
   priced: PricedPreset;
+  /** False while the snapshot is still coming; nothing is priced yet. */
+  libraryLoaded: boolean;
   alreadyExists: boolean;
   /** This is the one being made. */
   busy: boolean;
@@ -220,11 +241,13 @@ function PresetRow({
   onPick: () => void;
 }) {
   const { preset, count, missing } = priced;
-  const unavailable = missing.length > 0;
+  // While the library is still arriving nothing can be priced, and "Needs play
+  // history" would be blaming the user for our own outage.
+  const unavailable = libraryLoaded && missing.length > 0;
   // A preset that cannot work here, or that duplicates a collection you
   // already have, is still shown — with the reason. Dropping it silently
   // invites the question of where it went.
-  const blocked = unavailable || alreadyExists || locked;
+  const blocked = !libraryLoaded || unavailable || alreadyExists || locked;
   // `focusable: !blocked` matters as much as the disabled attribute: a
   // disabled control left in the focus tree is one the D-pad stops on and A
   // does nothing to, which reads as the plugin having hung.
@@ -237,7 +260,9 @@ function PresetRow({
 
   const note = busy
     ? "Building it…"
-    : unavailable
+    : !libraryLoaded
+      ? "…"
+      : unavailable
       ? `Needs ${missing.join(" and ")}`
       : alreadyExists
         ? "You have this one"

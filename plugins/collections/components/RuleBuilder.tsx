@@ -29,7 +29,7 @@ import { countMatches, evaluateCollection } from "../lib/evaluate";
 import { diagnoseCollection } from "../lib/diagnose";
 import { ruleCandidate } from "../lib/rule-params";
 import type { ParamOption } from "../lib/rule-params";
-import { RULE_KINDS, factUnavailableReason, requiredFacts } from "../lib/rules";
+import { RULE_KINDS, factUnavailableReason, requiredFacts, ruleDef } from "../lib/rules";
 import {
   asRoot,
   duplicateRule,
@@ -254,7 +254,12 @@ export function RuleBuilder({
     (rule: Rule): RuleRowAction[] => {
       const parent = findParent(draft.root, rule.id);
       const at = parent?.children.findIndex((c) => c.id === rule.id) ?? -1;
-      const invertible = rule.kind !== "whitelist" && rule.kind !== "blacklist";
+      // The registry decides, not a local guess. Inverting a range rule turns
+      // "unknown" into a match — `matchRange` resolves the `-1` sentinel to a
+      // definite false, which invert flips to true — so "NOT played 2 hours or
+      // less" would collect every game whose playtime we couldn't read. The
+      // rule editor already gated on this flag; the row menu did not.
+      const invertible = rule.kind !== "group" && ruleDef(rule.kind)?.invertible === true;
 
       const close = () => setMenuOpenId(null);
       const apply = (next: Rule) => {
@@ -371,6 +376,11 @@ export function RuleBuilder({
           onPick={(candidate) => {
             const parentId = paletteParent;
             if (parentId === null) return;
+            // The card is dimmed and says why, but pressing it used to insert
+            // the rule anyway — and a rule whose fact nothing resolves passes
+            // every game, so the collection silently became the whole library
+            // and was mirrored into Steam that way.
+            if (candidate.unavailable) return;
             const rule = { ...candidate.rule, id: newId() } as Rule;
             setRoot(insertRule({ root: draft.root, parentId, rule }));
             setPaletteParent(null);

@@ -8,7 +8,7 @@
  * 1. The builder's whole premise is that you can see the consequence of an
  *    edit *before* committing it. That requires producing the edited tree
  *    without touching the saved one, so the caller can evaluate a candidate
- *    (`evaluateTab({...tab, root: candidate})`) and throw it away.
+ *    (`evaluateCollection({...tab, root: candidate})`) and throw it away.
  * 2. `diagnose.ts` already expresses its one-tap repairs as pure
  *    `Tab -> Tab` fixes. Sharing the same primitives keeps a fix and the
  *    equivalent manual edit from drifting apart.

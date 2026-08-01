@@ -45,6 +45,7 @@ export {
 export {
   listCollections,
   createCollection,
+  editCollectionApps,
   setCollectionApps,
   renameCollection,
   deleteCollection,

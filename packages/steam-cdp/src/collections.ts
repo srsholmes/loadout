@@ -183,6 +183,62 @@ export async function setCollectionApps(
   return unwrap<SteamCollectionInfo>(await client._evaluateAsync(expr), "setCollectionApps");
 }
 
+/**
+ * Add and/or remove specific apps, leaving everything else in the collection
+ * alone.
+ *
+ * The difference from {@link setCollectionApps} is what happens to entries the
+ * caller has never heard of. That one computes `have − want` in-page, so an app
+ * added by EmuDeck between the caller's read and this evaluate is *removed*;
+ * this one touches only the ids it was given, so a hand edit can't take
+ * somebody else's write with it. It is also the only safe way to edit a
+ * collection holding ids the caller cannot resolve — dead non-Steam shortcut
+ * ids, which are invisible to a library read and would otherwise be silently
+ * dropped by a whole-membership write.
+ *
+ * Refuses dynamic collections for the same reason as `setCollectionApps`.
+ */
+export async function editCollectionApps(
+  client: SteamClient,
+  args: { collectionId: string; add?: readonly string[]; remove?: readonly string[] },
+): Promise<SteamCollectionInfo> {
+  const { collectionId, add = [], remove = [] } = args;
+  const expr = `(async () => {
+    const cs = window.collectionStore;
+    if (!cs) return { tag: "no-store" };
+    if (typeof cs.SaveCollection !== "function") return { tag: "no-api" };
+    ${HELPERS}
+    try {
+      const col = findById(cs, ${JSON.stringify(collectionId)});
+      if (!col) return { tag: "error", error: "no collection with id " + ${JSON.stringify(collectionId)} };
+      const info = infoOf(col);
+      if (info.isDynamic || !info.isEditable) {
+        return { tag: "error", error: "collection is dynamic or not editable" };
+      }
+
+      const have = new Set(info.appIds);
+      // Only ids that would actually change anything: asking Steam to remove
+      // what it doesn't hold, or add what it does, is a write for nothing.
+      const toRemove = ${JSON.stringify([...remove].map(String))}.filter((id) => have.has(id));
+      const toAdd = ${JSON.stringify([...add].map(String))}.filter((id) => !have.has(id));
+
+      // Remove first: on a collection at Steam's size limit, adding before
+      // removing can throw and leave the write half-applied.
+      if (toRemove.length && typeof col.RemoveApps === "function") {
+        col.RemoveApps(toRemove.map((id) => ({ appid: Number(id) })));
+      }
+      if (toAdd.length && typeof col.AddApps === "function") {
+        col.AddApps(toAdd.map((id) => ({ appid: Number(id) })));
+      }
+      if (!toRemove.length && !toAdd.length) return { tag: "ok", value: info };
+
+      await cs.SaveCollection(col);
+      return { tag: "ok", value: infoOf(col) };
+    } catch (e) { return { tag: "error", error: String(e && e.message) }; }
+  })()`;
+  return unwrap<SteamCollectionInfo>(await client._evaluateAsync(expr), "editCollectionApps");
+}
+
 /** Rename in place. The id — and so the mirror's claim on it — is unchanged. */
 export async function renameCollection(
   client: SteamClient,

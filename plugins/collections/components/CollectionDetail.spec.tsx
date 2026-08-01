@@ -128,6 +128,40 @@ describe("removing games", () => {
     expect(screen.queryByRole("button", { name: "Options" })).toBeNull();
   });
 
+  it("says how many picks the filter is hiding, before you confirm", () => {
+    // Picks survive a filter change on purpose. Without this count, narrowing
+    // the view after picking removes games that aren't on screen and nothing
+    // says so — the grid doesn't even change afterwards, because the filter is
+    // still applied.
+    renderDetail();
+    enterEditMode();
+    fireEvent.click(screen.getByText("Hades"));
+    filter("celeste");
+    expect(screen.getByText("1 picked · 1 not shown")).toBeTruthy();
+  });
+
+  it("names the collection and what survives before deleting it", () => {
+    // Trigger and confirm used to share an accessible name and a screen slot,
+    // so two quick presses on what reads as one control destroyed it.
+    const { header } = renderDetail();
+    fireEvent.click(header.getByRole("button", { name: "Remove collection" }));
+    expect(header.queryByRole("button", { name: "Remove collection" })).toBeNull();
+    expect(header.getByText(/Delete .*Emulation.*3 games stay in your library/)).toBeTruthy();
+    // The safe option comes first now.
+    expect(header.getByRole("button", { name: "Keep it" })).toBeTruthy();
+  });
+
+  it("disarms the bin when you go into select mode", () => {
+    // Otherwise you come back from picking games to a live delete button armed
+    // by an intent expressed several interactions ago.
+    const { header } = renderDetail();
+    fireEvent.click(header.getByRole("button", { name: "Remove collection" }));
+    enterEditMode();
+    fireEvent.click(header.getByRole("button", { name: "Done" }));
+    expect(header.getByRole("button", { name: "Remove collection" })).toBeTruthy();
+    expect(header.queryByText(/Delete .*Emulation/)).toBeNull();
+  });
+
   it("still filters while picking, so a long collection stays usable", () => {
     const h = renderDetail();
     enterEditMode();

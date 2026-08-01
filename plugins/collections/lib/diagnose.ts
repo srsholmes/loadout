@@ -25,6 +25,7 @@
 import type { EvalResult, RuleNodeTrace } from "./evaluate";
 import type { FactKey, GroupRule, Rule, ManagedCollection } from "./types";
 import { leafRules } from "./rules";
+import { paramSpecs } from "./rule-params";
 import { asRoot, removeRule } from "./rule-tree";
 import { summarizeRule } from "./summarize";
 
@@ -192,8 +193,15 @@ export function diagnoseCollection(
   ctx: DiagnoseContext,
 ): Diagnosis {
   // A tab that is showing games needs no explanation — except when the cap
-  // is hiding most of them, which surprises people.
-  if (result.matched.length > 0) {
+  // is hiding most of them, which surprises people, and except when a rule
+  // couldn't be checked at all.
+  //
+  // That second exception is the important one: `indeterminate` resolves to a
+  // match under the default policy, so a rule reading a fact no resolver
+  // supplies passes *every* game. The collection looks healthy, quietly
+  // contains the whole library, and gets mirrored into Steam that way. Exiting
+  // here on "it has matches" is what hid it.
+  if (result.matched.length > 0 && result.blockedFacts.length === 0) {
     if (
       tab.limit !== null &&
       result.cappedOut > 0 &&
@@ -241,7 +249,10 @@ export function diagnoseCollection(
       message:
         `${ruleCount} rule${ruleCount === 1 ? "" : "s"} couldn't be checked: ` +
         // The resolver's own sentence, verbatim — it knows why.
-        reasons.join(" "),
+        reasons.join(" ") +
+        (result.matched.length > 0
+          ? ` Until that data arrives ${ruleCount === 1 ? "it matches" : "they match"} everything, so this is wider than it looks.`
+          : ""),
       fixes:
         tab.indeterminatePolicy === "fail"
           ? [FIX_IGNORE_UNCHECKED]
@@ -300,7 +311,14 @@ export function diagnoseCollection(
   // Only suggest widening when there is something to widen. A tab whose one
   // rule is `familyShared` has no range anywhere in the tree, and telling its
   // owner to widen one sends them looking for a control that isn't there.
-  const hasRange = leafRules(tab.root).some((r) => "range" in r || "epochSec" in r);
+  // No rule variant has a `range` property — ranges are named `minutes`,
+  // `bytes`, `percent`, `score`, `hours`, `epochSec`. Testing for one meant
+  // only the three date kinds were recognised and every other range rule was
+  // told to remove itself when widening a bound was the actual fix. The
+  // registry already knows which params are ranges.
+  const hasRange = leafRules(tab.root).some((r) =>
+    paramSpecs(r.kind).some((spec) => spec.control === "range"),
+  );
   return {
     kind: "genuinely-empty",
     message: hasRange

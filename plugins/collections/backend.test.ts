@@ -25,6 +25,9 @@ let failNextWrite: string | null = null;
 /** Hold a write open so an edit can provably land mid-sync. */
 let releaseWrite: (() => void) | null = null;
 let holdWrite = false;
+/** Hold the *read* open, to land an edit between evaluating and planning. */
+let releaseSteamRead: (() => void) | null = null;
+let hangSteamOnce = false;
 let fakeCollections: Array<{
   id: string;
   name: string;
@@ -41,12 +44,18 @@ mock.module("@loadout/steam-cdp", () => ({
   readSteamLibrary: async () => ({ entries: [], installedCount: 0, resolvedTagCount: 0 }),
   listCollections: async () => {
     if (hangSteam) await new Promise((r) => setTimeout(r, 20_000));
+    if (hangSteamOnce) {
+      hangSteamOnce = false;
+      await new Promise<void>((resolve) => {
+        releaseSteamRead = resolve;
+      });
+    }
     return fakeCollections.map((c) => ({ ...c, appIds: [...c.appIds] }));
   },
   // Stateful, so a test can ask what Steam ended up holding. A fake that
   // accepts every call and remembers nothing cannot tell "wrote it" from
   // "thought about writing it".
-  createCollection: async (_c: unknown, { name }: { name: string }) => {
+  createCollection: async (_c: unknown, { name, appIds = [] }: { name: string; appIds?: string[] }) => {
     if (failNextWrite === "create") {
       failNextWrite = null;
       throw new Error("Steam went away mid-write (test stub)");
@@ -57,9 +66,43 @@ mock.module("@loadout/steam-cdp", () => ({
         releaseWrite = resolve;
       });
     }
-    const made = { id: `uc-${fakeCollections.length + 1}`, name, appIds: [], isDynamic: false, isEditable: true };
+    // Honour the membership it was handed. Dropping it meant every created
+    // collection was empty in the fake, so a plan that created one holding the
+    // wrong games looked identical to one that got it right.
+    const made = {
+      id: `uc-${fakeCollections.length + 1}`,
+      name,
+      appIds: [...appIds],
+      isDynamic: false,
+      isEditable: true,
+    };
     fakeCollections.push(made);
     return { ...made };
+  },
+  // A true delta, like the real one: only the named ids move, so an entry the
+  // caller never knew about — a dead shortcut id, or something EmuDeck added
+  // in between — is left where it is.
+  editCollectionApps: async (
+    _c: unknown,
+    { collectionId, add = [], remove = [] }: { collectionId: string; add?: string[]; remove?: string[] },
+  ) => {
+    if (failNextWrite === "setApps") {
+      failNextWrite = null;
+      throw new Error("Steam went away mid-write (test stub)");
+    }
+    if (holdWrite) {
+      holdWrite = false;
+      await new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+    }
+    const found = fakeCollections.find((c) => c.id === collectionId);
+    if (!found) throw new Error("no collection with id " + collectionId);
+    const dropped = new Set(remove);
+    const kept = found.appIds.filter((id) => !dropped.has(id));
+    const present = new Set(kept);
+    found.appIds = [...kept, ...add.filter((id) => !present.has(id))];
+    return { ...found, appIds: [...found.appIds] };
   },
   setCollectionApps: async (_c: unknown, { collectionId, appIds }: { collectionId: string; appIds: string[] }) => {
     if (failNextWrite === "setApps") {
@@ -187,16 +230,37 @@ describe("entries Steam can no longer resolve", () => {
     expect(result.staleAppIds).toEqual(["2924527325", "3541813501"]);
   });
 
+  it("refuses to prune when Steam answered but the library came back empty", async () => {
+    // `appstore: "ok"` only means the call returned. Steam answers with an
+    // empty list while its stores hydrate, and every owned-but-uninstalled
+    // game then looks dead. The old fake made *every* test run with a healthy
+    // provider, so this guard could be deleted with the suite still green.
+    withDeadIds();
+    const backend = await loaded([]);
+    await expect(backend.pruneLinked("uc-rh")).rejects.toThrow(/isn't fully loaded/);
+    expect(fakeCollections[0]!.appIds).toHaveLength(3);
+  });
+
   it("refuses to prune when the library can't vouch for the ids", async () => {
     // "Stale" means the library doesn't know the id, which is only safe to act
     // on when the library is trustworthy. Both sources degrade to empty on
     // failure, and a thin snapshot makes every ROM in an EmuDeck collection
     // look dead — shortcuts have no appmanifest. Confirming that dialog would
     // empty a collection somebody else built.
+    // A library that answered with *something*, but nothing this collection
+    // holds — the shape of a half-loaded read rather than a dead collection.
     withDeadIds();
-    const backend = await loaded([]);
-    await expect(backend.pruneLinked("uc-rh")).rejects.toThrow(/isn't fully loaded|unreadable/);
+    const backend = await loaded([{ appId: "999", name: "Something else" }]);
+    await expect(backend.pruneLinked("uc-rh")).rejects.toThrow(/unreadable/);
     expect(fakeCollections[0]!.appIds).toHaveLength(3);
+  });
+
+  it("removes only the dead ids, naming them rather than rewriting the list", async () => {
+    withDeadIds();
+    const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
+    const result = await backend.pruneLinked("uc-rh");
+    expect(result).toEqual({ removed: 2, kept: 1 });
+    expect(fakeCollections[0]!.appIds).toEqual(["620"]);
   });
 
   it("prunes them on request, keeping everything real", async () => {
@@ -254,14 +318,24 @@ describe("editing a Steam collection by hand", () => {
     expect(fakeCollections[0]!.appIds).toEqual(["620", "2924527325", "400"]);
   });
 
-  it("keeps what somebody else added between the read and the write", async () => {
-    // The UI's copy is always a moment old. A delta cannot lose what it never
-    // knew about.
+  it("keeps what somebody else added while the write was in flight", async () => {
+    // The window that matters is between our read and Steam applying the
+    // write. The old version pushed its entry in *before* the read, which a
+    // whole-membership write survived too — so it proved nothing about the
+    // delta. Held open here, so the concurrent add genuinely interleaves.
     collectionOf(["620"]);
     const backend = await loaded([{ appId: "620", name: "Portal 2" }]);
-    fakeCollections[0]!.appIds.push("999999"); // EmuDeck, mid-edit
-    await backend.editLinked("uc-rh", { add: ["400"] });
-    expect(fakeCollections[0]!.appIds).toEqual(["620", "999999", "400"]);
+
+    holdWrite = true;
+    const editing = backend.editLinked("uc-rh", { add: ["400"] });
+    await new Promise((r) => setTimeout(r, 10));
+    fakeCollections[0]!.appIds.push("999999"); // EmuDeck, mid-write
+    releaseWrite?.();
+    await editing;
+
+    expect(fakeCollections[0]!.appIds).toContain("999999");
+    expect(fakeCollections[0]!.appIds).toContain("400");
+    expect(fakeCollections[0]!.appIds).toContain("620");
   });
 
   it("won't add the same game twice", async () => {
@@ -369,6 +443,46 @@ describe("things happening at once", () => {
     await Promise.all([backend.createCollection("Backlog"), backend.createCollection("Backlog")]);
     const ids = (await backend.getConfig()).config.collections.map((c) => c.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("never pairs one reading of the rules with another reading of the config", async () => {
+    // The plan used to read `this.config.collections` twice with awaits in
+    // between: once to evaluate, once to plan. A rule saved in that window
+    // paired the *new* tree with the *old* evaluation — and a collection with
+    // no rules evaluates to the whole library, so it stopped being skipped and
+    // went to Steam holding everything. Reverting the capture-once change must
+    // fail here.
+    const backend = await loaded([
+      { appId: "620", name: "Portal 2" },
+      { appId: "400", name: "Portal" },
+      { appId: "500", name: "Left 4 Dead" },
+    ]);
+    await backend.createCollection("Backlog"); // no rules: matches everything
+    const { config } = await backend.getConfig();
+    const ruled = {
+      ...config.collections[0]!,
+      root: {
+        kind: "group" as const,
+        id: "backlog-root",
+        combinator: "all" as const,
+        children: [{ id: "r1", kind: "installed" as const, invert: true }],
+      },
+    };
+
+    // The plan's Steam read is held open, so the rule save lands between the
+    // evaluation and the planning — the exact window.
+    hangSteamOnce = true;
+    const syncing = backend.syncMirror();
+    await new Promise((r) => setTimeout(r, 10));
+    await backend.setCollections([ruled]);
+    releaseSteamRead?.();
+    await syncing;
+
+    // Either it was skipped as rule-less, or it was written with the
+    // membership its rules actually produce. What it must never be is present
+    // in Steam holding the whole library.
+    const written = fakeCollections.find((c) => c.name === "Backlog");
+    expect(written?.appIds.length ?? 0).toBeLessThan(3);
   });
 
   it("keeps the sync owed when an edit lands while it is writing", async () => {
