@@ -15,6 +15,7 @@ import {
   createCollection,
   deleteCollection,
   listCollections,
+  editCollectionApps,
   renameCollection,
   setCollectionApps,
 } from "./collections";
@@ -159,6 +160,39 @@ describe("createCollection", () => {
         appIds: [],
       }),
     ).rejects.toBeInstanceOf(SteamClientUnreachableError);
+  });
+});
+
+describe("editCollectionApps", () => {
+  it("touches only the ids it was given", async () => {
+    // The difference from `setCollectionApps`, and the reason it exists: that
+    // one computes `have − want` in-page, so an app added by EmuDeck between
+    // the caller's read and this evaluate is removed. It is also the only safe
+    // way to edit a collection holding ids the caller cannot resolve — dead
+    // shortcut ids, invisible to a library read.
+    // 4294901760 stands in for a dead non-Steam shortcut id: present in the
+    // collection, unknown to any library read, and silently dropped by a
+    // whole-membership write.
+    const target = collection({ m_setApps: new Set([10, 4294901760]) });
+    const { store, saved } = fakeStore([target]);
+    await editCollectionApps(clientFor({ collectionStore: store }), {
+      collectionId: "uc-1",
+      add: ["20"],
+      remove: ["10"],
+    });
+    expect([...target.m_setApps!].sort((a, b) => a - b)).toEqual([20, 4294901760]);
+    expect(saved).toHaveLength(1);
+  });
+
+  it("refuses a dynamic collection, like every other write here", async () => {
+    const target = collection({ m_setApps: new Set([10]), m_bIsDynamic: true });
+    const { store } = fakeStore([target]);
+    await expect(
+      editCollectionApps(clientFor({ collectionStore: store }), {
+        collectionId: "uc-1",
+        add: ["20"],
+      }),
+    ).rejects.toThrow(/dynamic|editable/);
   });
 });
 
