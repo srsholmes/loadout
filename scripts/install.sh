@@ -1101,10 +1101,10 @@ WantedBy=graphical-session.target
 # restarts us whenever we aren't running, whether or not it ever cycled.
 #
 # This is an [Install] directive, so it only takes effect on enable — it
-# writes the graphical-session.target.upholds/ symlink. That's why the
-# enable below is a `reenable`: plain `enable` is a no-op for a unit that
-# is already enabled, so upgraders would silently never get the symlink.
-# Putting it in [Unit] parses as an unknown key and is silently ignored.
+# writes the graphical-session.target.upholds/ symlink. install.sh runs
+# `reenable` rather than `enable` for that reason: plain `enable` is a
+# no-op for an already-enabled unit, so upgraders would silently never
+# get the symlink. In [Unit] it parses as an unknown key and is ignored.
 #
 # Trade-off worth knowing when debugging: this also reverts a manual
 # `systemctl --user stop` within seconds. To hold it down, mask it
