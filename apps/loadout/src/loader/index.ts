@@ -94,8 +94,8 @@ export function shouldRethrowUncaught(
   return false;
 }
 
-// Opt-in crash reporting. Inert unless the user granted consent *and* a DSN
-// was compiled in — see packages/crash-report. Initialising here, at module
+// Opt-in crash reporting. Inert unless the user granted consent *and* a
+// collector URL was compiled in — see packages/crash-report. Here, at module
 // scope before the handlers below, means the reporter is live for the
 // earliest possible failure.
 //
@@ -106,7 +106,7 @@ export function shouldRethrowUncaught(
 // proxy. A crash inside a plugin-scoped async callback (a setInterval
 // registered in onLoad, say) would then have its report evaluated against
 // that plugin's network allow-list, silently dropped, and logged as the
-// plugin attempting to reach Sentry.
+// plugin attempting to reach the collector.
 // `chown` matters because this process is root and writes under the desktop
 // user's $HOME, which the user-level overlay also writes to. Without it the
 // state directory is created root-owned and every overlay write fails EACCES

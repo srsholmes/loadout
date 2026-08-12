@@ -1,28 +1,45 @@
 /**
- * Turning an `Error` into a Sentry event.
+ * Turning an `Error` into a Faro payload.
  *
- * Stack parsing covers both runtimes we care about with one parser: Bun and
- * CEF are both V8-shaped ("    at fn (file:line:col)"), so the backend, the
- * overlay's Bun process, and the webview all produce the same frame format.
+ * Stack parsing covers both runtimes with one parser: Bun and CEF are both
+ * V8-shaped ("    at fn (file:line:col)"), so the backend, the overlay's Bun
+ * process and the webview all produce identical frame output.
  */
 
-import type { CaptureContext, Frame, ProcessName, SentryEvent } from "./types";
+import type {
+  CaptureContext,
+  FaroException,
+  FaroFrame,
+  FaroMeta,
+  FaroPayload,
+  ProcessName,
+} from "./types";
 
-/** Frames we mark `in_app: false` so Sentry greys them out and grouping ignores them. */
+/**
+ * Frames from the runtime or third-party code. Faro filters library frames out
+ * of its own grouping, but we still need the distinction locally: our
+ * fingerprint is computed over app frames only, and it is the layer Grafana
+ * gives priority to.
+ */
 const VENDOR = /(?:^|\/)(?:node_modules|bun:|node:)/;
 
 const AT_LINE = /^\s*at\s+(?:(?<fn>.*?)\s+\()?(?<file>.*?):(?<line>\d+):(?<col>\d+)\)?\s*$/;
 
+/** A frame plus the local-only flag used for fingerprinting. Never serialised. */
+export interface ParsedFrame extends FaroFrame {
+  inApp: boolean;
+}
+
 /**
- * Parse a V8 stack string into Sentry frames.
+ * Parse a V8 stack string into frames.
  *
- * Sentry renders frames oldest-first, the reverse of how V8 prints them, so
- * the result is reversed. Lines that don't parse are skipped rather than
- * guessed at — a malformed frame is worse than a missing one.
+ * Faro renders frames oldest-first, the reverse of how V8 prints them, so the
+ * result is reversed. Lines that don't parse are skipped rather than guessed
+ * at — a malformed frame is worse than a missing one.
  */
-export function parseStack(stack: string | undefined): Frame[] {
+export function parseStack(stack: string | undefined): ParsedFrame[] {
   if (!stack) return [];
-  const frames: Frame[] = [];
+  const frames: ParsedFrame[] = [];
   for (const line of stack.split("\n")) {
     const m = AT_LINE.exec(line);
     if (!m?.groups) continue;
@@ -33,17 +50,18 @@ export function parseStack(stack: string | undefined): Frame[] {
     const fn = m.groups.fn?.replace(/^(?:async|new)\s+/, "");
     frames.push({
       filename,
-      function: fn && fn.length > 0 ? fn : undefined,
+      // Faro types these as required strings.
+      function: fn && fn.length > 0 ? fn : "?",
       lineno: Number(m.groups.line),
       colno: Number(m.groups.col),
-      in_app: !VENDOR.test(filename),
+      inApp: !VENDOR.test(filename),
     });
   }
   return frames.reverse();
 }
 
-/** 32 lowercase hex chars, per the Sentry protocol. */
-export function newEventId(): string {
+/** Session ids are per-process and never persisted — see FaroMeta. */
+export function newSessionId(): string {
   return crypto.randomUUID().replace(/-/g, "");
 }
 
@@ -52,10 +70,10 @@ export interface BuildEventInput {
   process: ProcessName;
   release?: string;
   environment?: string;
+  sessionId?: string;
   context?: CaptureContext;
   /** Injected for tests. */
   now?: number;
-  eventId?: string;
 }
 
 /**
@@ -74,37 +92,58 @@ function describe(error: unknown): { type: string; value: string; stack?: string
   }
 }
 
-export function buildEvent(input: BuildEventInput): SentryEvent {
+export function buildMeta(input: BuildEventInput): FaroMeta {
+  return {
+    sdk: { name: "loadout-crash-report", version: input.release },
+    app: {
+      name: "loadout",
+      version: input.release,
+      environment: input.environment,
+      // Which of the three processes produced this. Faro has no first-class
+      // field for it and `namespace` is the closest fit; also duplicated into
+      // the exception context so it is filterable either way.
+      namespace: input.process,
+    },
+    os: { name: "linux" },
+    session: {
+      id: input.sessionId ?? newSessionId(),
+      // Switch off Grafana Cloud's IP-derived geolocation from the client.
+      overrides: { geoLocationTrackingEnabled: false },
+    },
+  };
+}
+
+export function buildEvent(input: BuildEventInput): FaroPayload {
   const { type, value, stack } = describe(input.error);
-  const tags: Record<string, string> = {
+  const frames = parseStack(stack);
+
+  const context: Record<string, string> = {
     process: input.process,
     ...(input.context?.tags ?? {}),
   };
   // Plugin attribution: tagged so third-party faults can be routed away from
   // the core crash feed rather than reading as loadout bugs.
   if (input.context?.pluginId) {
-    tags.plugin_id = input.context.pluginId;
-    tags.fault_origin = "plugin";
+    context.plugin_id = input.context.pluginId;
+    context.fault_origin = "plugin";
   } else {
-    tags.fault_origin = "core";
+    context.fault_origin = "core";
   }
 
-  return {
-    event_id: input.eventId ?? newEventId(),
-    timestamp: (input.now ?? Date.now()) / 1000,
-    platform: input.process === "webview" ? "javascript" : "node",
-    level: input.context?.level ?? "error",
-    release: input.release,
-    environment: input.environment,
-    logger: input.process,
-    tags,
-    contexts: {
-      // Deliberately minimal. No hostname, no user, no device serial.
-      os: { name: "linux" },
-      runtime: { name: input.process === "webview" ? "cef" : "bun" },
-    },
-    exception: {
-      values: [{ type, value, stacktrace: { frames: parseStack(stack) } }],
-    },
+  const exception: FaroException = {
+    timestamp: new Date(input.now ?? Date.now()).toISOString(),
+    type,
+    value,
+    fatal: input.context?.level === "fatal",
+    stacktrace: { frames: frames.map(stripLocal) },
+    context,
   };
+
+  return { meta: buildMeta(input), exceptions: [exception] };
+}
+
+/** Drop the local-only `inApp` flag; it is not part of the wire format. */
+function stripLocal(frame: ParsedFrame): FaroFrame {
+  const { inApp: _inApp, ...wire } = frame;
+  return wire;
 }

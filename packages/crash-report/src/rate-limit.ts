@@ -1,10 +1,10 @@
 /**
  * Rate limiting that survives process restarts.
  *
- * This is not politeness — it's the thing standing between one user's
- * crash loop and a dead monthly quota. Sentry's free tier is 5,000 events
- * a month and *silently stops accepting* when exhausted, so an unbounded
- * reporter goes blind exactly when something is badly broken.
+ * This is not politeness — it's the thing standing between one user's crash
+ * loop and a blown ingest quota. A device stuck in a restart loop can emit
+ * thousands of identical reports, which is both a cost problem and a signal
+ * problem: the real bug drowns in duplicates of itself.
  *
  * The subtlety: an in-memory counter is useless here. A crash loop kills
  * the process, systemd restarts it (the overlay allows 20 starts a minute),

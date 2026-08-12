@@ -29,7 +29,7 @@ import {
   mkdirSync,
   statSync,
 } from "node:fs";
-import type { SentryEvent } from "./types";
+import type { FaroPayload } from "./types";
 
 /** Keep the directory small: a crash loop must not fill the user's disk. */
 export const MAX_SPOOL_FILES = 20;
@@ -47,7 +47,7 @@ export const MAX_SPOOL_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 export const MAX_SPOOL_ATTEMPTS = 5;
 
 export interface SpooledEntry {
-  event: SentryEvent;
+  event: FaroPayload;
   attempts: number;
 }
 
@@ -72,7 +72,7 @@ function spoolFiles(dir: string): string[] {
  */
 export function spoolEvent(
   dir: string,
-  event: SentryEvent,
+  event: FaroPayload,
   now: number,
   attempts = 0,
   chown?: (path: string) => void,
@@ -92,7 +92,10 @@ export function spoolEvent(
         // Another process may have drained it already.
       }
     }
-    const path = join(dir, `${String(now).padStart(15, "0")}-a${attempts}-${event.event_id}.json`);
+    // Faro payloads carry no event id, so the filename gets a random suffix
+    // purely to keep two crashes in the same millisecond from colliding.
+    const unique = crypto.randomUUID().slice(0, 8);
+    const path = join(dir, `${String(now).padStart(15, "0")}-a${attempts}-${unique}.json`);
     writeFileSync(path, JSON.stringify(event), "utf8");
     chown?.(path);
     return true;
@@ -120,8 +123,8 @@ export function takeSpooled(dir: string, now: number): SpooledEntry[] {
       if (age > MAX_SPOOL_AGE_MS) continue;
       const attempts = Number(NAME.exec(name)?.[2] ?? 0);
       if (attempts >= MAX_SPOOL_ATTEMPTS) continue;
-      const parsed = JSON.parse(raw) as SentryEvent;
-      if (parsed && typeof parsed.event_id === "string") out.push({ event: parsed, attempts });
+      const parsed = JSON.parse(raw) as FaroPayload;
+      if (parsed && Array.isArray(parsed.exceptions)) out.push({ event: parsed, attempts });
     } catch {
       try {
         unlinkSync(path);

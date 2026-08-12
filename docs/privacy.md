@@ -77,9 +77,12 @@ recognise. If this matters to you, leave crash reporting off.
 
 ### Where reports go
 
-To [Sentry](https://sentry.io) (Functional Software, Inc.), on their **EU**
-infrastructure, used purely as an error-tracking processor. Storage of IP
-addresses is disabled at the project level.
+To [Grafana Cloud](https://grafana.com/products/cloud/frontend-observability/)
+(Grafana Labs), on **EU** infrastructure, used purely as an error-tracking
+processor.
+
+Reports are sent to a Faro collector endpoint. Loadout explicitly disables
+Grafana Cloud's IP-derived geolocation from the client side, on every report.
 
 ### Turning it off
 
@@ -105,10 +108,15 @@ small enough to read in one sitting:
 - `packages/crash-report/src/spool.ts` — where a report waits if your device
   is offline or crashed before it could be sent
 
-Loadout speaks Sentry's wire protocol directly rather than using their SDK,
-specifically so that this list is complete. An SDK would capture console output,
-network breadcrumbs, and request headers by default, and no honest short
-document could then tell you what leaves your machine.
+Loadout speaks Grafana's Faro wire protocol directly rather than using their
+Web SDK, specifically so that this list is complete. An SDK would capture
+console output, network breadcrumbs, page URLs and request headers by default,
+and no honest short document could then tell you what leaves your machine.
+
+The protocol supports a persistent installation id, a user object, and page and
+browser metadata. Loadout populates none of them. The session id it does send is
+regenerated every time the process starts and is never written to disk, so it
+groups events within a single run and cannot follow you across restarts.
 
 There is a test — "the never-leaks gate" in
 `packages/crash-report/src/crash-report.test.ts` — that builds a report from a

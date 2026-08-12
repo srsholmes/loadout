@@ -19,7 +19,7 @@ import {
 } from "./consent";
 import { scrubString, scrubEvent, fingerprint } from "./scrub";
 import { decide, parseState, freshState, DEFAULT_LIMITS } from "./rate-limit";
-import { parseDsn, buildEnvelope, envelopeUrl } from "./transport";
+import { parseCollector, buildBody } from "./transport";
 import { parseStack, buildEvent } from "./event";
 import {
   initCrashReporting,
@@ -33,15 +33,13 @@ import {
   resetForTests,
 } from "./index";
 import { spoolEvent, MAX_SPOOL_FILES, MAX_SPOOL_ATTEMPTS } from "./spool";
-import type { SentryEvent } from "./types";
+import type { FaroPayload } from "./types";
 
-const DSN = "https://abc123@o1.ingest.de.sentry.io/456";
+const COLLECTOR = "https://faro-collector-prod-eu-west-0.grafana.net/collect/abc123";
 
-const BARE_EVENT: SentryEvent = {
-  event_id: "x",
-  timestamp: 0,
-  platform: "node",
-  level: "error",
+const BARE_EVENT: FaroPayload = {
+  meta: { sdk: { name: "t" }, app: { name: "loadout" }, os: { name: "linux" } },
+  exceptions: [{ timestamp: "1970-01-01T00:00:00.000Z", type: "Error", value: "x" }],
 };
 
 function configWith(value: unknown): { env: Record<string, string>; home: string } {
@@ -195,68 +193,73 @@ describe("scrubbing", () => {
     expect(scrubString("/run/user/1000/bus")).toBe("/run/user/<uid>/bus");
   });
 
-  test("strips identifying fields even if something upstream sets them", () => {
+  test("strips Faro meta fields we never populate, even if set upstream", () => {
+    // Faro supports all of these. We don't send them, and scrubEvent deletes
+    // them defensively so a future edit can't reintroduce one silently.
     const dirty = {
-      event_id: "x",
-      timestamp: 0,
-      platform: "node",
-      level: "error",
-      user: { ip_address: "1.2.3.4", email: "a@b.c" },
-      server_name: "simons-deck",
-      breadcrumbs: [{ message: "secret" }],
-      request: { url: "https://x", headers: { cookie: "c" } },
-    } as unknown as SentryEvent;
-    const clean = scrubEvent(dirty) as unknown as Record<string, unknown>;
-    expect(clean.user).toBeUndefined();
-    expect(clean.server_name).toBeUndefined();
-    expect(clean.breadcrumbs).toBeUndefined();
-    expect(clean.request).toBeUndefined();
+      meta: {
+        sdk: { name: "t" },
+        app: { name: "loadout", installationId: "persistent-install-id" },
+        os: { name: "linux" },
+        user: { id: "u1", email: "a@b.c", username: "simon" },
+        page: { url: "https://example/secret" },
+        browser: { userAgent: "Mozilla/5.0 …", language: "en-GB" },
+        view: { name: "settings" },
+        device: { model_identifier: "serial-ish" },
+      },
+      exceptions: [{ timestamp: "1970-01-01T00:00:00.000Z", type: "Error", value: "x" }],
+    } as unknown as FaroPayload;
+
+    const clean = scrubEvent(dirty);
+    const meta = clean.meta as unknown as Record<string, unknown>;
+    expect(meta.user).toBeUndefined();
+    expect(meta.page).toBeUndefined();
+    expect(meta.browser).toBeUndefined();
+    expect(meta.view).toBeUndefined();
+    expect(meta.device).toBeUndefined();
+    // A persistent install id would make every report from a machine linkable.
+    expect((clean.meta.app as Record<string, unknown>).installationId).toBeUndefined();
   });
 
-  test("scrubs inside frames, messages and tags", () => {
+  test("scrubs inside frames, values and context", () => {
     const ev = scrubEvent({
-      event_id: "x",
-      timestamp: 0,
-      platform: "node",
-      level: "error",
-      message: { formatted: "failed at /home/deck/a.ts" },
-      tags: { path: "/home/deck/b.ts" },
-      exception: {
-        values: [
-          {
-            type: "Error",
-            value: "boom in /home/deck/c.ts",
-            stacktrace: {
-              frames: [{ filename: "/home/deck/d.ts", function: "f", lineno: 1, colno: 2 }],
-            },
+      meta: { sdk: { name: "t" }, app: { name: "loadout" }, os: { name: "linux" } },
+      exceptions: [
+        {
+          timestamp: "1970-01-01T00:00:00.000Z",
+          type: "Error",
+          value: "boom in /home/deck/c.ts",
+          context: { path: "/home/deck/b.ts" },
+          stacktrace: {
+            frames: [
+              { filename: "/home/deck/d.ts", function: "f", lineno: 1, colno: 2 },
+            ],
           },
-        ],
-      },
+        },
+      ],
     });
-    expect(ev.message?.formatted).toBe("failed at ~/a.ts");
-    expect(ev.tags?.path).toBe("~/b.ts");
-    expect(ev.exception?.values[0]?.value).toBe("boom in ~/c.ts");
-    expect(ev.exception?.values[0]?.stacktrace?.frames[0]?.filename).toBe("~/d.ts");
+    const ex = ev.exceptions[0]!;
+    expect(ex.value).toBe("boom in ~/c.ts");
+    expect(ex.context?.path).toBe("~/b.ts");
+    expect(ex.stacktrace?.frames[0]?.filename).toBe("~/d.ts");
   });
 
   test("fingerprint is stable across users and ignores line numbers", () => {
-    const mk = (home: string, line: number): SentryEvent => ({
-      event_id: "x",
-      timestamp: 0,
-      platform: "node",
-      level: "error",
-      tags: { process: "backend" },
-      exception: {
-        values: [
-          {
-            type: "TypeError",
-            value: "bad",
-            stacktrace: {
-              frames: [{ filename: `${home}/a.ts`, function: "f", lineno: line, colno: 1 }],
-            },
+    // This is what makes one bug read as one Grafana issue with N affected
+    // devices, rather than N separate issues — it is the top layer of their
+    // grouping strategy.
+    const mk = (home: string, line: number): FaroPayload => ({
+      meta: { sdk: { name: "t" }, app: { name: "loadout", namespace: "backend" }, os: { name: "linux" } },
+      exceptions: [
+        {
+          timestamp: "1970-01-01T00:00:00.000Z",
+          type: "TypeError",
+          value: "bad",
+          stacktrace: {
+            frames: [{ filename: `${home}/a.ts`, function: "f", lineno: line, colno: 1 }],
           },
-        ],
-      },
+        },
+      ],
     });
     const a = fingerprint(scrubEvent(mk("/home/deck", 10)));
     const b = fingerprint(scrubEvent(mk("/home/simon", 99)));
@@ -337,29 +340,33 @@ describe("rate limiting", () => {
 });
 
 describe("transport", () => {
-  test("parses a DSN and builds the ingest URL", () => {
-    const d = parseDsn(DSN);
-    expect(d).not.toBeNull();
-    expect(d?.publicKey).toBe("abc123");
-    expect(d?.projectId).toBe("456");
-    expect(envelopeUrl(d!)).toBe("https://o1.ingest.de.sentry.io/api/456/envelope/");
+  test("parses a Faro collector URL", () => {
+    const c = parseCollector(COLLECTOR);
+    expect(c).not.toBeNull();
+    expect(c?.url).toBe(COLLECTOR);
   });
 
-  test("rejects malformed DSNs instead of throwing", () => {
-    for (const bad of [undefined, null, "", "not-a-url", "https://nokey.example.com/1", "https://k@host/"]) {
-      expect(parseDsn(bad as string | undefined)).toBeNull();
+  test("rejects malformed endpoints instead of throwing", () => {
+    for (const bad of [undefined, null, "", "not-a-url", "ftp://host/collect/x"]) {
+      expect(parseCollector(bad as string | undefined)).toBeNull();
     }
   });
 
-  test("envelope length counts bytes, not characters", () => {
-    // A stack trace with any non-ASCII would otherwise produce a short
-    // count and an envelope the server rejects.
+  test("the body is the Faro payload shape and nothing more", () => {
     const ev = buildEvent({ error: new Error("héllo — ünicode"), process: "backend" });
-    const env = buildEnvelope(ev, parseDsn(DSN)!);
-    const [, itemHeader, body] = env.split("\n");
-    const declared = (JSON.parse(itemHeader!) as { length: number }).length;
-    expect(declared).toBe(new TextEncoder().encode(body!).length);
-    expect(declared).toBeGreaterThan(body!.length - 10);
+    const parsed = JSON.parse(buildBody(ev)) as Record<string, unknown>;
+    // Exactly the two documented top-level keys — no logs, measurements,
+    // traces or events smuggled in.
+    expect(Object.keys(parsed).sort()).toEqual(["exceptions", "meta"]);
+    const meta = parsed.meta as Record<string, unknown>;
+    expect(Object.keys(meta).sort()).toEqual(["app", "os", "sdk", "session"]);
+    // Non-ASCII survives the round trip intact.
+    expect(buildBody(ev)).toContain("ünicode");
+  });
+
+  test("geolocation tracking is explicitly disabled", () => {
+    const ev = buildEvent({ error: new Error("x"), process: "backend" });
+    expect(ev.meta.session?.overrides?.geoLocationTrackingEnabled).toBe(false);
   });
 });
 
@@ -374,42 +381,61 @@ describe("event building", () => {
         "    at other (node:internal/x:1:1)",
       ].join("\n"),
     );
-    // Reversed: Sentry renders oldest-first.
+    // Reversed: Faro renders oldest-first.
     expect(frames).toHaveLength(4);
     expect(frames.at(-1)?.function).toBe("doThing");
     expect(frames.at(-1)?.lineno).toBe(10);
     expect(frames.at(-2)?.function).toBe("Foo.bar");
     expect(frames.at(-2)?.filename).toBe("/home/deck/b.ts");
-    expect(frames[0]?.in_app).toBe(false);
+    // Vendor frames are flagged locally so they're excluded from the
+    // fingerprint; the flag itself never reaches the wire.
+    expect(frames[0]?.inApp).toBe(false);
+  });
+
+  test("anonymous frames get a placeholder, since Faro requires a string", () => {
+    const frames = parseStack(["Error: x", "    at /home/deck/c.ts:1:1"].join("\n"));
+    expect(frames[0]?.function).toBe("?");
   });
 
   test("handles non-Error throws", () => {
-    expect(buildEvent({ error: "just a string", process: "backend" }).exception?.values[0]?.value)
-      .toBe("just a string");
-    expect(buildEvent({ error: { a: 1 }, process: "backend" }).exception?.values[0]?.value)
-      .toBe('{"a":1}');
-    expect(buildEvent({ error: null, process: "backend" }).exception?.values[0]?.value).toBe("null");
+    const v = (e: unknown) => buildEvent({ error: e, process: "backend" }).exceptions[0]?.value;
+    expect(v("just a string")).toBe("just a string");
+    expect(v({ a: 1 })).toBe('{"a":1}');
+    expect(v(null)).toBe("null");
   });
 
   test("tags fault origin so plugin faults can be routed away from core", () => {
     const core = buildEvent({ error: new Error("x"), process: "backend" });
-    expect(core.tags?.fault_origin).toBe("core");
-    expect(core.tags?.plugin_id).toBeUndefined();
+    expect(core.exceptions[0]?.context?.fault_origin).toBe("core");
+    expect(core.exceptions[0]?.context?.plugin_id).toBeUndefined();
 
     const plugin = buildEvent({
       error: new Error("x"),
       process: "backend",
       context: { pluginId: "hltb" },
     });
-    expect(plugin.tags?.fault_origin).toBe("plugin");
-    expect(plugin.tags?.plugin_id).toBe("hltb");
+    expect(plugin.exceptions[0]?.context?.fault_origin).toBe("plugin");
+    expect(plugin.exceptions[0]?.context?.plugin_id).toBe("hltb");
   });
 
-  test("never sets hostname or user", () => {
-    const ev = buildEvent({ error: new Error("x"), process: "overlay-bun" }) as unknown as
-      Record<string, unknown>;
-    expect(ev.server_name).toBeUndefined();
-    expect(ev.user).toBeUndefined();
+  test("marks fatal crashes so they can be separated from handled errors", () => {
+    const fatal = buildEvent({
+      error: new Error("x"),
+      process: "overlay-bun",
+      context: { level: "fatal" },
+    });
+    expect(fatal.exceptions[0]?.fatal).toBe(true);
+    expect(buildEvent({ error: new Error("x"), process: "backend" }).exceptions[0]?.fatal).toBe(
+      false,
+    );
+  });
+
+  test("never sets user or a persistent install id", () => {
+    const meta = buildEvent({ error: new Error("x"), process: "overlay-bun" })
+      .meta as unknown as Record<string, unknown>;
+    expect(meta.user).toBeUndefined();
+    expect(meta.browser).toBeUndefined();
+    expect((meta.app as Record<string, unknown>).installationId).toBeUndefined();
   });
 });
 
@@ -438,9 +464,9 @@ describe("the never-leaks gate", () => {
         release: "0.9.0",
         context: { pluginId: "hltb", tags: { path: "/home/deck/secret" } },
       }),
-      { hostname: "simons-deck" },
+      { hostname: "simons-deck", username: "otheruser" },
     );
-    const wire = buildEnvelope(event, parseDsn(DSN)!);
+    const wire = buildBody(event);
 
     for (const forbidden of [
       "/home/",
@@ -509,7 +535,7 @@ describe("scrubbing on the real send path", () => {
   test("captureError scrubs before transmitting", async () => {
     initCrashReporting({
       process: "backend",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       release: "0.9.0",
       readConsent: () => "granted",
       stateStore: memoryStateStore(),
@@ -533,7 +559,7 @@ describe("scrubbing on the real send path", () => {
     const dir = mkdtempSync(join(tmpdir(), "loadout-spool-"));
     initCrashReporting({
       process: "overlay-bun",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       readConsent: () => "granted",
       stateStore: memoryStateStore(),
       username: "simonh",
@@ -572,7 +598,7 @@ describe("spool and fatal path", () => {
     // Run 1: dies without sending anything.
     initCrashReporting({
       process: "overlay-bun",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       readConsent: () => "granted",
       stateStore: memoryStateStore(),
       spoolDir: dir,
@@ -587,7 +613,7 @@ describe("spool and fatal path", () => {
     resetForTests();
     initCrashReporting({
       process: "overlay-bun",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       readConsent: () => "granted",
       stateStore: memoryStateStore(),
       spoolDir: dir,
@@ -603,7 +629,7 @@ describe("spool and fatal path", () => {
   test("consent withdrawn between crash and restart discards the spool", async () => {
     initCrashReporting({
       process: "overlay-bun",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       readConsent: () => "granted",
       stateStore: memoryStateStore(),
       spoolDir: dir,
@@ -616,7 +642,7 @@ describe("spool and fatal path", () => {
     resetForTests();
     initCrashReporting({
       process: "overlay-bun",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       readConsent: () => "denied",
       stateStore: memoryStateStore(),
       spoolDir: dir,
@@ -639,7 +665,7 @@ describe("spool and fatal path", () => {
 
     initCrashReporting({
       process: "overlay-bun",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       readConsent: () => "granted",
       stateStore: memoryStateStore(),
       spoolDir: dir,
@@ -659,7 +685,7 @@ describe("spool and fatal path", () => {
     resetForTests();
     initCrashReporting({
       process: "overlay-bun",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       readConsent: () => "granted",
       stateStore: memoryStateStore(),
       spoolDir: dir,
@@ -677,7 +703,7 @@ describe("spool and fatal path", () => {
     }) as unknown as typeof fetch;
     initCrashReporting({
       process: "overlay-bun",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       readConsent: () => "granted",
       stateStore: memoryStateStore(),
       spoolDir: dir,
@@ -693,7 +719,7 @@ describe("spool and fatal path", () => {
   test("a fatal capture without consent writes nothing at all", () => {
     initCrashReporting({
       process: "overlay-bun",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       readConsent: () => undefined,
       stateStore: memoryStateStore(),
       spoolDir: dir,
@@ -732,7 +758,7 @@ describe("the shipped default consent supplier", () => {
   function initWithHome(home: string) {
     initCrashReporting({
       process: "backend",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       // No readConsent: exercise the real default, pointed at a temp home.
       hostname: "irrelevant",
       stateStore: memoryStateStore(),
@@ -783,7 +809,7 @@ describe("rate-limit state really persists to disk", () => {
       resetForTests();
       initCrashReporting({
         process: "backend",
-        dsn: DSN,
+        collectorUrl: COLLECTOR,
         readConsent: () => "granted",
         stateStore: fileStateStore(path),
         fetchImpl,
@@ -812,7 +838,7 @@ describe("capture gating (the test that matters)", () => {
   test("sends nothing when consent is unset", async () => {
     initCrashReporting({
       process: "backend",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       readConsent: () => undefined,
       stateStore: memoryStateStore(),
       fetchImpl,
@@ -826,7 +852,7 @@ describe("capture gating (the test that matters)", () => {
   test("sends nothing when consent is denied", async () => {
     initCrashReporting({
       process: "backend",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       readConsent: () => "denied",
       stateStore: memoryStateStore(),
       fetchImpl,
@@ -836,10 +862,10 @@ describe("capture gating (the test that matters)", () => {
     expect(sent).toBe(0);
   });
 
-  test("sends nothing when no DSN is configured", async () => {
+  test("sends nothing when no collector is configured", async () => {
     initCrashReporting({
       process: "backend",
-      dsn: undefined,
+      collectorUrl: undefined,
       readConsent: () => "granted",
       stateStore: memoryStateStore(),
       fetchImpl,
@@ -853,7 +879,7 @@ describe("capture gating (the test that matters)", () => {
   test("sends when granted", async () => {
     initCrashReporting({
       process: "backend",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       release: "0.9.0",
       readConsent: () => "granted",
       stateStore: memoryStateStore(),
@@ -869,7 +895,7 @@ describe("capture gating (the test that matters)", () => {
     let consent: "granted" | "denied" = "granted";
     initCrashReporting({
       process: "backend",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       readConsent: () => consent,
       stateStore: memoryStateStore(),
       fetchImpl,
@@ -885,7 +911,7 @@ describe("capture gating (the test that matters)", () => {
   test("webview consent comes from setConsent", async () => {
     initCrashReporting({
       process: "webview",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       stateStore: memoryStateStore(),
       fetchImpl,
       drainOnInit: false,
@@ -899,7 +925,7 @@ describe("capture gating (the test that matters)", () => {
   test("a network failure resolves false rather than throwing", async () => {
     initCrashReporting({
       process: "backend",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       readConsent: () => "granted",
       stateStore: memoryStateStore(),
       fetchImpl: (async () => {
@@ -912,7 +938,7 @@ describe("capture gating (the test that matters)", () => {
   test("rate limiting applies end to end", async () => {
     initCrashReporting({
       process: "backend",
-      dsn: DSN,
+      collectorUrl: COLLECTOR,
       readConsent: () => "granted",
       stateStore: memoryStateStore(),
       fetchImpl,

@@ -1,10 +1,10 @@
 /**
- * @loadout/crash-report — opt-in crash reporting.
+ * @loadout/crash-report — opt-in crash reporting, via Grafana Faro.
  *
  * Callsites see exactly two things: `initCrashReporting` once at startup and
- * `captureError` on the crash paths. Everything Sentry-specific is behind
- * this boundary, which is what keeps the backend choice reversible — moving
- * from Sentry SaaS to a self-hosted GlitchTip is a DSN change and nothing else.
+ * `captureError` / `captureFatalSync` on the crash paths. Everything
+ * protocol-specific is behind this boundary, which is what kept the move from
+ * Sentry to Faro down to two files.
  *
  * Design rules, in priority order:
  *   1. Never send without consent. Fail-closed everywhere; see consent.ts.
@@ -16,20 +16,20 @@ import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { isGranted, readConsentSync } from "./consent";
-import { buildEvent } from "./event";
+import { buildEvent, newSessionId } from "./event";
 import { decide, parseState } from "./rate-limit";
 import { fingerprint, scrubEvent } from "./scrub";
-import { parseDsn, sendEvent, type Dsn } from "./transport";
+import { parseCollector, sendEvent, type Collector } from "./transport";
 import { spoolEvent, takeSpooled } from "./spool";
-import type { CaptureContext, ConsentState, ProcessName, SentryEvent } from "./types";
+import type { CaptureContext, ConsentState, FaroPayload, ProcessName } from "./types";
 
-export type { CaptureContext, ConsentState, ProcessName, SentryEvent } from "./types";
+export type { CaptureContext, ConsentState, ProcessName, FaroPayload, FaroException, FaroMeta, FaroFrame } from "./types";
 export { CRASH_REPORTING_KEY, parseConsent, readConsentSync, isGranted } from "./consent";
 export { scrubEvent, scrubString, fingerprint } from "./scrub";
-export { parseStack, buildEvent } from "./event";
-export { parseDsn, buildEnvelope } from "./transport";
+export { parseStack, buildEvent, buildMeta, newSessionId } from "./event";
+export { parseCollector, buildBody } from "./transport";
 export { decide, parseState, DEFAULT_LIMITS } from "./rate-limit";
-export { spoolEvent, takeSpooled, MAX_SPOOL_FILES, MAX_SPOOL_AGE_MS } from "./spool";
+export { spoolEvent, takeSpooled, MAX_SPOOL_FILES, MAX_SPOOL_AGE_MS, MAX_SPOOL_ATTEMPTS } from "./spool";
 
 /** Where the rate limiter keeps its counters. Abstracted so the webview,
  *  which has no filesystem, can back it with localStorage instead. */
@@ -119,16 +119,19 @@ function defaultSpoolDir(
 
 export interface InitOptions {
   process: ProcessName;
-  /** Product version — becomes the Sentry release. */
+  /** Product version — becomes `meta.app.version`. */
   release?: string;
   /** Defaults to "development" for dev builds, else "production". */
   environment?: string;
   /**
-   * DSN. Resolution order: this option, then `$LOADOUT_CRASH_DSN`, then none.
-   * With no DSN, reporting is inert — which is the intended state until a
-   * project is provisioned, and what makes dogfooding safe by default.
+   * Faro collector URL, e.g.
+   * `https://faro-collector-<region>.grafana.net/collect/<app-key>`.
+   *
+   * Resolution order: this option, then `$LOADOUT_CRASH_COLLECTOR`, then none.
+   * With no collector, reporting is inert — the intended state until an app is
+   * provisioned, and what makes dogfooding safe by default.
    */
-  dsn?: string;
+  collectorUrl?: string;
   /**
    * Consent supplier. Node processes default to reading `config.json` on
    * every capture so a revocation takes effect immediately. The webview has
@@ -164,7 +167,7 @@ interface Runtime {
   process: ProcessName;
   release?: string;
   environment: string;
-  dsn: Dsn | null;
+  collector: Collector | null;
   readConsent: () => ConsentState;
   store: StateStore;
   now: () => number;
@@ -174,26 +177,31 @@ interface Runtime {
   username?: string;
   spoolDir: string;
   chown?: ChownHook;
+  /**
+   * Regenerated on every process start and never persisted, so it groups
+   * events within one run without correlating across restarts.
+   */
+  sessionId: string;
 }
 
 let rt: Runtime | null = null;
 let explicitConsent: ConsentState;
 
 /**
- * Wire up reporting. Safe to call in any process, including with no DSN —
- * that just makes every later `captureError` a no-op.
+ * Wire up reporting. Safe to call in any process, including with no collector
+ * configured — that just makes every later `captureError` a no-op.
  */
 export function initCrashReporting(opts: InitOptions): void {
   const env = typeof process !== "undefined" ? process.env : {};
   const home = opts.homeOverride ?? safeHomedir();
-  const dsn = parseDsn(opts.dsn ?? env.LOADOUT_CRASH_DSN);
+  const collector = parseCollector(opts.collectorUrl ?? env.LOADOUT_CRASH_COLLECTOR);
   const isDev = !opts.release || opts.release === "dev";
 
   rt = {
     process: opts.process,
     release: opts.release,
     environment: opts.environment ?? (isDev ? "development" : "production"),
-    dsn,
+    collector,
     readConsent:
       opts.readConsent ??
       (opts.process === "webview"
@@ -208,6 +216,7 @@ export function initCrashReporting(opts: InitOptions): void {
     username: opts.username ?? basename(home),
     spoolDir: opts.spoolDir ?? defaultSpoolDir(env, home, opts.process),
     chown: opts.chown,
+    sessionId: newSessionId(),
   };
 
   // Ship anything a previous run died holding. Best-effort and detached: a
@@ -242,7 +251,7 @@ export function setConsent(state: ConsentState): void {
 
 /** Whether a capture right now would actually send. Useful in tests and UI. */
 export function isEnabled(): boolean {
-  return !!rt && !!rt.dsn && isGranted(rt.readConsent());
+  return !!rt && !!rt.collector && isGranted(rt.readConsent());
 }
 
 /**
@@ -250,7 +259,7 @@ export function isEnabled(): boolean {
  * handlers that are about to exit can await it; everywhere else, ignore it.
  *
  * Resolves false — never rejects — for every failure mode: no consent, no
- * DSN, rate-limited, network down, server angry.
+ * collector, rate-limited, network down, server angry.
  */
 /**
  * Shared front half of every capture: consent gate, build, scrub, rate limit.
@@ -259,7 +268,7 @@ export function isEnabled(): boolean {
  * the fatal path go through here, so scrubbing cannot be bypassed by adding a
  * new entry point — a property the tests assert against the transmitted bytes.
  */
-function prepare(r: Runtime, error: unknown, context?: CaptureContext): SentryEvent | null {
+function prepare(r: Runtime, error: unknown, context?: CaptureContext): FaroPayload | null {
   // Re-checked on every capture, not cached: revoking consent has to take
   // effect immediately, not at next restart.
   if (!isGranted(r.readConsent())) return null;
@@ -270,18 +279,27 @@ function prepare(r: Runtime, error: unknown, context?: CaptureContext): SentryEv
       process: r.process,
       release: r.release,
       environment: r.environment,
+      sessionId: r.sessionId,
       context,
       now: r.now(),
     }),
     { hostname: r.hostname, username: r.username },
   );
 
+  // Computed after scrubbing, so it is identical across machines hitting the
+  // same bug. Serves double duty: the local dedup key below, and
+  // `FaroException.fingerprint` on the wire — the top layer of Grafana's error
+  // grouping, which takes priority over its own stack normalisation. Without
+  // it, one bug on N devices can read as N issues.
+  const fp = fingerprint(event);
+  for (const ex of event.exceptions) ex.fingerprint = fp;
+
   const now = r.now();
   // Re-read from the store rather than caching in memory. A cached copy goes
   // stale against any other writer and, more importantly, survives across the
   // very restarts a crash loop produces — which is when the counters matter.
   const state = parseState(r.store.read(), now);
-  const verdict = decide(state, now, fingerprint(event), undefined);
+  const verdict = decide(state, now, fp, undefined);
   // Persist in both branches — the windows may have rolled forward even
   // when the event is dropped, and pinning them would leak quota.
   r.store.write(JSON.stringify(verdict.state));
@@ -293,14 +311,11 @@ export async function captureError(
   context?: CaptureContext,
 ): Promise<boolean> {
   const r = rt;
-  if (!r || !r.dsn) return false;
+  if (!r || !r.collector) return false;
   try {
     const event = prepare(r, error, context);
     if (!event) return false;
-    return await sendEvent(event, r.dsn, {
-      clientName: `loadout/${r.release ?? "dev"}`,
-      fetchImpl: r.fetchImpl,
-    });
+    return await sendEvent(event, r.collector, { fetchImpl: r.fetchImpl });
   } catch {
     // Reporting a crash must never cause one.
     return false;
@@ -330,7 +345,7 @@ export function captureErrorSync(error: unknown, context?: CaptureContext): void
  */
 export function captureFatalSync(error: unknown, context?: CaptureContext): boolean {
   const r = rt;
-  if (!r || !r.dsn) return false;
+  if (!r || !r.collector) return false;
   try {
     const event = prepare(r, error, { ...context, level: context?.level ?? "fatal" });
     if (!event) return false;
@@ -348,7 +363,7 @@ export function captureFatalSync(error: unknown, context?: CaptureContext): bool
  */
 export async function drainSpool(): Promise<number> {
   const r = rt;
-  if (!r || !r.dsn) return 0;
+  if (!r || !r.collector) return 0;
   try {
     if (!isGranted(r.readConsent())) {
       // Consent withdrawn since these were written — discard, don't send.
@@ -358,10 +373,7 @@ export async function drainSpool(): Promise<number> {
     const entries = takeSpooled(r.spoolDir, r.now());
     let sent = 0;
     for (const { event, attempts } of entries) {
-      const ok = await sendEvent(event, r.dsn, {
-        clientName: `loadout/${r.release ?? "dev"}`,
-        fetchImpl: r.fetchImpl,
-      });
+      const ok = await sendEvent(event, r.collector, { fetchImpl: r.fetchImpl });
       if (ok) {
         sent++;
       } else {

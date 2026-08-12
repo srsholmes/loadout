@@ -13,10 +13,10 @@
  *     the same fingerprint. Plugins are compiled on the end user's machine
  *     (see plugin-manager.ts), so their frames carry absolute local paths;
  *     without normalisation every user's copy of one bug is a separate
- *     Sentry issue.
+ *     issue in Grafana.
  */
 
-import type { Frame, SentryEvent } from "./types";
+import type { FaroFrame, FaroPayload } from "./types";
 
 /**
  * Any user's home directory, not just this process's. The backend runs as
@@ -149,11 +149,12 @@ export function scrubString(input: string, opts: ScrubOptions = {}): string {
   return out;
 }
 
-function scrubFrame(frame: Frame, opts: ScrubOptions): Frame {
-  const out: Frame = { ...frame };
-  if (out.filename) out.filename = scrubString(out.filename, opts);
-  if (out.function) out.function = scrubString(out.function, opts);
-  return out;
+function scrubFrame(frame: FaroFrame, opts: ScrubOptions): FaroFrame {
+  return {
+    ...frame,
+    filename: scrubString(frame.filename, opts),
+    function: scrubString(frame.function, opts),
+  };
 }
 
 /**
@@ -163,54 +164,67 @@ function scrubFrame(frame: Frame, opts: ScrubOptions): Frame {
  * `server_name`, `breadcrumbs` and `request` are deleted even though we
  * never set them, so a future callsite can't reintroduce them by accident.
  */
-export function scrubEvent(event: SentryEvent, opts: ScrubOptions = {}): SentryEvent {
-  const out: SentryEvent = { ...event };
+export function scrubEvent(payload: FaroPayload, opts: ScrubOptions = {}): FaroPayload {
+  const out: FaroPayload = {
+    meta: { ...payload.meta },
+    exceptions: payload.exceptions.map((ex) => ({
+      ...ex,
+      type: scrubString(ex.type, opts),
+      value: scrubString(ex.value, opts),
+      stacktrace: ex.stacktrace
+        ? { frames: ex.stacktrace.frames.map((f) => scrubFrame(f, opts)) }
+        : undefined,
+      context: ex.context
+        ? Object.fromEntries(
+            Object.entries(ex.context).map(([k, v]) => [k, scrubString(v, opts)]),
+          )
+        : undefined,
+    })),
+  };
 
-  if (out.exception?.values) {
-    out.exception = {
-      values: out.exception.values.map((v) => ({
-        ...v,
-        type: scrubString(v.type, opts),
-        value: scrubString(v.value, opts),
-        stacktrace: v.stacktrace
-          ? { frames: v.stacktrace.frames.map((f) => scrubFrame(f, opts)) }
-          : undefined,
-      })),
-    };
-  }
-
-  if (out.message) out.message = { formatted: scrubString(out.message.formatted, opts) };
-
-  if (out.tags) {
-    out.tags = Object.fromEntries(
-      Object.entries(out.tags).map(([k, v]) => [k, scrubString(v, opts)]),
-    );
-  }
-
-  // Belt and braces: these must never be present. We don't set them, but
-  // deleting here means a future edit upstream can't leak them silently.
-  const loose = out as unknown as Record<string, unknown>;
-  delete loose.user;
-  delete loose.server_name;
-  delete loose.breadcrumbs;
-  delete loose.request;
+  // Belt and braces: Faro supports all of these and we never populate them.
+  // Deleting here means a future edit upstream cannot leak them silently.
+  const meta = out.meta as unknown as Record<string, unknown>;
+  delete meta.user;
+  delete meta.page;
+  delete meta.browser;
+  delete meta.view;
+  delete meta.device;
+  const app = out.meta.app as unknown as Record<string, unknown>;
+  delete app.installationId;
 
   return out;
 }
 
+/** Runtime/vendor frames, excluded from the fingerprint. */
+const VENDOR_FRAME = /(?:^|\/)(?:node_modules|bun:|node:)/;
+
 /**
- * Stable fingerprint for dedup and rate limiting, computed *after*
- * scrubbing so it's identical across users hitting the same bug.
+ * Stable fingerprint, computed *after* scrubbing so it's identical across
+ * users hitting the same bug.
  *
- * Deliberately coarse: exception type + the top few in-app frames by
+ * Serves two purposes. Locally it is the dedup key for rate limiting — the
+ * thing that stops a crash loop reporting forever. On the wire it becomes
+ * `FaroException.fingerprint`, which is the **top layer** of Grafana's error
+ * grouping and takes priority over its own stack normalisation. Getting it
+ * stable across machines is what makes one bug read as one issue with N
+ * affected devices, rather than N separate issues.
+ *
+ * Deliberately coarse: exception type and the innermost few app frames by
  * file/function, ignoring line numbers so a one-line edit between releases
- * doesn't reset the dedup window mid-crash-loop.
+ * doesn't split a group or reset a dedup window mid-crash-loop.
  */
-export function fingerprint(event: SentryEvent): string {
-  const ex = event.exception?.values?.[0];
-  const parts: string[] = [event.tags?.process ?? "", ex?.type ?? "", ex?.value ?? ""];
-  const frames = (ex?.stacktrace?.frames ?? []).filter((f) => f.in_app !== false).slice(-3);
-  for (const f of frames) parts.push(`${f.filename ?? ""}:${f.function ?? ""}`);
+export function fingerprint(payload: FaroPayload): string {
+  const ex = payload.exceptions[0];
+  const parts: string[] = [
+    payload.meta.app.namespace ?? "",
+    ex?.type ?? "",
+    ex?.value ?? "",
+  ];
+  const frames = (ex?.stacktrace?.frames ?? [])
+    .filter((f) => !VENDOR_FRAME.test(f.filename))
+    .slice(-3);
+  for (const f of frames) parts.push(`${f.filename}:${f.function}`);
   return djb2(parts.join("|"));
 }
 
