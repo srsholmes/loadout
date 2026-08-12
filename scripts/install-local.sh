@@ -144,7 +144,18 @@ fi
 # native wrapper dlopens at startup). Fetch the closure from a Fedora container
 # the first time and cache the tarball; subsequent installs reuse it. No-op on
 # Bazzite/CachyOS/Fedora — those ship the libs in the base image.
-sh "$SCRIPT_DIR/fetch-deck-overlay-libs.sh" "$OVERLAY_INSTALL_DIR/bin"
+#
+# Non-fatal, matching install.sh's handling. This script runs under `set -e`,
+# so a bare call would abort the whole install the moment the closure build or
+# its resolvability check fails — after the overlay tree is already in place
+# but before Steam CEF remote debugging and everything below, leaving a
+# half-configured dev install. The overlay alone is broken in that case, and
+# the operator is better served finishing the install and reading the error.
+if ! sh "$SCRIPT_DIR/fetch-deck-overlay-libs.sh" "$OVERLAY_INSTALL_DIR/bin"; then
+    echo "[install-local] WARNING: overlay runtime libraries are not ready" >&2
+    echo "  (see the error above). The rest of the install continues; the" >&2
+    echo "  overlay will not launch until that is resolved." >&2
+fi
 
 # --- Steam CEF remote debugging ---
 # Drop the empty `.cef-enable-remote-debugging` marker in Steam's root so

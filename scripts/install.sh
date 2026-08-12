@@ -965,11 +965,20 @@ Description=Loadout Overlay
 After=graphical-session.target
 PartOf=graphical-session.target
 
-# Never let the restart limiter wedge us permanently. A mode switch has a
-# window with no X server at all, so several starts can fail back to back;
-# the default (5 starts / 10s) would then give up for good and leave the
-# overlay dead — the precise state this whole block exists to prevent.
-StartLimitIntervalSec=0
+# Widen, but do NOT remove, the start limiter. A mode switch has a window
+# with no X server at all, so several starts can fail back to back, and the
+# default 5-in-10s is tight enough to trip and leave the overlay dead — the
+# state this block exists to prevent.
+#
+# The limiter still has to exist, because `UpheldBy=` above re-queues a start
+# the instant the unit goes inactive and those starts are NOT paced by
+# RestartSec= (that only paces the Restart= path). So if the launcher ever
+# exits cleanly, upholds alone would respawn it as fast as it can exit, with
+# nothing else to throttle it: `Restart=on-failure` does not fire on exit 0,
+# and the ExecStartPre `/up` wait only blocks while the backend is down.
+# 20-in-60s absorbs any plausible mode switch while still capping a runaway.
+StartLimitIntervalSec=60
+StartLimitBurst=20
 
 [Service]
 Type=simple

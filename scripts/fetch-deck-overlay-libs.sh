@@ -264,14 +264,35 @@ for link in "$EXTRACT_TMP/lib/"*; do
         "$(basename "$(readlink "$link")")" "$(basename "$link")" >> "$SONAME_MAP"
 done
 
-# True when the deck already provides this entry, under its own name or
-# under its SONAME. The SONAME arm is what catches version-suffix drift.
-deck_owns() {
-    if grep -qxF "$1" "$DECK_LIBS_TMP"; then
-        return 0
-    fi
+# The SONAME an entry is reached by. A soname symlink IS its own soname, so
+# it never appears in field 1 and correctly falls through to itself. A real
+# file's soname is whatever `ldconfig -n` pointed at it. An entry with no
+# link at all also falls back to its own basename, which is right for the
+# privately-loaded libs the deck-list walk exists to protect (e.g.
+# `libpulsecommon-17.0.so`, where the file name IS the soname).
+soname_of() {
     _sn="$(awk -F'\t' -v f="$1" '$1 == f { print $2; exit }' "$SONAME_MAP")"
-    [ -n "$_sn" ] && grep -qxF "$_sn" "$DECK_LIBS_TMP"
+    [ -n "$_sn" ] || _sn="$1"
+    printf '%s\n' "$_sn"
+}
+
+# True when the deck provides the SONAME this entry is reached by.
+#
+# Testing the SONAME and *only* the SONAME is the whole point. Consumers
+# link against the SONAME, so the deck owning some other alias — or even
+# owning the real versioned file — does not mean the deck can satisfy the
+# link. Matching the entry's own basename as well (an earlier version of
+# this fix did) reintroduces the librav1e bug: SteamOS ships
+# `librav1e.so`, `librav1e.so.0.8` and `librav1e.so.0.8.1` but NOT
+# `librav1e.so.0`, which is what the bundled libavif actually needs. The
+# basename arm matched `librav1e.so.0.8.1` and skipped the real file,
+# while its `librav1e.so.0` link — absent from the deck list — was
+# bundled, leaving exactly the dangling link this was meant to eliminate.
+#
+# Because a link and its target now resolve to the same SONAME, they always
+# get the same answer, so a bundled link can never lose its target.
+deck_owns() {
+    grep -qxF "$(soname_of "$1")" "$DECK_LIBS_TMP"
 }
 
 # Electrobun's launcher sets LD_LIBRARY_PATH=./ (its bin/ cwd) — it does
@@ -307,9 +328,16 @@ if [ "$skipped_deck" -gt 0 ]; then
     echo "[fetch-deck-libs] skipped $skipped_deck libs the deck owns (deck's loader will resolve them)"
 fi
 
-# Sweep any dangling links still in the bundle, including ones planted by
-# an earlier version of this script. They resolve to nothing, and leaving
-# them in place only hides which copy the loader actually ends up using.
+# Belt to the SONAME rule's braces: with link and target now always decided
+# together, this should find nothing. It stays as a cheap invariant check
+# against a closure whose links don't come from `ldconfig -n`, since a
+# dangling link resolves to nothing and only hides which copy the loader
+# actually ends up using.
+#
+# Note this cannot repair an existing broken install: both entry points
+# `rm -rf` the overlay tree before calling us (install.sh, install-local.sh),
+# so $TARGET_DIR is always a freshly extracted tree and the only links here
+# are ones this run just copied.
 pruned=0
 for link in "$TARGET_DIR"/*; do
     if [ -L "$link" ] && [ ! -e "$link" ]; then
@@ -332,18 +360,31 @@ done
 
 # Being present is not the same as being loadable. Resolve each root the way
 # the launcher will (LD_LIBRARY_PATH=./ from bin/) and fail loudly on anything
-# missing. Every SONAME we deferred to the deck is a bet that the deck keeps
-# shipping that major; this is the check that turns losing the bet into one
-# actionable line at install time rather than a crash-loop weeks later, after
-# an OS update, with only a dlopen failure to go on.
-unresolved="$(cd "$TARGET_DIR" && LD_LIBRARY_PATH=. ldd $TEST_LIBS 2>/dev/null \
-    | awk '/not found/ { print $1 }' | sort -u)"
-if [ -n "$unresolved" ]; then
-    echo "[fetch-deck-libs] ERROR: sonames resolve nowhere — not in the bundle," >&2
-    echo "  and not on this system:" >&2
-    echo "$unresolved" | sed 's/^/    /' >&2
-    echo "  Delete $CACHE_TAR and re-run to rebuild the closure against the" >&2
-    echo "  current system, or install the matching library." >&2
+# broken. Every SONAME we defer to the deck is a bet that the deck keeps
+# shipping a compatible one; this turns losing that bet into one actionable
+# line at install time rather than a crash-loop weeks later, after an OS
+# update, with only a dlopen failure to go on.
+#
+# `-r` (resolve ALL relocations), not a plain `ldd`. Plain `ldd` reports only
+# missing DT_NEEDED *files* and is blind to the second failure mode this
+# script can produce: a lib that IS present but whose symbols don't resolve.
+# That is the fontconfig bug — the deck's own libpangoft2 failing with
+# `undefined symbol: FcConfigSetDefaultSubstitute` against a stale bundled
+# fontconfig. It matters more the more we defer, since every deferred lib is
+# one more chance for the bundled Fedora webkit to meet an incompatible
+# SteamOS library.
+broken="$(cd "$TARGET_DIR" && LD_LIBRARY_PATH=. ldd -r $TEST_LIBS 2>/dev/null \
+    | awk '/not found/ { print "  missing:   " $1 }
+           /undefined symbol/ { print "  unresolved:" $0 }' | sort -u)"
+if [ -n "$broken" ]; then
+    echo "[fetch-deck-libs] ERROR: the installed closure does not fully resolve:" >&2
+    echo "$broken" >&2
+    echo "  'missing' means no bundled or system library provides that SONAME." >&2
+    echo "  'unresolved' means one was found but is the wrong version." >&2
+    echo "  Both are decided against THIS system's libraries, so a plain re-run" >&2
+    echo "  reproduces them. Either install the missing/newer library, or force" >&2
+    echo "  the lib to be bundled instead of deferred (it is skipped only when" >&2
+    echo "  /usr/lib* already offers its SONAME)." >&2
     exit 1
 fi
 
