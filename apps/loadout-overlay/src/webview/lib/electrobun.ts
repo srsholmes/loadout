@@ -166,6 +166,32 @@ export async function getOverlayVisibility(): Promise<boolean> {
 }
 
 /**
+ * Same question, but answers `null` when we genuinely cannot tell yet
+ * instead of guessing "open".
+ *
+ * `getOverlayVisibility()` above resolves the *static* `Electroview.rpc`,
+ * which `defineRPC()` has not attached during early boot — so it takes its
+ * `return true` branch and claims the overlay is open when the window was
+ * in fact created hidden. That optimistic default is right for callers
+ * that only gate input polling (better to poll than to swallow input), but
+ * wrong for anything that acts on being *hidden*: they need to tell a real
+ * "open" apart from "ask me later".
+ *
+ * Read the instance handle main.tsx stashes on `window` instead. It is
+ * assigned at module scope, before boot() runs, so it is already live at
+ * the point the static one is still missing — verified on-device, where
+ * the static path fail-opened at t≈19ms while this one returned the true
+ * `{ isOpen: false }`.
+ */
+export async function tryGetOverlayVisibility(): Promise<boolean | null> {
+  if (!isElectrobun) return null;
+  const req = getElectroRpc()?.request?.getOverlayVisibility;
+  if (typeof req !== "function") return null;
+  const res = (await req()) as { isOpen?: unknown } | undefined;
+  return typeof res?.isOpen === "boolean" ? res.isOpen : null;
+}
+
+/**
  * Subscribe to Bun → webview `overlay-open-plugin` messages emitted
  * when a controller shortcut bound to OpenPlugin fires. Resolves to
  * an unsubscribe function. No-op outside Electrobun.

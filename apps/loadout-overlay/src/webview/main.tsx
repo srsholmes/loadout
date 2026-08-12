@@ -37,7 +37,7 @@ import {
   onOverlayToggleKeyboard,
   onOverlayScroll,
   onOverlayVisibility,
-  getOverlayVisibility,
+  tryGetOverlayVisibility,
   type OverlayAction,
 } from "./lib/electrobun";
 import { setKeyboardVisible, isKeyboardVisible } from "@loadout/ui";
@@ -218,10 +218,10 @@ async function boot() {
 
   // Two paths deliver open/close, and they race. `onOverlayVisibility`
   // registers against a synchronous global and is live almost immediately;
-  // `getOverlayVisibility` awaits `import("electrobun/view")` and then an
-  // RPC round trip. So a pushed transition can — and on the boot-time open
-  // paths does — arrive BEFORE the initial fetch resolves, and the fetch's
-  // now-stale value must not overwrite it.
+  // the initial fetch has to resolve an RPC handle first. So a pushed
+  // transition can — and on the boot-time open paths does — arrive BEFORE
+  // the fetch resolves, and the fetch's now-stale value must not overwrite
+  // it.
   //
   // Landing a stale `false` while the window is on screen is worse than a
   // frozen focus ring: `viewEnter`/`fadeIn` are one-shot entry animations
@@ -229,10 +229,17 @@ async function boot() {
   // just mounted — App.tsx's view container and the whole plugin surface in
   // PluginHost.tsx. The overlay would render blank, and stale-false also
   // stops gamepad polling, so it would be unresponsive too.
+  //
+  // `tryGetOverlayVisibility` rather than `getOverlayVisibility`: the latter
+  // fail-opens to `true` when the static RPC handle isn't attached yet,
+  // which at boot is *always* — measured on-device, it undid the class 0ms
+  // after it was set and left the renderer unthrottled until the first
+  // manual close. A `null` here means "couldn't tell", and the right
+  // response is to keep the parked default rather than assume open.
   let visibilityPushed = false;
-  getOverlayVisibility()
+  tryGetOverlayVisibility()
     .then((isOpen) => {
-      if (!visibilityPushed) dispatchVisibility(isOpen);
+      if (isOpen !== null && !visibilityPushed) dispatchVisibility(isOpen);
     })
     .catch((err) =>
       console.warn("[main] getOverlayVisibility failed:", err),
