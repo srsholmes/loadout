@@ -10,14 +10,15 @@
 // in source order, so placing this side-effect import first guarantees
 // process.env.DISPLAY is set before libNativeWrapper is even resolved.
 import "./native/display-detect";
+
+// Registers the crash handlers. MUST stay above the `electrobun/bun` import
+// below: Electrobun installs an `uncaughtException` listener that natively
+// force-exits, and listeners run in registration order — anything registered
+// after it is dead code. See crash-init.ts.
+import "./crash-init";
+
 import { detectOverlayDisplay } from "./native/display-detect";
 const DISPLAY = detectOverlayDisplay();
-
-// Opt-in crash reporting. Inert unless the user granted consent *and* a DSN
-// is configured. Consent is read straight off config.json on every capture —
-// this process can't be told over RPC, because the webview may be the very
-// thing that died.
-initCrashReporting({ process: "overlay-bun", release: OVERLAY_BUN_VERSION });
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore — resolved at runtime once electrobun is installed.
@@ -56,8 +57,7 @@ import {
 } from "./native/process-control";
 
 import { trace } from "./native/trace";
-import { initCrashReporting, captureErrorSync } from "@loadout/crash-report";
-import { OVERLAY_BUN_VERSION } from "./version";
+import { captureFatalSync } from "@loadout/crash-report";
 import { createOverlayState } from "./lib/overlay-state";
 import { routeWake, isStartupWakePhantom } from "./lib/wake-routing";
 import { loadPersistedShortcuts } from "./lib/persisted-shortcuts";
@@ -1039,10 +1039,10 @@ overlayManagementLoop({
   toggleOverlay,
 }).catch((e) => {
   console.error("[overlay] management loop crashed:", e);
-  // A deliberate fatal exit with a known error object — the clearest crash
-  // signal this process produces, so it's worth reporting explicitly rather
-  // than leaving to the uncaughtException handler (which this never reaches).
-  captureErrorSync(e, { level: "fatal" });
+  // Spooled synchronously, not sent. `process.exit(1)` on the next line kills
+  // any in-flight request, so an async send here would never arrive — the
+  // report is written to disk and shipped by the next start instead.
+  captureFatalSync(e);
   process.exit(1);
 });
 
@@ -1072,22 +1072,6 @@ function runShutdown(): Promise<void> {
 }
 process.on("SIGINT", runShutdown);
 process.on("SIGTERM", runShutdown);
-
-// Until now this process had no global error handlers at all: an uncaught
-// throw killed it silently and systemd restarted it, leaving nothing behind
-// but a gap in the journal. Log first (so the failure is visible on-device
-// even with reporting off), then report opt-in.
-//
-// Deliberately no `await` and no shutdown work here. This process owes Steam
-// a prompt SIGCONT — a report that blocked exit would leave the whole machine
-// looking frozen, which is a far worse bug than a lost crash report.
-process.on("uncaughtException", (err) => {
-  console.error("[overlay] uncaught exception:", err);
-  trace(`uncaught exception: ${err.stack ?? err.message}`);
-  captureErrorSync(err, { level: "fatal" });
-});
-process.on("unhandledRejection", (reason) => {
-  console.error("[overlay] unhandled rejection:", reason);
-  trace(`unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : reason}`);
-  captureErrorSync(reason);
-});
+// Global uncaughtException / unhandledRejection handlers live in
+// ./crash-init, imported at the top of this file — they must be registered
+// before `electrobun/bun` installs its own force-exiting listener.

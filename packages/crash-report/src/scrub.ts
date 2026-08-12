@@ -23,8 +23,23 @@ import type { Frame, SentryEvent } from "./types";
  * root, so `homedir()` is `/root` while the frames it collects reference
  * `/home/deck/...`. Scrubbing only the current home would miss exactly the
  * paths that carry the username.
+ *
+ * The optional `/var` prefix covers ostree-based distros (Bazzite, Silverblue)
+ * where real homes live at `/var/home/<user>`. Without it the `/home` branch
+ * still matched the tail and produced a mangled `/var~/…`.
  */
-const ANY_HOME = /\/home\/[^/\s:)'"]+/g;
+const ANY_HOME = /(?:\/var)?\/home\/[^/\s:)'"]+/g;
+
+/**
+ * Removable-media mount points, which embed the username on every desktop
+ * Linux system: `/run/media/<user>/<label>` (udisks2) and `/media/<user>/…`.
+ *
+ * This codebase constructs these paths deliberately — the storage plugin
+ * builds `/run/media/${user}/${name}` from the real desktop username — so an
+ * error thrown anywhere near SD-card handling carries it. The volume label
+ * after the username is kept: it's useful for triage and is not a username.
+ */
+const MEDIA_MOUNT = /\/(?:run\/)?media\/[^/\s:)'"]+/g;
 
 /** `/run/user/1000` → `/run/user/<uid>`; the uid is weakly identifying. */
 const RUN_USER = /\/run\/user\/\d+/g;
@@ -65,7 +80,22 @@ export interface ScrubOptions {
    * never-leaks test first caught it.
    */
   hostname?: string;
+  /**
+   * The account name (the basename of the user's home). Path rules above
+   * strip it from paths we recognise; this catches it in free-form error
+   * text and in any path shape we did not anticipate — which matters because
+   * the capture points exist precisely for *unanticipated* failures.
+   */
+  username?: string;
 }
+
+/**
+ * Substituting a very short token would corrupt ordinary prose — "deck"
+ * appears in "steamdeck", "decked", and half the identifiers in this project.
+ * Below this length we leave it, accepting that the canonical SteamOS
+ * username ("deck") is shared by every device and identifies nobody.
+ */
+const MIN_TOKEN_LEN = 5;
 
 /** Escape a value for safe use inside a RegExp. */
 function escapeRe(s: string): string {
@@ -80,14 +110,20 @@ export function scrubString(input: string, opts: ScrubOptions = {}): string {
   let out = input
     .replace(QUERY_SECRET, "$1=<redacted>")
     .replace(BEARER, "Bearer <redacted>")
+    // Media mounts before homes: both end up rewritten, but doing media
+    // first keeps the `<media>` marker rather than a half-applied `~`.
+    .replace(MEDIA_MOUNT, "<media>")
     .replace(ANY_HOME, "~")
     .replace(RUN_USER, "/run/user/<uid>")
     .replace(PLUGIN_PATH, "<plugins>/$1")
     .replace(STEAM_ID64, "<steamid>");
-  // Very short hostnames ("deck") would match far too much ordinary text,
-  // so only substitute one distinctive enough to be worth removing.
-  if (opts.hostname && opts.hostname.length >= 5) {
-    out = out.replace(new RegExp(escapeRe(opts.hostname), "g"), "<host>");
+  // Case-insensitive: a hostname can appear capitalised in error text even
+  // though the system stores it lowercase.
+  if (opts.hostname && opts.hostname.length >= MIN_TOKEN_LEN) {
+    out = out.replace(new RegExp(escapeRe(opts.hostname), "gi"), "<host>");
+  }
+  if (opts.username && opts.username.length >= MIN_TOKEN_LEN) {
+    out = out.replace(new RegExp(escapeRe(opts.username), "gi"), "<user>");
   }
   return out;
 }

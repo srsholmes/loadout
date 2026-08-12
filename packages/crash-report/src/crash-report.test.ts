@@ -1,5 +1,12 @@
 import { describe, expect, test, beforeEach } from "bun:test";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  writeFileSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  existsSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,14 +24,25 @@ import { parseStack, buildEvent } from "./event";
 import {
   initCrashReporting,
   captureError,
+  captureFatalSync,
+  drainSpool,
   setConsent,
   isEnabled,
   memoryStateStore,
+  fileStateStore,
   resetForTests,
 } from "./index";
+import { spoolEvent, MAX_SPOOL_FILES } from "./spool";
 import type { SentryEvent } from "./types";
 
 const DSN = "https://abc123@o1.ingest.de.sentry.io/456";
+
+const BARE_EVENT: SentryEvent = {
+  event_id: "x",
+  timestamp: 0,
+  platform: "node",
+  level: "error",
+};
 
 function configWith(value: unknown): { env: Record<string, string>; home: string } {
   const home = mkdtempSync(join(tmpdir(), "loadout-consent-"));
@@ -117,6 +135,43 @@ describe("scrubbing", () => {
     expect(scrubString("/home/deck/.local/share/x.ts")).toBe("~/.local/share/x.ts");
     expect(scrubString("/home/simon/foo")).toBe("~/foo");
     expect(scrubString("at fn (/home/alice/a.ts:1:2)")).toBe("at fn (~/a.ts:1:2)");
+  });
+
+  test("removes usernames from removable-media mount points", () => {
+    // The storage plugin builds `/run/media/${user}/${name}` from the real
+    // desktop username, so these paths are constructed deliberately and any
+    // throw near SD-card handling carries the account name.
+    expect(scrubString("EACCES, scandir '/run/media/simon/Games/steamapps'")).toBe(
+      "EACCES, scandir '<media>/Games/steamapps'",
+    );
+    expect(scrubString("ENOENT, mkdir '/media/simon/SD/steamapps'")).toBe(
+      "ENOENT, mkdir '<media>/SD/steamapps'",
+    );
+    // The volume label after the username is kept — useful for triage, and
+    // not itself an account name.
+    expect(scrubString("/run/media/simon/BigSSD/x")).toContain("BigSSD");
+  });
+
+  test("handles ostree homes without mangling them", () => {
+    // Bazzite/Silverblue put real homes at /var/home/<user>. An earlier
+    // version matched only the `/home` tail and produced "/var~/…".
+    expect(scrubString("/var/home/simon/.config/loadout")).toBe("~/.config/loadout");
+    expect(scrubString("/var/home/simon/x")).not.toContain("/var~");
+  });
+
+  test("removes the account name from free-form text, case-insensitively", () => {
+    const opts = { username: "simonh", hostname: "Simons-Deck" };
+    expect(scrubString("permission denied for simonh", opts)).toBe(
+      "permission denied for <user>",
+    );
+    expect(scrubString("SIMONH could not write", opts)).toBe("<user> could not write");
+    expect(scrubString("connecting to simons-deck.local", opts)).toBe(
+      "connecting to <host>.local",
+    );
+    // Short names are left alone deliberately: substituting "deck" would
+    // corrupt ordinary text, and it is universal on SteamOS so identifies
+    // nobody.
+    expect(scrubString("deck wrote a file", { username: "deck" })).toBe("deck wrote a file");
   });
 
   test("normalises on-device plugin paths so users share a fingerprint", () => {
@@ -413,6 +468,199 @@ describe("the never-leaks gate", () => {
     const s = scrubString("/home/deck/.steam/steam/userdata/76561198012345678/config");
     expect(s).not.toContain("/home/");
     expect(s.startsWith("~/")).toBe(true);
+  });
+});
+
+describe("scrubbing on the real send path", () => {
+  // The scrub tests above and the gating tests below both passed while
+  // `captureError` could have skipped scrubEvent entirely — they exercise the
+  // scrubber and the transport separately and never together. These assert on
+  // the bytes actually handed to fetch, so removing scrubbing from the send
+  // path fails here.
+  let bodies: string[];
+  let fetchImpl: typeof fetch;
+
+  beforeEach(() => {
+    resetForTests();
+    bodies = [];
+    fetchImpl = (async (_url: string, init: RequestInit) => {
+      bodies.push(String(init.body));
+      return new Response("", { status: 200 });
+    }) as unknown as typeof fetch;
+  });
+
+  test("captureError scrubs before transmitting", async () => {
+    initCrashReporting({
+      process: "backend",
+      dsn: DSN,
+      release: "0.9.0",
+      readConsent: () => "granted",
+      stateStore: memoryStateStore(),
+      hostname: "simons-deck",
+      username: "simonh",
+      fetchImpl,
+      drainOnInit: false,
+    });
+    const err = new Error("failed for simonh at /home/simonh/x on simons-deck");
+    err.stack = "Error: x\n    at f (/run/media/simonh/SD/steamapps/y.ts:1:1)";
+    await captureError(err);
+
+    expect(bodies).toHaveLength(1);
+    const wire = bodies[0]!;
+    for (const forbidden of ["simonh", "simons-deck", "/home/", "/run/media/simonh"]) {
+      expect(wire).not.toContain(forbidden);
+    }
+  });
+
+  test("captureFatalSync scrubs before spooling", () => {
+    const dir = mkdtempSync(join(tmpdir(), "loadout-spool-"));
+    initCrashReporting({
+      process: "overlay-bun",
+      dsn: DSN,
+      readConsent: () => "granted",
+      stateStore: memoryStateStore(),
+      username: "simonh",
+      spoolDir: dir,
+      fetchImpl,
+      drainOnInit: false,
+    });
+    expect(captureFatalSync(new Error("boom for simonh at /home/simonh/a"))).toBe(true);
+
+    // Read what actually landed on disk — the spool must never hold anything
+    // we would not have sent.
+    const files = readdirSync(dir);
+    expect(files).toHaveLength(1);
+    const onDisk = readFileSync(join(dir, files[0]!), "utf8");
+    expect(onDisk).not.toContain("simonh");
+    expect(onDisk).not.toContain("/home/");
+  });
+});
+
+describe("spool and fatal path", () => {
+  let dir: string;
+  let sentBodies: string[];
+  let fetchImpl: typeof fetch;
+
+  beforeEach(() => {
+    resetForTests();
+    dir = mkdtempSync(join(tmpdir(), "loadout-spool2-"));
+    sentBodies = [];
+    fetchImpl = (async (_u: string, init: RequestInit) => {
+      sentBodies.push(String(init.body));
+      return new Response("", { status: 200 });
+    }) as unknown as typeof fetch;
+  });
+
+  test("a fatal capture survives the process and ships on next start", async () => {
+    // Run 1: dies without sending anything.
+    initCrashReporting({
+      process: "overlay-bun",
+      dsn: DSN,
+      readConsent: () => "granted",
+      stateStore: memoryStateStore(),
+      spoolDir: dir,
+      fetchImpl,
+      drainOnInit: false,
+    });
+    captureFatalSync(new Error("fatal one"));
+    expect(sentBodies).toHaveLength(0);
+    expect(readdirSync(dir)).toHaveLength(1);
+
+    // Run 2: a fresh process drains it.
+    resetForTests();
+    initCrashReporting({
+      process: "overlay-bun",
+      dsn: DSN,
+      readConsent: () => "granted",
+      stateStore: memoryStateStore(),
+      spoolDir: dir,
+      fetchImpl,
+      drainOnInit: false,
+    });
+    expect(await drainSpool()).toBe(1);
+    expect(sentBodies).toHaveLength(1);
+    expect(sentBodies[0]).toContain("fatal one");
+    expect(readdirSync(dir)).toHaveLength(0);
+  });
+
+  test("consent withdrawn between crash and restart discards the spool", async () => {
+    initCrashReporting({
+      process: "overlay-bun",
+      dsn: DSN,
+      readConsent: () => "granted",
+      stateStore: memoryStateStore(),
+      spoolDir: dir,
+      fetchImpl,
+      drainOnInit: false,
+    });
+    captureFatalSync(new Error("spooled while allowed"));
+    expect(readdirSync(dir)).toHaveLength(1);
+
+    resetForTests();
+    initCrashReporting({
+      process: "overlay-bun",
+      dsn: DSN,
+      readConsent: () => "denied",
+      stateStore: memoryStateStore(),
+      spoolDir: dir,
+      fetchImpl,
+      drainOnInit: false,
+    });
+    expect(await drainSpool()).toBe(0);
+    expect(sentBodies).toHaveLength(0);
+    // Discarded, not left to be sent if consent is granted again later.
+    expect(readdirSync(dir)).toHaveLength(0);
+  });
+
+  test("a fatal capture without consent writes nothing at all", () => {
+    initCrashReporting({
+      process: "overlay-bun",
+      dsn: DSN,
+      readConsent: () => undefined,
+      stateStore: memoryStateStore(),
+      spoolDir: dir,
+      fetchImpl,
+      drainOnInit: false,
+    });
+    expect(captureFatalSync(new Error("boom"))).toBe(false);
+    expect(readdirSync(dir)).toHaveLength(0);
+  });
+
+  test("the spool is bounded so a crash loop cannot fill the disk", () => {
+    for (let i = 0; i < MAX_SPOOL_FILES + 15; i++) {
+      spoolEvent(dir, { ...BARE_EVENT, event_id: `id${i}` }, 1_700_000_000_000 + i);
+    }
+    expect(readdirSync(dir).length).toBeLessThanOrEqual(MAX_SPOOL_FILES);
+  });
+});
+
+describe("rate-limit state really persists to disk", () => {
+  // The rate-limit tests above drive the pure `decide` function and would all
+  // pass if fileStateStore were removed entirely. This drives the real store.
+  test("the limit holds across simulated process restarts", async () => {
+    const path = join(mkdtempSync(join(tmpdir(), "loadout-state-")), "state.json");
+    let sent = 0;
+    const fetchImpl = (async () => {
+      sent++;
+      return new Response("", { status: 200 });
+    }) as unknown as typeof fetch;
+
+    // Each iteration is a fresh process hitting the identical fault — exactly
+    // what systemd Restart=on-failure produces during a crash loop.
+    for (let restart = 0; restart < 5; restart++) {
+      resetForTests();
+      initCrashReporting({
+        process: "backend",
+        dsn: DSN,
+        readConsent: () => "granted",
+        stateStore: fileStateStore(path),
+        fetchImpl,
+        drainOnInit: false,
+      });
+      await captureError(new Error("identical crash loop fault"));
+    }
+    expect(sent).toBe(DEFAULT_LIMITS.maxPerFingerprintPerHour);
+    expect(existsSync(path)).toBe(true);
   });
 });
 

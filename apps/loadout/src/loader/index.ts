@@ -18,6 +18,7 @@ import {
   loadPlugins,
   withSandboxedFetch,
 } from "./plugin-manager";
+import { unsandboxedFetch } from "./sandboxed-fetch";
 import { resolveDisabledPlugins, DISABLED_PLUGINS_KEY } from "./user-config";
 import { createRpcHandler } from "./rpc-handler";
 import { log } from "./logger";
@@ -96,7 +97,20 @@ export function shouldRethrowUncaught(
 // was compiled in — see packages/crash-report. Initialising here, at module
 // scope before the handlers below, means the reporter is live for the
 // earliest possible failure.
-initCrashReporting({ process: "backend", release: LOADER_VERSION });
+//
+// `fetchImpl` is passed explicitly and must stay that way. `plugin-manager`
+// replaces `globalThis.fetch` with a proxy that resolves the *calling
+// plugin's* sandboxed fetch via AsyncLocalStorage, and it is imported before
+// this module — so anything the reporter captured for itself would be that
+// proxy. A crash inside a plugin-scoped async callback (a setInterval
+// registered in onLoad, say) would then have its report evaluated against
+// that plugin's network allow-list, silently dropped, and logged as the
+// plugin attempting to reach Sentry.
+initCrashReporting({
+  process: "backend",
+  release: LOADER_VERSION,
+  fetchImpl: unsandboxedFetch,
+});
 
 process.on("unhandledRejection", (reason) => {
   log.error(`Unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : reason}`);

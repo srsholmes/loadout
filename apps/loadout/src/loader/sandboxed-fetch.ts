@@ -4,6 +4,19 @@ import type { PluginPermissions } from "@loadout/types";
 const originalFetch = globalThis.fetch;
 
 /**
+ * The unsandboxed `fetch`, captured before `plugin-manager` installs its
+ * proxy over `globalThis.fetch`.
+ *
+ * Exported for the crash reporter, which must not have its requests routed
+ * through whichever plugin's allow-list happens to be scoped when a crash
+ * occurs. It cannot capture this for itself: `plugin-manager` is imported
+ * (and so evaluated) before `@loadout/crash-report`, meaning a module-load
+ * capture there grabs the proxy, not the real thing. Passing this explicitly
+ * makes the guarantee independent of import order.
+ */
+export const unsandboxedFetch: typeof globalThis.fetch = originalFetch;
+
+/**
  * Create a sandboxed fetch function that only allows requests to domains
  * listed in the plugin's `permissions.network` array.
  *

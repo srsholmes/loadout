@@ -38,12 +38,20 @@ Exactly these fields, and nothing else:
 
 - **No IP address**, no account, no user id, no device id — nothing that
   identifies you or your machine across reports
-- **No hostname** — removed even where it appears inside an error message
-- **No home directory or username** — every path is rewritten to `~`
+- **No home directory** — `/home/you/…`, `/var/home/you/…` and removable-media
+  mounts like `/run/media/you/…` are all rewritten
+- **No username or hostname** — removed from paths, and also from free-form
+  error text (see the caveat below)
 - **No Steam ID** — rewritten to `<steamid>` wherever it appears
 - **No API keys, tokens, or passwords** — redacted from error text
 - **No console logs, no browser history, no request URLs, no cookies**
 - **No usage data of any kind** — nothing about what you launch or do
+
+One deliberate exception to the username rule: names shorter than five
+characters are left alone in free-form text, because substituting them would
+mangle ordinary words. In practice this means the standard SteamOS account name
+`deck` is not redacted — it is the same on every Steam Deck and identifies
+nobody. Paths are rewritten regardless of name length.
 
 Because reports carry no identifier, they cannot be linked to you or to each
 other. That is deliberate, and it is also a genuine limitation: it means a
@@ -87,6 +95,8 @@ small enough to read in one sitting:
 - `packages/crash-report/src/scrub.ts` — what is removed before sending
 - `packages/crash-report/src/transport.ts` — the entire network layer
 - `packages/crash-report/src/consent.ts` — the consent check
+- `packages/crash-report/src/spool.ts` — where a report waits if your device
+  is offline or crashed before it could be sent
 
 Loadout speaks Sentry's wire protocol directly rather than using their SDK,
 specifically so that this list is complete. An SDK would capture console output,
