@@ -6,6 +6,12 @@ Description=Loadout Overlay
 After=graphical-session.target
 PartOf=graphical-session.target
 
+# Never let the restart limiter wedge us permanently. A mode switch has a
+# window with no X server at all, so several starts can fail back to back;
+# the default (5 starts / 10s) would then give up for good and leave the
+# overlay dead — the precise state this whole block exists to prevent.
+StartLimitIntervalSec=0
+
 [Service]
 Type=simple
 
@@ -119,3 +125,28 @@ ExecStopPost=-/bin/sh -c 'pkill -CONT -x steam || true'
 
 [Install]
 WantedBy=graphical-session.target
+
+# Recovery net for a session switch that doesn't cycle the target.
+# `PartOf=` stops us when graphical-session.target goes down and
+# `WantedBy=` starts us again when it comes back UP — but on a SteamOS
+# Gaming -> Desktop switch those two never pair up. The target's own stop
+# job gets refused as destructive:
+#
+#   Transaction for graphical-session.target/stop is destructive
+#   (xdg-desktop-portal.service has 'start' job queued)
+#
+# so the target stays active while `PartOf=` has already stopped us, it
+# never "starts" again, and nothing brings us back — the overlay stays
+# dead until the next reboot or a manual `systemctl --user start`.
+# `UpheldBy=` closes exactly that gap: while the target is active, systemd
+# restarts us whenever we aren't running, whether or not it ever cycled.
+#
+# This is an [Install] directive, so it only takes effect on enable — it
+# writes the graphical-session.target.upholds/ symlink. Existing installs
+# need `systemctl --user reenable loadout-overlay` to pick it up; putting
+# it in [Unit] parses as an unknown key and is silently ignored.
+#
+# Trade-off worth knowing when debugging: this also reverts a manual
+# `systemctl --user stop` within seconds. To hold it down, mask it
+# (`systemctl --user mask --now loadout-overlay`) and unmask after.
+UpheldBy=graphical-session.target
