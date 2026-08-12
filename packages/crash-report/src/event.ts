@@ -33,9 +33,21 @@ export interface ParsedFrame extends FaroFrame {
 /**
  * Parse a V8 stack string into frames.
  *
- * Faro renders frames oldest-first, the reverse of how V8 prints them, so the
- * result is reversed. Lines that don't parse are skipped rather than guessed
- * at — a malformed frame is worse than a missing one.
+ * Order is **innermost-first** — the throw site is `frames[0]` — which is
+ * V8's own print order and what Faro expects. Confirmed against upstream:
+ * `getStackFramesFromError` builds its array with `lines.reduce(… acc.push …)`
+ * over `error.stack.split('\n')` and never reverses, and its test asserts the
+ * throw site at index 0.
+ *
+ * Worth stating because the opposite is also true somewhere: Sentry renders
+ * oldest-first, so this function used to reverse. That reversal was correct
+ * then and silently wrong after the move to Faro — it inverted every stack
+ * trace on the wire, putting the process entry point where the failing frame
+ * should be. Note `fingerprint()` in scrub.ts takes the *first* few frames
+ * for the same reason; the two must agree.
+ *
+ * Lines that don't parse are skipped rather than guessed at — a malformed
+ * frame is worse than a missing one.
  */
 export function parseStack(stack: string | undefined): ParsedFrame[] {
   if (!stack) return [];
@@ -57,7 +69,7 @@ export function parseStack(stack: string | undefined): ParsedFrame[] {
       inApp: !VENDOR.test(filename),
     });
   }
-  return frames.reverse();
+  return frames;
 }
 
 /** Session ids are per-process and never persisted — see FaroMeta. */

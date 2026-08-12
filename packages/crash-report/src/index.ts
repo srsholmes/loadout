@@ -29,7 +29,14 @@ export { scrubEvent, scrubString, fingerprint } from "./scrub";
 export { parseStack, buildEvent, buildMeta, newSessionId } from "./event";
 export { parseCollector, buildBody } from "./transport";
 export { decide, parseState, DEFAULT_LIMITS } from "./rate-limit";
-export { spoolEvent, takeSpooled, MAX_SPOOL_FILES, MAX_SPOOL_AGE_MS, MAX_SPOOL_ATTEMPTS } from "./spool";
+export {
+  spoolEvent,
+  takeSpooled,
+  MAX_SPOOL_FILES,
+  MAX_SPOOL_AGE_MS,
+  MAX_SPOOL_ATTEMPTS,
+  RETRY_BACKOFF_MS,
+} from "./spool";
 
 /** Where the rate limiter keeps its counters. Abstracted so the webview,
  *  which has no filesystem, can back it with localStorage instead. */
@@ -161,6 +168,13 @@ export interface InitOptions {
    * the shipped default uncovered.
    */
   homeOverride?: string;
+  /**
+   * Override `process.env`. Needed alongside `homeOverride` for a test to be
+   * hermetic: consent resolution checks `$XDG_CONFIG_HOME` *before* the home
+   * directory, so sandboxing only the home still reads the real machine's
+   * config on any developer who sets that variable.
+   */
+  envOverride?: Record<string, string | undefined>;
 }
 
 interface Runtime {
@@ -192,7 +206,7 @@ let explicitConsent: ConsentState;
  * configured — that just makes every later `captureError` a no-op.
  */
 export function initCrashReporting(opts: InitOptions): void {
-  const env = typeof process !== "undefined" ? process.env : {};
+  const env = opts.envOverride ?? (typeof process !== "undefined" ? process.env : {});
   const home = opts.homeOverride ?? safeHomedir();
   const collector = parseCollector(opts.collectorUrl ?? env.LOADOUT_CRASH_COLLECTOR);
   const isDev = !opts.release || opts.release === "dev";

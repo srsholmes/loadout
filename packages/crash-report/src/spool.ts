@@ -46,6 +46,20 @@ export const MAX_SPOOL_AGE_MS = 14 * 24 * 60 * 60 * 1000;
  */
 export const MAX_SPOOL_ATTEMPTS = 5;
 
+/**
+ * Minimum gap between send attempts for one entry.
+ *
+ * Without this the retry budget is consumed per *process start*, not per
+ * elapsed time — and the case that matters is precisely a crash loop while
+ * offline. systemd restarts the overlay every 5s, each start drains, each
+ * drain fails and burns an attempt, and five restarts later the reports are
+ * discarded roughly twenty seconds after the crash that produced them. The
+ * spool exists for exactly that scenario, so it must outlive it.
+ *
+ * Entries younger than this are left untouched on disk rather than read.
+ */
+export const RETRY_BACKOFF_MS = 5 * 60 * 1000;
+
 export interface SpooledEntry {
   event: FaroPayload;
   attempts: number;
@@ -115,16 +129,25 @@ export function takeSpooled(dir: string, now: number): SpooledEntry[] {
   for (const name of spoolFiles(dir)) {
     const path = join(dir, name);
     try {
-      const age = now - statSync(path).mtimeMs;
+      const attemptsSoFar = Number(NAME.exec(name)?.[2] ?? 0);
+      const mtime = statSync(path).mtimeMs;
+      // An entry that has already failed at least once waits out the backoff.
+      // Leave it entirely alone — reading unlinks, and unlinking here is what
+      // would let a restart loop chew through the retry budget in seconds.
+      // Fresh entries (attempts 0) are always eligible, so a crash reported on
+      // one start still ships on the next.
+      if (attemptsSoFar > 0 && now - mtime < RETRY_BACKOFF_MS) continue;
+      const age = now - mtime;
       const raw = readFileSync(path, "utf8");
       // Unlink before sending. A malformed or permanently-rejected entry left
       // on disk would be retried on every start forever.
       unlinkSync(path);
       if (age > MAX_SPOOL_AGE_MS) continue;
-      const attempts = Number(NAME.exec(name)?.[2] ?? 0);
-      if (attempts >= MAX_SPOOL_ATTEMPTS) continue;
+      if (attemptsSoFar >= MAX_SPOOL_ATTEMPTS) continue;
       const parsed = JSON.parse(raw) as FaroPayload;
-      if (parsed && Array.isArray(parsed.exceptions)) out.push({ event: parsed, attempts });
+      if (parsed && Array.isArray(parsed.exceptions)) {
+        out.push({ event: parsed, attempts: attemptsSoFar });
+      }
     } catch {
       try {
         unlinkSync(path);

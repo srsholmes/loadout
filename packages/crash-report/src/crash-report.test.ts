@@ -32,7 +32,7 @@ import {
   fileStateStore,
   resetForTests,
 } from "./index";
-import { spoolEvent, MAX_SPOOL_FILES, MAX_SPOOL_ATTEMPTS } from "./spool";
+import { spoolEvent, MAX_SPOOL_FILES, MAX_SPOOL_ATTEMPTS, RETRY_BACKOFF_MS } from "./spool";
 import type { FaroPayload } from "./types";
 
 const COLLECTOR = "https://faro-collector-prod-eu-west-0.grafana.net/collect/abc123";
@@ -368,6 +368,55 @@ describe("transport", () => {
     const ev = buildEvent({ error: new Error("x"), process: "backend" });
     expect(ev.meta.session?.overrides?.geoLocationTrackingEnabled).toBe(false);
   });
+
+  test("the request itself matches Faro's contract", async () => {
+    // Every other fetch mock ignores the URL and headers and returns 200, so
+    // none of this was asserted anywhere: a wrong URL, a missing content type
+    // or a mishandled status would have passed the whole suite.
+    let seenUrl: string | undefined;
+    let seenInit: RequestInit | undefined;
+    resetForTests();
+    initCrashReporting({
+      process: "backend",
+      collectorUrl: COLLECTOR,
+      readConsent: () => "granted",
+      stateStore: memoryStateStore(),
+      drainOnInit: false,
+      spoolDir: mkdtempSync(join(tmpdir(), "loadout-req-")),
+      fetchImpl: (async (url: string, init: RequestInit) => {
+        seenUrl = url;
+        seenInit = init;
+        return new Response("", { status: 202 });
+      }) as unknown as typeof fetch,
+    });
+
+    // 202 Accepted is what the collector returns on success.
+    expect(await captureError(new Error("boom"))).toBe(true);
+    expect(seenUrl).toBe(COLLECTOR);
+    expect(seenInit?.method).toBe("POST");
+    const headers = seenInit?.headers as Record<string, string>;
+    expect(headers["Content-Type"]).toBe("application/json");
+    // Session header must match the id inside the body.
+    const body = JSON.parse(String(seenInit?.body)) as FaroPayload;
+    expect(headers["x-faro-session-id"]).toBe(body.meta.session?.id);
+    // No api key is set unless the collector needs one.
+    expect(headers["x-api-key"]).toBeUndefined();
+  });
+
+  test("a rejected request is reported as a failure, not a success", async () => {
+    resetForTests();
+    initCrashReporting({
+      process: "backend",
+      collectorUrl: COLLECTOR,
+      readConsent: () => "granted",
+      stateStore: memoryStateStore(),
+      drainOnInit: false,
+      spoolDir: mkdtempSync(join(tmpdir(), "loadout-429-")),
+      fetchImpl: (async () => new Response("rate limited", { status: 429 })) as unknown as
+        typeof fetch,
+    });
+    expect(await captureError(new Error("boom"))).toBe(false);
+  });
 });
 
 describe("event building", () => {
@@ -381,15 +430,33 @@ describe("event building", () => {
         "    at other (node:internal/x:1:1)",
       ].join("\n"),
     );
-    // Reversed: Faro renders oldest-first.
+    // Innermost-first: the throw site is frames[0]. This matches Faro's
+    // upstream getStackFramesFromError, which pushes in V8 print order and
+    // never reverses. (Sentry is the opposite, which is exactly how the
+    // reversal survived the migration and inverted every trace.)
     expect(frames).toHaveLength(4);
-    expect(frames.at(-1)?.function).toBe("doThing");
-    expect(frames.at(-1)?.lineno).toBe(10);
-    expect(frames.at(-2)?.function).toBe("Foo.bar");
-    expect(frames.at(-2)?.filename).toBe("/home/deck/b.ts");
+    expect(frames[0]?.function).toBe("doThing");
+    expect(frames[0]?.lineno).toBe(10);
+    expect(frames[1]?.function).toBe("Foo.bar");
+    expect(frames[1]?.filename).toBe("/home/deck/b.ts");
     // Vendor frames are flagged locally so they're excluded from the
     // fingerprint; the flag itself never reaches the wire.
-    expect(frames[0]?.inApp).toBe(false);
+    expect(frames.at(-1)?.inApp).toBe(false);
+  });
+
+  test("the throw site is the first frame on the wire", () => {
+    const err = new Error("boom");
+    err.stack = [
+      "Error: boom",
+      "    at applyTdp (/app/tdp.ts:10:5)",
+      "    at main (/app/index.ts:3:1)",
+    ].join("\n");
+    const frames = buildEvent({ error: err, process: "backend" }).exceptions[0]!.stacktrace!
+      .frames;
+    // Grafana renders the array top-down, so an inverted list shows the
+    // process entry point as the failing frame on every single issue.
+    expect(frames[0]?.function).toBe("applyTdp");
+    expect(frames.at(-1)?.function).toBe("main");
   });
 
   test("anonymous frames get a placeholder, since Faro requires a string", () => {
@@ -681,7 +748,8 @@ describe("spool and fatal path", () => {
     expect(after).toHaveLength(1);
     expect(after[0]).toContain("-a1-");
 
-    // Back online: it finally ships.
+    // Back online — but only after the retry backoff has elapsed, so the
+    // clock is pushed forward rather than draining immediately.
     resetForTests();
     initCrashReporting({
       process: "overlay-bun",
@@ -691,16 +759,22 @@ describe("spool and fatal path", () => {
       spoolDir: dir,
       fetchImpl,
       drainOnInit: false,
+      now: () => Date.now() + RETRY_BACKOFF_MS + 1000,
     });
     expect(await drainSpool()).toBe(1);
     expect(sentBodies[0]).toContain("survives an offline drain");
     expect(readdirSync(dir)).toHaveLength(0);
   });
 
-  test("an event that never sends is eventually given up on", async () => {
+  test("a restart loop cannot chew through the retry budget", async () => {
+    // The budget is per elapsed time, not per process start. systemd restarts
+    // the overlay every 5s; without the backoff, five restarts would discard
+    // the reports about twenty seconds after the crash that produced them —
+    // the exact scenario the spool exists for.
     const offline = (async () => {
       throw new Error("offline");
     }) as unknown as typeof fetch;
+
     initCrashReporting({
       process: "overlay-bun",
       collectorUrl: COLLECTOR,
@@ -710,8 +784,39 @@ describe("spool and fatal path", () => {
       fetchImpl: offline,
       drainOnInit: false,
     });
+    captureFatalSync(new Error("must survive a restart loop"));
+
+    // Ten rapid restarts, all within the backoff window.
+    for (let i = 0; i < 10; i++) await drainSpool();
+
+    const files = readdirSync(dir);
+    expect(files).toHaveLength(1);
+    // Exactly one attempt was spent, not ten.
+    expect(files[0]).toContain("-a1-");
+  });
+
+  test("an event that never sends is eventually given up on", async () => {
+    const offline = (async () => {
+      throw new Error("offline");
+    }) as unknown as typeof fetch;
+    // Each attempt sits one backoff window further into the future, so the
+    // budget is spent over hours rather than in a tight loop.
+    let clock = Date.now();
+    initCrashReporting({
+      process: "overlay-bun",
+      collectorUrl: COLLECTOR,
+      readConsent: () => "granted",
+      stateStore: memoryStateStore(),
+      spoolDir: dir,
+      fetchImpl: offline,
+      drainOnInit: false,
+      now: () => clock,
+    });
     captureFatalSync(new Error("permanently unsendable"));
-    for (let i = 0; i < MAX_SPOOL_ATTEMPTS + 2; i++) await drainSpool();
+    for (let i = 0; i < MAX_SPOOL_ATTEMPTS + 2; i++) {
+      clock += RETRY_BACKOFF_MS + 1000;
+      await drainSpool();
+    }
     // Dropped rather than retried forever on every start.
     expect(readdirSync(dir)).toHaveLength(0);
   });
@@ -766,6 +871,10 @@ describe("the shipped default consent supplier", () => {
       fetchImpl,
       drainOnInit: false,
       homeOverride: home,
+      // Hermetic: consent resolution checks $XDG_CONFIG_HOME before the home
+      // directory, so sandboxing only the home would still read the real
+      // machine's config on a developer who sets that variable.
+      envOverride: {},
     });
   }
 
@@ -928,6 +1037,12 @@ describe("capture gating (the test that matters)", () => {
       collectorUrl: COLLECTOR,
       readConsent: () => "granted",
       stateStore: memoryStateStore(),
+      // Isolated like every neighbouring test: without these, init drains the
+      // developer's REAL spool at ~/.local/state/loadout/crash-spool-backend
+      // and, with a throwing fetch, burns an attempt off each genuine queued
+      // report until they are discarded.
+      spoolDir: mkdtempSync(join(tmpdir(), "loadout-netfail-")),
+      drainOnInit: false,
       fetchImpl: (async () => {
         throw new Error("offline");
       }) as unknown as typeof fetch,

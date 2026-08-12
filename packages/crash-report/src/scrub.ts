@@ -221,9 +221,13 @@ export function fingerprint(payload: FaroPayload): string {
     ex?.type ?? "",
     ex?.value ?? "",
   ];
+  // Frames are innermost-first (see parseStack), so the *first* few app
+  // frames are the ones nearest the fault. This must stay in step with the
+  // ordering in event.ts — taking them from the wrong end would fingerprint
+  // on the process entry point, collapsing unrelated bugs into one group.
   const frames = (ex?.stacktrace?.frames ?? [])
     .filter((f) => !VENDOR_FRAME.test(f.filename))
-    .slice(-3);
+    .slice(0, 3);
   for (const f of frames) parts.push(`${f.filename}:${f.function}`);
   return djb2(parts.join("|"));
 }
