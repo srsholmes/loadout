@@ -374,8 +374,9 @@ done
 # one more chance for the bundled Fedora webkit to meet an incompatible
 # SteamOS library.
 broken="$(cd "$TARGET_DIR" && LD_LIBRARY_PATH=. ldd -r $TEST_LIBS 2>/dev/null \
-    | awk '/not found/ { print "  missing:   " $1 }
-           /undefined symbol/ { print "  unresolved:" $0 }' | sort -u)"
+    | awk '/not found/ { print "  missing:    " $1 }
+           /undefined symbol/ { sub(/^[[:space:]]*undefined symbol: /, "")
+                                print "  unresolved: " $0 }' | sort -u)"
 if [ -n "$broken" ]; then
     echo "[fetch-deck-libs] ERROR: the installed closure does not fully resolve:" >&2
     echo "$broken" >&2

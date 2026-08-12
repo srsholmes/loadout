@@ -967,8 +967,11 @@ PartOf=graphical-session.target
 
 # Widen, but do NOT remove, the start limiter. A mode switch has a window
 # with no X server at all, so several starts can fail back to back, and the
-# default 5-in-10s is tight enough to trip and leave the overlay dead — the
-# state this block exists to prevent.
+# default 5-in-10s is tight enough to trip during one. Tripping is not fatal
+# — with UpheldBy= above systemd logs "not starting since we tried this too
+# often recently" and does keep retrying — but it stalls recovery for no
+# reason. Measured on the no-X-yet shape: ~12 starts/min, RestartSec-paced,
+# comfortably inside this 20/min budget.
 #
 # The limiter still has to exist, because `UpheldBy=` above re-queues a start
 # the instant the unit goes inactive and those starts are NOT paced by
