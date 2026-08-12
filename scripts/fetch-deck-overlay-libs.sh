@@ -224,12 +224,55 @@ fi
 # and the overlay crashes at dlopen time with `undefined symbol:
 # pa_in_valgrind` and the like. Walk the whole `/usr/lib*` tree so we
 # catch those too.
+#
+# Match symlinks as well as regular files (`! -type d`, not `-type f`).
+# The deck exposes most libraries under two names — the real
+# `libfontconfig.so.1.17.0` and the SONAME link `libfontconfig.so.1` —
+# and the skip test below needs to see both. Counting only real files
+# let two distinct bugs through, both of which shipped:
+#   - Fedora's `libfontconfig.so.1.15.0` didn't match the deck's
+#     `libfontconfig.so.1.17.0` (different version suffix), so we bundled
+#     it. With LD_LIBRARY_PATH=./ our stale copy won, and the deck's own
+#     libpangoft2 then failed to relocate against it:
+#     `undefined symbol: FcConfigSetDefaultSubstitute`.
+#   - The container's `ldconfig -n` SONAME links didn't match either, so
+#     they were copied while their real targets were (correctly) skipped
+#     as deck-owned — planting dangling links like
+#     `libicui18n.so.76 -> libicui18n.so.76.1`. A dangling link is skipped
+#     by the loader, which silently falls through to the deck's copy, so
+#     the bundle ends up pinned to whatever major the deck ships today.
+#     Invisible until the deck moves: ICU 76 -> 78 in the Aug 2026 SteamOS
+#     update left the overlay unable to dlopen libNativeWrapper.so at all.
 DECK_LIBS_TMP="$EXTRACT_TMP/deck-libs.txt"
 # `-printf '%f'` emits the basename in-process. The old `xargs -n1 basename`
 # spawned one process PER .so (~4500 on SteamOS), which on the Deck's session
 # took minutes (and looked like a hang) — find's own printf does it in <1s.
-find /usr/lib /usr/lib64 -name '*.so*' -type f -printf '%f\n' 2>/dev/null \
+find /usr/lib /usr/lib64 -name '*.so*' ! -type d -printf '%f\n' 2>/dev/null \
     | sort -u > "$DECK_LIBS_TMP"
+
+# Map each real closure file to the SONAME it is reachable by, so the skip
+# test can compare SONAME-to-SONAME instead of comparing version-suffixed
+# basenames that drift between distros. `ldconfig -n` already built exactly
+# this relation in the container (`libfoo.so.1 -> libfoo.so.1.2.3`), so read
+# it back off the symlinks rather than shelling out to objdump/readelf —
+# binutils is not guaranteed to be installed on a stock deck.
+SONAME_MAP="$EXTRACT_TMP/soname-map.txt"
+: > "$SONAME_MAP"
+for link in "$EXTRACT_TMP/lib/"*; do
+    [ -L "$link" ] || continue
+    printf '%s\t%s\n' \
+        "$(basename "$(readlink "$link")")" "$(basename "$link")" >> "$SONAME_MAP"
+done
+
+# True when the deck already provides this entry, under its own name or
+# under its SONAME. The SONAME arm is what catches version-suffix drift.
+deck_owns() {
+    if grep -qxF "$1" "$DECK_LIBS_TMP"; then
+        return 0
+    fi
+    _sn="$(awk -F'\t' -v f="$1" '$1 == f { print $2; exit }' "$SONAME_MAP")"
+    [ -n "$_sn" ] && grep -qxF "$_sn" "$DECK_LIBS_TMP"
+}
 
 # Electrobun's launcher sets LD_LIBRARY_PATH=./ (its bin/ cwd) — it does
 # NOT add `./lib`. So the closure must sit alongside the launcher itself,
@@ -249,7 +292,7 @@ for entry in "$EXTRACT_TMP/lib/"*; do
         skipped_existing=$((skipped_existing + 1))
         continue
     fi
-    if grep -qxF "$base" "$DECK_LIBS_TMP"; then
+    if deck_owns "$base"; then
         skipped_deck=$((skipped_deck + 1))
         continue
     fi
@@ -264,6 +307,20 @@ if [ "$skipped_deck" -gt 0 ]; then
     echo "[fetch-deck-libs] skipped $skipped_deck libs the deck owns (deck's loader will resolve them)"
 fi
 
+# Sweep any dangling links still in the bundle, including ones planted by
+# an earlier version of this script. They resolve to nothing, and leaving
+# them in place only hides which copy the loader actually ends up using.
+pruned=0
+for link in "$TARGET_DIR"/*; do
+    if [ -L "$link" ] && [ ! -e "$link" ]; then
+        rm -f "$link"
+        pruned=$((pruned + 1))
+    fi
+done
+if [ "$pruned" -gt 0 ]; then
+    echo "[fetch-deck-libs] pruned $pruned dangling soname symlink(s)"
+fi
+
 # Final smoke: the three top-level sonames must resolve in the target dir.
 TEST_LIBS="libwebkit2gtk-4.1.so.0 libjavascriptcoregtk-4.1.so.0 libayatana-appindicator3.so.1"
 for lib in $TEST_LIBS; do
@@ -272,5 +329,22 @@ for lib in $TEST_LIBS; do
         exit 1
     fi
 done
+
+# Being present is not the same as being loadable. Resolve each root the way
+# the launcher will (LD_LIBRARY_PATH=./ from bin/) and fail loudly on anything
+# missing. Every SONAME we deferred to the deck is a bet that the deck keeps
+# shipping that major; this is the check that turns losing the bet into one
+# actionable line at install time rather than a crash-loop weeks later, after
+# an OS update, with only a dlopen failure to go on.
+unresolved="$(cd "$TARGET_DIR" && LD_LIBRARY_PATH=. ldd $TEST_LIBS 2>/dev/null \
+    | awk '/not found/ { print $1 }' | sort -u)"
+if [ -n "$unresolved" ]; then
+    echo "[fetch-deck-libs] ERROR: sonames resolve nowhere — not in the bundle," >&2
+    echo "  and not on this system:" >&2
+    echo "$unresolved" | sed 's/^/    /' >&2
+    echo "  Delete $CACHE_TAR and re-run to rebuild the closure against the" >&2
+    echo "  current system, or install the matching library." >&2
+    exit 1
+fi
 
 echo "[fetch-deck-libs] Closure installed into $TARGET_DIR ($(find "$TARGET_DIR" -maxdepth 1 -name '*.so*' | wc -l) so files)"
