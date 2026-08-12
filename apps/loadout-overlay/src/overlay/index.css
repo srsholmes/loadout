@@ -1020,6 +1020,26 @@ body {
   50%      { box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-primary) 25%, transparent); }
 }
 
+/* Park every animation while the overlay window is hidden. Set from
+   dispatchVisibility() in src/webview/main.tsx — see the comment there for
+   why document.hidden can't be relied on under gamescope, and for the
+   measured cost of leaving the focus ring pulsing at 120Hz off-screen.
+
+   `!important` is load-bearing: @loadout/ui sets the focus ring via an
+   inline `animation: focusPulse 2s ease-in-out infinite` shorthand
+   (Button, IconButton, Toggle, Slider, GameCard, GamepadNav), and an
+   inline shorthand resets animation-play-state to `running`. A normal
+   stylesheet declaration loses to inline styles; an !important one wins.
+
+   Deliberately `animation-play-state` and not `animation: none`: paused
+   animations hold their current frame, so the ring is still drawn and
+   reappears mid-pulse on reopen rather than popping. */
+.loadout-idle *,
+.loadout-idle *::before,
+.loadout-idle *::after {
+  animation-play-state: paused !important;
+}
+
 @keyframes viewEnter {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }

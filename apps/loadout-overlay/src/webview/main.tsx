@@ -185,6 +185,19 @@ async function boot() {
   // keyboard events and plays select sounds while the user is back in
   // the game, because gamescope's minimize doesn't flip document.hidden.
   function dispatchVisibility(isOpen: boolean): void {
+    // Same root cause as the polling stop above, one layer down: because
+    // minimize never flips document.hidden, Chromium does not treat the
+    // page as hidden and so never throttles the renderer. The focus ring
+    // is `focusPulse 2s ease-in-out infinite`, and spatial-nav always
+    // leaves something focused, so there is permanently one running
+    // animation and the compositor repaints at the display's refresh rate
+    // forever — including while the overlay is closed and off-screen.
+    //
+    // Measured on an ONEXPLAYER APEX (120Hz), overlay CLOSED and idle:
+    // 20.3% of a core with the animation running, 3.4% with animations
+    // paused. That is a constant battery cost on a handheld for a ring
+    // nobody can see. Park them whenever the window is hidden.
+    document.documentElement.classList.toggle("loadout-idle", !isOpen);
     window.dispatchEvent(
       new CustomEvent("loadout:overlay-visibility", {
         detail: { isOpen },
