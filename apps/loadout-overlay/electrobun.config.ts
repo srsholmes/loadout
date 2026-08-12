@@ -18,8 +18,17 @@ export default {
   },
   build: {
     // Bun-side main process entrypoint.
+    //
+    // `bun` accepts Bun.build() options (see the ElectrobunConfig.ts
+    // referenced above), so the version is baked in the same way
+    // vite.config.ts bakes `__OVERLAY_VERSION__` for the webview. The Bun
+    // process had no version of its own before, and crash reports need one
+    // to attribute a stack trace to a release.
     bun: {
       entrypoint: "src/bun/index.ts",
+      define: {
+        __OVERLAY_BUN_VERSION__: JSON.stringify(pkg.version),
+      },
     },
     // The webview is built separately by Vite (`bunx vite build` or
     // `bun run webview:build` from this package) so it can use the

@@ -39,6 +39,8 @@ import {
 import { SteamInjector } from "../injector";
 import { dispatchRoute, type RouteContext } from "./routes";
 import { cleanupStaleSelfUpdateArtifacts } from "./self-update";
+import { initCrashReporting, captureErrorSync } from "@loadout/crash-report";
+import { LOADER_VERSION } from "../version";
 
 // Global error handlers — prevent plugin crashes from killing the server.
 // The real fix is process isolation (P1 TODO), but this keeps the server alive
@@ -90,11 +92,24 @@ export function shouldRethrowUncaught(
   return false;
 }
 
+// Opt-in crash reporting. Inert unless the user granted consent *and* a DSN
+// was compiled in — see packages/crash-report. Initialising here, at module
+// scope before the handlers below, means the reporter is live for the
+// earliest possible failure.
+initCrashReporting({ process: "backend", release: LOADER_VERSION });
+
 process.on("unhandledRejection", (reason) => {
   log.error(`Unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : reason}`);
+  captureErrorSync(reason);
 });
 process.on("uncaughtException", (err) => {
   log.error(`Uncaught exception: ${err.stack ?? err.message}`);
+  // Reported before the swallow decision, deliberately. In production this
+  // handler keeps the server alive (A-009), which means these exceptions are
+  // invisible today — not just to us, but to the user, who sees only that
+  // something quietly stopped working. This is the single highest-value
+  // capture point in the codebase for exactly that reason.
+  captureErrorSync(err, { level: shouldRethrowUncaught(err) ? "fatal" : "error" });
   if (shouldRethrowUncaught(err)) {
     throw err;
   }

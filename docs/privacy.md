@@ -1,0 +1,106 @@
+# Privacy
+
+Loadout collects **nothing** unless you explicitly turn crash reporting on.
+
+There is no usage analytics, no feature tracking, no session recording, and no
+account. Loadout has no server of its own and no way to identify you.
+
+> **Status:** crash reporting is implemented but **not yet enabled** — no
+> reporting endpoint is configured in released builds, so nothing is sent even
+> if the setting is on. This document describes how it behaves once enabled.
+
+## What Loadout does without asking
+
+Two things reach the network by default, both of which predate crash reporting:
+
+| What | Where to | Why |
+|---|---|---|
+| Update check on startup | `api.github.com` | Checks whether a newer release exists. An unauthenticated GET — GitHub sees your IP address and user-agent, and nothing about your machine is sent. |
+| Artwork and plugin data | Steam CDN, and per-plugin services you enable | Game art, ProtonDB ratings, HowLongToBeat times. Each plugin declares which domains it may contact, enforced by a deny-by-default allow-list. |
+
+## Crash reporting
+
+**Off unless you turn it on.** You are asked once, with a plain yes/no and no
+pre-selected answer. Declining is remembered and you are not asked again. You
+can change your mind at any time in **Settings → Privacy**.
+
+### What a crash report contains
+
+Exactly these fields, and nothing else:
+
+- The error type, message, and stack trace
+- Which loadout process crashed (backend, overlay, or interface)
+- The loadout version, and whether the fault came from loadout itself or from a
+  plugin (with the plugin's id)
+- That the operating system is Linux, and the runtime (Bun or CEF)
+
+### What it never contains
+
+- **No IP address**, no account, no user id, no device id — nothing that
+  identifies you or your machine across reports
+- **No hostname** — removed even where it appears inside an error message
+- **No home directory or username** — every path is rewritten to `~`
+- **No Steam ID** — rewritten to `<steamid>` wherever it appears
+- **No API keys, tokens, or passwords** — redacted from error text
+- **No console logs, no browser history, no request URLs, no cookies**
+- **No usage data of any kind** — nothing about what you launch or do
+
+Because reports carry no identifier, they cannot be linked to you or to each
+other. That is deliberate, and it is also a genuine limitation: it means a
+report cannot be traced back and deleted on request, because there is nothing to
+trace it by.
+
+### One thing we cannot fully guarantee
+
+A crash report contains the error message written by whichever code failed. If a
+game or a file has a revealing name and that name is part of the error, it can
+appear in the message. Paths are rewritten, so `/home/you/Games/Some Game` becomes
+`~/Games/Some Game` — the username is gone, but the folder name is not.
+
+We scrub every pattern we can identify. We cannot scrub arbitrary text we can't
+recognise. If this matters to you, leave crash reporting off.
+
+### Where reports go
+
+To [Sentry](https://sentry.io) (Functional Software, Inc.), on their **EU**
+infrastructure, used purely as an error-tracking processor. Storage of IP
+addresses is disabled at the project level.
+
+### Turning it off
+
+Any one of these:
+
+1. **Settings → Privacy → Send crash reports** — off.
+2. Set `"crashReporting": "denied"` in `~/.config/loadout/config.json`.
+3. Delete the key entirely. Anything that isn't exactly `"granted"` — including
+   a missing, empty, or unreadable config file — means no reports are sent.
+
+The check runs on **every** report, not at startup, so switching it off takes
+effect immediately rather than at next restart.
+
+## Verifying any of this
+
+Loadout is BSD-3-Clause licensed and the whole reporting path is deliberately
+small enough to read in one sitting:
+
+- `packages/crash-report/src/types.ts` — every field that can be sent
+- `packages/crash-report/src/scrub.ts` — what is removed before sending
+- `packages/crash-report/src/transport.ts` — the entire network layer
+- `packages/crash-report/src/consent.ts` — the consent check
+
+Loadout speaks Sentry's wire protocol directly rather than using their SDK,
+specifically so that this list is complete. An SDK would capture console output,
+network breadcrumbs, and request headers by default, and no honest short
+document could then tell you what leaves your machine.
+
+There is a test — "the never-leaks gate" in
+`packages/crash-report/src/crash-report.test.ts` — that builds a report from a
+crash containing a home directory, another user's path, a Steam ID, an API key
+and a hostname, then asserts none of them survive into the transmitted bytes.
+
+## Questions
+
+Open an issue at
+[github.com/srsholmes/loadout/issues](https://github.com/srsholmes/loadout/issues).
+
+*Last updated: 2026-08-12.*
