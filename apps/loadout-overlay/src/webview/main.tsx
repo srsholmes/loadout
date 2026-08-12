@@ -204,12 +204,43 @@ async function boot() {
       }),
     );
   }
+  // The window is created hidden at boot (see the BrowserWindow comment in
+  // src/bun/index.ts), so start parked rather than waiting to be told. The
+  // initial fetch below has to await a dynamic import plus an RPC round
+  // trip, and it fails open (getOverlayVisibility() returns true when the
+  // RPC handle is missing) — without this, a slow or failed boot leaves the
+  // renderer unthrottled for the entire session, which is the case this is
+  // all meant to fix. Safe to do unconditionally: this entry point only
+  // runs inside the Electrobun webview (src/overlay/main.tsx is the
+  // standalone dev entry and never imports this file), so there is no
+  // browser-only context where nothing would ever clear it.
+  document.documentElement.classList.add("loadout-idle");
+
+  // Two paths deliver open/close, and they race. `onOverlayVisibility`
+  // registers against a synchronous global and is live almost immediately;
+  // `getOverlayVisibility` awaits `import("electrobun/view")` and then an
+  // RPC round trip. So a pushed transition can — and on the boot-time open
+  // paths does — arrive BEFORE the initial fetch resolves, and the fetch's
+  // now-stale value must not overwrite it.
+  //
+  // Landing a stale `false` while the window is on screen is worse than a
+  // frozen focus ring: `viewEnter`/`fadeIn` are one-shot entry animations
+  // with no fill-mode, so pausing them at t=0 pins `opacity: 0` on whatever
+  // just mounted — App.tsx's view container and the whole plugin surface in
+  // PluginHost.tsx. The overlay would render blank, and stale-false also
+  // stops gamepad polling, so it would be unresponsive too.
+  let visibilityPushed = false;
   getOverlayVisibility()
-    .then(dispatchVisibility)
+    .then((isOpen) => {
+      if (!visibilityPushed) dispatchVisibility(isOpen);
+    })
     .catch((err) =>
       console.warn("[main] getOverlayVisibility failed:", err),
     );
-  onOverlayVisibility(dispatchVisibility);
+  onOverlayVisibility((isOpen) => {
+    visibilityPushed = true;
+    dispatchVisibility(isOpen);
+  });
 
   // Bun-side ControllerShortcuts → OpenPlugin lands here. Route straight
   // into the App's hash-based router; the webview is persistent so the

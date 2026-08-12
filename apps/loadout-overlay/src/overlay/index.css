@@ -1025,11 +1025,17 @@ body {
    why document.hidden can't be relied on under gamescope, and for the
    measured cost of leaving the focus ring pulsing at 120Hz off-screen.
 
-   `!important` is load-bearing: @loadout/ui sets the focus ring via an
-   inline `animation: focusPulse 2s ease-in-out infinite` shorthand
-   (Button, IconButton, Toggle, Slider, GameCard, GamepadNav), and an
-   inline shorthand resets animation-play-state to `running`. A normal
-   stylesheet declaration loses to inline styles; an !important one wins.
+   `!important` is load-bearing: the focus ring is also set from inline
+   `style` in a dozen-odd places (@loadout/ui's Button, IconButton, Toggle,
+   Slider, GameCard, Collapse; the overlay's GamepadNav; and several
+   plugins), always as the `animation:` shorthand — which resets
+   animation-play-state to `running`. A normal stylesheet declaration loses
+   to an inline style; an important one outranks it, because importance is
+   compared before the inline-style step of the cascade.
+
+   Keep the rule unlayered. Unlayered !important ranks LOWEST among
+   important author declarations, so moving this into a @layer would let
+   any layered important animation rule beat it.
 
    Deliberately `animation-play-state` and not `animation: none`: paused
    animations hold their current frame, so the ring is still drawn and
