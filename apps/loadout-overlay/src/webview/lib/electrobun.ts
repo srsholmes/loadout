@@ -173,7 +173,8 @@ export async function getOverlayVisibility(): Promise<boolean> {
  * which `defineRPC()` has not attached during early boot — so it takes its
  * `return true` branch and claims the overlay is open when the window was
  * in fact created hidden. That optimistic default is right for callers
- * that only gate input polling (better to poll than to swallow input), but
+ * that only gate input polling (better to poll than to swallow input) — it
+ * has no callers today but is kept for API parity, see knip.ts — but
  * wrong for anything that acts on being *hidden*: they need to tell a real
  * "open" apart from "ask me later".
  *
@@ -184,7 +185,13 @@ export async function getOverlayVisibility(): Promise<boolean> {
  * `{ isOpen: false }`.
  */
 export async function tryGetOverlayVisibility(): Promise<boolean | null> {
-  if (!isElectrobun) return null;
+  // `true`, not `null`: outside Electrobun there is no host window to be
+  // hidden behind, so "visible" is a definite answer rather than "ask me
+  // later". It matters because callers park animations on anything that
+  // isn't a positive "open" — under `webview:dev` (vite rooted at
+  // src/webview) nothing would ever push a visibility message, so `null`
+  // here would leave the whole dev UI frozen at `opacity: 0`.
+  if (!isElectrobun) return true;
   const req = getElectroRpc()?.request?.getOverlayVisibility;
   if (typeof req !== "function") return null;
   const res = (await req()) as { isOpen?: unknown } | undefined;

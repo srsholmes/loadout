@@ -205,15 +205,17 @@ async function boot() {
     );
   }
   // The window is created hidden at boot (see the BrowserWindow comment in
-  // src/bun/index.ts), so start parked rather than waiting to be told. The
-  // initial fetch below has to await a dynamic import plus an RPC round
-  // trip, and it fails open (getOverlayVisibility() returns true when the
-  // RPC handle is missing) — without this, a slow or failed boot leaves the
-  // renderer unthrottled for the entire session, which is the case this is
-  // all meant to fix. Safe to do unconditionally: this entry point only
-  // runs inside the Electrobun webview (src/overlay/main.tsx is the
-  // standalone dev entry and never imports this file), so there is no
-  // browser-only context where nothing would ever clear it.
+  // src/bun/index.ts), so start parked rather than waiting to be told —
+  // otherwise a slow or dropped initial fetch leaves the renderer
+  // unthrottled for the whole session, which is the case this is all meant
+  // to fix. Erring toward parked is the deliberate bias: burning a core
+  // forever is worse than a ring that is briefly static.
+  //
+  // Unconditional is safe only because `tryGetOverlayVisibility()` answers
+  // a definite `true` outside Electrobun. This file IS reachable in a plain
+  // browser — `webview:dev` runs vite rooted at src/webview — and there
+  // nothing ever pushes a visibility message, so a `null` there would leave
+  // the class on and freeze the dev UI at `opacity: 0`.
   document.documentElement.classList.add("loadout-idle");
 
   // Two paths deliver open/close, and they race. `onOverlayVisibility`
@@ -236,13 +238,19 @@ async function boot() {
   // after it was set and left the renderer unthrottled until the first
   // manual close. A `null` here means "couldn't tell", and the right
   // response is to keep the parked default rather than assume open.
+  //
+  // There is no retry and no timeout shorter than the 30s maxRequestTime.
+  // A dropped request therefore parks us until the next real transition,
+  // which is the intended bias — but see the PR notes: combined with a
+  // push lost before the listener below registers, it is the one path that
+  // can leave a visible overlay parked, and it self-heals on next toggle.
   let visibilityPushed = false;
   tryGetOverlayVisibility()
     .then((isOpen) => {
       if (isOpen !== null && !visibilityPushed) dispatchVisibility(isOpen);
     })
     .catch((err) =>
-      console.warn("[main] getOverlayVisibility failed:", err),
+      console.warn("[main] tryGetOverlayVisibility failed:", err),
     );
   onOverlayVisibility((isOpen) => {
     visibilityPushed = true;
