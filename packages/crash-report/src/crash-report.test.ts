@@ -32,7 +32,7 @@ import {
   fileStateStore,
   resetForTests,
 } from "./index";
-import { spoolEvent, MAX_SPOOL_FILES } from "./spool";
+import { spoolEvent, MAX_SPOOL_FILES, MAX_SPOOL_ATTEMPTS } from "./spool";
 import type { SentryEvent } from "./types";
 
 const DSN = "https://abc123@o1.ingest.de.sentry.io/456";
@@ -462,12 +462,29 @@ describe("the never-leaks gate", () => {
     expect(wire).not.toContain("~<plugins>");
   });
 
-  test("a steam id in a path is not silently preserved by normalisation", () => {
-    // Steam userdata paths embed a SteamID64. They arrive under $HOME, so
-    // home normalisation is what removes them; this pins that behaviour.
-    const s = scrubString("/home/deck/.steam/steam/userdata/76561198012345678/config");
-    expect(s).not.toContain("/home/");
-    expect(s.startsWith("~/")).toBe(true);
+  test("removes the Steam account id Steam actually uses in paths", () => {
+    // Steam names userdata directories by the 32-BIT ACCOUNT ID, not the
+    // SteamID64 — `ls ~/.steam/steam/userdata` gives e.g. "25139426". An
+    // earlier version of this test used a fictional 7656119… path, so it
+    // passed while the identifier loadout really handles went out intact.
+    // Add 76561197960265728 to that number and you have a public profile URL.
+    const real = scrubString("/home/deck/.local/share/Steam/userdata/25139426/config/grid/1.png");
+    expect(real).not.toContain("25139426");
+    expect(real).toContain("userdata/<steamid>");
+    // The grid/app path after it survives — useful for triage.
+    expect(real).toContain("grid");
+
+    // The other renderings of the same account, all permanent identifiers.
+    expect(scrubString("profile 76561198012345678 failed")).toBe("profile <steamid> failed");
+    expect(scrubString("owner [U:1:25139426] missing")).toBe("owner <steamid> missing");
+    expect(scrubString("id STEAM_0:1:12569713 invalid")).toBe("id <steamid> invalid");
+  });
+
+  test("does not mangle ordinary numbers outside userdata context", () => {
+    // A bare 8-digit number is indistinguishable from a timestamp or byte
+    // count, so account-id scrubbing is scoped to `userdata/` deliberately.
+    expect(scrubString("wrote 25139426 bytes")).toBe("wrote 25139426 bytes");
+    expect(scrubString("timeout after 16000 ms")).toBe("timeout after 16000 ms");
   });
 });
 
@@ -612,6 +629,67 @@ describe("spool and fatal path", () => {
     expect(readdirSync(dir)).toHaveLength(0);
   });
 
+  test("a failed drain puts reports back instead of destroying them", async () => {
+    // takeSpooled unlinks on read, so without re-spooling, a drain that runs
+    // while the device is offline would wipe the queue — defeating the spool
+    // in the exact situation it exists for.
+    const offline = (async () => {
+      throw new Error("offline");
+    }) as unknown as typeof fetch;
+
+    initCrashReporting({
+      process: "overlay-bun",
+      dsn: DSN,
+      readConsent: () => "granted",
+      stateStore: memoryStateStore(),
+      spoolDir: dir,
+      fetchImpl: offline,
+      drainOnInit: false,
+    });
+    captureFatalSync(new Error("survives an offline drain"));
+    expect(readdirSync(dir)).toHaveLength(1);
+
+    expect(await drainSpool()).toBe(0);
+    // Still queued, with the attempt count bumped.
+    const after = readdirSync(dir);
+    expect(after).toHaveLength(1);
+    expect(after[0]).toContain("-a1-");
+
+    // Back online: it finally ships.
+    resetForTests();
+    initCrashReporting({
+      process: "overlay-bun",
+      dsn: DSN,
+      readConsent: () => "granted",
+      stateStore: memoryStateStore(),
+      spoolDir: dir,
+      fetchImpl,
+      drainOnInit: false,
+    });
+    expect(await drainSpool()).toBe(1);
+    expect(sentBodies[0]).toContain("survives an offline drain");
+    expect(readdirSync(dir)).toHaveLength(0);
+  });
+
+  test("an event that never sends is eventually given up on", async () => {
+    const offline = (async () => {
+      throw new Error("offline");
+    }) as unknown as typeof fetch;
+    initCrashReporting({
+      process: "overlay-bun",
+      dsn: DSN,
+      readConsent: () => "granted",
+      stateStore: memoryStateStore(),
+      spoolDir: dir,
+      fetchImpl: offline,
+      drainOnInit: false,
+    });
+    captureFatalSync(new Error("permanently unsendable"));
+    for (let i = 0; i < MAX_SPOOL_ATTEMPTS + 2; i++) await drainSpool();
+    // Dropped rather than retried forever on every start.
+    expect(readdirSync(dir)).toHaveLength(0);
+  });
+
   test("a fatal capture without consent writes nothing at all", () => {
     initCrashReporting({
       process: "overlay-bun",
@@ -631,6 +709,60 @@ describe("spool and fatal path", () => {
       spoolEvent(dir, { ...BARE_EVENT, event_id: `id${i}` }, 1_700_000_000_000 + i);
     }
     expect(readdirSync(dir).length).toBeLessThanOrEqual(MAX_SPOOL_FILES);
+  });
+});
+
+describe("the shipped default consent supplier", () => {
+  // Every other gating test injects its own `readConsent`, so the default
+  // built inside initCrashReporting — the one that actually runs in
+  // production — had no coverage at all. A fail-open there would have passed
+  // the entire suite.
+  let sent: number;
+  let fetchImpl: typeof fetch;
+
+  beforeEach(() => {
+    resetForTests();
+    sent = 0;
+    fetchImpl = (async () => {
+      sent++;
+      return new Response("", { status: 200 });
+    }) as unknown as typeof fetch;
+  });
+
+  function initWithHome(home: string) {
+    initCrashReporting({
+      process: "backend",
+      dsn: DSN,
+      // No readConsent: exercise the real default, pointed at a temp home.
+      hostname: "irrelevant",
+      stateStore: memoryStateStore(),
+      spoolDir: mkdtempSync(join(tmpdir(), "loadout-defspool-")),
+      fetchImpl,
+      drainOnInit: false,
+      homeOverride: home,
+    });
+  }
+
+  test("sends when config.json on disk says granted", async () => {
+    initWithHome(configWith("granted").home);
+    expect(await captureError(new Error("boom"))).toBe(true);
+    expect(sent).toBe(1);
+  });
+
+  test("sends nothing when the config says denied", async () => {
+    initWithHome(configWith("denied").home);
+    expect(await captureError(new Error("boom"))).toBe(false);
+    expect(sent).toBe(0);
+  });
+
+  test("sends nothing when the key is absent or the file is missing", async () => {
+    initWithHome(configWith(undefined).home);
+    expect(await captureError(new Error("boom"))).toBe(false);
+
+    resetForTests();
+    initWithHome(mkdtempSync(join(tmpdir(), "loadout-nohome-")));
+    expect(await captureError(new Error("boom"))).toBe(false);
+    expect(sent).toBe(0);
   });
 });
 
@@ -684,6 +816,7 @@ describe("capture gating (the test that matters)", () => {
       readConsent: () => undefined,
       stateStore: memoryStateStore(),
       fetchImpl,
+      drainOnInit: false,
     });
     expect(isEnabled()).toBe(false);
     expect(await captureError(new Error("boom"))).toBe(false);
@@ -697,6 +830,7 @@ describe("capture gating (the test that matters)", () => {
       readConsent: () => "denied",
       stateStore: memoryStateStore(),
       fetchImpl,
+      drainOnInit: false,
     });
     expect(await captureError(new Error("boom"))).toBe(false);
     expect(sent).toBe(0);
@@ -709,6 +843,7 @@ describe("capture gating (the test that matters)", () => {
       readConsent: () => "granted",
       stateStore: memoryStateStore(),
       fetchImpl,
+      drainOnInit: false,
     });
     expect(isEnabled()).toBe(false);
     expect(await captureError(new Error("boom"))).toBe(false);
@@ -723,6 +858,7 @@ describe("capture gating (the test that matters)", () => {
       readConsent: () => "granted",
       stateStore: memoryStateStore(),
       fetchImpl,
+      drainOnInit: false,
     });
     expect(isEnabled()).toBe(true);
     expect(await captureError(new Error("boom"))).toBe(true);
@@ -737,6 +873,7 @@ describe("capture gating (the test that matters)", () => {
       readConsent: () => consent,
       stateStore: memoryStateStore(),
       fetchImpl,
+      drainOnInit: false,
     });
     await captureError(new Error("one"));
     expect(sent).toBe(1);
@@ -751,6 +888,7 @@ describe("capture gating (the test that matters)", () => {
       dsn: DSN,
       stateStore: memoryStateStore(),
       fetchImpl,
+      drainOnInit: false,
     });
     expect(await captureError(new Error("boom"))).toBe(false);
     setConsent("granted");
@@ -778,6 +916,7 @@ describe("capture gating (the test that matters)", () => {
       readConsent: () => "granted",
       stateStore: memoryStateStore(),
       fetchImpl,
+      drainOnInit: false,
     });
     for (let i = 0; i < 6; i++) await captureError(new Error("same boom"));
     // Same fault repeated — the per-fingerprint cap is what stops a loop.

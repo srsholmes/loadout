@@ -56,11 +56,29 @@ const RUN_USER = /\/run\/user\/\d+/g;
 const PLUGIN_PATH = /(?:~|\/)[^\s:)'"]*?\/loadout\/plugins\/([^/\s:)'"]+)/g;
 
 /**
- * SteamID64. A persistent account identifier, and it turns up in ordinary
- * paths (`~/.steam/steam/userdata/<id>/`) as well as error text. All real
- * ones start 7656119 and run 17 digits.
+ * Steam account identifiers. All of these are permanent and resolve to a
+ * public profile, so any one of them makes reports linkable to a named person
+ * and to each other.
+ *
+ * The important case is the **32-bit account ID**, not the SteamID64. Steam
+ * names `userdata/` directories by the 32-bit form (`userdata/25139426`), and
+ * that is the value this codebase actually handles — steam-paths,
+ * game-library, sgdb-art, steam-grid, hltb and playtime all build
+ * `<userdata>/<accountId>/…` paths. `7656119…` appears nowhere in loadout
+ * outside this file. An earlier version scrubbed only the SteamID64 and so
+ * matched a format we never see, while the one we do see went out intact;
+ * adding 76561197960265728 to it yields the SteamID64 and the profile URL.
+ *
+ * The account ID is scrubbed only in `userdata/` context — a bare 8-digit
+ * number is indistinguishable from a timestamp or a byte count, and blanket
+ * substitution would corrupt ordinary error text.
  */
+const STEAM_USERDATA = /(userdata\/)\d{4,}/gi;
 const STEAM_ID64 = /\b7656119\d{10}\b/g;
+/** `[U:1:25139426]` — the SteamID3 rendering of the same account ID. */
+const STEAM_ID3 = /\[U:1:\d+\]/g;
+/** `STEAM_0:1:12569713` — the legacy SteamID2 rendering. */
+const STEAM_ID2 = /\bSTEAM_[0-5]:[01]:\d+\b/gi;
 
 /**
  * Credentials that turn up inside error messages. The SGDB integration puts
@@ -116,7 +134,10 @@ export function scrubString(input: string, opts: ScrubOptions = {}): string {
     .replace(ANY_HOME, "~")
     .replace(RUN_USER, "/run/user/<uid>")
     .replace(PLUGIN_PATH, "<plugins>/$1")
-    .replace(STEAM_ID64, "<steamid>");
+    .replace(STEAM_USERDATA, "$1<steamid>")
+    .replace(STEAM_ID64, "<steamid>")
+    .replace(STEAM_ID3, "<steamid>")
+    .replace(STEAM_ID2, "<steamid>");
   // Case-insensitive: a hostname can appear capitalised in error text even
   // though the system stores it lowercase.
   if (opts.hostname && opts.hostname.length >= MIN_TOKEN_LEN) {

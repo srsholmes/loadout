@@ -38,7 +38,23 @@ export interface StateStore {
   write(value: string): void;
 }
 
-export function fileStateStore(path: string): StateStore {
+/**
+ * Hand back ownership of anything we create under the user's home.
+ *
+ * The root backend and the user-level overlay share `$HOME`, so whichever
+ * runs first creates the state directory — and the backend always wins, since
+ * it starts at multi-user.target while the overlay waits for
+ * graphical-session.target. Left root-owned, every subsequent write from the
+ * overlay fails EACCES and is swallowed, leaving it with no spool and no
+ * cross-restart rate limiting at all.
+ *
+ * Per-process *filenames* do not fix this; the shared parent directory is the
+ * problem. The backend passes `chownToTarget` here, the same hook
+ * `user-config.ts` already uses for `~/.config/loadout`.
+ */
+export type ChownHook = (path: string) => void;
+
+export function fileStateStore(path: string, chown?: ChownHook): StateStore {
   return {
     read() {
       try {
@@ -49,8 +65,11 @@ export function fileStateStore(path: string): StateStore {
     },
     write(value) {
       try {
-        mkdirSync(join(path, ".."), { recursive: true });
+        const dir = join(path, "..");
+        mkdirSync(dir, { recursive: true });
         writeFileSync(path, value, "utf8");
+        chown?.(dir);
+        chown?.(path);
       } catch {
         // A read-only or full disk must not break the app. Losing the
         // counters degrades us to per-process limiting, not to no limiting:
@@ -127,6 +146,18 @@ export interface InitOptions {
   spoolDir?: string;
   /** Set false in tests to stop init touching the real spool. */
   drainOnInit?: boolean;
+  /**
+   * Hand ownership of created files back to the desktop user. The root
+   * backend must pass this; see {@link ChownHook}.
+   */
+  chown?: ChownHook;
+  /**
+   * Override `os.homedir()`. Exists so tests can exercise the *real* default
+   * consent supplier — the one that reads config.json — against a temporary
+   * home, instead of every test injecting its own `readConsent` and leaving
+   * the shipped default uncovered.
+   */
+  homeOverride?: string;
 }
 
 interface Runtime {
@@ -142,6 +173,7 @@ interface Runtime {
   hostname?: string;
   username?: string;
   spoolDir: string;
+  chown?: ChownHook;
 }
 
 let rt: Runtime | null = null;
@@ -153,7 +185,7 @@ let explicitConsent: ConsentState;
  */
 export function initCrashReporting(opts: InitOptions): void {
   const env = typeof process !== "undefined" ? process.env : {};
-  const home = safeHomedir();
+  const home = opts.homeOverride ?? safeHomedir();
   const dsn = parseDsn(opts.dsn ?? env.LOADOUT_CRASH_DSN);
   const isDev = !opts.release || opts.release === "dev";
 
@@ -167,12 +199,15 @@ export function initCrashReporting(opts: InitOptions): void {
       (opts.process === "webview"
         ? () => explicitConsent
         : () => readConsentSync(env, home)),
-    store: opts.stateStore ?? fileStateStore(defaultStatePath(env, home, opts.process)),
+    store:
+      opts.stateStore ??
+      fileStateStore(defaultStatePath(env, home, opts.process), opts.chown),
     now: opts.now ?? Date.now,
     fetchImpl: opts.fetchImpl,
     hostname: opts.hostname ?? safeHostname(),
     username: opts.username ?? basename(home),
     spoolDir: opts.spoolDir ?? defaultSpoolDir(env, home, opts.process),
+    chown: opts.chown,
   };
 
   // Ship anything a previous run died holding. Best-effort and detached: a
@@ -299,7 +334,7 @@ export function captureFatalSync(error: unknown, context?: CaptureContext): bool
   try {
     const event = prepare(r, error, { ...context, level: context?.level ?? "fatal" });
     if (!event) return false;
-    return spoolEvent(r.spoolDir, event, r.now());
+    return spoolEvent(r.spoolDir, event, r.now(), 0, r.chown);
   } catch {
     return false;
   }
@@ -320,14 +355,22 @@ export async function drainSpool(): Promise<number> {
       takeSpooled(r.spoolDir, r.now());
       return 0;
     }
-    const events = takeSpooled(r.spoolDir, r.now());
+    const entries = takeSpooled(r.spoolDir, r.now());
     let sent = 0;
-    for (const event of events) {
+    for (const { event, attempts } of entries) {
       const ok = await sendEvent(event, r.dsn, {
         clientName: `loadout/${r.release ?? "dev"}`,
         fetchImpl: r.fetchImpl,
       });
-      if (ok) sent++;
+      if (ok) {
+        sent++;
+      } else {
+        // Put it back. `takeSpooled` unlinks on read, so without this a drain
+        // that runs while the device is offline would destroy every queued
+        // report — the precise situation the spool exists for. The attempt
+        // counter stops a permanently-unsendable event retrying forever.
+        spoolEvent(r.spoolDir, event, r.now(), attempts + 1, r.chown);
+      }
     }
     return sent;
   } catch {

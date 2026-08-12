@@ -42,7 +42,8 @@ Exactly these fields, and nothing else:
   mounts like `/run/media/you/…` are all rewritten
 - **No username or hostname** — removed from paths, and also from free-form
   error text (see the caveat below)
-- **No Steam ID** — rewritten to `<steamid>` wherever it appears
+- **No Steam ID** — the account id in `userdata/` paths, plus SteamID64,
+  SteamID3 and SteamID2 forms, are all rewritten to `<steamid>`
 - **No API keys, tokens, or passwords** — redacted from error text
 - **No console logs, no browser history, no request URLs, no cookies**
 - **No usage data of any kind** — nothing about what you launch or do
@@ -53,10 +54,16 @@ mangle ordinary words. In practice this means the standard SteamOS account name
 `deck` is not redacted — it is the same on every Steam Deck and identifies
 nobody. Paths are rewritten regardless of name length.
 
-Because reports carry no identifier, they cannot be linked to you or to each
-other. That is deliberate, and it is also a genuine limitation: it means a
+No identifier is attached to a report deliberately — there is no account, no
+device id, and no generated install id. So reports are not designed to be
+linkable to you or to each other, and one practical consequence is that a
 report cannot be traced back and deleted on request, because there is nothing to
 trace it by.
+
+We stop short of promising that linkage is *impossible*. A stack trace is
+free-form text produced by whatever code failed, and the guarantee is only ever
+as good as the scrubbing described above. We remove every identifier we know how
+to recognise — and we keep finding new ones to add.
 
 ### One thing we cannot fully guarantee
 

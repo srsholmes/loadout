@@ -35,6 +35,24 @@ import type { SentryEvent } from "./types";
 export const MAX_SPOOL_FILES = 20;
 /** A three-week-old crash on a long-superseded version is noise. */
 export const MAX_SPOOL_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+/**
+ * How many times a single event may fail to send before it is discarded.
+ *
+ * Needed because entries are unlinked when read, not when sent. Unlinking on
+ * read is deliberate — an entry the server permanently rejects would otherwise
+ * be retried on every start forever — but it means a failed send must put the
+ * event back, or a drain that happens to run while the device is offline
+ * destroys exactly the reports the spool exists to protect.
+ */
+export const MAX_SPOOL_ATTEMPTS = 5;
+
+export interface SpooledEntry {
+  event: SentryEvent;
+  attempts: number;
+}
+
+/** `<padded-timestamp>-a<attempts>-<event id>.json` — lexical order is chronological. */
+const NAME = /^(\d+)-a(\d+)-(.+)\.json$/;
 
 function spoolFiles(dir: string): string[] {
   try {
@@ -52,9 +70,18 @@ function spoolFiles(dir: string): string[] {
  * Returns whether it landed. Never throws: a read-only or full disk must not
  * turn a crash we were trying to report into a second crash.
  */
-export function spoolEvent(dir: string, event: SentryEvent, now: number): boolean {
+export function spoolEvent(
+  dir: string,
+  event: SentryEvent,
+  now: number,
+  attempts = 0,
+  chown?: (path: string) => void,
+): boolean {
   try {
     mkdirSync(dir, { recursive: true });
+    // The root backend and the user overlay share $HOME; anything root
+    // creates there must be handed back or the overlay can never write.
+    chown?.(dir);
     const existing = spoolFiles(dir);
     // Oldest-first eviction. Filenames lead with the timestamp, so lexical
     // order is chronological order.
@@ -65,31 +92,36 @@ export function spoolEvent(dir: string, event: SentryEvent, now: number): boolea
         // Another process may have drained it already.
       }
     }
-    writeFileSync(
-      join(dir, `${String(now).padStart(15, "0")}-${event.event_id}.json`),
-      JSON.stringify(event),
-      "utf8",
-    );
+    const path = join(dir, `${String(now).padStart(15, "0")}-a${attempts}-${event.event_id}.json`);
+    writeFileSync(path, JSON.stringify(event), "utf8");
+    chown?.(path);
     return true;
   } catch {
     return false;
   }
 }
 
-/** Read and remove every spooled event. Entries too old to be useful are dropped. */
-export function takeSpooled(dir: string, now: number): SentryEvent[] {
-  const out: SentryEvent[] = [];
+/**
+ * Read and remove every spooled event, with its prior attempt count.
+ *
+ * Entries too old, too often retried, or unparseable are dropped. The caller
+ * MUST re-spool anything it fails to send (see `MAX_SPOOL_ATTEMPTS`).
+ */
+export function takeSpooled(dir: string, now: number): SpooledEntry[] {
+  const out: SpooledEntry[] = [];
   for (const name of spoolFiles(dir)) {
     const path = join(dir, name);
     try {
       const age = now - statSync(path).mtimeMs;
       const raw = readFileSync(path, "utf8");
-      // Unlink before sending. A malformed or un-sendable entry that stayed
+      // Unlink before sending. A malformed or permanently-rejected entry left
       // on disk would be retried on every start forever.
       unlinkSync(path);
       if (age > MAX_SPOOL_AGE_MS) continue;
+      const attempts = Number(NAME.exec(name)?.[2] ?? 0);
+      if (attempts >= MAX_SPOOL_ATTEMPTS) continue;
       const parsed = JSON.parse(raw) as SentryEvent;
-      if (parsed && typeof parsed.event_id === "string") out.push(parsed);
+      if (parsed && typeof parsed.event_id === "string") out.push({ event: parsed, attempts });
     } catch {
       try {
         unlinkSync(path);

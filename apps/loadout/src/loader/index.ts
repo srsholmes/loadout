@@ -40,7 +40,8 @@ import {
 import { SteamInjector } from "../injector";
 import { dispatchRoute, type RouteContext } from "./routes";
 import { cleanupStaleSelfUpdateArtifacts } from "./self-update";
-import { initCrashReporting, captureErrorSync } from "@loadout/crash-report";
+import { initCrashReporting, captureErrorSync, captureFatalSync } from "@loadout/crash-report";
+import { chownToTarget } from "./target-user";
 import { LOADER_VERSION } from "../version";
 
 // Global error handlers — prevent plugin crashes from killing the server.
@@ -106,10 +107,15 @@ export function shouldRethrowUncaught(
 // registered in onLoad, say) would then have its report evaluated against
 // that plugin's network allow-list, silently dropped, and logged as the
 // plugin attempting to reach Sentry.
+// `chown` matters because this process is root and writes under the desktop
+// user's $HOME, which the user-level overlay also writes to. Without it the
+// state directory is created root-owned and every overlay write fails EACCES
+// silently — leaving the overlay with no spool and no rate limiting.
 initCrashReporting({
   process: "backend",
   release: LOADER_VERSION,
   fetchImpl: unsandboxedFetch,
+  chown: chownToTarget,
 });
 
 process.on("unhandledRejection", (reason) => {
@@ -123,10 +129,16 @@ process.on("uncaughtException", (err) => {
   // invisible today — not just to us, but to the user, who sees only that
   // something quietly stopped working. This is the single highest-value
   // capture point in the codebase for exactly that reason.
-  captureErrorSync(err, { level: shouldRethrowUncaught(err) ? "fatal" : "error" });
+  //
+  // The two branches need different transports. When we rethrow (OOM, or
+  // debug mode) the process dies on this tick, so an async send would be
+  // killed in flight — spool it instead and let the next start ship it. When
+  // we swallow, the server lives on and an ordinary send completes.
   if (shouldRethrowUncaught(err)) {
+    captureFatalSync(err);
     throw err;
   }
+  captureErrorSync(err);
 });
 
 /**
