@@ -6,6 +6,29 @@ Picture Mode and games under gamescope. Reflects the architecture as
 of PR #53. Read this first if you're touching `gamescope-atoms.ts`,
 `x11.ts`, or `steam-quick-access.ts`.
 
+## Hard dependency: xdotool
+
+Everything below needs a **window id**, and the only way we get one is
+`xdotool search --name` (`findWindow()`). Electrobun can't set a stable
+`WM_CLASS`, so a class match isn't available, and `x11.ts` has no
+`xcb_query_tree` binding — libxcb does the atom *writes*, not the
+lookup. `xprop` is likewise required whenever libxcb isn't usable.
+
+Without them `prepare()` and `show()` both return on their
+`if (!this.windowId) return` guard: no atoms are written, gamescope
+never learns the window exists, and the overlay cannot appear. Because
+`toggleOverlay()` also grabs input and SIGSTOPs Steam, the visible
+result is a frozen device with no UI and no error — which is exactly
+how this reached us as a bug report.
+
+`GamescopeAtoms.probeMissingTools()` reports what's absent (accounting
+for the libxcb-vs-xprop path), and `lib/x11-preflight.ts` turns that
+into a refusal: **under gamescope, an open with tools missing is
+declined rather than half-performed**, so Steam stays usable. The
+probe re-runs after each refusal, so installing the package and
+pressing the button again recovers without a service restart. See
+[dependencies.md](dependencies.md).
+
 ## Mental model
 
 Gamescope is a Wayland compositor that hosts an Xwayland server for

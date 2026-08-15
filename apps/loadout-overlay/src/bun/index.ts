@@ -16,10 +16,14 @@ const DISPLAY = detectOverlayDisplay();
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore — resolved at runtime once electrobun is installed.
 import { BrowserWindow, BrowserView, GlobalShortcut } from "electrobun/bun";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import type {
   ControllerShortcuts,
 } from "../webview/lib/electrobun";
+import {
+  formatMissingToolsBanner,
+  shouldBlockOverlayOpen,
+} from "./lib/x11-preflight";
 import { GamescopeAtoms } from "./native/gamescope-atoms";
 import { detectGamescopeScreenSizeSync } from "./native/screen-size";
 import {
@@ -323,6 +327,48 @@ setTimeout(() => {
   atoms.prepare().catch((e) => console.warn("[overlay] atoms.prepare:", e));
 }, 500);
 
+// ---- X11 CLI tool preflight -------------------------------------------------
+//
+// `xdotool` (and `xprop`, when libxcb is unavailable) are hard requirements
+// for the gamescope path — see lib/x11-preflight.ts for why there's no
+// fallback. Probed once at boot and re-probed after any refused open, so
+// installing the package and pressing the button again is enough to
+// recover without restarting the service.
+const missingX11Tools: { current: string[] } = { current: [] };
+
+/** /etc/os-release verbatim, for the install hint in the banner. Read once
+ *  — it doesn't change under us, and the banner is on the toggle path. */
+const osReleaseText: string = (() => {
+  try {
+    return readFileSync("/etc/os-release", "utf8");
+  } catch {
+    return "";
+  }
+})();
+
+async function refreshMissingX11Tools(): Promise<void> {
+  try {
+    const missing = await atoms.probeMissingTools();
+    const changed = missing.join(",") !== missingX11Tools.current.join(",");
+    missingX11Tools.current = missing;
+    if (missing.length > 0 && changed) {
+      console.error(formatMissingToolsBanner(missing, osReleaseText));
+    } else if (missing.length === 0 && changed) {
+      console.log("[overlay] X11 tool preflight: all required tools present");
+    }
+  } catch (err) {
+    // A failed probe must not be read as "tools missing" — that would
+    // refuse every open on a healthy host. Leave the last known state.
+    console.warn("[overlay] X11 tool preflight failed:", err);
+  }
+}
+
+// Probed after prepare() so the atoms object has settled on its libxcb-vs-
+// xprop path — probeMissingTools() only demands xprop when libxcb is out.
+setTimeout(() => {
+  void refreshMissingX11Tools();
+}, 600);
+
 // Tell the webview when the overlay opens / closes. The webview uses
 // this to gate useGamepadInput so its Web Gamepad API poller doesn't
 // keep dispatching synthetic keyboard events into spatial-nav while
@@ -593,6 +639,31 @@ function toggleOverlay(source: string) {
     broadcastOverlayVisibility();
     trace(`[toggle] ${source} → MINIMIZE`);
   } else {
+    // Refuse the open outright when we know we can't become visible.
+    // Without xdotool there's no window id, so GamescopeAtoms.show()
+    // returns on its `if (!this.windowId)` guard and gamescope is never
+    // told we exist — but everything below still runs, grabbing the
+    // controller and SIGSTOPping Steam. That combination is what a
+    // CachyOS user reported as "Steam freezes and nothing appears".
+    // Doing nothing is strictly better: Steam stays usable and the
+    // journal explains why.
+    if (
+      shouldBlockOverlayOpen({
+        missingTools: missingX11Tools.current,
+        gameModeActive: isGameModeActive(),
+      })
+    ) {
+      console.error(
+        formatMissingToolsBanner(missingX11Tools.current, osReleaseText),
+      );
+      trace(
+        `[toggle] ${source} → REFUSED (missing ${missingX11Tools.current.join(", ")})`,
+      );
+      // Re-probe so installing the tool recovers on the next press rather
+      // than requiring a restart of the service.
+      void refreshMissingX11Tools();
+      return;
+    }
     // --- Open path: suspend Steam (if enabled), grab controllers,
     // raise the window, set atoms. Also matches open_overlay().
     // Freeze Steam ONLY in Gaming Mode. In gaming mode Steam reads the

@@ -38,6 +38,46 @@ describe("GamescopeAtoms", () => {
     );
   });
 
+  describe("probeMissingTools", () => {
+    // The caller (index.ts) refuses to open the overlay on a non-empty
+    // result, so a false positive here would strand a healthy host with a
+    // permanently un-openable overlay — hence the xcb-connected case.
+    it("reports nothing when both tools are present", async () => {
+      const atoms = new GamescopeAtoms({
+        display: ":0",
+        windowName: "Loadout Overlay",
+        forceXprop: true,
+      });
+      expect(await atoms.probeMissingTools()).toEqual([]);
+    });
+
+    it("reports xdotool when it's missing", async () => {
+      mockCommandExists.mockImplementation((name: string) =>
+        Promise.resolve(name !== "xdotool"),
+      );
+      const atoms = new GamescopeAtoms({
+        display: ":0",
+        windowName: "Loadout Overlay",
+        forceXprop: true,
+      });
+      expect(await atoms.probeMissingTools()).toEqual(["xdotool"]);
+    });
+
+    it("reports xprop on the xprop path when it's missing", async () => {
+      // forceXprop leaves this.x11 null, so xprop is the only way atoms
+      // get written and its absence is fatal.
+      mockCommandExists.mockImplementation((name: string) =>
+        Promise.resolve(name !== "xprop"),
+      );
+      const atoms = new GamescopeAtoms({
+        display: ":0",
+        windowName: "Loadout Overlay",
+        forceXprop: true,
+      });
+      expect(await atoms.probeMissingTools()).toEqual(["xprop"]);
+    });
+  });
+
   describe("findWindow", () => {
     it("returns null and warns when xdotool is missing", async () => {
       mockCommandExists.mockImplementation(() => Promise.resolve(false));
