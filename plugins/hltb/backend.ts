@@ -307,6 +307,9 @@ export default class HltbBackend implements PluginBackend {
       bpmGlobalName: "__hltb_badges",
       storeGlobalName: "__hltb_store_badges",
       css: this.generateBadgeCSS(),
+      // Hide while the Steam menu / QAM covers the BPM window — they are
+      // separate windows drawn above ours, so we can't sit behind them.
+      obscuredHideSelector: "#hltb-badges-container",
       bpmScript: this.generateBPMScript(),
       buildStoreScript: (d) => this.generateStoreScript(d),
       fetchBadgeData: (appId) => this.getBadgeData(appId),
@@ -1043,8 +1046,18 @@ export default class HltbBackend implements PluginBackend {
 
   // ─── RPC: Status ────────────────────────────────────────────────
 
-  async getStatus(): Promise<{ connected: boolean; tabs: number }> {
-    return this.injector?.getStatus() ?? { connected: false, tabs: 0 };
+  async getStatus(): Promise<{
+    connected: boolean;
+    tabs: number;
+    detail?: string;
+  }> {
+    return (
+      this.injector?.getStatus() ?? {
+        connected: false,
+        tabs: 0,
+        detail: "Badge injection is not running.",
+      }
+    );
   }
 
   async reconnect(): Promise<{ success: boolean; error?: string }> {
@@ -1338,13 +1351,14 @@ export default class HltbBackend implements PluginBackend {
   // ─── State Emission ─────────────────────────────────────────────
 
   private emitState(): void {
-    const { connected, tabs } = this.injector?.getStatus() ?? {
+    const { connected, tabs, detail } = this.injector?.getStatus() ?? {
       connected: false,
       tabs: 0,
+      detail: "Badge injection is not running.",
     };
     this.emit?.({
       event: "stateChanged",
-      data: { connected, tabs, settings: this.settings },
+      data: { connected, tabs, detail, settings: this.settings },
     });
   }
 }

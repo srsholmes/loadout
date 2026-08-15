@@ -44,6 +44,14 @@ export interface SteamCefBadgeInjectorConfig<TBadgeData> {
   /** Full CSS string injected into every tab (BPM + store). Static. */
   css: string;
   /**
+   * CSS selector for the plugin's badge root(s) in the BPM document, e.g.
+   * `"#protondb-badge-container"`. When set, the injector appends a rule
+   * hiding it while the window is obscured — the Steam menu and Quick
+   * Access menu are separate windows drawn over ours, so the badge has to
+   * hide itself rather than sit behind them. Omit to opt out.
+   */
+  obscuredHideSelector?: string;
+  /**
    * Passive BPM renderer IIFE source. Must define
    * `window[bpmGlobalName] = { cleanup, ... }`. The plugin owns the exact
    * surface; the helper only evaluates the string.
@@ -93,10 +101,102 @@ const SHARED_JS_NAMES = [
   "Steam",
 ];
 const BIG_PICTURE_TITLE = "Steam Big Picture Mode";
-/** Steam splits the BPM UI across the parent BPM tab and per-session
- *  `MainMenu_uid<N>` popups; which hosts the visible React UI is
- *  build-dependent, so both are candidate render targets. */
+/** Per-session `MainMenu_uid<N>` popups. On older builds these could host
+ *  the visible React UI, so they stay as a *fallback* render target — but
+ *  never alongside the real BPM window (see `_pickRenderKeys`). */
 const BPM_PREFIX_TARGETS = ["MainMenu"];
+/**
+ * Steam renders the Big Picture chrome — the Steam menu (`MainMenu_uid<N>`),
+ * the Quick Access menu, notification toasts — as *browser-view popups*,
+ * each its own CEF target whose debug URL carries `browserviewpopup=1`.
+ * The main BPM window (which hosts the library / game-detail React tree)
+ * does not. Title-matching alone can't tell them apart, so this marker is
+ * what keeps a `position: fixed` badge out of the Steam menu overlay.
+ */
+const BROWSER_VIEW_POPUP_MARKER = "browserviewpopup=1";
+
+/** Class the obscured-gate parks on `<html>` while the badge should hide. */
+const OBSCURED_CLASS = "loadout-badges-obscured";
+
+/**
+ * Obscured-gate: hides the badge whenever the window it lives in is covered.
+ *
+ * The Steam menu / Quick Access menu are separate OS-level windows composited
+ * *above* the BPM window, so no `z-index` in our document can get behind them
+ * — the badge has to take itself out of the picture instead. Deliberately
+ * built on nothing but `document.visibilityState`, `document.hasFocus()` and
+ * the `focus`/`blur`/`visibilitychange` events: the badge's own document can
+ * tell it has been covered without knowing *what* covered it, so a Steam UI
+ * reshuffle (renamed popups, new overlays, restructured React tree) can't
+ * break it the way selector- or store-sniffing would.
+ *
+ * Fail-open on `hasFocus`: a document that has never once reported focus is
+ * assumed to be a build where Steam doesn't route focus there, and keeps its
+ * badge rather than hiding it forever.
+ *
+ * Settle delay: opening the Steam menu doesn't produce one clean blur — it
+ * bounces focus between the windows several times in under 100ms (measured
+ * on SteamOS, 5 transitions inside one frame budget). Applying every edge
+ * would strobe the badge, so an edge only lands once the state has held for
+ * {@link OBSCURED_SETTLE_MS}; a burst collapses into a single toggle at its
+ * settled value.
+ *
+ * Exported (with the constant) for tests — otherwise only evaluated over CDP.
+ */
+export const OBSCURED_SETTLE_MS = 250;
+
+export function buildObscuredGateScript(pluginId: string): string {
+  const globalKey = `__loadout_badge_gate_${pluginId.replace(/\W/g, "_")}`;
+  return `
+(function() {
+  if (window.${globalKey}) window.${globalKey}.cleanup();
+
+  var everFocused = false;
+  var applied = null;
+  var timer = null;
+
+  function desired() {
+    if (document.hasFocus()) everFocused = true;
+    return (
+      document.visibilityState === "hidden" ||
+      (everFocused && !document.hasFocus())
+    );
+  }
+
+  function apply() {
+    timer = null;
+    var want = desired();
+    if (want === applied) return;
+    applied = want;
+    document.documentElement.classList.toggle("${OBSCURED_CLASS}", want);
+  }
+
+  // Every edge restarts the timer, so only the settled value is applied.
+  function sync() {
+    desired();
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(apply, ${OBSCURED_SETTLE_MS});
+  }
+
+  window.addEventListener("focus", sync);
+  window.addEventListener("blur", sync);
+  document.addEventListener("visibilitychange", sync);
+
+  window.${globalKey} = {
+    cleanup: function() {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("focus", sync);
+      window.removeEventListener("blur", sync);
+      document.removeEventListener("visibilitychange", sync);
+      document.documentElement.classList.remove("${OBSCURED_CLASS}");
+      delete window.${globalKey};
+    }
+  };
+
+  apply();
+})();
+`;
+}
 
 export class SteamCefBadgeInjector<TBadgeData> {
   private readonly cfg: Required<
@@ -136,12 +236,21 @@ export class SteamCefBadgeInjector<TBadgeData> {
   private pendingPushAppId: string | null = null;
   private pendingPushSet = false;
 
-  /** Candidate BPM render targets — the parent BPM tab and/or MainMenu
-   *  popups. We inject into and push to all of them; only the visible tab
-   *  composites. Refilled by health-check rediscovery when popups die. */
+  /** The tab(s) that host the BPM library UI — where the badge renders.
+   *  Exactly one tier of candidate wins (see `_pickRenderKeys`); refilled
+   *  by health-check rediscovery when the window dies. */
   private bpmRenderKeys: string[] = [];
 
+  /** Connected-but-not-rendering tabs (the Steam menu popups, and
+   *  SharedJSContext when it isn't the render target). We scrub any badge
+   *  runtime out of these — a Loadout update lands mid-Steam-session, so a
+   *  tab an older build injected into keeps its badge until we remove it. */
+  private purgeKeys: string[] = [];
+
   private injectDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Why the last `_tryConnect` gave up, surfaced through `getStatus()`. */
+  private lastConnectError: string | null = null;
 
   constructor(config: SteamCefBadgeInjectorConfig<TBadgeData>) {
     this.cfg = {
@@ -209,6 +318,7 @@ export class SteamCefBadgeInjector<TBadgeData> {
     }
     this.connections.clear();
     this.bpmRenderKeys = [];
+    this.purgeKeys = [];
     this._connected = false;
   }
 
@@ -229,6 +339,7 @@ export class SteamCefBadgeInjector<TBadgeData> {
     }
     this.connections.clear();
     this.bpmRenderKeys = [];
+    this.purgeKeys = [];
     this._connected = false;
 
     const ok = await this._tryConnect();
@@ -238,12 +349,31 @@ export class SteamCefBadgeInjector<TBadgeData> {
     }
     return {
       success: false,
-      error: "Could not connect to Steam CEF. Is Steam running?",
+      error:
+        this.lastConnectError ?? "Could not connect to Steam CEF. Is Steam running?",
     };
   }
 
-  getStatus(): { connected: boolean; tabs: number } {
-    return { connected: this._connected, tabs: this.connections.size };
+  /** `detail` is the human-readable reason badges aren't showing — the
+   *  "connected" dot alone can't distinguish desktop mode from a Steam
+   *  that never opened its debug port, and both look identical to a user
+   *  who just sees no badges. `undefined` once badges can render. */
+  getStatus(): { connected: boolean; tabs: number; detail?: string } {
+    const detail = this._statusDetail();
+    return {
+      connected: this._connected,
+      tabs: this.connections.size,
+      ...(detail ? { detail } : {}),
+    };
+  }
+
+  private _statusDetail(): string | undefined {
+    if (this.lastConnectError) return this.lastConnectError;
+    if (!this._connected) return "Not connected to Steam.";
+    if (this.bpmRenderKeys.length === 0) {
+      return "Connected, but no Big Picture window was found to draw into.";
+    }
+    return undefined;
   }
 
   getCurrentAppId(): string | null {
@@ -270,7 +400,10 @@ export class SteamCefBadgeInjector<TBadgeData> {
 
   private async _pollCurrentAppId(): Promise<void> {
     if (this.polling) return;
-    const conn = this.connections.get("SharedJSContext");
+    // SharedJSContext owns `tempNavStore` on every build that has one; the
+    // render tab is the fallback for builds that don't expose it there, so
+    // a missing shared context isn't a silent "no badges ever".
+    const conn = this._routeConn();
     if (!conn || !conn.client.connected) return;
 
     this.polling = true;
@@ -291,6 +424,17 @@ export class SteamCefBadgeInjector<TBadgeData> {
     } finally {
       this.polling = false;
     }
+  }
+
+  /** Tab the route is read from: SharedJSContext, else the render tab. */
+  private _routeConn(): CDPConnection | undefined {
+    const shared = this.connections.get("SharedJSContext");
+    if (shared?.client.connected) return shared;
+    for (const key of this.bpmRenderKeys) {
+      const conn = this.connections.get(key);
+      if (conn?.client.connected) return conn;
+    }
+    return undefined;
   }
 
   /** Fetch badge data server-side and push it into the BPM tab(s) via CDP. */
@@ -351,6 +495,8 @@ export class SteamCefBadgeInjector<TBadgeData> {
     // Covers start(), health rediscovery and reconnect() — all funnel here.
     if (!(await this.isGameMode())) {
       this._connected = false;
+      this.lastConnectError =
+        "Steam CEF badges are only available in Gaming Mode.";
       return false;
     }
     try {
@@ -371,6 +517,7 @@ export class SteamCefBadgeInjector<TBadgeData> {
       }
       this.connections.clear();
       this.bpmRenderKeys = [];
+      this.purgeKeys = [];
 
       const exactTargets = [...SHARED_JS_NAMES, BIG_PICTURE_TITLE];
 
@@ -379,12 +526,13 @@ export class SteamCefBadgeInjector<TBadgeData> {
       // an exact/prefix target (which would orphan one socket from
       // health-check pruning, since the two are stored under different keys).
       const connectedTabIds = new Set<string>();
+      const candidates: { key: string; tab: CefTab }[] = [];
 
       for (const tab of tabs) {
         if (!tab.webSocketDebuggerUrl) continue;
 
         const isExact = exactTargets.includes(tab.title);
-        const prefixHit = BPM_PREFIX_TARGETS.find((p) => tab.title.startsWith(p));
+        const prefixHit = BPM_PREFIX_TARGETS.some((p) => tab.title.startsWith(p));
         if (!isExact && !prefixHit) continue;
 
         try {
@@ -396,13 +544,19 @@ export class SteamCefBadgeInjector<TBadgeData> {
             : tab.title;
           this.connections.set(key, conn);
           connectedTabIds.add(tab.id);
-          if (prefixHit === "MainMenu" || tab.title === BIG_PICTURE_TITLE) {
-            this.bpmRenderKeys.push(key);
-          }
+          candidates.push({ key, tab });
           this.log(`Connected to: ${tab.title} (key: ${key})`);
         } catch (err) {
           this.warn(`Failed to connect to ${tab.title}:`, err);
         }
+      }
+
+      this.bpmRenderKeys = this._pickRenderKeys(candidates);
+      this.purgeKeys = candidates
+        .map((c) => c.key)
+        .filter((k) => !this.bpmRenderKeys.includes(k));
+      if (this.bpmRenderKeys.length > 0) {
+        this.log(`Badge render target: ${this.bpmRenderKeys.join(", ")}`);
       }
 
       // Also connect to Steam store tabs (store.steampowered.com).
@@ -422,12 +576,60 @@ export class SteamCefBadgeInjector<TBadgeData> {
 
       this._connected =
         this.connections.has("SharedJSContext") || this.bpmRenderKeys.length > 0;
+      this.lastConnectError = this._connected
+        ? null
+        : "Steam is running but exposed no Big Picture tab to inject into.";
       this._emitState();
       return this._connected;
     } catch {
       this._connected = false;
+      // Overwhelmingly the cause when Steam is up: the debug port was never
+      // opened, so /json refuses the connection.
+      this.lastConnectError =
+        `Steam's CEF debug port (${this.cfg.debugPort}) is not reachable. ` +
+        "Create an empty `.cef-enable-remote-debugging` file in Steam's root " +
+        "(~/.steam/steam or ~/.local/share/Steam) and restart Steam.";
       return false;
     }
+  }
+
+  /**
+   * Pick the tab(s) the badge renders into, in strict preference order —
+   * the first tier that yields anything wins, and the rest are purged.
+   *
+   * The badge is a `position: fixed` child of `document.body`, so it draws
+   * over *whatever* that document shows. Injecting into every candidate
+   * ("only the visible one composites") was wrong: the Steam menu is its
+   * own always-live popup document, so on current SteamOS builds the badge
+   * showed up inside the menu as well as on the game page (issue: badges
+   * injected into the Steam menu).
+   *
+   *   1. The real BPM window — `Steam Big Picture Mode`, and not a
+   *      browser-view popup. This is where the library / game-detail React
+   *      tree lives on current builds.
+   *   2. `MainMenu_uid<N>` popups — legacy builds with no separate BPM
+   *      window, where the popup *was* the whole UI.
+   *   3. SharedJSContext — builds that run the UI in the shared context
+   *      with popups disabled. Without this tier such a setup discovers no
+   *      render target at all and silently shows no badges anywhere.
+   */
+  private _pickRenderKeys(candidates: { key: string; tab: CefTab }[]): string[] {
+    const isPopup = (t: CefTab) => t.url.includes(BROWSER_VIEW_POPUP_MARKER);
+    const isMenu = (t: CefTab) => BPM_PREFIX_TARGETS.some((p) => t.title.startsWith(p));
+
+    // Not keyed off the BPM title alone: if Valve renames the window, a
+    // non-popup candidate still beats the menu popups rather than falling
+    // through to tier 2 and putting the badge back in the Steam menu.
+    const bpmWindow = candidates.filter(
+      (c) => c.key !== "SharedJSContext" && !isPopup(c.tab) && !isMenu(c.tab),
+    );
+    if (bpmWindow.length > 0) return bpmWindow.map((c) => c.key);
+
+    const mainMenu = candidates.filter((c) => isMenu(c.tab));
+    if (mainMenu.length > 0) return mainMenu.map((c) => c.key);
+
+    const shared = candidates.filter((c) => c.key === "SharedJSContext");
+    return shared.map((c) => c.key);
   }
 
   private async _openCDP(wsUrl: string, tabTitle: string): Promise<CDPConnection> {
@@ -463,8 +665,30 @@ export class SteamCefBadgeInjector<TBadgeData> {
     );
   }
 
+  /** Plugin CSS + the rule the obscured-gate toggles. */
+  private _bpmCss(): string {
+    const sel = this.cfg.obscuredHideSelector;
+    if (!sel) return this.cfg.css;
+    return `${this.cfg.css}
+html.${OBSCURED_CLASS} ${sel} { display: none !important; }
+`;
+  }
+
   private async _injectBadgeSystem(): Promise<void> {
-    const css = this.cfg.css;
+    const css = this._bpmCss();
+
+    // Scrub tabs we deliberately don't render into. A Loadout update lands
+    // mid-Steam-session, so a Steam-menu popup an older build injected into
+    // still has its badge + <style> until we take them back out.
+    for (const key of this.purgeKeys) {
+      const conn = this.connections.get(key);
+      if (!conn || !conn.client.connected) continue;
+      try {
+        await this._removeFromTab(conn);
+      } catch {
+        /* best effort — nothing to remove is the common case */
+      }
+    }
 
     // Inject into every candidate BPM render tab — only the visible one
     // composites; hidden tabs update their off-screen DOM harmlessly.
@@ -481,6 +705,9 @@ export class SteamCefBadgeInjector<TBadgeData> {
         try {
           await this._injectCSSToTab(conn, css);
           await this._cdpEvaluate(conn, this.cfg.bpmScript);
+          if (this.cfg.obscuredHideSelector) {
+            await this._cdpEvaluate(conn, buildObscuredGateScript(this.cfg.pluginId));
+          }
           this.log(`Injected badge system into ${t.key}`);
         } catch (err) {
           this.warn(`Failed to inject into ${t.key}:`, err);
@@ -523,19 +750,26 @@ export class SteamCefBadgeInjector<TBadgeData> {
     }
   }
 
+  /** Tear the badge runtime, the obscured-gate and `<style>` back out of one tab. */
+  private _removeFromTab(conn: CDPConnection): Promise<unknown> {
+    const { bpmGlobalName, storeGlobalName, styleId, pluginId } = this.cfg;
+    const gateKey = `__loadout_badge_gate_${pluginId.replace(/\W/g, "_")}`;
+    return this._cdpEvaluate(
+      conn,
+      `
+      if (window.${bpmGlobalName}) { window.${bpmGlobalName}.cleanup(); delete window.${bpmGlobalName}; }
+      if (window.${storeGlobalName}) { window.${storeGlobalName}.cleanup(); delete window.${storeGlobalName}; }
+      if (window.${gateKey}) window.${gateKey}.cleanup();
+      var s = document.getElementById("${styleId}"); if (s) s.remove();
+    `,
+    );
+  }
+
   private async _removeBadgeSystem(): Promise<void> {
-    const { bpmGlobalName, storeGlobalName, styleId } = this.cfg;
     for (const conn of this.connections.values()) {
       if (!conn.client.connected) continue;
       try {
-        await this._cdpEvaluate(
-          conn,
-          `
-          if (window.${bpmGlobalName}) window.${bpmGlobalName}.cleanup();
-          if (window.${storeGlobalName}) window.${storeGlobalName}.cleanup();
-          var s = document.getElementById("${styleId}"); if (s) s.remove();
-        `,
-        );
+        await this._removeFromTab(conn);
       } catch {
         /* best effort */
       }
@@ -556,6 +790,7 @@ export class SteamCefBadgeInjector<TBadgeData> {
         if (!conn.client.connected) {
           this.connections.delete(key);
           this.bpmRenderKeys = this.bpmRenderKeys.filter((k) => k !== key);
+          this.purgeKeys = this.purgeKeys.filter((k) => k !== key);
           this.log(`Pruned dead connection: ${key}`);
         }
       }

@@ -89,7 +89,11 @@ describe("SteamCefBadgeInjector — desktop mode gate (#111)", () => {
     expect(fetchCalls).toEqual([]);
     expect(clientsConstructed).toEqual([]);
     expect(inj.connected).toBe(false);
-    expect(inj.getStatus()).toEqual({ connected: false, tabs: 0 });
+    expect(inj.getStatus()).toEqual({
+      connected: false,
+      tabs: 0,
+      detail: "Steam CEF badges are only available in Gaming Mode.",
+    });
     expect(inj.getCurrentAppId()).toBeNull();
     await inj.stop();
   });
@@ -166,6 +170,88 @@ describe("SteamCefBadgeInjector — Gaming Mode connect + inject", () => {
   });
 });
 
+describe("SteamCefBadgeInjector — render-target selection", () => {
+  // Real SteamOS shape: the Steam menu / QAM / toasts are browser-view
+  // popups; the BPM window is not.
+  const POPUP = "about:blank?browserviewpopup=1&requestid=1&parentpopup=2";
+  const BPM_WINDOW = "about:blank?createflags=6292738&browserType=4";
+
+  it("renders into the BPM window only, never the Steam menu popup", async () => {
+    tabsResponse = [
+      tab("SharedJSContext", "https://steamloopback.host/"),
+      tab("MainMenu_uid2", POPUP),
+      tab("Steam Big Picture Mode", BPM_WINDOW),
+    ];
+    const inj = makeInjector(() => true);
+    await inj.start();
+
+    const menuEvals = evalCalls.filter((c) => c.wsUrl === "ws://MainMenu_uid2");
+    const bpmEvals = evalCalls.filter(
+      (c) => c.wsUrl === "ws://Steam Big Picture Mode",
+    );
+    expect(bpmEvals.some((c) => c.expr.includes("/*bpm-script*/"))).toBe(true);
+    expect(menuEvals.some((c) => c.expr.includes("/*bpm-script*/"))).toBe(false);
+    expect(menuEvals.some((c) => c.expr.includes("/*css*/"))).toBe(false);
+    await inj.stop();
+  });
+
+  it("scrubs a badge an earlier build left in the Steam menu popup", async () => {
+    tabsResponse = [
+      tab("SharedJSContext", "https://steamloopback.host/"),
+      tab("MainMenu_uid2", POPUP),
+      tab("Steam Big Picture Mode", BPM_WINDOW),
+    ];
+    const inj = makeInjector(() => true);
+    await inj.start();
+
+    const menuEvals = evalCalls.filter((c) => c.wsUrl === "ws://MainMenu_uid2");
+    expect(
+      menuEvals.some(
+        (c) =>
+          c.expr.includes("__test_badges.cleanup()") &&
+          c.expr.includes('getElementById("test-styles")'),
+      ),
+    ).toBe(true);
+    await inj.stop();
+  });
+
+  it("falls back to MainMenu popups when there is no BPM window", async () => {
+    tabsResponse = [
+      tab("SharedJSContext", "https://steamloopback.host/"),
+      tab("MainMenu_uid2", POPUP),
+    ];
+    const inj = makeInjector(() => true);
+    await inj.start();
+
+    const menuEvals = evalCalls.filter((c) => c.wsUrl === "ws://MainMenu_uid2");
+    expect(menuEvals.some((c) => c.expr.includes("/*bpm-script*/"))).toBe(true);
+    await inj.stop();
+  });
+
+  it("falls back to SharedJSContext when it is the only candidate", async () => {
+    tabsResponse = [tab("SharedJSContext", "https://steamloopback.host/")];
+    const inj = makeInjector(() => true);
+    await inj.start();
+
+    const sharedEvals = evalCalls.filter((c) => c.wsUrl === "ws://SharedJSContext");
+    expect(sharedEvals.some((c) => c.expr.includes("/*bpm-script*/"))).toBe(true);
+    await inj.stop();
+  });
+
+  it("reads the route from the render tab when SharedJSContext is absent", async () => {
+    tabsResponse = [tab("Steam Big Picture Mode", BPM_WINDOW)];
+    evalResponder = (expr) =>
+      expr.includes("tempNavStore") ? "/library/app/620" : "";
+    const inj = makeInjector(() => true);
+    await inj.start();
+    await (inj as unknown as { _pollCurrentAppId(): Promise<void> })._pollCurrentAppId();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(inj.getCurrentAppId()).toBe("620");
+    await inj.stop();
+  });
+});
+
 describe("SteamCefBadgeInjector — route poll + push coalescing", () => {
   beforeEach(() => {
     tabsResponse = [
@@ -212,6 +298,93 @@ describe("SteamCefBadgeInjector — route poll + push coalescing", () => {
   });
 });
 
+describe("SteamCefBadgeInjector — obscured gate", () => {
+  const BPM_WINDOW = "about:blank?createflags=6292738";
+
+  beforeEach(() => {
+    tabsResponse = [
+      tab("SharedJSContext", "https://steamloopback.host/"),
+      tab("Steam Big Picture Mode", BPM_WINDOW),
+    ];
+  });
+
+  it("injects the gate and the hide rule when a selector is configured", async () => {
+    const inj = makeInjector(() => true, {
+      obscuredHideSelector: "#test-badge",
+    });
+    await inj.start();
+
+    const bpm = evalCalls.filter((c) => c.wsUrl === "ws://Steam Big Picture Mode");
+    // Hide rule rides along with the plugin CSS.
+    expect(
+      bpm.some((c) =>
+        c.expr.includes(
+          "html.loadout-badges-obscured #test-badge { display: none !important; }",
+        ),
+      ),
+    ).toBe(true);
+    // Gate listens on standard DOM events only — no Steam globals.
+    const gate = bpm.find((c) => c.expr.includes("__loadout_badge_gate_"));
+    expect(gate).toBeDefined();
+    expect(gate?.expr).toContain('addEventListener("blur"');
+    expect(gate?.expr).toContain('addEventListener("visibilitychange"');
+    expect(gate?.expr).toContain("document.hasFocus()");
+    await inj.stop();
+  });
+
+  it("stays out entirely when no selector is configured", async () => {
+    const inj = makeInjector(() => true);
+    await inj.start();
+
+    const bpm = evalCalls.filter((c) => c.wsUrl === "ws://Steam Big Picture Mode");
+    expect(bpm.some((c) => c.expr.includes("__loadout_badge_gate_"))).toBe(false);
+    expect(bpm.some((c) => c.expr.includes("loadout-badges-obscured"))).toBe(false);
+    await inj.stop();
+  });
+
+  it("cleans the gate up on stop()", async () => {
+    const inj = makeInjector(() => true, {
+      obscuredHideSelector: "#test-badge",
+    });
+    await inj.start();
+    evalCalls = [];
+    await inj.stop();
+
+    expect(
+      evalCalls.some((c) =>
+        c.expr.includes("window.__loadout_badge_gate_test_badges.cleanup()"),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("SteamCefBadgeInjector — status detail", () => {
+  it("names the debug port when /json is unreachable", async () => {
+    globalThis.fetch = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as typeof fetch;
+    const inj = makeInjector(() => true);
+    await inj.start();
+
+    const { connected, detail } = inj.getStatus();
+    expect(connected).toBe(false);
+    expect(detail).toContain("8080");
+    expect(detail).toContain(".cef-enable-remote-debugging");
+    await inj.stop();
+  });
+
+  it("clears the detail once badges can render", async () => {
+    tabsResponse = [
+      tab("SharedJSContext", "https://steamloopback.host/"),
+      tab("Steam Big Picture Mode", "about:blank?createflags=6292738"),
+    ];
+    const inj = makeInjector(() => true);
+    await inj.start();
+    expect(inj.getStatus().detail).toBeUndefined();
+    await inj.stop();
+  });
+});
+
 describe("SteamCefBadgeInjector — health prune", () => {
   it("prunes a dead connection and rediscovers", async () => {
     tabsResponse = [
@@ -243,7 +416,7 @@ describe("SteamCefBadgeInjector — cleanup", () => {
     const inj = makeInjector(() => true);
     await inj.start();
     await inj.stop();
-    expect(inj.getStatus()).toEqual({ connected: false, tabs: 0 });
+    expect(inj.getStatus()).toMatchObject({ connected: false, tabs: 0 });
     // restore real fetch for any later suites
     globalThis.fetch = realFetch;
   });

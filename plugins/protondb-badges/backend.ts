@@ -149,6 +149,9 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
       bpmGlobalName: "__protondb_badges",
       storeGlobalName: "__protondb_store_badges",
       css: this._generateBadgeCSS(),
+      // Hide while the Steam menu / QAM covers the BPM window — they are
+      // separate windows drawn above ours, so we can't sit behind them.
+      obscuredHideSelector: "#protondb-badge-container",
       bpmScript: this._generateBPMScript(),
       buildStoreScript: (d) => this._generateStoreScript(d),
       // Report only — the injected runtime never reads Linux-support, so
@@ -430,8 +433,18 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
 
   // ─── RPC: Steam-CEF status ──────────────────────────────────────
 
-  async getStatus(): Promise<{ connected: boolean; tabs: number }> {
-    return this.injector?.getStatus() ?? { connected: false, tabs: 0 };
+  async getStatus(): Promise<{
+    connected: boolean;
+    tabs: number;
+    detail?: string;
+  }> {
+    return (
+      this.injector?.getStatus() ?? {
+        connected: false,
+        tabs: 0,
+        detail: "Badge injection is not running.",
+      }
+    );
   }
 
   async reconnect(): Promise<{ success: boolean; error?: string }> {
@@ -772,13 +785,14 @@ export default class ProtonDBBadgesBackend implements PluginBackend {
   }
 
   private _emitState(): void {
-    const { connected, tabs } = this.injector?.getStatus() ?? {
+    const { connected, tabs, detail } = this.injector?.getStatus() ?? {
       connected: false,
       tabs: 0,
+      detail: "Badge injection is not running.",
     };
     this.emit?.({
       event: "stateChanged",
-      data: { settings: this.settings, connected, tabs },
+      data: { settings: this.settings, connected, tabs, detail },
     });
   }
 }

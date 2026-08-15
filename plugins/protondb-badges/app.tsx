@@ -63,6 +63,8 @@ interface ProtonDBSettings {
 interface StatusInfo {
   connected: boolean;
   tabs: number;
+  /** Why badges aren't rendering (Gaming Mode, debug port, no BPM tab). */
+  detail?: string;
 }
 
 interface BareInstalledGame {
@@ -254,6 +256,7 @@ function ProtonDBBadges() {
         settings?: ProtonDBSettings;
         connected?: boolean;
         tabs?: number;
+        detail?: string;
       };
       if (d.settings) {
         setSettings(d.settings);
@@ -261,7 +264,11 @@ function ProtonDBBadges() {
       // Backend emits connection state alongside settings on connect /
       // health-check changes — reflect it live in the Steam CEF section.
       if (typeof d.connected === "boolean") {
-        setStatus({ connected: d.connected, tabs: d.tabs ?? 0 });
+        setStatus({
+          connected: d.connected,
+          tabs: d.tabs ?? 0,
+          detail: d.detail,
+        });
       }
     },
   });
@@ -804,6 +811,9 @@ function ConfigCards({
                 : "Disconnected"}
             </span>
           </div>
+          {status.detail && (
+            <div className="subsection-desc mt-2">{status.detail}</div>
+          )}
           {!status.connected && (
             <div className="mt-2">
               <Button onClick={onReconnect}>Reconnect</Button>
