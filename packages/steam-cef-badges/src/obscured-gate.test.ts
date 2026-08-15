@@ -7,7 +7,7 @@
 import { describe, it, expect } from "bun:test";
 import { buildObscuredGateScript, OBSCURED_SETTLE_MS } from "./injector";
 
-const CLASS = "loadout-badges-obscured";
+const CLASS = "loadout-badges-obscured-protondb_badges";
 
 type Listener = () => void;
 
@@ -19,6 +19,7 @@ function harness(opts: { focused?: boolean; visible?: boolean } = {}) {
   const winListeners = new Map<string, Listener[]>();
   const docListeners = new Map<string, Listener[]>();
 
+  let toggles = 0;
   let now = 0;
   const timers = new Map<number, { at: number; fn: Listener }>();
   let nextTimer = 1;
@@ -45,11 +46,16 @@ function harness(opts: { focused?: boolean; visible?: boolean } = {}) {
     },
     documentElement: {
       classList: {
+        contains: (c: string) => classes.has(c),
         toggle: (c: string, on_: boolean) => {
+          if (on_ !== classes.has(c)) toggles++;
           if (on_) classes.add(c);
           else classes.delete(c);
         },
-        remove: (c: string) => classes.delete(c),
+        remove: (c: string) => {
+          if (classes.has(c)) toggles++;
+          classes.delete(c);
+        },
       },
     },
   };
@@ -61,10 +67,15 @@ function harness(opts: { focused?: boolean; visible?: boolean } = {}) {
   };
   const clearTimeoutFn = (id: number) => void timers.delete(id);
 
+  const countWinListeners = () =>
+    [...winListeners.values()].reduce((n, l) => n + l.length, 0);
+
   return {
     win,
-    /** Total class toggles applied — the strobe counter. */
-    toggles: 0,
+    /** Every actual class mutation since arming — the strobe counter. */
+    toggles: () => toggles,
+    resetToggles: () => void (toggles = 0),
+    winListeners: countWinListeners,
     run(src: string) {
       new Function("window", "document", "setTimeout", "clearTimeout", src)(
         win,
@@ -92,6 +103,7 @@ function harness(opts: { focused?: boolean; visible?: boolean } = {}) {
       }
     },
     obscured: () => classes.has(CLASS),
+    hasClass: (c: string) => classes.has(c),
     pendingTimers: () => timers.size,
   };
 }
@@ -116,21 +128,44 @@ describe("obscured gate", () => {
     expect(h.obscured()).toBe(true);
   });
 
-  it("swallows a focus burst instead of strobing", () => {
+  it("swallows a focus burst without a single class mutation", () => {
     const h = harness();
     h.run(src);
+    h.resetToggles();
 
     // The measured SteamOS pattern: 5 transitions inside one frame budget,
-    // settling back on focus. Nothing should ever be applied.
+    // settling back on focus. Counting mutations (not just the final state)
+    // is the point — an un-debounced gate ends on the same value while
+    // having strobed the badge on the way there.
     for (const state of [false, true, false, true, false]) {
       h.fire(state ? "focus" : "blur", state);
       h.tick(10);
     }
     h.fire("focus", true);
-    expect(h.obscured()).toBe(false);
+    h.tick(OBSCURED_SETTLE_MS);
 
+    expect(h.toggles()).toBe(0);
+    expect(h.obscured()).toBe(false);
+  });
+
+  it("applies exactly one mutation for a real menu open and close", () => {
+    const h = harness();
+    h.run(src);
+    h.resetToggles();
+
+    // Measured shape: one blur, seconds of silence, one focus.
+    h.fire("blur", false);
+    h.tick(OBSCURED_SETTLE_MS);
+    expect(h.obscured()).toBe(true);
+    expect(h.toggles()).toBe(1);
+
+    h.tick(8000);
+    expect(h.toggles()).toBe(1);
+
+    h.fire("focus", true);
     h.tick(OBSCURED_SETTLE_MS);
     expect(h.obscured()).toBe(false);
+    expect(h.toggles()).toBe(2);
   });
 
   it("restores the badge once focus comes back and settles", () => {
@@ -188,11 +223,50 @@ describe("obscured gate", () => {
   it("re-running the script re-arms rather than double-binding", () => {
     const h = harness();
     h.run(src);
+    const after1 = h.winListeners();
     h.run(src);
+
+    // The listener count is what catches a missing cleanup — a Set-backed
+    // class makes a doubled toggle indistinguishable from a single one.
+    expect(h.winListeners()).toBe(after1);
 
     h.fire("blur", false);
     h.tick(OBSCURED_SETTLE_MS);
     expect(h.obscured()).toBe(true);
     expect(h.pendingTimers()).toBe(0);
+  });
+
+  it("keeps the badge hidden when re-injected while the menu is open", () => {
+    // Regression: a health blip re-injects the gate. A naive re-arm resets
+    // everFocused, which reads as "never focused" ⇒ fail-open ⇒ the class
+    // comes off and the badge draws over the open Steam menu again.
+    const h = harness();
+    h.run(src);
+
+    h.fire("blur", false);
+    h.tick(OBSCURED_SETTLE_MS);
+    expect(h.obscured()).toBe(true);
+
+    h.run(src); // still blurred — menu still open
+    expect(h.obscured()).toBe(true);
+
+    h.tick(OBSCURED_SETTLE_MS * 4);
+    expect(h.obscured()).toBe(true);
+  });
+
+  it("gives each plugin its own class so one teardown can't un-hide another", () => {
+    const h = harness();
+    h.run(src);
+    h.run(buildObscuredGateScript("hltb"));
+
+    h.fire("blur", false);
+    h.tick(OBSCURED_SETTLE_MS);
+    expect(h.obscured()).toBe(true);
+    expect(h.hasClass("loadout-badges-obscured-hltb")).toBe(true);
+
+    // Tearing down HLTB must leave ProtonDB hidden.
+    (h.win["__loadout_badge_gate_hltb"] as { cleanup: () => void }).cleanup();
+    expect(h.hasClass("loadout-badges-obscured-hltb")).toBe(false);
+    expect(h.obscured()).toBe(true);
   });
 });

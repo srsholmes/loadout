@@ -228,26 +228,54 @@ describe("SteamCefBadgeInjector — render-target selection", () => {
     await inj.stop();
   });
 
-  it("falls back to SharedJSContext when it is the only candidate", async () => {
+  it("never renders into SharedJSContext, and says so", async () => {
+    // SharedJSContext is the invisible page (docs/steam-ui-injection.md).
+    // Electing it would draw nothing while reporting everything is fine.
     tabsResponse = [tab("SharedJSContext", "https://steamloopback.host/")];
     const inj = makeInjector(() => true);
     await inj.start();
 
     const sharedEvals = evalCalls.filter((c) => c.wsUrl === "ws://SharedJSContext");
-    expect(sharedEvals.some((c) => c.expr.includes("/*bpm-script*/"))).toBe(true);
+    expect(sharedEvals.some((c) => c.expr.includes("/*bpm-script*/"))).toBe(false);
+    expect(inj.getStatus().detail).toMatch(/no Big Picture window/i);
     await inj.stop();
   });
 
-  it("reads the route from the render tab when SharedJSContext is absent", async () => {
-    tabsResponse = [tab("Steam Big Picture Mode", BPM_WINDOW)];
-    evalResponder = (expr) =>
-      expr.includes("tempNavStore") ? "/library/app/620" : "";
+  it("classifies a BPM window titled \"Steam\" as the window, not the context", async () => {
+    // "Steam" is in SHARED_JS_NAMES, so a desktop-BPM window carrying
+    // browserType=4 would otherwise collapse onto the SharedJSContext key,
+    // evict the real shared context and be excluded from the render tier.
+    tabsResponse = [
+      tab("SharedJSContext", "https://steamloopback.host/", "shared"),
+      tab("Steam", "about:blank?browserType=4", "bpm"),
+      tab("MainMenu_uid2", POPUP),
+    ];
     const inj = makeInjector(() => true);
     await inj.start();
+
+    const bpmEvals = evalCalls.filter((c) => c.wsUrl === "ws://bpm");
+    const menuEvals = evalCalls.filter((c) => c.wsUrl === "ws://MainMenu_uid2");
+    expect(bpmEvals.some((c) => c.expr.includes("/*bpm-script*/"))).toBe(true);
+    expect(menuEvals.some((c) => c.expr.includes("/*bpm-script*/"))).toBe(false);
+    // The real shared context survived under its own key.
+    expect(clientsConstructed).toContain("ws://shared");
+    await inj.stop();
+  });
+
+  it("route polling is a no-op without SharedJSContext, not a badge eviction", async () => {
+    // tempNavStore only exists on SharedJSContext, and BPM's location is
+    // pinned to the entry URL — so reading the route from the render tab
+    // would push a null update and wipe a badge that was on screen.
+    tabsResponse = [tab("Steam Big Picture Mode", BPM_WINDOW)];
+    evalResponder = () => "https://steamloopback.host/index.html";
+    const inj = makeInjector(() => true);
+    await inj.start();
+    evalCalls = [];
+
     await (inj as unknown as { _pollCurrentAppId(): Promise<void> })._pollCurrentAppId();
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(inj.getCurrentAppId()).toBe("620");
+    expect(evalCalls.some((c) => c.expr.includes("update(null)"))).toBe(false);
     await inj.stop();
   });
 });
@@ -319,7 +347,7 @@ describe("SteamCefBadgeInjector — obscured gate", () => {
     expect(
       bpm.some((c) =>
         c.expr.includes(
-          "html.loadout-badges-obscured #test-badge { display: none !important; }",
+          "html.loadout-badges-obscured-test_badges #test-badge { display: none !important; }",
         ),
       ),
     ).toBe(true);
