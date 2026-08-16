@@ -4,6 +4,7 @@ import {
   matchProfileName,
   effectiveMaxWatts,
   isBatteryLimited,
+  applyFirmwareRange,
   BATTERY_SAFE_MAX_WATTS,
 } from "./devices";
 
@@ -221,6 +222,83 @@ describe("battery safety ceiling", () => {
     // change for that device and is intentional.
     expect(
       effectiveMaxWatts({ acOnline: false, maxTdp: 90, batteryMaxTdp: 65 }),
+    ).toBe(BATTERY_SAFE_MAX_WATTS);
+  });
+});
+
+describe("isFallback", () => {
+  it("is false for a table match", () => {
+    expect(matchDevice("ONEXPLAYER APEX", "AMD").isFallback).toBe(false);
+  });
+
+  it("is true for a vendor fallback", () => {
+    expect(matchDevice("Some Unknown Handheld", "Intel").isFallback).toBe(true);
+    expect(matchDevice("Some Unknown Handheld", "AMD").isFallback).toBe(true);
+    expect(matchDevice("", "Unknown").isFallback).toBe(true);
+  });
+});
+
+// A handheld whose vendor driver implements the kernel's firmware-attributes
+// interface publishes the envelope its firmware will accept. That's the only
+// correct source for a device released after this table was last touched —
+// but it says nothing about thermals, so a matched row keeps its judgment.
+describe("applyFirmwareRange", () => {
+  it("gives an unknown device the firmware's range and derived presets", () => {
+    // The shape an Arc G3 Extreme handheld reports: 8-35 W on PL1.
+    const device = applyFirmwareRange(matchDevice("BRAND NEW HANDHELD", "Intel"), {
+      min: 8,
+      max: 35,
+    });
+
+    expect(device.minTdp).toBe(8);
+    expect(device.maxTdp).toBe(35);
+    expect(device.profiles).toEqual({ Silent: 13, Balanced: 22, Performance: 35 });
+    expect(device.batteryMaxTdp).toBe(28);
+  });
+
+  it("keeps a known device's hand-tuned battery cap", () => {
+    const matched = matchDevice("ROG Ally RC71", "AMD"); // 25 W plugged, 20 W battery
+    const device = applyFirmwareRange(matched, { min: 7, max: 30 });
+
+    expect(device.maxTdp).toBe(30);
+    expect(device.batteryMaxTdp).toBe(20);
+  });
+
+  it("never lets a known device's battery cap exceed the firmware max", () => {
+    const matched = matchDevice("ONEXPLAYER APEX", "AMD"); // 55 W battery cap
+    const device = applyFirmwareRange(matched, { min: 5, max: 40 });
+
+    expect(device.batteryMaxTdp).toBe(40);
+  });
+
+  it("clamps a known device's presets into the firmware's interval", () => {
+    const matched = matchDevice("ONEXPLAYER APEX", "AMD"); // 15 / 30 / 50
+    const device = applyFirmwareRange(matched, { min: 20, max: 40 });
+
+    expect(device.profiles).toEqual({ Silent: 20, Balanced: 30, Performance: 40 });
+  });
+
+  it("leaves the device name and fallback flag alone", () => {
+    const matched = matchDevice("ONEXPLAYER APEX", "AMD");
+    const device = applyFirmwareRange(matched, { min: 8, max: 35 });
+
+    expect(device.name).toBe("OneXPlayer APEX");
+    expect(device.isFallback).toBe(false);
+  });
+
+  it("still defers to the global on-battery ceiling", () => {
+    const device = applyFirmwareRange(matchDevice("BIG UNKNOWN RIG", "AMD"), {
+      min: 10,
+      max: 120,
+    });
+
+    expect(device.batteryMaxTdp).toBe(96);
+    expect(
+      effectiveMaxWatts({
+        acOnline: false,
+        maxTdp: device.maxTdp,
+        batteryMaxTdp: device.batteryMaxTdp,
+      }),
     ).toBe(BATTERY_SAFE_MAX_WATTS);
   });
 });
