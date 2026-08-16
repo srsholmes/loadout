@@ -66,6 +66,32 @@ describe("classifyTempZone()", () => {
     expect(classifyTempZone("amdgpu", "edge")).toBe("gpu");
   });
 
+  it("classifies i915 as gpu", () => {
+    expect(classifyTempZone("i915", "")).toBe("gpu");
+  });
+
+  // Xe/Xe3 graphics (Lunar Lake, Panther Lake / Arc G3) bind the `xe`
+  // driver, whose hwmon chip name is just "xe".
+  it("classifies xe as gpu on an exact chip-name match", () => {
+    expect(classifyTempZone("xe", "")).toBe("gpu");
+    expect(classifyTempZone("XE", "")).toBe("gpu");
+  });
+
+  // "xe" is two characters — matching it as a substring the way the other
+  // GPU chips are matched would claim sensors that have nothing to do with
+  // the GPU, so it is matched exactly instead.
+  it("does not claim an unrelated sensor whose text merely contains 'xe'", () => {
+    expect(classifyTempZone("mychip", "Mixed Zone")).toBe("unknown");
+    expect(classifyTempZone("xenon_board", "")).toBe("unknown");
+  });
+
+  // The chip name settles which engine a sensor belongs to, so it has to
+  // outrank the CPU *label* keywords — an `xe` sensor labelled "package" is
+  // still the GPU's.
+  it("prefers the xe chip name over a CPU-ish label", () => {
+    expect(classifyTempZone("xe", "Package")).toBe("gpu");
+  });
+
   it("classifies junction label as gpu", () => {
     expect(classifyTempZone("something", "junction")).toBe("gpu");
   });
