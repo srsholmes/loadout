@@ -4,6 +4,7 @@ import {
   findWifiDevice,
   modulesForDriver,
   findModuleHolders,
+  filterLoadedModules,
   readRfkill,
   detectDriverInfo,
   getWifiDevice,
@@ -88,6 +89,16 @@ function makeHarness(init?: { rfkillAbsent?: boolean }) {
 
 type Harness = ReturnType<typeof makeHarness>;
 
+/**
+ * `/proc/modules` for a pre-Wi-Fi-7 Intel radio: iwlmvm is the loaded
+ * opmode, iwlmld isn't present. unloadModules filters the driver map down
+ * to this before shelling out to modprobe.
+ */
+const IWLMVM_PROC_MODULES = [
+  "iwlmvm 851968 0 - Live 0x0",
+  "iwlwifi 479232 1 iwlmvm, Live 0x0",
+].join("\n");
+
 /** Wire up /sys links for a live Intel card on `iface`. */
 function linkIntel(h: Harness, iface = "wlan0") {
   h.links[`/sys/class/net/${iface}/device/driver`] = "../../../bus/pci/drivers/iwlwifi";
@@ -131,9 +142,11 @@ describe("parseNmDeviceStatus / findWifiDevice", () => {
 });
 
 describe("modulesForDriver", () => {
-  it("unloads iwlmvm before iwlwifi for Intel (the 'in use' lesson)", () => {
+  it("unloads both Intel opmodes before iwlwifi (the 'in use' lesson)", () => {
+    // Wi-Fi 7 radios bind iwlmld where older ones bind iwlmvm; whichever
+    // isn't loaded is dropped by unloadModules before modprobe sees it.
     expect(modulesForDriver({ driver: "iwlwifi" })).toEqual({
-      unload: ["iwlmvm", "iwlwifi"],
+      unload: ["iwlmld", "iwlmvm", "iwlwifi"],
       load: "iwlwifi",
     });
   });
@@ -143,6 +156,24 @@ describe("modulesForDriver", () => {
       unload: ["mt7921e"],
       load: "mt7921e",
     });
+  });
+});
+
+describe("filterLoadedModules", () => {
+  const PROC = ["iwlmld 262144 0 - Live 0x0", "iwlwifi 589824 1 iwlmld, Live 0x0"].join("\n");
+
+  it("keeps only loaded modules, in the caller's order", () => {
+    expect(
+      filterLoadedModules({ procModules: PROC, modules: ["iwlmld", "iwlmvm", "iwlwifi"] }),
+    ).toEqual(["iwlmld", "iwlwifi"]);
+  });
+
+  it("returns nothing when none of the modules are loaded", () => {
+    expect(filterLoadedModules({ procModules: PROC, modules: ["mt7921e"] })).toEqual([]);
+  });
+
+  it("treats an empty /proc/modules as nothing loaded", () => {
+    expect(filterLoadedModules({ procModules: "", modules: ["iwlwifi"] })).toEqual([]);
   });
 });
 
@@ -261,6 +292,7 @@ describe("recover", () => {
     const h = makeHarness();
     h.nmState = "wlan0:wifi:unavailable";
     linkIntel(h);
+    h.files["/proc/modules"] = IWLMVM_PROC_MODULES;
     h.onModprobe = (cmd) => {
       // Unload removes the device entirely; load brings it back renamed —
       // exactly what happened live on the Apex (wlan0 → wlan1).
@@ -296,6 +328,7 @@ describe("recover", () => {
   it("falls back to the persisted driver when the interface has vanished", async () => {
     const h = makeHarness();
     h.nmState = "lo:loopback:connected (externally)"; // no wifi row at all
+    h.files["/proc/modules"] = IWLMVM_PROC_MODULES;
     h.onModprobe = (cmd) => {
       if (cmd[1] !== "-r") h.nmState = "wlan0:wifi:disconnected";
       return { stdout: "", stderr: "", exitCode: 0 };
@@ -315,6 +348,37 @@ describe("recover", () => {
     expect(res.stage).toBe("precheck");
     expect(res.detail).toContain("No WiFi driver known");
     expect(modprobeCalls(h)).toEqual([]);
+  });
+
+  // Regression: Intel Wi-Fi 7 parts (BE2xx, as in the current Intel
+  // handhelds) load iwlmld, not iwlmvm. `modprobe -r iwlmld iwlmvm iwlwifi`
+  // would fail with "not found" — which isn't an "in use" error, so the
+  // holders retry below never fires and recovery burns a PCI reset it
+  // didn't need. The unload list is filtered against /proc/modules first.
+  it("unloads a Wi-Fi 7 radio's iwlmld without touching the absent iwlmvm", async () => {
+    const h = makeHarness();
+    h.nmState = "";
+    h.files["/proc/modules"] = [
+      "iwlmld 262144 0 - Live 0x0",
+      "iwlwifi 589824 1 iwlmld, Live 0x0",
+    ].join("\n");
+    h.onModprobe = (cmd) => {
+      if (cmd[1] !== "-r") h.nmState = "wlan0:wifi:disconnected";
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+
+    const res = await recover({
+      deps: h.deps,
+      lastKnown: { driver: "iwlwifi", pciAddress: null, iface: "wlan0", updatedAt: 0 },
+    });
+
+    expect(res.ok).toBe(true);
+    expect(modprobeCalls(h)).toEqual([
+      ["modprobe", "-r", "iwlmld", "iwlwifi"],
+      ["modprobe", "iwlwifi"],
+    ]);
+    // No PCI tier: the cheap reload was enough.
+    expect(h.writes).toEqual([]);
   });
 
   it("retries an 'in use' unload with the /proc/modules holders", async () => {
