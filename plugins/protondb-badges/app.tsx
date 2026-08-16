@@ -814,7 +814,7 @@ function ConfigCards({
           {status.detail && (
             <div className="subsection-desc mt-2">{status.detail}</div>
           )}
-          {!status.connected && (
+          {(!status.connected || status.detail) && (
             <div className="mt-2">
               <Button onClick={onReconnect}>Reconnect</Button>
             </div>

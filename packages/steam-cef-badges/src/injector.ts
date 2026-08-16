@@ -124,6 +124,9 @@ const BROWSER_VIEW_POPUP_MARKER = "browserviewpopup=1";
 /** Steam's own marker for a Big Picture browser window. */
 const BPM_BROWSER_TYPE = "browserType=4";
 
+/** Ceiling on the rediscovery back-off, in health ticks (~5s each). */
+const MAX_DISCOVERY_SKIPS = 63;
+
 /** A chrome popup — the Steam menu, QAM, toasts. Never a render target. */
 function isBrowserViewPopup(tab: CefTab): boolean {
   return tab.url.includes(BROWSER_VIEW_POPUP_MARKER);
@@ -147,12 +150,40 @@ function isBigPictureWindow(tab: CefTab): boolean {
   return tab.title === "Steam" && tab.url.includes(BPM_BROWSER_TYPE);
 }
 
+/** URL patterns the GamepadUI / shared context is served from. */
+const LOOPBACK_URL_PATTERNS = [
+  "https://steamloopback.host/routes/",
+  "https://steamloopback.host/index.html",
+];
+
+/**
+ * The shared JS context. Mirrors `isSharedJSContext` in
+ * apps/loadout/src/injector/tabs.ts: title alone is not enough, because
+ * `SHARED_JS_NAMES` contains generic titles ("Steam", "SP") that an ordinary
+ * steamcommunity.com tab can also carry. Matching those loosely lets a decoy
+ * claim the key and evict the real context.
+ */
+function isSharedContext(tab: CefTab): boolean {
+  if (!SHARED_JS_NAMES.includes(tab.title)) return false;
+  return LOOPBACK_URL_PATTERNS.some((u) => tab.url.includes(u));
+}
+
+/** How strongly a tab claims the SharedJSContext key. Higher wins, so a
+ *  loosely-matching decoy can never displace the canonical target
+ *  regardless of the order Steam lists them in. */
+function sharedContextRank(tab: CefTab): number {
+  if (tab.title === "SharedJSContext" && isSharedContext(tab)) return 3;
+  if (isSharedContext(tab)) return 2;
+  if (tab.title === "SharedJSContext") return 1;
+  return 0;
+}
+
 /** Tabs worth opening a socket to: the BPM window, the shared context (for
  *  route polling) and menu popups (so we can scrub old builds' badges). */
 function isBadgeCandidate(tab: CefTab): boolean {
   return (
     isBigPictureWindow(tab) ||
-    SHARED_JS_NAMES.includes(tab.title) ||
+    sharedContextRank(tab) > 0 ||
     isMenuPopup(tab)
   );
 }
@@ -324,10 +355,21 @@ export class SteamCefBadgeInjector<TBadgeData> {
    *  it runs once per discovery rather than on every debounced re-inject. */
   private purgePending = false;
 
+  /** Health ticks still to skip before the next discovery attempt. */
+  private discoverySkips = 0;
+  /** Current back-off size. Kept separate from the countdown above — sharing
+   *  one field means the ratchet is read back after being decremented to
+   *  zero, so it never actually grows. Ratchets 1, 3, 7, 15, 31, 63. */
+  private discoveryBackoff = 0;
+
+  /** Guards `_injectBadgeSystem` against overlapping runs. */
+  private injecting = false;
+
   /** Last `{connected, detail}` handed to `onStateChange`, so failure paths
    *  can emit the new reason without re-emitting an unchanged one. */
   private lastEmittedDetail: string | null = null;
   private lastEmittedConnected: boolean | null = null;
+  private lastEmittedTabs: number | null = null;
 
   constructor(config: SteamCefBadgeInjectorConfig<TBadgeData>) {
     this.cfg = {
@@ -398,6 +440,16 @@ export class SteamCefBadgeInjector<TBadgeData> {
     this.purgeKeys = [];
     this._connected = false;
     this.lastConnectError = null;
+    this.currentAppId = null;
+    this.purgePending = false;
+    this.discoverySkips = 0;
+    this.discoveryBackoff = 0;
+    // Announce the shutdown, then forget what we announced — a later start()
+    // must be free to emit the same values again.
+    this._emitStateIfChanged();
+    this.lastEmittedDetail = null;
+    this.lastEmittedConnected = null;
+    this.lastEmittedTabs = null;
   }
 
   /** Manual reconnect (RPC). Returns a Gaming-Mode error in desktop mode. */
@@ -454,6 +506,12 @@ export class SteamCefBadgeInjector<TBadgeData> {
     if (this.bpmRenderKeys.length === 0) {
       return "Connected, but no Big Picture window was found to draw into.";
     }
+    if (!this.connections.has("SharedJSContext")) {
+      // Render target but no route source: the badge can never be told which
+      // game is on screen, so nothing appears. Without this clause the status
+      // reads as healthy while showing no badges at all.
+      return "Connected to the Big Picture window, but not to Steam's shared context — the game you're viewing can't be detected.";
+    }
     return undefined;
   }
 
@@ -481,9 +539,7 @@ export class SteamCefBadgeInjector<TBadgeData> {
 
   private async _pollCurrentAppId(): Promise<void> {
     if (this.polling) return;
-    // SharedJSContext owns `tempNavStore` on every build that has one; the
-    // render tab is the fallback for builds that don't expose it there, so
-    // a missing shared context isn't a silent "no badges ever".
+    // SharedJSContext only — see _routeConn for why there is no fallback.
     const conn = this._routeConn();
     if (!conn || !conn.client.connected) return;
 
@@ -608,28 +664,34 @@ export class SteamCefBadgeInjector<TBadgeData> {
       // an exact/prefix target (which would orphan one socket from
       // health-check pruning, since the two are stored under different keys).
       const connectedTabIds = new Set<string>();
-      const candidates: { key: string; tab: CefTab }[] = [];
 
+      // Classify every tab first, with no I/O, so duplicate keys are resolved
+      // on merit rather than on the order Steam happened to list them in.
+      const claims = new Map<string, { tab: CefTab; rank: number }>();
       for (const tab of tabs) {
         if (!tab.webSocketDebuggerUrl) continue;
         if (!isBadgeCandidate(tab)) continue;
 
         // A BPM window titled "Steam" is in SHARED_JS_NAMES too — classify it
-        // as the window, or it collapses onto the SharedJSContext key, evicts
-        // the real shared context and is then excluded from tier 1.
-        const key = isBigPictureWindow(tab)
-          ? tab.title
-          : SHARED_JS_NAMES.includes(tab.title)
-            ? "SharedJSContext"
-            : tab.title;
-        // Two tabs can reduce to one key (e.g. "SP" and "Steam" both meaning
-        // SharedJSContext). Keep the first and leave the rest alone rather
-        // than opening a socket we'd immediately orphan.
-        if (this.connections.has(key)) {
-          this.log(`Ignoring duplicate ${key} target: ${tab.title}`);
+        // as the window, or it collapses onto the SharedJSContext key and
+        // evicts the real shared context.
+        const isBpm = isBigPictureWindow(tab);
+        const key = isBpm ? tab.title : isMenuPopup(tab) ? tab.title : "SharedJSContext";
+        const rank = isBpm || isMenuPopup(tab) ? 1 : sharedContextRank(tab);
+
+        const held = claims.get(key);
+        if (held && held.rank >= rank) {
+          this.log(`Ignoring weaker ${key} candidate: "${tab.title}" (${tab.url})`);
           continue;
         }
+        if (held) {
+          this.log(`Preferring "${tab.title}" over "${held.tab.title}" for ${key}`);
+        }
+        claims.set(key, { tab, rank });
+      }
 
+      const candidates: { key: string; tab: CefTab }[] = [];
+      for (const [key, { tab }] of claims) {
         try {
           const conn = await this._openCDP(tab.webSocketDebuggerUrl, tab.title);
           this.connections.set(key, conn);
@@ -715,9 +777,16 @@ export class SteamCefBadgeInjector<TBadgeData> {
    * target" diagnostic that tells the user what is actually wrong.
    */
   private _pickRenderKeys(candidates: { key: string; tab: CefTab }[]): string[] {
-    const bpmWindow = candidates.filter((c) => isBigPictureWindow(c.tab));
-    if (bpmWindow.length > 0) return bpmWindow.map((c) => c.key);
+    // Exactly one window: two BPM-shaped tabs (the Gaming-Mode one plus a
+    // desktop `Steam`/browserType=4 window) would otherwise both get a badge
+    // and an independent gate. Prefer the Gaming-Mode title.
+    const windows = candidates.filter((c) => isBigPictureWindow(c.tab));
+    const preferred =
+      windows.find((c) => c.tab.title === BIG_PICTURE_TITLE) ?? windows[0];
+    if (preferred) return [preferred.key];
 
+    // Menu popups stay plural: on legacy builds the UI really was split
+    // across the per-session popups.
     return candidates.filter((c) => isMenuPopup(c.tab)).map((c) => c.key);
   }
 
@@ -764,6 +833,19 @@ html.${obscuredClass(safePluginId(this.cfg.pluginId))} ${sel} { display: none !i
   }
 
   private async _injectBadgeSystem(): Promise<void> {
+    // Re-entrancy guard: a debounced re-inject can land inside _tryConnect's
+    // window between clearing the connections and refilling them, where it
+    // would see no render keys and log a spurious "badge will not appear".
+    if (this.injecting) return;
+    this.injecting = true;
+    try {
+      await this._injectBadgeSystemInner();
+    } finally {
+      this.injecting = false;
+    }
+  }
+
+  private async _injectBadgeSystemInner(): Promise<void> {
     const css = this._bpmCss();
 
     // Scrub tabs we deliberately don't render into. A Loadout update lands
@@ -883,38 +965,67 @@ html.${obscuredClass(safePluginId(this.cfg.pluginId))} ${sel} { display: none !i
           this.connections.delete(key);
           this.bpmRenderKeys = this.bpmRenderKeys.filter((k) => k !== key);
           this.purgeKeys = this.purgeKeys.filter((k) => k !== key);
+          // Real state change — Steam moved, so stop backing off.
+          this.discoverySkips = 0;
+          this.discoveryBackoff = 0;
           this.log(`Pruned dead connection: ${key}`);
         }
       }
 
-      const wasConnected = this._connected;
       this._connected =
         this.connections.has("SharedJSContext") || this.bpmRenderKeys.length > 0;
 
       // Rediscover when we lack a render target OR the shared context — the
       // latter is the only place the route can be read, so losing it alone
       // (BPM socket still alive) would otherwise freeze the badge silently.
-      if (
+      const wants =
         !this._connected ||
         this.bpmRenderKeys.length === 0 ||
-        !this.connections.has("SharedJSContext")
-      ) {
-        if (wasConnected && !this._connected) this._emitState();
+        !this.connections.has("SharedJSContext");
+
+      if (wants && this.discoverySkips > 0) {
+        this.discoverySkips--;
+      } else if (wants) {
         // Re-run discovery (gated inside _tryConnect) so a reopened BPM or a
         // freshly-started Steam reconnects without a manual nudge.
         const ok = await this._tryConnect();
         if (ok) await this._injectBadgeSystem();
+
+        // Back off when a *successful* discovery still leaves us wanting.
+        // That means Steam simply has no such target — retrying every tick
+        // reconnects every socket and re-runs the BPM script, and the badge
+        // script's own cleanup() drops the badge before the async re-push
+        // puts it back, so the badge blinks out once per tick, forever.
+        // A failed connect is a different case (Steam not up yet) and keeps
+        // the plain 5s retry.
+        const stillWants =
+          !this._connected ||
+          this.bpmRenderKeys.length === 0 ||
+          !this.connections.has("SharedJSContext");
+        if (ok && stillWants) {
+          this.discoveryBackoff = Math.min(
+            this.discoveryBackoff * 2 + 1,
+            MAX_DISCOVERY_SKIPS,
+          );
+          this.discoverySkips = this.discoveryBackoff;
+        } else {
+          this.discoveryBackoff = 0;
+          this.discoverySkips = 0;
+        }
       }
+      this._emitStateIfChanged();
     } finally {
       this.healthChecking = false;
     }
   }
 
-  /** Emit only when the user-visible state actually moved. */
+  /** Emit only when the user-visible state actually moved. Compares every
+   *  field in the payload, so adding one here can't silently go unemitted. */
   private _emitStateIfChanged(): void {
     if (
       (this._statusDetail() ?? null) === this.lastEmittedDetail &&
-      this._connected === this.lastEmittedConnected
+      this._connected === this.lastEmittedConnected &&
+      this.connections.size === this.lastEmittedTabs
     ) {
       return;
     }
@@ -924,6 +1035,7 @@ html.${obscuredClass(safePluginId(this.cfg.pluginId))} ${sel} { display: none !i
   private _emitState(): void {
     this.lastEmittedDetail = this._statusDetail() ?? null;
     this.lastEmittedConnected = this._connected;
+    this.lastEmittedTabs = this.connections.size;
     this.cfg.onStateChange?.({
       connected: this._connected,
       tabs: this.connections.size,

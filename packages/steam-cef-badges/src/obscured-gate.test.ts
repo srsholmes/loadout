@@ -46,7 +46,6 @@ function harness(opts: { focused?: boolean; visible?: boolean } = {}) {
     },
     documentElement: {
       classList: {
-        contains: (c: string) => classes.has(c),
         toggle: (c: string, on_: boolean) => {
           if (on_ !== classes.has(c)) toggles++;
           if (on_) classes.add(c);
