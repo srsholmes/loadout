@@ -91,6 +91,41 @@ function installHint(osRelease: string): string {
 }
 
 /**
+ * Why the missing tools matter, in the reader's actual situation. The two
+ * tools fail for different reasons and the banner is the only explanation
+ * anyone gets, so it says which one is gone rather than always telling the
+ * xdotool story.
+ */
+function whyItBreaks(missingTools: string[]): string[] {
+  const noXdotool = missingTools.includes("xdotool");
+  const noXprop = missingTools.includes("xprop");
+
+  if (noXdotool && noXprop) {
+    return [
+      "  The overlay CANNOT be shown in Gaming Mode without these. It resolves",
+      "  its own X window id with xdotool, and every gamescope atom write needs",
+      "  that id; xprop is the fallback path for those writes when libxcb is",
+      "  unusable. With both gone there is no way left to tell gamescope the",
+      "  overlay exists.",
+    ];
+  }
+  if (noXprop) {
+    return [
+      "  The overlay CANNOT be shown in Gaming Mode without this. xprop is the",
+      "  fallback for gamescope atom reads/writes whenever libxcb is unusable",
+      "  (OVERLAY_FORCE_XPROP=1, or xcb_connect failing) — and libxcb is out on",
+      "  this host, so there is no path left to tell gamescope the overlay",
+      "  exists.",
+    ];
+  }
+  return [
+    "  The overlay CANNOT be shown in Gaming Mode without this. It resolves its",
+    "  own X window id with xdotool, and every gamescope atom write needs that",
+    "  id — so gamescope is never told the overlay exists.",
+  ];
+}
+
+/**
  * The banner logged at startup and on every blocked open. Multi-line and
  * deliberately shouty: the whole point is that the previous single
  * `console.warn` was impossible to spot in a journal, and this failure
@@ -98,21 +133,33 @@ function installHint(osRelease: string): string {
  *
  * `osRelease` is the raw /etc/os-release contents (or "" when unreadable)
  * — passed in rather than read here so this stays pure.
+ *
+ * `gameModeActive` decides the closing line. It must match what
+ * `shouldBlockOverlayOpen` is told, or the banner claims opens are refused
+ * on a desktop host where they aren't.
  */
-export function formatMissingToolsBanner(
-  missingTools: string[],
-  osRelease: string,
-): string {
+export function formatMissingToolsBanner(input: {
+  missingTools: string[];
+  osRelease: string;
+  gameModeActive: boolean;
+}): string {
+  const { missingTools, osRelease, gameModeActive } = input;
   const list = missingTools.join(", ");
+  const consequence = gameModeActive
+    ? ["  Opens are refused until this is fixed: opening anyway would take your",
+       "  controller and freeze Steam without ever appearing."]
+    : ["  You're in desktop mode, where the overlay doesn't use the gamescope",
+       "  path — opens are NOT refused here and the overlay works. Gaming Mode",
+       "  will refuse to open until this is fixed."];
+
   return [
     "",
     "========================================================================",
     `  MISSING REQUIRED TOOL${missingTools.length > 1 ? "S" : ""}: ${list}`,
     "",
-    "  The overlay CANNOT be shown in Gaming Mode without these. It resolves",
-    "  its own X window id with xdotool, and every gamescope atom write needs",
-    "  that id — so the overlay would take your controller and freeze Steam",
-    "  without ever appearing. Opens are refused until this is fixed.",
+    ...whyItBreaks(missingTools),
+    "",
+    ...consequence,
     "",
     `  Fix:  ${installHint(osRelease)}`,
     "        systemctl --user restart loadout-overlay",

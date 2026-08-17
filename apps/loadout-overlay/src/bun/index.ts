@@ -352,7 +352,13 @@ async function refreshMissingX11Tools(): Promise<void> {
     const changed = missing.join(",") !== missingX11Tools.current.join(",");
     missingX11Tools.current = missing;
     if (missing.length > 0 && changed) {
-      console.error(formatMissingToolsBanner(missing, osReleaseText));
+      console.error(
+        formatMissingToolsBanner({
+          missingTools: missing,
+          osRelease: osReleaseText,
+          gameModeActive: isGameModeActive(),
+        }),
+      );
     } else if (missing.length === 0 && changed) {
       console.log("[overlay] X11 tool preflight: all required tools present");
     }
@@ -365,6 +371,10 @@ async function refreshMissingX11Tools(): Promise<void> {
 
 // Probed after prepare() so the atoms object has settled on its libxcb-vs-
 // xprop path — probeMissingTools() only demands xprop when libxcb is out.
+// (The delay is belt-and-braces, not a race fix: `this.x11` is assigned in
+// the GamescopeAtoms constructor, not in prepare(), so the probe can't
+// observe a half-settled path. It also keeps the banner out of the noisiest
+// part of boot.)
 setTimeout(() => {
   void refreshMissingX11Tools();
 }, 600);
@@ -654,13 +664,21 @@ function toggleOverlay(source: string) {
       })
     ) {
       console.error(
-        formatMissingToolsBanner(missingX11Tools.current, osReleaseText),
+        formatMissingToolsBanner({
+          missingTools: missingX11Tools.current,
+          osRelease: osReleaseText,
+          gameModeActive: true,
+        }),
       );
       trace(
         `[toggle] ${source} → REFUSED (missing ${missingX11Tools.current.join(", ")})`,
       );
       // Re-probe so installing the tool recovers on the next press rather
-      // than requiring a restart of the service.
+      // than requiring a restart of the service. Note the refusal has
+      // already consumed this press's debounce slot (lastToggleAt was set
+      // above), and this probe is fire-and-forget — so "install it and
+      // press again" needs the next press to be >600ms later, which any
+      // human retry is.
       void refreshMissingX11Tools();
       return;
     }
