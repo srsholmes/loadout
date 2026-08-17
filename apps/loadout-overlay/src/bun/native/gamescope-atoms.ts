@@ -16,6 +16,7 @@ import { trace } from "./trace";
 import { X11Connection } from "./x11";
 import { dismissSteamMenusIfOpen } from "./steam-quick-access";
 import { parseScreenGeometry } from "./screen-size";
+import { missingRequiredTools } from "../lib/x11-preflight";
 
 // From overlay_display.rs
 const OVERLAY_APP_ID = 0x534c; // 21324, "SL"
@@ -172,7 +173,17 @@ export class GamescopeAtoms {
    */
   async findWindow(): Promise<string | null> {
     if (!(await commandExists("xdotool"))) {
-      console.warn("[gamescope-atoms] xdotool not found on PATH");
+      // ERROR, not warn: without a window id every atom write below is a
+      // no-op, so under gamescope the overlay can never appear. This used
+      // to be a single console.warn at boot, which is how a CachyOS user
+      // ran for weeks with an invisible overlay and a frozen Steam while
+      // every other log line looked healthy. index.ts refuses opens on
+      // this condition — see lib/x11-preflight.ts.
+      console.error(
+        "[gamescope-atoms] xdotool not found on PATH — cannot resolve the " +
+          "overlay window id, so gamescope will never composite us. " +
+          "Install xdotool (see docs/dependencies.md).",
+      );
       return null;
     }
     try {
@@ -193,6 +204,26 @@ export class GamescopeAtoms {
       console.warn("[gamescope-atoms] findWindow failed:", err);
       return null;
     }
+  }
+
+  /**
+   * Which of the CLI tools this class depends on are missing, given the
+   * atom path actually in use. Empty means we can drive gamescope.
+   *
+   * Lives here rather than in the caller because only this object knows
+   * whether it settled on libxcb or the xprop fallback — demanding xprop
+   * on a host with a live xcb connection would be a false alarm.
+   */
+  async probeMissingTools(): Promise<string[]> {
+    const [xdotool, xprop] = await Promise.all([
+      commandExists("xdotool"),
+      commandExists("xprop"),
+    ]);
+    return missingRequiredTools({
+      xdotool,
+      xprop,
+      xcbConnected: this.x11 !== null,
+    });
   }
 
   /**
