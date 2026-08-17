@@ -17,6 +17,7 @@ import {
   BATTERY_SAFE_MAX_WATTS,
   effectiveMaxWatts,
   isBatteryLimited,
+  applyFirmwareRange,
 } from "@loadout/devices";
 import {
   readCustomDevice,
@@ -27,6 +28,12 @@ import {
   type CustomDevice,
 } from "./lib/custom-device";
 import { readSavedTdp, writeSavedTdp } from "./lib/saved-tdp";
+import {
+  discoverPowerRails,
+  type PowerRails,
+} from "./lib/firmware-attributes";
+import { discoverRaplConstraints, type RaplConstraints } from "./lib/rapl";
+import { findXeFreqDirs, writeCeilingFirst } from "./lib/gpu";
 import { readCpuBoostPref, writeCpuBoostPref } from "./lib/cpu-boost-pref";
 
 // ---------------------------------------------------------------------------
@@ -43,29 +50,48 @@ const AMD_LEGACY_CPU_BOOST_PATH = "/sys/devices/system/cpu/cpufreq/boost";
 const INTEL_CPU_BOOST_PATH = "/sys/devices/system/cpu/intel_pstate/no_turbo";
 const CPU_ONLINE_PATH = "/sys/devices/system/cpu/online";
 
-const INTEL_RAPL_PATHS = [
-  "/sys/devices/virtual/powercap/intel-rapl-mmio/intel-rapl-mmio:0/constraint_0_power_limit_uw",
-  "/sys/devices/virtual/powercap/intel-rapl/intel-rapl:0/constraint_0_power_limit_uw",
-  "/sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw",
-];
-
-const ROG_ALLY_WMI_PATHS = {
-  legacy: {
-    fppt: "/sys/devices/platform/asus-nb-wmi/ppt_fppt",
-    sppt: "/sys/devices/platform/asus-nb-wmi/ppt_pl2_sppt",
-    spl: "/sys/devices/platform/asus-nb-wmi/ppt_pl1_spl",
-  },
+/**
+ * The two handhelds this plugin has always special-cased by DMI name,
+ * carried over unchanged from before `discoverPowerRails()` existed.
+ *
+ * Deliberately kept rather than folded into generic discovery: these are
+ * AMD devices that work today, and re-ordering their detection is a
+ * behaviour change on hardware we can't test. Generic discovery running
+ * ahead of them on AMD is a separate PR. The milliwatt unit is the one
+ * these paths have always been written in, so `scale` reproduces exactly
+ * what shipped — but `scaleKnown: false` lets `setTdpViaWmi` recover if a
+ * firmware rejects it (see there), which the old unconditional
+ * `watts * 1000` could not.
+ */
+const ROG_ALLY_WMI_RAILS: { armoury: PowerRails; legacy: PowerRails } = {
   armoury: {
-    fppt: "/sys/class/firmware-attributes/asus-armoury/attributes/ppt_fppt/current_value",
-    sppt: "/sys/class/firmware-attributes/asus-armoury/attributes/ppt_pl2_sppt/current_value",
     spl: "/sys/class/firmware-attributes/asus-armoury/attributes/ppt_pl1_spl/current_value",
+    sppt: "/sys/class/firmware-attributes/asus-armoury/attributes/ppt_pl2_sppt/current_value",
+    fppt: "/sys/class/firmware-attributes/asus-armoury/attributes/ppt_fppt/current_value",
+    scale: 1000,
+    scaleKnown: false,
+    range: null,
+    source: "asus-armoury (DMI-matched)",
+  },
+  legacy: {
+    spl: "/sys/devices/platform/asus-nb-wmi/ppt_pl1_spl",
+    sppt: "/sys/devices/platform/asus-nb-wmi/ppt_pl2_sppt",
+    fppt: "/sys/devices/platform/asus-nb-wmi/ppt_fppt",
+    scale: 1000,
+    scaleKnown: false,
+    range: null,
+    source: "asus-nb-wmi (legacy)",
   },
 };
 
-const LEGION_GO_WMI_PATHS = {
-  fppt: "/sys/class/firmware-attributes/lenovo-wmi-other-0/attributes/ppt_pl3_fppt/current_value",
-  sppt: "/sys/class/firmware-attributes/lenovo-wmi-other-0/attributes/ppt_pl2_sppt/current_value",
+const LEGION_GO_WMI_RAILS: PowerRails = {
   spl: "/sys/class/firmware-attributes/lenovo-wmi-other-0/attributes/ppt_pl1_spl/current_value",
+  sppt: "/sys/class/firmware-attributes/lenovo-wmi-other-0/attributes/ppt_pl2_sppt/current_value",
+  fppt: "/sys/class/firmware-attributes/lenovo-wmi-other-0/attributes/ppt_pl3_fppt/current_value",
+  scale: 1000,
+  scaleKnown: false,
+  range: null,
+  source: "lenovo-wmi-other-0 (DMI-matched)",
 };
 
 // ---------------------------------------------------------------------------
@@ -103,6 +129,17 @@ async function readFileText(path: string): Promise<string | null> {
     return null;
   }
 }
+
+/**
+ * The real sysfs, in the injectable shape every `./lib` discovery module
+ * takes (`FirmwareAttrDeps` / `RaplDeps` / `GpuFsDeps` are the same pair of
+ * "read, or null" functions). Tests hand those modules an in-memory tree
+ * instead.
+ */
+const sysfsDeps = {
+  readFile: readFileText,
+  listDir: (path: string) => readdir(path).catch(() => null),
+};
 
 async function writeSysfs(path: string, value: string): Promise<void> {
   // The backend runs as root (system service), so a direct write to the
@@ -331,7 +368,7 @@ export default class TdpControlBackend implements PluginBackend {
    * detectMethod(); used by setTdpViaRyzenadj() + testRyzenadjRead().
    */
   private ryzenadjPath = "ryzenadj";
-  private intelRaplPath: string | null = null;
+  private intelRapl: RaplConstraints | null = null;
   private scalingDriver = "";
   private platformProfile: string | null = null;
   private platformProfileChoices: string[] = [];
@@ -342,8 +379,9 @@ export default class TdpControlBackend implements PluginBackend {
 
   private pollInterval?: Timer;
 
-  // WMI TDP paths (for ROG Ally / Legion Go)
-  private wmiPaths: { fppt: string; sppt: string; spl: string } | null = null;
+  // Firmware power rails, discovered from /sys/class/firmware-attributes
+  // (ROG Ally, Legion Go, MSI Claw, …) or the legacy ASUS platform files.
+  private wmiPaths: PowerRails | null = null;
 
   // CPU boost detection
   private cpuBoostPath: string | null = null;
@@ -351,6 +389,11 @@ export default class TdpControlBackend implements PluginBackend {
   // GPU control
   private gpuCardPath: string | null = null;
   private gpuVendor: "AMD" | "Intel" | "Unknown" = "Unknown";
+  /** Which kernel driver backs `gpuCardPath` — the two Intel drivers expose
+   *  entirely different frequency interfaces. */
+  private gpuDriver: "amdgpu" | "i915" | "xe" | null = null;
+  /** Per-GT frequency directories; `xe` only, empty otherwise. */
+  private gpuFreqDirs: string[] = [];
 
   // AC power monitoring
   private acPowerOnline: boolean | null = null;
@@ -423,6 +466,14 @@ export default class TdpControlBackend implements PluginBackend {
       this.detectGpu(),
       this.detectAcPower(),
     ]);
+
+    // detectTdpMethod() may have learned the firmware's real TDP envelope
+    // from the power rails' declared min_value/max_value. Re-derive the range
+    // now it's known — this is what gives a handheld with no entry in
+    // @loadout/devices a correct slider instead of a generic-vendor guess.
+    if (this.wmiPaths?.range) {
+      this.applyDeviceDefaults();
+    }
 
     // After scaling driver is known, detect EPP/governor options
     await Promise.all([
@@ -735,7 +786,7 @@ export default class TdpControlBackend implements PluginBackend {
       supportsSmt: this.supportsSmt,
       supportsCpuBoost: this.supportsCpuBoost,
       ryzenadjAvailable: this.ryzenadjAvailable,
-      intelRaplAvailable: this.intelRaplPath !== null,
+      intelRaplAvailable: this.intelRapl !== null,
       ryzenadjCanRead: this.ryzenadjCanRead,
       gpuVendor: this.gpuVendor,
       supportsGpuControl: this.gpuCardPath !== null,
@@ -1232,9 +1283,24 @@ export default class TdpControlBackend implements PluginBackend {
         await writeSysfs(odClkPath, `s 0 ${minMhz}`);
         await writeSysfs(odClkPath, `s 1 ${maxMhz}`);
         await writeSysfs(odClkPath, "c");
+      } else if (this.gpuVendor === "Intel" && this.gpuDriver === "xe") {
+        // Every GT gets the range — leaving the media GT unbounded would
+        // undercut the point of setting a ceiling at all.
+        for (const dir of this.gpuFreqDirs) {
+          await this.writeIntelFreqPair(
+            `${dir}/min_freq`,
+            `${dir}/max_freq`,
+            minMhz,
+            maxMhz,
+          );
+        }
       } else if (this.gpuVendor === "Intel") {
-        await writeSysfs(`${this.gpuCardPath}/gt_min_freq_mhz`, String(minMhz));
-        await writeSysfs(`${this.gpuCardPath}/gt_max_freq_mhz`, String(maxMhz));
+        await this.writeIntelFreqPair(
+          `${this.gpuCardPath}/gt_min_freq_mhz`,
+          `${this.gpuCardPath}/gt_max_freq_mhz`,
+          minMhz,
+          maxMhz,
+        );
       } else {
         return { success: false, error: "Unknown GPU vendor" };
       }
@@ -1243,6 +1309,32 @@ export default class TdpControlBackend implements PluginBackend {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return { success: false, error: msg };
+    }
+  }
+
+  /**
+   * Write an Intel GPU floor/ceiling pair in an order the kernel will accept.
+   *
+   * Both drivers reject a write that would put the floor above the ceiling,
+   * so neither fixed order is safe on its own: raising the whole range needs
+   * the ceiling first, lowering it needs the floor first. Compare against the
+   * ceiling in force and pick.
+   */
+  private async writeIntelFreqPair(
+    minPath: string,
+    maxPath: string,
+    minMhz: number,
+    maxMhz: number,
+  ): Promise<void> {
+    const text = await readFileText(maxPath);
+    const currentMax = text === null ? null : parseInt(text, 10);
+
+    if (writeCeilingFirst(currentMax, minMhz)) {
+      await writeSysfs(maxPath, String(maxMhz));
+      await writeSysfs(minPath, String(minMhz));
+    } else {
+      await writeSysfs(minPath, String(minMhz));
+      await writeSysfs(maxPath, String(maxMhz));
     }
   }
 
@@ -1346,7 +1438,8 @@ export default class TdpControlBackend implements PluginBackend {
 
   private applyDeviceDefaults(): void {
     // A user-defined custom device is the default when present — it overrides
-    // whatever DMI matching would have picked.
+    // whatever DMI matching would have picked, and a firmware-declared range
+    // too: an explicit choice by the user outranks both.
     if (this.customDevice) {
       const d = this.customDevice;
       this.deviceName = d.name;
@@ -1356,7 +1449,15 @@ export default class TdpControlBackend implements PluginBackend {
       this.profiles = { ...d.profiles };
       return;
     }
-    const device = matchDevice(this.dmiProductName, this.cpuVendor);
+    const matched = matchDevice(this.dmiProductName, this.cpuVendor);
+
+    // A firmware-declared envelope outranks the table: it is per-unit exact,
+    // and for a handheld released after the table was last touched it is the
+    // only correct source. Only known once detectTdpMethod() has run, which
+    // is why onLoad re-runs this afterwards.
+    const range = this.wmiPaths?.range;
+    const device = range ? applyFirmwareRange(matched, range) : matched;
+
     this.deviceName = device.name;
     this.minWatts = device.minTdp;
     this.maxWatts = device.maxTdp;
@@ -1402,27 +1503,60 @@ export default class TdpControlBackend implements PluginBackend {
   }
 
   private async detectTdpMethod(): Promise<void> {
-    // 0. Try WMI paths first (higher priority for known devices)
+    const amd = await isAmdCpu();
+
+    // 0. Firmware power rails, discovered generically by attribute name
+    //    across every driver in /sys/class/firmware-attributes — covering
+    //    asus-armoury, lenovo-wmi-other-N, msi-wmi-platform and whatever
+    //    ships next without a DMI check to maintain.
+    //
+    //    NON-AMD ONLY, deliberately. On Intel this is the whole point: an
+    //    EC-governed handheld typically also exposes Intel RAPL, but RAPL
+    //    there is locked or immediately overridden by firmware, so falling
+    //    through to it looks like it works and does nothing. On AMD, the
+    //    DMI-matched paths below and ryzenadj are what ships today and
+    //    works; letting generic discovery outrank them changes behaviour
+    //    on ROG Ally / Legion Go hardware we have no way to test, so that
+    //    reordering is a separate PR rather than a side effect of adding
+    //    Intel support.
+    if (!amd) {
+      const rails = await discoverPowerRails(sysfsDeps);
+      if (rails) {
+        this.wmiPaths = rails;
+        this.method = "wmi";
+        console.log(
+          `[tdp-control] Firmware power rails via ${rails.source}: ` +
+            `spl=${rails.spl}, sppt=${rails.sppt ?? "n/a"}, fppt=${rails.fppt ?? "n/a"}, ` +
+            `range=${rails.range ? `${rails.range.min}-${rails.range.max}W` : "undeclared"}, ` +
+            `unit=${rails.scale === 1000 ? "mW" : "W"}${rails.scaleKnown ? "" : " (assumed)"}`,
+        );
+        return;
+      }
+    }
+
+    // 0a. ROG Ally, then Legion Go — DMI-matched, in the order they have
+    //     always been probed. Copy rather than alias the module-level
+    //     consts: setTdpViaWmi learns `scale`/`scaleKnown` from a write and
+    //     stores it back, which would otherwise leak across instances.
     if (this.dmiProductName.includes("ROG Ally")) {
-      // Try armoury driver first (newer), then legacy asus-nb-wmi
-      const armouryPaths = ROG_ALLY_WMI_PATHS.armoury;
-      if ((await readFileText(armouryPaths.spl)) !== null) {
-        this.wmiPaths = armouryPaths;
+      const armoury = ROG_ALLY_WMI_RAILS.armoury;
+      if ((await readFileText(armoury.spl)) !== null) {
+        this.wmiPaths = { ...armoury };
         this.method = "wmi";
         console.log("[tdp-control] ROG Ally WMI (armoury) paths detected");
         return;
       }
-      const legacyPaths = ROG_ALLY_WMI_PATHS.legacy;
-      if ((await readFileText(legacyPaths.spl)) !== null) {
-        this.wmiPaths = legacyPaths;
+      const legacy = ROG_ALLY_WMI_RAILS.legacy;
+      if ((await readFileText(legacy.spl)) !== null) {
+        this.wmiPaths = { ...legacy };
         this.method = "wmi";
         console.log("[tdp-control] ROG Ally WMI (legacy) paths detected");
         return;
       }
     }
     if (this.dmiProductName.includes("Legion Go")) {
-      if ((await readFileText(LEGION_GO_WMI_PATHS.spl)) !== null) {
-        this.wmiPaths = LEGION_GO_WMI_PATHS;
+      if ((await readFileText(LEGION_GO_WMI_RAILS.spl)) !== null) {
+        this.wmiPaths = { ...LEGION_GO_WMI_RAILS };
         this.method = "wmi";
         console.log("[tdp-control] Legion Go WMI paths detected");
         return;
@@ -1435,7 +1569,6 @@ export default class TdpControlBackend implements PluginBackend {
     //    https://github.com/FlyGoat/RyzenAdj v0.19.0 via this plugin's build-ryzenadj.sh)
     //    so we work out-of-box on stock SteamOS where ryzenadj isn't packaged.
     //    Fall back to a system install on $PATH (Bazzite/Arch with AUR).
-    const amd = await isAmdCpu();
     if (amd) {
       const bundled = resolveBundledRyzenadj();
       const onPath = await commandExists("ryzenadj");
@@ -1463,24 +1596,17 @@ export default class TdpControlBackend implements PluginBackend {
       }
     }
 
-    // 2. Try Intel RAPL sysfs. Probe all candidate paths in parallel
-    //    and pick the first one that returned a value — fan-out is
-    //    safe because reads are independent and the kernel handles
-    //    them on separate fds. Saves 200-400ms on cold start on
-    //    Intel systems where 3 of the 4 paths typically don't exist.
-    //    `INTEL_RAPL_PATHS` is ordered by preference, so picking the
-    //    first non-null hit preserves the existing tie-break.
-    const raplResults = await Promise.all(
-      INTEL_RAPL_PATHS.map(async (path) => ({
-        path,
-        val: await readFileText(path),
-      })),
-    );
-    const raplHit = raplResults.find((r) => r.val !== null);
-    if (raplHit) {
-      this.intelRaplPath = raplHit.path;
+    // 2. Try Intel RAPL powercap. Constraints are resolved by name rather
+    //    than by slot index, and both the sustained and boost limits are
+    //    captured — see ./lib/rapl for why each matters.
+    const rapl = await discoverRaplConstraints(sysfsDeps);
+    if (rapl) {
+      this.intelRapl = rapl;
       this.method = "intel-rapl";
-      console.log(`[tdp-control] Intel RAPL available at ${raplHit.path}`);
+      console.log(
+        `[tdp-control] Intel RAPL available at ${rapl.zone} ` +
+          `(short_term=${rapl.shortTerm ? "yes" : "no"})`,
+      );
       return;
     }
 
@@ -1602,16 +1728,34 @@ export default class TdpControlBackend implements PluginBackend {
         if ((await readFileText(amdOdPath)) !== null) {
           this.gpuCardPath = cardPath;
           this.gpuVendor = "AMD";
+          this.gpuDriver = "amdgpu";
           console.log(`[tdp-control] AMD GPU detected at ${cardPath}`);
           return;
         }
 
-        // Check for Intel GPU (gt_max_freq_mhz)
+        // Check for an i915 Intel GPU (flat gt_max_freq_mhz on the card)
         const intelFreqPath = `${cardPath}/gt_max_freq_mhz`;
         if ((await readFileText(intelFreqPath)) !== null) {
           this.gpuCardPath = cardPath;
           this.gpuVendor = "Intel";
-          console.log(`[tdp-control] Intel GPU detected at ${cardPath}`);
+          this.gpuDriver = "i915";
+          console.log(`[tdp-control] Intel GPU (i915) detected at ${cardPath}`);
+          return;
+        }
+
+        // Check for an xe Intel GPU (per-GT freq dirs). Probed after i915
+        // because the i915 test is a single read against a known path,
+        // where this one walks a directory tree.
+        const xeFreqDirs = await findXeFreqDirs(sysfsDeps, cardPath);
+        if (xeFreqDirs.length > 0) {
+          this.gpuCardPath = cardPath;
+          this.gpuVendor = "Intel";
+          this.gpuDriver = "xe";
+          this.gpuFreqDirs = xeFreqDirs;
+          console.log(
+            `[tdp-control] Intel GPU (xe) detected at ${cardPath}, ` +
+              `${xeFreqDirs.length} GT(s): ${xeFreqDirs.join(", ")}`,
+          );
           return;
         }
       }
@@ -1620,6 +1764,8 @@ export default class TdpControlBackend implements PluginBackend {
     }
     this.gpuCardPath = null;
     this.gpuVendor = "Unknown";
+    this.gpuDriver = null;
+    this.gpuFreqDirs = [];
   }
 
   private async detectAcPower(): Promise<void> {
@@ -1719,18 +1865,31 @@ export default class TdpControlBackend implements PluginBackend {
           cardPath: this.gpuCardPath,
         };
       } else if (this.gpuVendor === "Intel") {
-        const [gtMax, gtMin, gtRP0, gtRPn] = await Promise.all([
-          readFileText(`${this.gpuCardPath}/gt_max_freq_mhz`),
-          readFileText(`${this.gpuCardPath}/gt_min_freq_mhz`),
-          readFileText(`${this.gpuCardPath}/gt_RP0_freq_mhz`),
-          readFileText(`${this.gpuCardPath}/gt_RPn_freq_mhz`),
-        ]);
+        // Both Intel drivers report the same four numbers under different
+        // names: the hardware bounds (RPn/RP0) and the range in force.
+        // Reported from the first GT — it's the render engine, and the UI
+        // shows one range even where a part has several GTs.
+        const freqDir = this.gpuFreqDirs[0];
+        const [max, min, rp0, rpn] =
+          this.gpuDriver === "xe" && freqDir
+            ? await Promise.all([
+                readFileText(`${freqDir}/max_freq`),
+                readFileText(`${freqDir}/min_freq`),
+                readFileText(`${freqDir}/rp0_freq`),
+                readFileText(`${freqDir}/rpn_freq`),
+              ])
+            : await Promise.all([
+                readFileText(`${this.gpuCardPath}/gt_max_freq_mhz`),
+                readFileText(`${this.gpuCardPath}/gt_min_freq_mhz`),
+                readFileText(`${this.gpuCardPath}/gt_RP0_freq_mhz`),
+                readFileText(`${this.gpuCardPath}/gt_RPn_freq_mhz`),
+              ]);
 
         return {
           vendor: "Intel",
-          minFreqMhz: gtRPn ? parseInt(gtRPn, 10) : 0,
-          maxFreqMhz: gtRP0 ? parseInt(gtRP0, 10) : 0,
-          currentMode: `min=${gtMin ?? "?"}MHz max=${gtMax ?? "?"}MHz`,
+          minFreqMhz: rpn ? parseInt(rpn, 10) : 0,
+          maxFreqMhz: rp0 ? parseInt(rp0, 10) : 0,
+          currentMode: `min=${min ?? "?"}MHz max=${max ?? "?"}MHz`,
           cardPath: this.gpuCardPath,
         };
       }
@@ -1748,13 +1907,16 @@ export default class TdpControlBackend implements PluginBackend {
     watts: number;
     source: TdpReadSource;
   } | null> {
-    // 0. Try WMI sysfs (ROG Ally / Legion Go)
+    // 0. Try the firmware power rails (ROG Ally / Legion Go / MSI Claw / …)
     if (this.method === "wmi" && this.wmiPaths) {
       const text = await readFileText(this.wmiPaths.spl);
       if (text !== null) {
-        const milliwatts = parseInt(text, 10);
-        if (!isNaN(milliwatts)) {
-          return { watts: Math.round(milliwatts / 1000), source: "read" };
+        const raw = parseInt(text, 10);
+        if (!isNaN(raw)) {
+          return {
+            watts: Math.round(raw / this.wmiPaths.scale),
+            source: "read",
+          };
         }
       }
     }
@@ -1766,8 +1928,8 @@ export default class TdpControlBackend implements PluginBackend {
     }
 
     // 2. Try Intel RAPL sysfs
-    if (this.method === "intel-rapl" && this.intelRaplPath) {
-      const text = await readFileText(this.intelRaplPath);
+    if (this.method === "intel-rapl" && this.intelRapl) {
+      const text = await readFileText(this.intelRapl.longTerm);
       if (text !== null) {
         const uw = parseInt(text, 10);
         if (!isNaN(uw)) {
@@ -1841,22 +2003,91 @@ export default class TdpControlBackend implements PluginBackend {
     }
   }
 
+  /**
+   * Drive the RAPL package zone to `watts`.
+   *
+   * The short-term (PL2) limit is pinned to the same wattage before the
+   * sustained one, best-effort: left at its firmware default it lets a
+   * base/boost part spend the boost budget no matter where the slider sits,
+   * but plenty of zones expose no short-term constraint or refuse writes to
+   * it, and neither should fail an otherwise good apply.
+   */
   private async setTdpViaIntelRapl(watts: number): Promise<void> {
-    if (!this.intelRaplPath) {
+    const rapl = this.intelRapl;
+    if (!rapl) {
       throw new Error("Intel RAPL path not available");
     }
-    const microwatts = String(watts * 1_000_000);
-    await writeSysfs(this.intelRaplPath, microwatts);
+    const microwatts = String(Math.round(watts * 1_000_000));
+
+    if (rapl.shortTerm) {
+      try {
+        await writeSysfs(rapl.shortTerm, microwatts);
+      } catch (e) {
+        console.warn(`[tdp-control] RAPL short_term not writable: ${e}`);
+      }
+    }
+    await writeSysfs(rapl.longTerm, microwatts);
   }
 
+  /**
+   * Drive the firmware power rails to `watts`.
+   *
+   * Only the sustained rail (SPL/PL1) is required: MSI's driver exposes just
+   * PL1 + PL2, and the old code's unconditional write of all three threw on
+   * anything that didn't have a PL3. The boost rails are pinned to the same
+   * wattage rather than left alone, so a firmware-default PL2 can't spend the
+   * whole envelope the moment load arrives.
+   *
+   * Rails are written boost-first so the sustained limit — the one we read
+   * back and the one that governs — lands last and wins any firmware
+   * cross-validation between them.
+   */
   private async setTdpViaWmi(watts: number): Promise<void> {
-    if (!this.wmiPaths) {
+    const rails = this.wmiPaths;
+    if (!rails) {
       throw new Error("WMI paths not available");
     }
-    const milliwatts = String(watts * 1000);
-    await writeSysfs(this.wmiPaths.fppt, milliwatts);
-    await writeSysfs(this.wmiPaths.sppt, milliwatts);
-    await writeSysfs(this.wmiPaths.spl, milliwatts);
+
+    const write = (path: string) =>
+      writeSysfs(path, String(Math.round(watts * rails.scale)));
+
+    // Boost rails are best-effort: a firmware that rejects or omits them is
+    // still perfectly controllable through the sustained rail.
+    for (const path of [rails.fppt, rails.sppt]) {
+      if (!path) continue;
+      try {
+        await write(path);
+      } catch (e) {
+        console.warn(`[tdp-control] boost rail ${path} not writable: ${e}`);
+      }
+    }
+
+    try {
+      await write(rails.spl);
+    } catch (e) {
+      // Flip the unit once and latch whichever one the firmware accepts.
+      //
+      // This runs even when `scaleKnown` is true. "Known" means inferred
+      // from max_value, and a rejected write is precisely the evidence that
+      // the inference was wrong — gating the retry on it left the only
+      // devices with a declared range (asus-armoury, lenovo-wmi-other-N)
+      // with no recovery at all, which is the wrong way round. If the flip
+      // is also rejected the original error is what propagates, so trying
+      // costs nothing beyond one extra failed write.
+      const flipped = rails.scale === 1 ? 1000 : 1;
+      console.warn(
+        `[tdp-control] ${rails.spl} rejected ${watts * rails.scale}; ` +
+          `retrying as ${watts * flipped} (unit was ` +
+          `${rails.scaleKnown ? "declared — the declaration looks wrong" : "assumed, not declared"})`,
+      );
+      try {
+        await writeSysfs(rails.spl, String(Math.round(watts * flipped)));
+      } catch {
+        throw e;
+      }
+      rails.scale = flipped;
+      rails.scaleKnown = true;
+    }
   }
 
   // -----------------------------------------------------------------------

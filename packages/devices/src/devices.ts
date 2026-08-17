@@ -280,6 +280,14 @@ const KNOWN_DEVICES: DeviceInfo[] = [
   },
 ];
 
+/**
+ * Share of a firmware-declared max allowed on battery for a device we have no
+ * table row for. Matches the ~80% relationship the hand-tuned rows above use
+ * between `maxTdp` and `batteryMaxTdp`. `BATTERY_SAFE_MAX_WATTS` still caps
+ * the result.
+ */
+const FALLBACK_BATTERY_FRACTION = 0.8;
+
 /** Default ranges when device is unknown. */
 const DEFAULT_AMD: Omit<DeviceInfo, "match"> = {
   name: "Generic AMD",
@@ -321,6 +329,13 @@ export interface DeviceMatch {
   /** Max TDP when on battery (<= maxTdp). */
   batteryMaxTdp: number;
   profiles: Record<string, number>;
+  /**
+   * True when no row in the device table matched and this is a vendor-keyed
+   * guess. Callers that have a better source of truth for the envelope — a
+   * firmware-declared range, say — use this to tell "we know this device"
+   * from "we're guessing from the CPU vendor".
+   */
+  isFallback: boolean;
 }
 
 /**
@@ -340,6 +355,7 @@ export function matchDevice(
         maxTdp: device.maxTdp,
         batteryMaxTdp: device.batteryMaxTdp,
         profiles: { ...device.profiles },
+        isFallback: false,
       };
     }
   }
@@ -355,6 +371,58 @@ export function matchDevice(
     maxTdp: fallback.maxTdp,
     batteryMaxTdp: fallback.batteryMaxTdp,
     profiles: { ...fallback.profiles },
+    isFallback: true,
+  };
+}
+
+/**
+ * Fold a firmware-declared TDP envelope into a device match.
+ *
+ * Handhelds whose vendor driver implements the kernel's `firmware-attributes`
+ * interface publish the exact envelope their firmware will accept
+ * (`min_value`/`max_value` on the PL1 rail). That beats this table: it is
+ * per-unit accurate, and it is the only source of truth for a device that
+ * shipped after the table was last touched.
+ *
+ * What it does NOT beat is the hand-tuned judgment in a matched row. A device
+ * we know about keeps its battery ceiling and its presets — those encode
+ * thermals and runtime, not just what the silicon tolerates — clamped into
+ * the firmware's interval so we never ask for a wattage the rail will reject.
+ * A fallback match has no such judgment to preserve, so its presets are
+ * derived from the range instead. Pure.
+ */
+export function applyFirmwareRange(
+  device: DeviceMatch,
+  range: { min: number; max: number },
+): DeviceMatch {
+  const { min, max } = range;
+  const clamp = (w: number) => Math.min(Math.max(w, min), max);
+  const span = max - min;
+  // Both battery-ceiling paths run through clamp() so neither can land under
+  // the floor. A narrow firmware range makes this reachable: 15–17 W gives
+  // round(17 * 0.8) = 14 on the fallback path, and a known row whose
+  // batteryMaxTdp predates a firmware that raised min would slip under it
+  // too — either way the UI would offer a battery ceiling the rail rejects.
+
+  return {
+    ...device,
+    minTdp: min,
+    maxTdp: max,
+    batteryMaxTdp: device.isFallback
+      ? clamp(Math.round(max * FALLBACK_BATTERY_FRACTION))
+      : clamp(device.batteryMaxTdp),
+    profiles: device.isFallback
+      ? {
+          Silent: Math.round(min + span * 0.2),
+          Balanced: Math.round(min + span * 0.5),
+          Performance: max,
+        }
+      : Object.fromEntries(
+          Object.entries(device.profiles).map(([name, watts]) => [
+            name,
+            clamp(watts),
+          ]),
+        ),
   };
 }
 
