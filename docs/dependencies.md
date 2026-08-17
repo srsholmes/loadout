@@ -11,7 +11,7 @@ reported with the feature they gate and left alone.
 To check an existing install by hand:
 
 ```sh
-for t in xdotool xprop xrandr pgrep tar curl systemctl; do
+for t in xdotool xprop xrandr pgrep tar systemctl; do
     command -v "$t" >/dev/null || echo "MISSING: $t"
 done
 ```
@@ -27,17 +27,26 @@ Loadout does not work correctly without these.
 | `xrandr` | `screen-size.ts`, `_positionOnPrimary` | The overlay can't probe the gamescope inner-X resolution, falls back to 1280×800, and pointer input lands away from where it's drawn ([#106](https://github.com/srsholmes/loadout/issues/106)). |
 | `pgrep` | `loadout-overlay.service` | The unit's `ExecStart` uses it to read Steam's environ and detect gamescope, before the app starts — so display detection falls through to a hardcoded `:0`. |
 | `tar` | `lib/updater.ts` | In-app self-update can't unpack a release tarball. |
-| `curl` | update checks, plugin fetches | Update checks and plugin-bundle downloads fail. |
 | `systemctl` | both units | Neither service can be managed. |
+
+`curl` is **not** required. Nothing in the app shells out to it — update checks
+and plugin-bundle fetches go through Bun's `fetch`, and `tar` is the only
+shell-out in the update path. `scripts/install.sh` needs curl *or* wget and
+falls back to wget at every download site.
 
 ### Package names
 
 | Distro | Packages |
 |---|---|
-| Arch / CachyOS / SteamOS | `xdotool xorg-xprop xorg-xrandr procps-ng tar curl` |
-| Fedora / Bazzite | `xdotool xorg-x11-utils xrandr procps-ng tar curl` |
-| Debian / Ubuntu | `xdotool x11-utils x11-xserver-utils procps tar curl` |
-| openSUSE | `xdotool xprop xrandr procps tar curl` |
+| Arch / CachyOS / SteamOS | `xdotool xorg-xprop xorg-xrandr procps-ng tar` |
+| Fedora / Bazzite | `xdotool xorg-x11-utils xrandr procps-ng tar` |
+| Debian / Ubuntu | `xdotool x11-utils x11-xserver-utils procps tar` |
+| openSUSE | `xdotool xprop xrandr procps tar` |
+
+`systemctl` is intentionally absent from those lists: it comes from `systemd`,
+and a host without it isn't running systemd at all, so installing the package
+wouldn't help. The installer maps it to `systemd` only so the fallback message
+doesn't suggest a package name that exists nowhere.
 
 On **SteamOS** the root filesystem is read-only, so installing means
 `sudo steamos-readonly disable` first — and a major OS update can revert it.

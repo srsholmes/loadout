@@ -337,8 +337,15 @@ detect_arch() {
 #   pgrep      loadout-overlay.service's ExecStart reads Steam's environ and
 #              detects gamescope with it, before the app starts.
 #   tar        The overlay's in-app self-update unpacks its release tarball.
-#   curl       Release checks and plugin-bundle fetches.
 #   systemctl  Both units. Present on any systemd distro (i.e. all of them).
+#
+# Deliberately NOT required: curl. Nothing in the app shells out to it —
+# release checks and plugin-bundle fetches go through Bun's `fetch`, and the
+# only shell-out in the update path is `tar`. This script needs curl *or*
+# wget, and falls back to wget at every download site, so by the time these
+# checks run one of them is already present. Listing curl here made a
+# wget-only host fail a "Loadout does not work correctly" check and install a
+# package it never uses.
 #
 # OPTIONAL — each one gates a single plugin or feature and is listed by
 # `report_runtime_deps` so users can see what they're missing and why,
@@ -346,7 +353,7 @@ detect_arch() {
 # deliberately NOT auto-installed: podman/distrobox/legendary and friends
 # are heavyweight, and pulling them onto someone's system because they ran
 # an installer would be a bad trade.
-REQUIRED_TOOLS="xdotool xprop xrandr pgrep tar curl systemctl"
+REQUIRED_TOOLS="xdotool xprop xrandr pgrep tar systemctl"
 
 # "tool<TAB>what breaks without it". A tool listed as `a|b|c` needs any one
 # of the alternatives present.
@@ -382,7 +389,7 @@ package_for_tool() {
                 xrandr) echo "xorg-xrandr" ;;
                 pgrep) echo "procps-ng" ;;
                 tar) echo "tar" ;;
-                curl) echo "curl" ;;
+                systemctl) echo "systemd" ;;
                 *) echo "" ;;
             esac
             ;;
@@ -393,7 +400,7 @@ package_for_tool() {
                 xrandr) echo "xrandr" ;;
                 pgrep) echo "procps-ng" ;;
                 tar) echo "tar" ;;
-                curl) echo "curl" ;;
+                systemctl) echo "systemd" ;;
                 *) echo "" ;;
             esac
             ;;
@@ -404,7 +411,7 @@ package_for_tool() {
                 xrandr) echo "x11-xserver-utils" ;;
                 pgrep) echo "procps" ;;
                 tar) echo "tar" ;;
-                curl) echo "curl" ;;
+                systemctl) echo "systemd" ;;
                 *) echo "" ;;
             esac
             ;;
@@ -415,7 +422,7 @@ package_for_tool() {
                 xrandr) echo "xrandr" ;;
                 pgrep) echo "procps" ;;
                 tar) echo "tar" ;;
-                curl) echo "curl" ;;
+                systemctl) echo "systemd" ;;
                 *) echo "" ;;
             esac
             ;;
@@ -461,13 +468,11 @@ report_runtime_deps() {
                 pgrep)
                     warn "  pgrep — the overlay service can't find Steam's display" ;;
                 tar) warn "  tar — in-app self-update can't unpack releases" ;;
-                curl) warn "  curl — update checks and plugin fetches fail" ;;
                 systemctl) warn "  systemctl — Loadout's services can't be managed" ;;
             esac
         done
     fi
 
-    _missing_opt=""
     optional_tools | while IFS="$(printf '\t')" read -r _tool _why; do
         [ -n "$_tool" ] || continue
         have_any_tool "$_tool" || info "  optional: $(printf '%s' "$_tool" | tr '|' '/') — $_why"
@@ -515,7 +520,7 @@ phase2_runtime_deps() {
             ;;
         bazzite)
             warn "Bazzite layers packages via rpm-ostree and needs a reboot:"
-            warn "  rpm-ostree install $_packages && systemctl reboot"
+            warn "  sudo rpm-ostree install $_packages && systemctl reboot"
             return
             ;;
         unknown)
@@ -542,7 +547,11 @@ phase2_runtime_deps() {
             sudo dnf install -y $_packages && _installed=1
             ;;
         debian)
-            sudo apt-get update && sudo apt-get install -y $_packages && _installed=1
+            # `update` is allowed to fail: one stale or unreachable repo in
+            # sources.list is common and would otherwise skip the install
+            # entirely and report it as "Package install failed".
+            sudo apt-get update || true
+            sudo apt-get install -y $_packages && _installed=1
             ;;
         opensuse)
             sudo zypper --non-interactive install $_packages && _installed=1
