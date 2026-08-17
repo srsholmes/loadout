@@ -8,6 +8,20 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com).
 
 ---
 
+## [v0.8.2] — 2026-08-17
+
+### Fixed
+- **Badges no longer sit on top of the Steam menu** (#252) — The ProtonDB and HowLongToBeat badges were drawing into the Steam menu — the panel that opens on the Steam button — where they sat over the top of it instead of on the game page. Separately, some people saw no badges at all. Both came from how the badge injector chooses which of Steam's windows to draw into: Steam splits its Big Picture interface across several, and the injector drew into every candidate on the understanding that only the visible one would ever appear. That stopped being true on current Steam builds, so a badge meant for the game page landed in the menu instead. It now identifies the real Big Picture window and leaves Steam's menu and quick-access panels alone.
+- **The installer says when the overlay cannot work, instead of leaving you to find out** (#250) — The overlay leans on a few command-line tools that SteamOS and Bazzite already ship but other distributions do not. Without `xdotool` it cannot appear in Gaming Mode at all: it starts, takes the controller, freezes Steam, and never draws — a device that looks broken, with nothing anywhere to say why. This is what a CachyOS user hit. The installer now checks for those tools before it does anything, explains what each one is for, and offers to install what is missing. On SteamOS and Bazzite, where the root filesystem is read-only or the change needs a reboot, it prints the exact command rather than running it behind your back.
+- **The overlay declines to open rather than freezing Steam** (#251) — The same fault, caught at the other end. If those tools go missing after installation, pressing the overlay button used to capture your controller and suspend Steam while never drawing anything, and only a reboot or a Steam restart got you out. It now refuses the open, leaves Steam running and your controller where it was, and writes a banner to the log naming the missing tool and the command that fixes it. Install the tool and press the button again — no restart needed. In Gaming Mode there is still nothing on screen, because the thing that would draw the message is the thing that is broken.
+- **Wi-Fi recovery takes the quick path again on Wi-Fi 7 radios** (#254) — Intel's Wi-Fi 7 cards, which are common in AMD handhelds as well as Intel ones, load a different driver module than earlier Intel cards. The first and cheapest recovery step reloads that driver, and it was still naming the older module — so it failed in a way that did not resemble the failure it knows how to handle, and recovery jumped straight to the much heavier PCI-level reset. It now reloads whichever module is actually in use.
+
+### Added
+- **Intel GPU temperatures are recognised by fan control** (#255) — Fan curves that follow GPU temperature had nothing to read on Intel graphics, since those sensors appear under names fan control did not know. Groundwork for Intel handheld support; no effect on AMD devices beyond a sensor labelling correction.
+
+### Upgrade notes
+- **If the overlay has never appeared for you in Gaming Mode on a distribution other than SteamOS or Bazzite, re-run the installer.** It will tell you which tools are missing and offer to install them. Updating from inside the app cannot fix this one — and if the overlay does not open, you cannot reach the updater anyway. Your settings, plugins and profiles are untouched.
+
 ## [v0.8.1] — 2026-08-12
 
 ### Fixed
