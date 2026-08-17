@@ -92,6 +92,25 @@ describe("classifyTempZone()", () => {
     expect(classifyTempZone("xe", "Package")).toBe("gpu");
   });
 
+  // Same rule, same tier, for the substring-matched GPU chips. i915 was
+  // added to GPU_TEMP_CHIPS but checked *below* CPU_LABEL_KEYWORDS, so an
+  // i915 sensor labelled "package" came back as cpu while the equivalent
+  // xe one came back as gpu.
+  it("prefers the i915 chip name over a CPU-ish label", () => {
+    expect(classifyTempZone("i915", "Package")).toBe("gpu");
+  });
+
+  it("prefers the amdgpu chip name over a CPU-ish label", () => {
+    expect(classifyTempZone("amdgpu", "package")).toBe("gpu");
+  });
+
+  it("still lets a CPU chip name win for its own labels", () => {
+    // The GPU chip tier sits below CPU_TEMP_CHIPS, so nothing here can
+    // steal k10temp/coretemp sensors.
+    expect(classifyTempZone("k10temp", "Tctl")).toBe("cpu");
+    expect(classifyTempZone("coretemp", "Package id 0")).toBe("cpu");
+  });
+
   it("classifies junction label as gpu", () => {
     expect(classifyTempZone("something", "junction")).toBe("gpu");
   });

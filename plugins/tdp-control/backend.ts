@@ -1501,7 +1501,11 @@ export default class TdpControlBackend implements PluginBackend {
     //     Probed unconditionally — the path only exists where the driver is
     //     bound, which is a better test than a DMI substring.
     if ((await readFileText(LEGACY_ASUS_WMI_RAILS.spl)) !== null) {
-      this.wmiPaths = LEGACY_ASUS_WMI_RAILS;
+      // Copy, don't alias: setTdpViaWmi learns `scale`/`scaleKnown` from a
+      // successful write and stores it back on this object. Handing out the
+      // module-level const would leak that learned state into every other
+      // instance (and across tests) instead of keeping it per-controller.
+      this.wmiPaths = { ...LEGACY_ASUS_WMI_RAILS };
       this.method = "wmi";
       console.log("[tdp-control] ROG Ally WMI (legacy asus-nb-wmi) paths detected");
       return;
@@ -2010,16 +2014,26 @@ export default class TdpControlBackend implements PluginBackend {
     try {
       await write(rails.spl);
     } catch (e) {
-      // The unit is only a guess on interfaces that declare no max_value.
-      // Rather than leave the device uncontrollable on a bad guess, flip the
-      // scale once and latch whichever one the firmware accepts.
-      if (rails.scaleKnown) throw e;
+      // Flip the unit once and latch whichever one the firmware accepts.
+      //
+      // This runs even when `scaleKnown` is true. "Known" means inferred
+      // from max_value, and a rejected write is precisely the evidence that
+      // the inference was wrong — gating the retry on it left the only
+      // devices with a declared range (asus-armoury, lenovo-wmi-other-N)
+      // with no recovery at all, which is the wrong way round. If the flip
+      // is also rejected the original error is what propagates, so trying
+      // costs nothing beyond one extra failed write.
       const flipped = rails.scale === 1 ? 1000 : 1;
       console.warn(
         `[tdp-control] ${rails.spl} rejected ${watts * rails.scale}; ` +
-          `retrying as ${watts * flipped} (unit was assumed, not declared)`,
+          `retrying as ${watts * flipped} (unit was ` +
+          `${rails.scaleKnown ? "declared — the declaration looks wrong" : "assumed, not declared"})`,
       );
-      await writeSysfs(rails.spl, String(Math.round(watts * flipped)));
+      try {
+        await writeSysfs(rails.spl, String(Math.round(watts * flipped)));
+      } catch {
+        throw e;
+      }
       rails.scale = flipped;
       rails.scaleKnown = true;
     }

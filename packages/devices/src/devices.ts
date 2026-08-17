@@ -398,14 +398,19 @@ export function applyFirmwareRange(
   const { min, max } = range;
   const clamp = (w: number) => Math.min(Math.max(w, min), max);
   const span = max - min;
+  // Both battery-ceiling paths run through clamp() so neither can land under
+  // the floor. A narrow firmware range makes this reachable: 15–17 W gives
+  // round(17 * 0.8) = 14 on the fallback path, and a known row whose
+  // batteryMaxTdp predates a firmware that raised min would slip under it
+  // too — either way the UI would offer a battery ceiling the rail rejects.
 
   return {
     ...device,
     minTdp: min,
     maxTdp: max,
     batteryMaxTdp: device.isFallback
-      ? Math.round(max * FALLBACK_BATTERY_FRACTION)
-      : Math.min(device.batteryMaxTdp, max),
+      ? clamp(Math.round(max * FALLBACK_BATTERY_FRACTION))
+      : clamp(device.batteryMaxTdp),
     profiles: device.isFallback
       ? {
           Silent: Math.round(min + span * 0.2),

@@ -175,6 +175,40 @@ describe("filterLoadedModules", () => {
   it("treats an empty /proc/modules as nothing loaded", () => {
     expect(filterLoadedModules({ procModules: "", modules: ["iwlwifi"] })).toEqual([]);
   });
+
+  it("matches a hyphenated driver name against underscored /proc/modules", () => {
+    // /proc/modules always prints underscores; a driver name arriving from
+    // sysfs (or DRIVER_MODULES) often has hyphens. Comparing them literally
+    // filtered the list down to nothing, and unloadModules reads an empty
+    // list as "nothing to unload" — silently skipping the cheap reload tier
+    // and pushing recovery on to a PCI reset it didn't need.
+    const proc = "hid_oxp 16384 0 - Live 0x0";
+    expect(filterLoadedModules({ procModules: proc, modules: ["hid-oxp"] })).toEqual([
+      "hid-oxp",
+    ]);
+  });
+
+  it("matches an underscored module against a hyphenated /proc/modules line", () => {
+    const proc = "some-mod 16384 0 - Live 0x0";
+    expect(filterLoadedModules({ procModules: proc, modules: ["some_mod"] })).toEqual([
+      "some_mod",
+    ]);
+  });
+});
+
+describe("findModuleHolders", () => {
+  it("finds holders regardless of hyphen/underscore spelling", () => {
+    const proc = "hid_oxp 16384 2 hid_multitouch,oxp_sensors, Live 0x0";
+    expect(findModuleHolders({ procModules: proc, module: "hid-oxp" })).toEqual([
+      "hid_multitouch",
+      "oxp_sensors",
+    ]);
+  });
+
+  it("returns nothing when the module holds no one", () => {
+    const proc = "iwlmld 262144 0 - Live 0x0";
+    expect(findModuleHolders({ procModules: proc, module: "iwlmld" })).toEqual([]);
+  });
 });
 
 describe("findModuleHolders", () => {

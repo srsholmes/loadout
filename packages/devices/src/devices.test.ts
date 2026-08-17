@@ -271,6 +271,26 @@ describe("applyFirmwareRange", () => {
     expect(device.batteryMaxTdp).toBe(40);
   });
 
+  it("never lets an unknown device's battery cap fall under the firmware min", () => {
+    // A narrow firmware envelope is where the 80% fallback goes under the
+    // floor: round(17 * 0.8) = 14, below a 15 W min. Offering a battery
+    // ceiling the rail would reject is worse than offering the floor.
+    const device = applyFirmwareRange(matchDevice("BRAND NEW HANDHELD", "Intel"), {
+      min: 15,
+      max: 17,
+    });
+
+    expect(device.batteryMaxTdp).toBe(15);
+    expect(device.batteryMaxTdp).toBeGreaterThanOrEqual(device.minTdp);
+  });
+
+  it("never lets a known device's battery cap fall under the firmware min", () => {
+    const matched = matchDevice("ROG Ally RC71", "AMD"); // 20 W battery cap
+    const device = applyFirmwareRange(matched, { min: 25, max: 35 });
+
+    expect(device.batteryMaxTdp).toBe(25);
+  });
+
   it("clamps a known device's presets into the firmware's interval", () => {
     const matched = matchDevice("ONEXPLAYER APEX", "AMD"); // 15 / 30 / 50
     const device = applyFirmwareRange(matched, { min: 20, max: 40 });

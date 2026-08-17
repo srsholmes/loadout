@@ -108,13 +108,26 @@ export function modulesForDriver(opts: { driver: string }): { unload: string[]; 
 }
 
 /**
+ * Kernel module names are interchangeable in `-` and `_` form: modprobe
+ * accepts either, but /proc/modules *always* prints underscores. Driver
+ * names reach us from the sysfs driver directory and from DRIVER_MODULES,
+ * where the hyphen form is common (`iwl-mld`, `hid-oxp`). Comparing the two
+ * spellings literally silently matches nothing, so normalise before any
+ * name comparison against /proc/modules.
+ */
+function normalizeModuleName(name: string): string {
+  return name.replace(/-/g, "_");
+}
+
+/**
  * Modules holding `module` per /proc/modules (4th column, "used by":
  * a comma-separated list, or "-" when nothing holds it).
  */
 export function findModuleHolders(opts: { procModules: string; module: string }): string[] {
+  const wanted = normalizeModuleName(opts.module);
   for (const line of opts.procModules.split("\n")) {
     const fields = line.trim().split(/\s+/);
-    if (fields[0] !== opts.module) continue;
+    if (!fields[0] || normalizeModuleName(fields[0]) !== wanted) continue;
     const usedBy = fields[3];
     if (!usedBy || usedBy === "-") return [];
     return usedBy.split(",").filter((name) => name.length > 0);
@@ -139,9 +152,9 @@ export function filterLoadedModules(opts: {
   const loaded = new Set<string>();
   for (const line of opts.procModules.split("\n")) {
     const name = line.trim().split(/\s+/)[0];
-    if (name) loaded.add(name);
+    if (name) loaded.add(normalizeModuleName(name));
   }
-  return opts.modules.filter((module) => loaded.has(module));
+  return opts.modules.filter((module) => loaded.has(normalizeModuleName(module)));
 }
 
 // --- impure orchestration ----------------------------------------------------

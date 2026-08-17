@@ -64,11 +64,14 @@ export function classifyTempZone(chipName: string, label: string): TempZone {
 
   if (CPU_TEMP_CHIPS.some((c) => lower.includes(c))) return "cpu";
 
-  // Exact chip-name match, checked in the same tier as CPU_TEMP_CHIPS above:
-  // the chip name is authoritative about which engine a sensor belongs to,
-  // so it must win over the label keywords below (an `xe` sensor labelled
-  // "package" is still the GPU).
-  if (EXACT_GPU_TEMP_CHIPS.includes(chipName.toLowerCase())) return "gpu";
+  // Chip-name match, checked in the same tier as CPU_TEMP_CHIPS above: the
+  // chip name is authoritative about which engine a sensor belongs to, so it
+  // must win over the label keywords below (an `xe` sensor labelled "package"
+  // is still the GPU — and so is an `i915` one, which is why both lists are
+  // consulted here rather than only the exact one).
+  const chip = chipName.toLowerCase();
+  if (EXACT_GPU_TEMP_CHIPS.includes(chip)) return "gpu";
+  if (GPU_TEMP_CHIPS.some((c) => chip.includes(c))) return "gpu";
 
   if (CPU_LABEL_KEYWORDS.some((kw) => lower.includes(kw))) return "cpu";
   if (GPU_TEMP_CHIPS.some((c) => lower.includes(c))) return "gpu";
