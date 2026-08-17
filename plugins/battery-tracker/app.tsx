@@ -10,6 +10,7 @@ import {
   notify,
   useBackend,
   mountComponent,
+  usePluginTranslation,
 } from "@loadout/ui";
 import type { BatteryInfo, HistoryEntry } from "./lib/battery";
 import type { BypassMode, ChargeControlInfo } from "./lib/charge-control";
@@ -46,12 +47,13 @@ function percentageColor(pct: number, charging: boolean): string {
 /** Stacked-bar history visualization. Shows the last N entries as
  *  thin bars; thicker top cap for charging samples. */
 function HistoryChart({ history }: { history: HistoryEntry[] }) {
+  const { t } = usePluginTranslation("battery-tracker");
   const entries = history.slice(-30);
   const oldest = entries[0];
   if (entries.length === 0) {
     return (
       <div className="subsection-desc" style={{ textAlign: "center", padding: "18px 0" }}>
-        No history yet. Data is recorded every minute.
+        {t("no_history")}
       </div>
     );
   }
@@ -344,6 +346,7 @@ function MetricTile({
 // ---------------------------------------------------------------------------
 
 function BatteryTracker() {
+  const { t } = usePluginTranslation("battery-tracker");
   const { call, useEvent } = useBackend("battery-tracker");
 
   const [battery, setBattery] = useState<BatteryInfo | null>(null);
@@ -408,10 +411,10 @@ function BatteryTracker() {
         <div className="page-content">
           <div className="card">
             <div className="card-body p-6">
-              <div className="subsection-label mb-2">Error</div>
+              <div className="subsection-label mb-2">{t("error")}</div>
               <div className="text-sm text-base-content">{error}</div>
               <div className="mt-4">
-                <Button onClick={handleRefresh}>Retry</Button>
+                <Button onClick={handleRefresh}>{t("retry")}</Button>
               </div>
             </div>
           </div>
@@ -444,14 +447,16 @@ function BatteryTracker() {
         <div className="card">
           <div className="card-header flex items-center justify-between py-3.5 px-4.5 border-b border-base-300">
             <div className="card-title flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-base-content/50">
-              <FaBatteryFull className="w-3 h-3" /> CHARGE
+              <FaBatteryFull className="w-3 h-3" /> {t("charge")}
             </div>
             {charging ? (
               <span className="chip chip-success">
-                <FaBolt className="w-2.5 h-2.5" /> CHARGING
+                <FaBolt className="w-2.5 h-2.5" /> {t("charging")}
               </span>
             ) : (
-              <span className="chip">{battery.timeRemainingFormatted} remaining</span>
+              <span className="chip">
+                {t("remaining", { time: battery.timeRemainingFormatted })}
+              </span>
             )}
           </div>
           <div className="px-6 py-7">
@@ -492,40 +497,38 @@ function BatteryTracker() {
         {/* POWER FLOW + HEALTH + DETAILS */}
         <div className="card">
           <div className="subsection">
-            <div className="subsection-label">Power Flow</div>
+            <div className="subsection-label">{t("power_flow")}</div>
             <div className="grid grid-cols-3 gap-2.5 mb-3">
               <MetricTile
-                label="WATTS"
+                label={t("watts")}
                 value={`${charging ? "+" : "-"}${drawW.toFixed(1)}`}
                 color={charging ? "var(--color-success)" : "var(--fg-1)"}
               />
-              <MetricTile label="VOLTS" value={voltage.toFixed(2)} />
-              <MetricTile label="AMPS" value={amps} />
+              <MetricTile label={t("volts")} value={voltage.toFixed(2)} />
+              <MetricTile label={t("amps")} value={amps} />
             </div>
             <div className="subsection-desc">
-              {charging
-                ? "Pack is absorbing energy from the adapter. Charge rate depends on TDP budget and thermals."
-                : "Pack is discharging. Lowering TDP or brightness is the fastest way to extend runtime."}
+              {charging ? t("charging_desc") : t("discharging_desc")}
             </div>
           </div>
 
           <div className="subsection">
             <div className="flex items-center justify-between mb-3.5">
-              <div className="subsection-label mb-0">Health</div>
+              <div className="subsection-label mb-0">{t("health")}</div>
               <span className="chip" style={{ borderColor: segColor, color: segColor }}>
                 ● {healthPct}%
               </span>
             </div>
             <div className="grid grid-cols-2 gap-2.5 mb-3.5">
               <MetricTile
-                label="CAPACITY"
+                label={t("capacity_metric")}
                 value={`${battery.energyFullWh.toFixed(1)}`}
                 unit=" Wh"
               />
-              <MetricTile label="WEAR" value={`${wearPct}%`} color={segColor} />
+              <MetricTile label={t("wear")} value={`${wearPct}%`} color={segColor} />
             </div>
             <div className="flex justify-between text-xs mb-1.5">
-              <span className="text-base-content/70">Capacity</span>
+              <span className="text-base-content/70">{t("capacity")}</span>
               <span className="mono text-base-content/50">
                 {battery.energyFullWh.toFixed(1)} / {battery.energyFullDesignWh.toFixed(1)} Wh
               </span>
@@ -541,45 +544,45 @@ function BatteryTracker() {
             </div>
             <div className="subsection-desc">
               {healthPct >= 90
-                ? "Battery is healthy. No action needed."
+                ? t("health_good")
                 : healthPct >= 75
-                  ? "Moderate wear. Consider enabling charge limit to slow degradation."
-                  : "Significant wear. Replacement may be worth considering."}
+                  ? t("health_moderate")
+                  : t("health_poor")}
             </div>
           </div>
 
           <div className="subsection">
-            <div className="subsection-label">Details</div>
+            <div className="subsection-label">{t("details")}</div>
             <div className="row">
-              <span className="row-label">Design capacity</span>
+              <span className="row-label">{t("design_capacity")}</span>
               <span className="row-value">{battery.energyFullDesignWh.toFixed(1)} Wh</span>
             </div>
             <div className="row">
-              <span className="row-label">Full-charge capacity</span>
+              <span className="row-label">{t("full_charge_capacity")}</span>
               <span className="row-value">{battery.energyFullWh.toFixed(1)} Wh</span>
             </div>
             <div className="row">
-              <span className="row-label">Current charge</span>
+              <span className="row-label">{t("current_charge")}</span>
               <span className="row-value">{battery.energyNowWh.toFixed(1)} Wh</span>
             </div>
             <div className="row">
-              <span className="row-label">Voltage</span>
+              <span className="row-label">{t("voltage")}</span>
               <span className="row-value">{voltage.toFixed(2)} V</span>
             </div>
             <div className="row">
-              <span className="row-label">Status</span>
+              <span className="row-label">{t("status")}</span>
               <span className="row-value">{battery.status}</span>
             </div>
             <div className="row">
-              <span className="row-label">Time remaining</span>
+              <span className="row-label">{t("time_remaining")}</span>
               <span className="row-value">{battery.timeRemainingFormatted}</span>
             </div>
           </div>
 
           <div className="subsection">
             <div className="flex items-center justify-between mb-3.5">
-              <div className="subsection-label mb-0">Charge History (30 min)</div>
-              <Button onClick={handleRefresh}>Refresh</Button>
+              <div className="subsection-label mb-0">{t("charge_history")}</div>
+              <Button onClick={handleRefresh}>{t("refresh")}</Button>
             </div>
             <HistoryChart history={history} />
           </div>
@@ -595,6 +598,7 @@ function BatteryTracker() {
 
 /** Compact battery display for the dashboard home widget. */
 function BatteryWidget() {
+  const { t } = usePluginTranslation("battery-tracker");
   const { call, useEvent } = useBackend("battery-tracker");
   const [battery, setBattery] = useState<BatteryInfo | null>(null);
 
@@ -606,7 +610,7 @@ function BatteryWidget() {
     });
   }, [call]);
 
-  if (!battery) return <div className="p-4 text-xs text-base-content/40">Loading battery…</div>;
+  if (!battery) return <div className="p-4 text-xs text-base-content/40">{t("loading")}</div>;
 
   const charging = battery.status === "Charging";
   const pct = Math.round(battery.percentage);
@@ -631,11 +635,11 @@ function BatteryWidget() {
         }}
       >
         <div className="card-title">
-          <FaBatteryFull className="w-3 h-3" /> BATTERY
+          <FaBatteryFull className="w-3 h-3" /> {t("battery")}
         </div>
         {charging ? (
           <div className="chip chip-success">
-            <FaBolt className="w-2.5 h-2.5" /> CHARGING
+            <FaBolt className="w-2.5 h-2.5" /> {t("charging")}
           </div>
         ) : hasTimeLeft ? (
           <div className="chip">{timeLeft}</div>
@@ -672,7 +676,7 @@ function BatteryWidget() {
           }}
         >
           <span>{hasDraw ? `${charging ? "+" : "-"}${drawW.toFixed(1)} W` : ""}</span>
-          <span>{hasHealth ? `Health: ${healthPct}%` : ""}</span>
+          <span>{hasHealth ? t("health_short", { pct: healthPct }) : ""}</span>
         </div>
       )}
     </div>
@@ -684,11 +688,12 @@ function BatteryWidget() {
 // ---------------------------------------------------------------------------
 
 function Header() {
+  const { t } = usePluginTranslation("battery-tracker");
   return (
     <div className="flex flex-col gap-0.5 min-w-0">
-      <h1 className="text-xl font-semibold tracking-[-0.015em] m-0 leading-tight">Battery</h1>
+      <h1 className="text-xl font-semibold tracking-[-0.015em] m-0 leading-tight">{t("title")}</h1>
       <span className="text-[11.5px] text-base-content/55 tracking-[0.02em] truncate leading-tight">
-        Real-time power monitoring
+        {t("subtitle")}
       </span>
     </div>
   );
