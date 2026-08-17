@@ -876,8 +876,11 @@ download_overlay() {
 # Fetch the runtime libraries the overlay's native wrapper needs but the
 # release archive deliberately omits. Electrobun's libNativeWrapper.so dlopens
 # libwebkit2gtk-4.1 / libjavascriptcoregtk-4.1 / libayatana-appindicator3 at
-# startup. Bazzite, CachyOS and Fedora-ostree ship those in the base image;
-# SteamOS Holo does not. Rather than fatten every download with a ~100 MB
+# startup. SteamOS Holo ships none of them. Other distros ship SOME but not
+# necessarily all — CachyOS has webkit2gtk-4.1 and no libayatana-appindicator,
+# which is why the helper's gate tests every soname rather than assuming they
+# travel together, and why verify_overlay_libs re-checks afterwards regardless
+# of which path ran. Rather than fatten every download with a ~100 MB
 # closure only SteamOS uses, we build it on the device at install time:
 # fetch-deck-overlay-libs.sh is a near-instant no-op where the system already
 # provides webkit2gtk-4.1, and builds + caches the closure from a Fedora
@@ -937,6 +940,104 @@ setup_overlay_deps() {
     if [ -n "$_deps_tmp" ]; then
         rm -f "$_deps_tmp"
     fi
+
+    verify_overlay_libs
+}
+
+# Package providing the dlopen'd SONAME $1 on the detected distro. Empty
+# when we don't know — the caller falls back to printing the soname.
+package_for_lib() {
+    case "$(detect_os)" in
+        steamos|arch)
+            case "$1" in
+                libayatana-appindicator3.so.1) echo "libayatana-appindicator" ;;
+                libwebkit2gtk-4.1.so.0|libjavascriptcoregtk-4.1.so.0) echo "webkit2gtk-4.1" ;;
+                *) echo "" ;;
+            esac
+            ;;
+        bazzite|fedora)
+            case "$1" in
+                libayatana-appindicator3.so.1) echo "libayatana-appindicator-gtk3" ;;
+                libwebkit2gtk-4.1.so.0) echo "webkit2gtk4.1" ;;
+                libjavascriptcoregtk-4.1.so.0) echo "javascriptcoregtk4.1" ;;
+                *) echo "" ;;
+            esac
+            ;;
+        debian)
+            case "$1" in
+                libayatana-appindicator3.so.1) echo "libayatana-appindicator3-1" ;;
+                libwebkit2gtk-4.1.so.0) echo "libwebkit2gtk-4.1-0" ;;
+                libjavascriptcoregtk-4.1.so.0) echo "libjavascriptcoregtk-4.1-0" ;;
+                *) echo "" ;;
+            esac
+            ;;
+        opensuse)
+            case "$1" in
+                libayatana-appindicator3.so.1) echo "libayatana-appindicator3-1" ;;
+                libwebkit2gtk-4.1.so.0) echo "libwebkit2gtk-4_1-0" ;;
+                libjavascriptcoregtk-4.1.so.0) echo "libjavascriptcoregtk-4_1-0" ;;
+                *) echo "" ;;
+            esac
+            ;;
+        *) echo "" ;;
+    esac
+}
+
+# Verify the SONAMEs libNativeWrapper.so dlopens at startup actually resolve
+# — from the overlay's own bin/ or from the system.
+#
+# Why this exists as a separate pass. The equivalent smoke test lives at the
+# END of fetch-deck-overlay-libs.sh, so it only runs on hosts that took the
+# fetch path. A host that already provides *some* of the roots short-circuits
+# that script and was never checked at all: CachyOS ships webkit2gtk-4.1 but
+# not libayatana-appindicator, so the installer reported success on an
+# overlay that could not start, and the user saw only a service restarting
+# forever with a dlopen error buried in the journal (reported 2026-08-17).
+#
+# Deliberately a warning, not a hard failure: the backend, plugins and
+# services are all still worth having, and the user may well install the
+# package afterwards. But it names the package and it prints last, so it
+# cannot be mistaken for a clean install.
+verify_overlay_libs() {
+    [ -x "$OVERLAY_LAUNCHER" ] || return 0
+
+    _lib_missing=""
+    for _so in libwebkit2gtk-4.1.so.0 libjavascriptcoregtk-4.1.so.0 \
+               libayatana-appindicator3.so.1; do
+        [ -e "$OVERLAY_INSTALL_DIR/bin/$_so" ] && continue
+        ldconfig -p 2>/dev/null | grep -q "$_so" && continue
+        _lib_missing="$_lib_missing $_so"
+    done
+
+    if [ -z "$_lib_missing" ]; then
+        success "Overlay runtime libraries verified."
+        return 0
+    fi
+
+    _lib_packages=""
+    for _so in $_lib_missing; do
+        _pkg="$(package_for_lib "$_so")"
+        [ -n "$_pkg" ] || _pkg="$_so"
+        case " $_lib_packages " in
+            *" $_pkg "*) ;;
+            *) _lib_packages="$_lib_packages $_pkg" ;;
+        esac
+    done
+
+    echo ""
+    error "THE OVERLAY CANNOT START — missing shared libraries:"
+    for _so in $_lib_missing; do
+        error "  $_so"
+    done
+    error ""
+    error "The overlay's native wrapper dlopens these at startup. Without them"
+    error "loadout-overlay.service exits immediately and systemd restarts it in"
+    error "a loop; nothing appears in Gaming Mode OR Desktop Mode."
+    error ""
+    error "Install:$(printf ' %s' $_lib_packages)"
+    error "Then:    systemctl --user restart loadout-overlay"
+    echo ""
+    OVERLAY_LIBS_MISSING=1
 }
 
 # Download and extract the plugin tree built by release.yml. Tarball
@@ -1653,6 +1754,16 @@ main() {
     if [ -n "$_still_missing" ]; then
         error "STILL MISSING:$(printf ' %s' $_still_missing)"
         error "The overlay will not work correctly in Gaming Mode until these are installed."
+        echo ""
+    fi
+
+    # Same reasoning as the tools block above — a missing dlopen'd library is
+    # the difference between a working overlay and a service that restarts
+    # forever, so it gets repeated after everything else has scrolled past.
+    # verify_overlay_libs has already printed the package names.
+    if [ -n "${OVERLAY_LIBS_MISSING:-}" ]; then
+        error "OVERLAY LIBRARIES MISSING — see the list above. The overlay will"
+        error "crash-loop until they are installed."
         echo ""
     fi
 
