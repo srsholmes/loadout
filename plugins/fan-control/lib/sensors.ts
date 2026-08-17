@@ -13,7 +13,18 @@
 export const CPU_TEMP_CHIPS = ["k10temp", "coretemp", "zenpower"];
 
 /** Chip names known to host GPU temperature sensors. */
-export const GPU_TEMP_CHIPS = ["amdgpu", "nvidia", "nouveau", "radeon"];
+export const GPU_TEMP_CHIPS = ["amdgpu", "nvidia", "nouveau", "radeon", "i915"];
+
+/**
+ * Chip names that identify a GPU only on an *exact* match.
+ *
+ * `xe` is the hwmon registered by Intel's Xe DRM driver — the one Xe3
+ * (Panther Lake / Arc G3) graphics bind to. At two characters it is far too
+ * short for the substring matching `GPU_TEMP_CHIPS` uses: it would fire on
+ * any chip or label that merely happens to contain the letters. Same
+ * treatment `acpitz` gets in `classifyTempZone`.
+ */
+export const EXACT_GPU_TEMP_CHIPS = ["xe"];
 
 /** Keywords that hint at a CPU-related temp label. */
 export const CPU_LABEL_KEYWORDS = ["tctl", "tdie", "cpu", "soc", "package"];
@@ -52,6 +63,16 @@ export function classifyTempZone(chipName: string, label: string): TempZone {
   if (NON_CPU_LABEL_KEYWORDS.some((kw) => lower.includes(kw))) return "unknown";
 
   if (CPU_TEMP_CHIPS.some((c) => lower.includes(c))) return "cpu";
+
+  // Chip-name match, checked in the same tier as CPU_TEMP_CHIPS above: the
+  // chip name is authoritative about which engine a sensor belongs to, so it
+  // must win over the label keywords below (an `xe` sensor labelled "package"
+  // is still the GPU — and so is an `i915` one, which is why both lists are
+  // consulted here rather than only the exact one).
+  const chip = chipName.toLowerCase();
+  if (EXACT_GPU_TEMP_CHIPS.includes(chip)) return "gpu";
+  if (GPU_TEMP_CHIPS.some((c) => chip.includes(c))) return "gpu";
+
   if (CPU_LABEL_KEYWORDS.some((kw) => lower.includes(kw))) return "cpu";
   if (GPU_TEMP_CHIPS.some((c) => lower.includes(c))) return "gpu";
   if (lower.includes("gpu") || lower.includes("junction") || lower.includes("edge")) return "gpu";
