@@ -277,9 +277,14 @@ async function unloadModules(opts: {
   if (first.exitCode === 0) return { ok: true, detail: "" };
 
   if (/in use/i.test(first.stderr)) {
+    // Normalised on both sides like every other /proc/modules comparison:
+    // holders come from that file (underscored) while `unload` may carry the
+    // hyphen spelling, and a missed dedupe here would put the same module
+    // twice on the retry command line.
+    const unloadNames = new Set(unload.map(normalizeModuleName));
     const holders = unload
       .flatMap((module) => findModuleHolders({ procModules, module }))
-      .filter((holder) => !unload.includes(holder));
+      .filter((holder) => !unloadNames.has(normalizeModuleName(holder)));
     if (holders.length > 0) {
       deps.log?.(`modprobe -r blocked by holders [${holders.join(", ")}] — retrying with them.`);
       const retry = await boundedRun({

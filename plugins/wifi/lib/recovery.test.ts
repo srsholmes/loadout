@@ -209,9 +209,7 @@ describe("findModuleHolders", () => {
     const proc = "iwlmld 262144 0 - Live 0x0";
     expect(findModuleHolders({ procModules: proc, module: "iwlmld" })).toEqual([]);
   });
-});
 
-describe("findModuleHolders", () => {
   const PROC_MODULES = [
     "iwlmvm 851968 0 - Live 0x0000000000000000",
     "iwlwifi 479232 1 iwlmvm, Live 0x0000000000000000",
