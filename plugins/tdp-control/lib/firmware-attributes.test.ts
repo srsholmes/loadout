@@ -160,6 +160,37 @@ describe("discoverPowerRails", () => {
     expect(rails?.source).toBe("zz-real-wmi");
   });
 
+  it("skips a driver whose rail directory has no readable current_value", async () => {
+    // A stub or read-only driver can publish the attribute directory with
+    // nothing behind it. Claiming those rails would latch method="wmi" and
+    // starve the Intel RAPL fallback, losing TDP control on a device the
+    // old code drove fine.
+    const stub = driverTree("stub-wmi", ["ppt_pl1_spl"]);
+    delete stub.files[
+      `${FIRMWARE_ATTRIBUTES_DIR}/stub-wmi/attributes/ppt_pl1_spl/current_value`
+    ];
+    const real = driverTree("zz-real-wmi", ["ppt_pl1_spl"]);
+    const rails = await discoverPowerRails(
+      fakeFs({
+        dirs: {
+          ...stub.dirs,
+          ...real.dirs,
+          [FIRMWARE_ATTRIBUTES_DIR]: ["stub-wmi", "zz-real-wmi"],
+        },
+        files: { ...stub.files, ...real.files },
+      }),
+    );
+    expect(rails?.source).toBe("zz-real-wmi");
+  });
+
+  it("returns null when the only rail directory is unreadable", async () => {
+    const stub = driverTree("stub-wmi", ["ppt_pl1_spl"]);
+    delete stub.files[
+      `${FIRMWARE_ATTRIBUTES_DIR}/stub-wmi/attributes/ppt_pl1_spl/current_value`
+    ];
+    expect(await discoverPowerRails(fakeFs(stub))).toBeNull();
+  });
+
   it("returns null when the class directory doesn't exist", async () => {
     expect(await discoverPowerRails(fakeFs({ dirs: {}, files: {} }))).toBeNull();
   });

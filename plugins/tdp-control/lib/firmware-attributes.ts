@@ -145,6 +145,14 @@ export async function discoverPowerRails(
     const fppt = pickAttribute(available, PPT_RAIL_ATTRS.fppt);
     const valuePath = (attr: string) => `${attrsDir}/${attr}/current_value`;
 
+    // The attribute *directory* existing is not enough: a stub or read-only
+    // driver can publish `ppt_pl1_spl/` with no readable `current_value`.
+    // Claiming those rails would latch method="wmi" and starve the Intel
+    // RAPL fallback at step 2 of detectTdpMethod — a device that works on
+    // the old code would lose TDP control entirely. Read it first, the way
+    // the DMI-matched probes in backend.ts do.
+    if ((await deps.readFile(valuePath(spl))) === null) continue;
+
     const [minText, maxText] = await Promise.all([
       deps.readFile(`${attrsDir}/${spl}/min_value`),
       deps.readFile(`${attrsDir}/${spl}/max_value`),

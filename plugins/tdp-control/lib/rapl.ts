@@ -68,21 +68,29 @@ export async function resolveZoneConstraints(
 ): Promise<RaplConstraints | null> {
   let longTerm: string | null = null;
   let shortTerm: string | null = null;
-  let anyNamed = false;
 
   for (let i = 0; i < RAPL_MAX_CONSTRAINTS; i++) {
     const limit = `${zone}/constraint_${i}${LIMIT_SUFFIX}`;
     if ((await deps.readFile(limit)) === null) continue;
 
     const name = (await deps.readFile(`${zone}/constraint_${i}_name`))?.trim();
-    if (name) anyNamed = true;
     if (name === "long_term" && !longTerm) longTerm = limit;
     else if (name === "short_term" && !shortTerm) shortTerm = limit;
   }
 
-  if (!longTerm && !anyNamed) {
+  // Fall back to slot 0 whenever no long_term was found — not only when
+  // nothing was named at all. A zone that names its constraints but has no
+  // `long_term` among them (say only `short_term` / `peak_power`) would
+  // otherwise resolve to null and lose TDP control entirely, where the
+  // positional convention still gives the right file.
+  if (!longTerm) {
     const slot0 = `${zone}/constraint_0${LIMIT_SUFFIX}`;
-    if ((await deps.readFile(slot0)) !== null) longTerm = slot0;
+    // Don't hand back the very file we already identified as the boost
+    // limit: pinning the sustained rail to short_term would silently cap
+    // boost instead of the sustained draw.
+    if (slot0 !== shortTerm && (await deps.readFile(slot0)) !== null) {
+      longTerm = slot0;
+    }
   }
 
   return longTerm ? { zone, longTerm, shortTerm } : null;

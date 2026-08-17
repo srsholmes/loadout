@@ -175,6 +175,25 @@ async function isAmdCpu(): Promise<boolean> {
 }
 
 /**
+ * The positive counterpart to `isAmdCpu`, and deliberately not `!isAmdCpu()`.
+ *
+ * Both fail closed to false, which is what we want at the one place this is
+ * used: generic firmware-rail discovery. An unreadable /proc/cpuinfo on an
+ * AMD ROG Ally would make `!isAmdCpu()` true and route it through the new
+ * discovery path — exactly the AMD behaviour change this PR promises not to
+ * make. Requiring a positive GenuineIntel keeps an unknown CPU on the old
+ * detection order.
+ */
+async function isIntelCpu(): Promise<boolean> {
+  try {
+    const t = await Bun.file(CPUINFO_PATH).text();
+    return /\bGenuineIntel\b/.test(t);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolve the bundled `ryzenadj` binary shipped with this plugin, if one is
  * present for the current architecture. Returns the absolute path or `null`.
  *
@@ -1519,7 +1538,12 @@ export default class TdpControlBackend implements PluginBackend {
     //    on ROG Ally / Legion Go hardware we have no way to test, so that
     //    reordering is a separate PR rather than a side effect of adding
     //    Intel support.
-    if (!amd) {
+    //
+    //    Gated on a *positive* Intel result rather than !amd: both probes
+    //    fail closed, so an unreadable /proc/cpuinfo keeps every machine on
+    //    the old detection order instead of routing an AMD handheld into
+    //    the new path.
+    if (await isIntelCpu()) {
       const rails = await discoverPowerRails(sysfsDeps);
       if (rails) {
         this.wmiPaths = rails;
@@ -2052,15 +2076,21 @@ export default class TdpControlBackend implements PluginBackend {
       writeSysfs(path, String(Math.round(watts * rails.scale)));
 
     // Boost rails are best-effort: a firmware that rejects or omits them is
-    // still perfectly controllable through the sustained rail.
-    for (const path of [rails.fppt, rails.sppt]) {
-      if (!path) continue;
-      try {
-        await write(path);
-      } catch (e) {
-        console.warn(`[tdp-control] boost rail ${path} not writable: ${e}`);
+    // still perfectly controllable through the sustained rail. (This is a
+    // deliberate loosening of the old behaviour, which threw on any failed
+    // rail write — MSI's driver exposes only PL1 + PL2, so an unconditional
+    // write of all three failed outright on anything without a PL3.)
+    const writeBoostRails = async () => {
+      for (const path of [rails.fppt, rails.sppt]) {
+        if (!path) continue;
+        try {
+          await write(path);
+        } catch (e) {
+          console.warn(`[tdp-control] boost rail ${path} not writable: ${e}`);
+        }
       }
-    }
+    };
+    await writeBoostRails();
 
     try {
       await write(rails.spl);
@@ -2087,6 +2117,12 @@ export default class TdpControlBackend implements PluginBackend {
       }
       rails.scale = flipped;
       rails.scaleKnown = true;
+      // The boost rails were written in the unit we've just disproved, so
+      // they're sitting at whatever the firmware made of a 1000×-wrong
+      // number. Re-write them now that `rails.scale` is right, otherwise
+      // PL1 lands correctly while PL2/PL3 keep firmware defaults for this
+      // apply and the boost limit we were trying to pin does nothing.
+      await writeBoostRails();
     }
   }
 

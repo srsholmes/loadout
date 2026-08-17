@@ -75,11 +75,27 @@ describe("resolveZoneConstraints", () => {
     expect(got?.longTerm).toBe(`${zone}/constraint_0_power_limit_uw`);
   });
 
-  it("returns null for a zone with named constraints but no long_term", async () => {
+  it("refuses to pin the sustained rail to short_term", async () => {
+    // Slot 0 is the short_term limit here, so the positional fallback must
+    // NOT claim it — capping boost while believing we capped sustained draw
+    // is worse than reporting no RAPL control at all.
     const zone = MMIO;
     expect(
       await resolveZoneConstraints(fakeFs(zoneFiles(zone, ["short_term"])), zone),
     ).toBeNull();
+  });
+
+  it("falls back to slot 0 when constraints are named but none is long_term", async () => {
+    // A zone that names peak_power/short_term but no long_term used to
+    // resolve to null, losing TDP control on a device the old positional
+    // code handled fine.
+    const zone = MMIO;
+    const got = await resolveZoneConstraints(
+      fakeFs(zoneFiles(zone, ["peak_power", "short_term"])),
+      zone,
+    );
+    expect(got?.longTerm).toBe(`${zone}/constraint_0_power_limit_uw`);
+    expect(got?.shortTerm).toBe(`${zone}/constraint_1_power_limit_uw`);
   });
 
   it("returns null for a zone that doesn't exist", async () => {
