@@ -30,18 +30,41 @@ if [ -z "$TARGET_DIR" ]; then
     exit 2
 fi
 
+# The top-level SONAMEs libNativeWrapper.so dlopens at startup. Any one of
+# them missing kills the overlay before it draws a frame, so this list is
+# both what the capability gate below tests and what the final smoke test
+# at the bottom verifies. Keep it as one list: they drifted apart once and
+# the result is the CachyOS bug described below.
+TOP_LEVEL_SONAMES="libwebkit2gtk-4.1.so.0 libjavascriptcoregtk-4.1.so.0 libayatana-appindicator3.so.1"
+
 # Capability gate, not distro-ID. Earlier versions of this script checked
 # `ID=steamos` from /etc/os-release and skipped on anything else — that was
 # wrong for Bazzite-Deck, custom Arch-on-Deck, and any future SteamOS variant
 # that drops webkit2gtk-4.1: the overlay would crash with the original
-# DLOPEN error this script is meant to prevent, with no breadcrumb. The
-# actual invariant we care about is "the system already provides
-# libwebkit2gtk-4.1.so.0" — Bazzite/CachyOS/Fedora-ostree ship it and short-
-# circuit here; SteamOS Holo doesn't and falls through to the fetch path.
-if ldconfig -p 2>/dev/null | grep -q "libwebkit2gtk-4.1.so.0"; then
-    echo "[fetch-deck-libs] libwebkit2gtk-4.1.so.0 already on system — nothing to do."
+# DLOPEN error this script is meant to prevent, with no breadcrumb.
+#
+# It then over-corrected: the gate tested `libwebkit2gtk-4.1.so.0` ALONE and
+# took a hit as proof that all three roots were present. They don't travel
+# together. CachyOS ships webkit2gtk-4.1 but NOT libayatana-appindicator, so
+# the gate short-circuited, nothing was bundled, and the overlay crash-looped
+# on `libayatana-appindicator3.so.1: cannot open shared object file` — the
+# exact failure this script exists to prevent, reintroduced by the check
+# meant to detect it. Reported on CachyOS 2026-08-17 (restart counter 46).
+#
+# So: skip only when the system provides EVERY root. A partial hit falls
+# through to the fetch path, which bundles the closure and defers whatever
+# the host already has (see the SONAME skip test further down) — bundling a
+# couple of libs CachyOS already owns is a trivially cheaper mistake than
+# shipping an overlay that cannot start.
+_missing_roots=""
+for _soname in $TOP_LEVEL_SONAMES; do
+    ldconfig -p 2>/dev/null | grep -q "$_soname" || _missing_roots="$_missing_roots $_soname"
+done
+if [ -z "$_missing_roots" ]; then
+    echo "[fetch-deck-libs] all top-level libs already on system — nothing to do."
     exit 0
 fi
+echo "[fetch-deck-libs] system is missing:$_missing_roots"
 
 if ! command -v podman >/dev/null 2>&1; then
     echo "[fetch-deck-libs] ERROR: podman is not installed." >&2
@@ -349,9 +372,9 @@ if [ "$pruned" -gt 0 ]; then
     echo "[fetch-deck-libs] pruned $pruned dangling soname symlink(s)"
 fi
 
-# Final smoke: the three top-level sonames must resolve in the target dir.
-TEST_LIBS="libwebkit2gtk-4.1.so.0 libjavascriptcoregtk-4.1.so.0 libayatana-appindicator3.so.1"
-for lib in $TEST_LIBS; do
+# Final smoke: the top-level sonames must resolve in the target dir. Same
+# list the capability gate uses — see TOP_LEVEL_SONAMES at the top.
+for lib in $TOP_LEVEL_SONAMES; do
     if [ ! -e "$TARGET_DIR/$lib" ]; then
         echo "[fetch-deck-libs] ERROR: $lib missing in $TARGET_DIR — closure build is broken." >&2
         exit 1

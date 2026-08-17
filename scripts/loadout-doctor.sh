@@ -74,6 +74,25 @@ for t in zenity kdialog yad busctl flatpak nmcli iw unzip zip bsdtar \
     have "$t"
 done
 
+# The shared libraries libNativeWrapper.so dlopens at startup. A missing one
+# is fatal — the overlay exits(1) before drawing anything and systemd
+# restarts it forever — and it is invisible to a binaries-only check, which
+# is how a CachyOS report got as far as "reinstall and downgrade" before
+# anyone looked at a journal. Bundled copies in the overlay's own bin/ count,
+# so both locations are reported.
+echo ""
+echo "  libraries (system, or bundled in the overlay's bin/):"
+for so in libwebkit2gtk-4.1.so.0 libjavascriptcoregtk-4.1.so.0 \
+          libayatana-appindicator3.so.1; do
+    if ldconfig -p 2>/dev/null | grep -q "$so"; then
+        printf '  %-34s system\n' "$so"
+    elif [ -e "$OVERLAY_INSTALL_DIR/bin/$so" ]; then
+        printf '  %-34s bundled\n' "$so"
+    else
+        printf '  %-34s MISSING  <-- overlay cannot start\n' "$so"
+    fi
+done
+
 # ---------------------------------------------------------------
 section "3. Install layout"
 # ---------------------------------------------------------------
@@ -91,15 +110,29 @@ done
 
 echo ""
 echo "  --- binary ---"
-if [ -x "$INSTALL_DIR/loadout" ]; then
-    ls -l "$INSTALL_DIR/loadout" | sed 's/^/  /'
-    # --version is the ground truth for what's installed. The GitHub
-    # release tag and the on-disk binary can disagree if an install
-    # half-failed, which is exactly the case this script is for.
-    echo "  version: $("$INSTALL_DIR/loadout" --version 2>&1 | head -3)"
-else
-    echo "  no executable at $INSTALL_DIR/loadout"
-fi
+# Installs are not all in one place: the current installer puts the binary
+# under ~/.local/share/loadout, but older and packaged installs run it from
+# /usr/local/bin (a CachyOS report showed a healthy backend there while this
+# section claimed "no executable"). Check every known location, and print
+# what the unit ACTUALLY executes so the two can be compared.
+_found_bin=""
+for _cand in "$INSTALL_DIR/loadout" /usr/local/bin/loadout /usr/bin/loadout \
+             "$HOME/.local/bin/loadout"; do
+    [ -x "$_cand" ] || continue
+    # Resolve symlinks: ~/.local/bin/loadout is normally a link to the real
+    # binary, and reporting the link twice hides which one is stale.
+    _real="$(readlink -f "$_cand" 2>/dev/null || echo "$_cand")"
+    ls -l "$_cand" | sed 's/^/  /'
+    [ "$_real" = "$_cand" ] || echo "      -> $_real"
+    echo "      version: $("$_cand" --version 2>&1 | head -1)"
+    _found_bin=1
+done
+[ -n "$_found_bin" ] || echo "  NO loadout executable found in any known location"
+
+echo ""
+echo "  ExecStart of the installed unit:"
+systemctl show loadout -p ExecStart --value 2>/dev/null \
+    | cut -c1-200 | sed 's/^/    /' || echo "    (unit not readable)"
 
 echo ""
 echo "  --- overlay bundle ---"
