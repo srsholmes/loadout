@@ -88,13 +88,19 @@ export function findWifiDevice(rows: NmDeviceRow[]): { device: string; state: st
 
 /**
  * Driver → module list. `unload` is ordered top-down (dependents first):
- * Intel's opmode module iwlmvm holds iwlwifi, so `modprobe -r iwlwifi`
- * alone fails with "Module iwlwifi is in use". Loading the base module
+ * Intel's opmode module holds iwlwifi, so `modprobe -r iwlwifi` alone
+ * fails with "Module iwlwifi is in use". Loading the base module
  * auto-pulls its dependents back. Unmapped drivers get the identity
  * mapping plus the generic /proc/modules holders fallback in recover().
+ *
+ * Which opmode is loaded depends on the radio: Wi-Fi 7 parts (BE2xx, as
+ * shipped in the current Intel handhelds) bind `iwlmld`, everything
+ * older binds `iwlmvm`. Both are listed — `unloadModules` drops whichever
+ * one isn't actually loaded before calling modprobe, so the list is a
+ * superset rather than an assertion about this machine.
  */
 export const DRIVER_MODULES: Record<string, { unload: string[]; load: string }> = {
-  iwlwifi: { unload: ["iwlmvm", "iwlwifi"], load: "iwlwifi" },
+  iwlwifi: { unload: ["iwlmld", "iwlmvm", "iwlwifi"], load: "iwlwifi" },
 };
 
 export function modulesForDriver(opts: { driver: string }): { unload: string[]; load: string } {
@@ -102,18 +108,53 @@ export function modulesForDriver(opts: { driver: string }): { unload: string[]; 
 }
 
 /**
+ * Kernel module names are interchangeable in `-` and `_` form: modprobe
+ * accepts either, but /proc/modules *always* prints underscores. Driver
+ * names reach us from the sysfs driver directory and from DRIVER_MODULES,
+ * where the hyphen form is common (`iwl-mld`, `hid-oxp`). Comparing the two
+ * spellings literally silently matches nothing, so normalise before any
+ * name comparison against /proc/modules.
+ */
+function normalizeModuleName(name: string): string {
+  return name.replace(/-/g, "_");
+}
+
+/**
  * Modules holding `module` per /proc/modules (4th column, "used by":
  * a comma-separated list, or "-" when nothing holds it).
  */
 export function findModuleHolders(opts: { procModules: string; module: string }): string[] {
+  const wanted = normalizeModuleName(opts.module);
   for (const line of opts.procModules.split("\n")) {
     const fields = line.trim().split(/\s+/);
-    if (fields[0] !== opts.module) continue;
+    if (!fields[0] || normalizeModuleName(fields[0]) !== wanted) continue;
     const usedBy = fields[3];
     if (!usedBy || usedBy === "-") return [];
     return usedBy.split(",").filter((name) => name.length > 0);
   }
   return [];
+}
+
+/**
+ * Keep only those `modules` that /proc/modules says are loaded, preserving
+ * the caller's order. Pure.
+ *
+ * `modprobe -r` fails the whole invocation when *any* named module isn't
+ * loaded, and it reports that as "not found" rather than "in use" — so an
+ * over-broad unload list would fail the cheap module-reload tier before the
+ * holders fallback below ever got a chance to run, pushing recovery on to a
+ * PCI reset it didn't need.
+ */
+export function filterLoadedModules(opts: {
+  procModules: string;
+  modules: string[];
+}): string[] {
+  const loaded = new Set<string>();
+  for (const line of opts.procModules.split("\n")) {
+    const name = line.trim().split(/\s+/)[0];
+    if (name) loaded.add(normalizeModuleName(name));
+  }
+  return opts.modules.filter((module) => loaded.has(normalizeModuleName(module)));
 }
 
 // --- impure orchestration ----------------------------------------------------
@@ -208,22 +249,34 @@ export async function detectDriverInfo(opts: {
 }
 
 /**
- * `modprobe -r` the module list; on an "in use" failure for a driver we
- * don't have in the map, look up the holders in /proc/modules and retry
- * once with them prepended (the generic form of the iwlmvm lesson).
+ * `modprobe -r` the module list, minus any entry that isn't currently
+ * loaded; on an "in use" failure for a driver we don't have in the map,
+ * look up the holders in /proc/modules and retry once with them prepended
+ * (the generic form of the iwlmvm lesson).
  */
 async function unloadModules(opts: {
   deps: RecoveryDeps;
   unload: string[];
 }): Promise<{ ok: boolean; detail: string }> {
-  const { deps, unload } = opts;
+  const { deps } = opts;
   const describe = (r: RunResult) => r.stderr.trim() || `modprobe -r exited ${r.exitCode}`;
+
+  // An unreadable /proc/modules leaves the caller's list untouched — the
+  // filter is an optimisation, and guessing "nothing is loaded" from a
+  // failed read would skip a real unload.
+  const procModules = await deps.readFile("/proc/modules").catch(() => "");
+  const unload = procModules
+    ? filterLoadedModules({ procModules, modules: opts.unload })
+    : opts.unload;
+  if (unload.length === 0) {
+    deps.log?.("No mapped modules are loaded — nothing to unload.");
+    return { ok: true, detail: "" };
+  }
 
   const first = await boundedRun({ deps, cmd: ["modprobe", "-r", ...unload], timeoutMs: 15_000 });
   if (first.exitCode === 0) return { ok: true, detail: "" };
 
   if (/in use/i.test(first.stderr)) {
-    const procModules = await deps.readFile("/proc/modules").catch(() => "");
     const holders = unload
       .flatMap((module) => findModuleHolders({ procModules, module }))
       .filter((holder) => !unload.includes(holder));
