@@ -96,6 +96,8 @@ const BPM_POSITIONS: ReadonlyArray<HltbSettings["position"]> = [
 interface StatusInfo {
   connected: boolean;
   tabs: number;
+  /** Why badges aren't rendering (Gaming Mode, debug port, no BPM tab). */
+  detail?: string;
 }
 
 // --- Helpers ---
@@ -176,12 +178,14 @@ function HltbPlugin() {
       const d = data as {
         connected?: boolean;
         tabs?: number;
+        detail?: string;
         settings?: HltbSettings;
       };
       if (d.connected !== undefined) {
         setStatus({
           connected: d.connected,
           tabs: d.tabs ?? 0,
+          detail: d.detail,
         });
       }
       if (d.settings) {
@@ -957,6 +961,14 @@ function ConfigCard({
                 ? ` · Connected (${status.tabs} tab${status.tabs !== 1 ? "s" : ""})`
                 : " · Steam CEF not connected"}
             </div>
+            {status.detail && (
+              <div
+                className="text-xs text-[var(--fg-3)]"
+                style={{ marginTop: 2 }}
+              >
+                {status.detail}
+              </div>
+            )}
           </div>
           <Toggle checked={integrationEnabled} onChange={toggleIntegration} />
         </div>
