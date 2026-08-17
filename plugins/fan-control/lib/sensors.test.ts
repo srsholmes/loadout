@@ -66,6 +66,51 @@ describe("classifyTempZone()", () => {
     expect(classifyTempZone("amdgpu", "edge")).toBe("gpu");
   });
 
+  it("classifies i915 as gpu", () => {
+    expect(classifyTempZone("i915", "")).toBe("gpu");
+  });
+
+  // Xe/Xe3 graphics (Lunar Lake, Panther Lake / Arc G3) bind the `xe`
+  // driver, whose hwmon chip name is just "xe".
+  it("classifies xe as gpu on an exact chip-name match", () => {
+    expect(classifyTempZone("xe", "")).toBe("gpu");
+    expect(classifyTempZone("XE", "")).toBe("gpu");
+  });
+
+  // "xe" is two characters — matching it as a substring the way the other
+  // GPU chips are matched would claim sensors that have nothing to do with
+  // the GPU, so it is matched exactly instead.
+  it("does not claim an unrelated sensor whose text merely contains 'xe'", () => {
+    expect(classifyTempZone("mychip", "Mixed Zone")).toBe("unknown");
+    expect(classifyTempZone("xenon_board", "")).toBe("unknown");
+  });
+
+  // The chip name settles which engine a sensor belongs to, so it has to
+  // outrank the CPU *label* keywords — an `xe` sensor labelled "package" is
+  // still the GPU's.
+  it("prefers the xe chip name over a CPU-ish label", () => {
+    expect(classifyTempZone("xe", "Package")).toBe("gpu");
+  });
+
+  // Same rule, same tier, for the substring-matched GPU chips. i915 was
+  // added to GPU_TEMP_CHIPS but checked *below* CPU_LABEL_KEYWORDS, so an
+  // i915 sensor labelled "package" came back as cpu while the equivalent
+  // xe one came back as gpu.
+  it("prefers the i915 chip name over a CPU-ish label", () => {
+    expect(classifyTempZone("i915", "Package")).toBe("gpu");
+  });
+
+  it("prefers the amdgpu chip name over a CPU-ish label", () => {
+    expect(classifyTempZone("amdgpu", "package")).toBe("gpu");
+  });
+
+  it("still lets a CPU chip name win for its own labels", () => {
+    // The GPU chip tier sits below CPU_TEMP_CHIPS, so nothing here can
+    // steal k10temp/coretemp sensors.
+    expect(classifyTempZone("k10temp", "Tctl")).toBe("cpu");
+    expect(classifyTempZone("coretemp", "Package id 0")).toBe("cpu");
+  });
+
   it("classifies junction label as gpu", () => {
     expect(classifyTempZone("something", "junction")).toBe("gpu");
   });
