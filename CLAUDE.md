@@ -20,6 +20,40 @@ CEF's DevTools live on `http://localhost:9222` in dev (baked in via
 `electrobun.config.ts` → `build.linux.chromiumFlags`). Attach Chromium
 or use CDP directly.
 
+## Triaging user reports
+
+When a user reports Loadout not working, get `scripts/loadout-doctor.sh`
+output before theorising. It is read-only — no sudo, no installs, no
+restarts — so it is always safe to ask for:
+
+```
+curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/loadout-doctor.sh | sh
+```
+
+It covers distro/kernel, the required tools + dlopen'd sonames, the
+install layout with the on-disk `--version`, both units, a `/up` probe,
+session/gamescope detection, both journals, and a "smoking guns" section
+grepping for the strings each known failure mode emits.
+
+Two habits that pay off, learned from the v0.8.2 CachyOS report:
+
+- **Don't assume the newest release caused it.** Diff the tags first.
+  That report was blamed on v0.8.2, but `apps/loadout/` was byte-identical
+  between v0.8.1 and v0.8.2 apart from the version string, so downgrading
+  could never have helped. The actual cause was a system library CachyOS
+  had dropped in an unrelated rolling update.
+- **"Can't access it" is ambiguous** — backend down, overlay crash-looping,
+  and UI-not-appearing are different bugs with the same description. The
+  doctor output distinguishes them; a follow-up question rarely does.
+
+Note `LOADOUT_VERSION=v0.8.1 curl … | sh` does **not** work — the
+assignment applies to `curl`, not the piped `sh`, so it silently installs
+latest. The variable has to go on `sh`:
+
+```
+curl -fsSL …/install.sh | LOADOUT_VERSION=v0.8.1 sh
+```
+
 ## Skill routing
 
 When the user's request matches an available skill, ALWAYS invoke it using the Skill
