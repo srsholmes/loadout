@@ -311,12 +311,286 @@ detect_arch() {
 }
 
 # ============================================================
+# Runtime dependencies
+# ============================================================
+#
+# Loadout ships a self-contained binary and a bundled CEF overlay, but a
+# handful of things are still shelled out to system tools. Until this
+# commit none of them were declared anywhere, so a distro that happened
+# not to ship one produced a silent, badly-diagnosable failure — a
+# CachyOS user lost the whole Gaming Mode overlay to a missing `xdotool`
+# while every log line looked healthy (the overlay ran, CEF rendered, and
+# only the atom writes no-oped because the window id lookup needs it).
+#
+# REQUIRED — Loadout does not work correctly without these.
+#
+#   xdotool    Resolves the overlay's own X window id (by title — Electrobun
+#              can't set a stable WM_CLASS) and Steam's Big Picture window.
+#              Every gamescope atom write targets a window id, so WITHOUT
+#              THIS THE OVERLAY IS INVISIBLE IN GAMING MODE: it runs, takes
+#              the controller and freezes Steam, and never composites.
+#   xprop      Atom read/write fallback whenever libxcb isn't usable
+#              (OVERLAY_FORCE_XPROP=1, or xcb_connect failing).
+#   xrandr     Probes the gamescope inner-X resolution so the overlay window
+#              is *born* the right size; without it we fall back to 1280x800
+#              and pointer input lands away from where it's drawn (#106).
+#   pgrep      loadout-overlay.service's ExecStart reads Steam's environ and
+#              detects gamescope with it, before the app starts.
+#   tar        The overlay's in-app self-update unpacks its release tarball.
+#   systemctl  Both units. Present on any systemd distro (i.e. all of them).
+#
+# Deliberately NOT required: curl. Nothing in the app shells out to it —
+# release checks and plugin-bundle fetches go through Bun's `fetch`, and the
+# only shell-out in the update path is `tar`. This script needs curl *or*
+# wget, and falls back to wget at every download site, so by the time these
+# checks run one of them is already present. Listing curl here made a
+# wget-only host fail a "Loadout does not work correctly" check and install a
+# package it never uses.
+#
+# OPTIONAL — each one gates a single plugin or feature and is listed by
+# `report_runtime_deps` so users can see what they're missing and why,
+# rather than finding out when a button silently does nothing. These are
+# deliberately NOT auto-installed: podman/distrobox/legendary and friends
+# are heavyweight, and pulling them onto someone's system because they ran
+# an installer would be a bad trade.
+REQUIRED_TOOLS="xdotool xprop xrandr pgrep tar systemctl"
+
+# "tool<TAB>what breaks without it". A tool listed as `a|b|c` needs any one
+# of the alternatives present.
+optional_tools() {
+    cat <<'EOF'
+zenity|kdialog|yad	native file dialogs (recomp ROM picker)
+inputplumber	controller wake button in games (Phase 2 installs this)
+busctl	InputPlumber / bluetooth DBus calls
+flatpak	flatpak-manager, and flatpak entries in quick-links
+nmcli	network-info, and the wifi plugin's connection controls
+iw	wifi plugin radio recovery
+unzip	sound-loader packs and recomp archives
+zip	sound-loader pack export
+bsdtar	recomp disc-image extraction
+podman	recomp build environment
+distrobox	recomp build environment
+legendary	store-bridge (Epic Games library)
+openrgb	rgb-control
+ectool	fan-control
+lsusb	APEX fingerprint-reader detection
+udevadm	InputPlumber udev rule reloads
+EOF
+}
+
+# Package that provides $1 on the detected distro. Empty = we don't know,
+# in which case we print the binary name and let the user map it.
+package_for_tool() {
+    case "$(detect_os)" in
+        steamos|arch)
+            case "$1" in
+                xdotool) echo "xdotool" ;;
+                xprop) echo "xorg-xprop" ;;
+                xrandr) echo "xorg-xrandr" ;;
+                pgrep) echo "procps-ng" ;;
+                tar) echo "tar" ;;
+                systemctl) echo "systemd" ;;
+                *) echo "" ;;
+            esac
+            ;;
+        bazzite|fedora)
+            case "$1" in
+                xdotool) echo "xdotool" ;;
+                xprop) echo "xorg-x11-utils" ;;
+                xrandr) echo "xrandr" ;;
+                pgrep) echo "procps-ng" ;;
+                tar) echo "tar" ;;
+                systemctl) echo "systemd" ;;
+                *) echo "" ;;
+            esac
+            ;;
+        debian)
+            case "$1" in
+                xdotool) echo "xdotool" ;;
+                xprop) echo "x11-utils" ;;
+                xrandr) echo "x11-xserver-utils" ;;
+                pgrep) echo "procps" ;;
+                tar) echo "tar" ;;
+                systemctl) echo "systemd" ;;
+                *) echo "" ;;
+            esac
+            ;;
+        opensuse)
+            case "$1" in
+                xdotool) echo "xdotool" ;;
+                xprop) echo "xprop" ;;
+                xrandr) echo "xrandr" ;;
+                pgrep) echo "procps" ;;
+                tar) echo "tar" ;;
+                systemctl) echo "systemd" ;;
+                *) echo "" ;;
+            esac
+            ;;
+        *) echo "" ;;
+    esac
+}
+
+# Required tools not on PATH, space-separated. Empty output = all present.
+missing_required_tools() {
+    _missing=""
+    for _tool in $REQUIRED_TOOLS; do
+        command -v "$_tool" >/dev/null 2>&1 || _missing="$_missing $_tool"
+    done
+    printf '%s' "${_missing# }"
+}
+
+# True when at least one of a `a|b|c` alternatives group is on PATH.
+have_any_tool() {
+    for _alt in $(printf '%s' "$1" | tr '|' ' '); do
+        command -v "$_alt" >/dev/null 2>&1 && return 0
+    done
+    return 1
+}
+
+# Print the dependency report. No sudo, no side effects — safe in Phase 1.
+report_runtime_deps() {
+    echo ""
+    info "--- Runtime dependencies ---"
+
+    _missing_req="$(missing_required_tools)"
+    if [ -z "$_missing_req" ]; then
+        success "All required tools present: $REQUIRED_TOOLS"
+    else
+        warn "Missing REQUIRED tools:$(printf ' %s' $_missing_req)"
+        for _tool in $_missing_req; do
+            case "$_tool" in
+                xdotool)
+                    warn "  xdotool — the overlay will be INVISIBLE in Gaming Mode without it" ;;
+                xprop)
+                    warn "  xprop — no fallback path for gamescope atom writes" ;;
+                xrandr)
+                    warn "  xrandr — overlay is sized wrong under gamescope; clicks land off-target" ;;
+                pgrep)
+                    warn "  pgrep — the overlay service can't find Steam's display" ;;
+                tar) warn "  tar — in-app self-update can't unpack releases" ;;
+                systemctl) warn "  systemctl — Loadout's services can't be managed" ;;
+            esac
+        done
+    fi
+
+    optional_tools | while IFS="$(printf '\t')" read -r _tool _why; do
+        [ -n "$_tool" ] || continue
+        have_any_tool "$_tool" || info "  optional: $(printf '%s' "$_tool" | tr '|' '/') — $_why"
+    done
+
+    echo ""
+}
+
+# Install whatever's missing. Needs sudo, so this runs in Phase 2.
+phase2_runtime_deps() {
+    echo ""
+    info "--- Required tools ---"
+
+    _missing="$(missing_required_tools)"
+    if [ -z "$_missing" ]; then
+        success "All required tools already present."
+        return
+    fi
+
+    _os="$(detect_os)"
+    _packages=""
+    for _tool in $_missing; do
+        _pkg="$(package_for_tool "$_tool")"
+        if [ -n "$_pkg" ]; then
+            _packages="$_packages $_pkg"
+        else
+            _packages="$_packages $_tool"
+        fi
+    done
+    _packages="${_packages# }"
+
+    warn "Missing required tools:$(printf ' %s' $_missing)"
+
+    # Immutable distros: installing here would either be undone by the next
+    # OS update (SteamOS) or need a reboot to take effect (Bazzite), so we
+    # hand over the command instead of running it behind the user's back.
+    case "$_os" in
+        steamos)
+            warn "SteamOS has a read-only root. To install these:"
+            warn "  sudo steamos-readonly disable"
+            warn "  sudo pacman -S --needed $_packages"
+            warn "  sudo steamos-readonly enable"
+            warn "(a major SteamOS update may revert this — re-run if the overlay stops appearing)"
+            return
+            ;;
+        bazzite)
+            warn "Bazzite layers packages via rpm-ostree and needs a reboot:"
+            warn "  sudo rpm-ostree install $_packages && systemctl reboot"
+            return
+            ;;
+        unknown)
+            warn "Unrecognised distro — install these with your package manager:"
+            warn "  $_packages"
+            return
+            ;;
+    esac
+
+    if ! prompt_yn "Install them now? (needed for the overlay to work in Gaming Mode) (Y/n)" "y"; then
+        warn "Skipped. Install manually before using the overlay:"
+        warn "  $_packages"
+        return
+    fi
+
+    info "Installing: $_packages (requires sudo)..."
+    _installed=0
+    case "$_os" in
+        arch)
+            # shellcheck disable=SC2086 — word splitting is the point here.
+            sudo pacman -S --needed --noconfirm $_packages && _installed=1
+            ;;
+        fedora)
+            sudo dnf install -y $_packages && _installed=1
+            ;;
+        debian)
+            # `update` is allowed to fail: one stale or unreachable repo in
+            # sources.list is common and would otherwise skip the install
+            # entirely and report it as "Package install failed".
+            sudo apt-get update || true
+            sudo apt-get install -y $_packages && _installed=1
+            ;;
+        opensuse)
+            sudo zypper --non-interactive install $_packages && _installed=1
+            ;;
+    esac
+
+    if [ "$_installed" != "1" ]; then
+        error "Package install failed. Run it manually:"
+        error "  $_packages"
+        return
+    fi
+
+    # Verify rather than trust: a package can install and still not provide
+    # the binary we actually look up (distro package splits move things).
+    _still_missing="$(missing_required_tools)"
+    if [ -z "$_still_missing" ]; then
+        success "All required tools installed."
+        if systemctl --user is-active loadout-overlay >/dev/null 2>&1; then
+            info "Restarting the overlay so it picks them up..."
+            systemctl --user restart loadout-overlay 2>/dev/null || true
+        fi
+    else
+        error "Still missing after install:$(printf ' %s' $_still_missing)"
+        error "The package names above may differ on your distro."
+    fi
+}
+
+# ============================================================
 # Phase 1: User-level install (no sudo needed)
 # ============================================================
 
 phase1() {
     info "=== Phase 1: Installing Loadout (no sudo required) ==="
     echo ""
+
+    # Report before installing anything: if a required tool is missing the
+    # user sees it up front, and it's still on screen if they decline Phase
+    # 2 (which is where the sudo install lives).
+    report_runtime_deps
 
     ARCH="$(detect_arch)"
     info "Detected architecture: $ARCH"
@@ -1205,6 +1479,7 @@ phase2() {
     info "=== Phase 2: System dependencies (optional) ==="
     echo ""
 
+    phase2_runtime_deps
     phase2_input_group
     phase2_inputplumber
 
@@ -1371,6 +1646,16 @@ main() {
     info "Overlay:   http://localhost:$OVERLAY_PORT"
     info "Plugins:   $INSTALL_DIR/plugins"
     echo ""
+    # Last word on the subject: a missing required tool is the difference
+    # between a working overlay and one that takes the controller and never
+    # appears, so it gets repeated after everything else has scrolled past.
+    _still_missing="$(missing_required_tools)"
+    if [ -n "$_still_missing" ]; then
+        error "STILL MISSING:$(printf ' %s' $_still_missing)"
+        error "The overlay will not work correctly in Gaming Mode until these are installed."
+        echo ""
+    fi
+
     warn "Restart Steam once so it picks up CEF remote debugging — required for"
     warn "the overlay to grab focus cleanly over Steam's menus (and for plugins"
     warn "that talk to Steam). Big Picture: Steam > Power > Restart Steam."

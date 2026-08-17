@@ -52,6 +52,13 @@ Runtime requirements: an X11/Xwayland display, membership in the `input` group
 (so the overlay can grab evdev devices), and a working Steam install. The CEF
 libraries ship inside the overlay archive.
 
+A handful of system tools are shelled out to — `xdotool`, `xprop`, `xrandr`,
+`pgrep`, `tar`, `curl` — and the installer checks for them, reports what's
+missing, and offers to install it. `xdotool` is the one that matters most:
+without it the overlay is invisible in Gaming Mode. See
+[docs/dependencies.md](docs/dependencies.md) for the full list, including the
+optional tools individual plugins need.
+
 On **SteamOS** the installer additionally builds a small `libwebkit2gtk-4.1`
 library closure (the overlay's native wrapper dlopens it) from a Fedora
 container via `podman` — shipped in SteamOS Holo 3.7+ — the first time, then
@@ -271,6 +278,7 @@ before trusting a change). Full dev/build/test loop:
 | [Overlay / Gamescope](docs/overlay-gamescope-integration.md) | X11 atoms, input grab, display detection                |
 | [Gamepad Navigation](docs/gamepad-navigation-guide.md)       | Spatial navigation, focus management                    |
 | [OS Compatibility](docs/os-compatibility.md)                 | SteamOS, Bazzite, CachyOS specifics                     |
+| [Dependencies](docs/dependencies.md)                         | System tools Loadout shells out to, required + optional |
 | [Releasing](docs/releasing.md)                               | Versioning policy + how releases are cut                |
 
 See [CHANGELOG.md](CHANGELOG.md) for the release history.
