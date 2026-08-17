@@ -66,18 +66,39 @@ export default {
         // as available and route it into the DOM, so overflow-auto
         // scrolls and TouchEvent listeners fire.
         "touch-events": "enabled",
-        // Disable Chrome's variations-seed and field-trial machinery.
-        // Reason: every utility helper subprocess gets spawned with
-        // `--change-stack-guard-on-fork=enable` (Chromium's stack-canary
-        // re-randomization between fork and exec). The Electrobun-
-        // shipped `bun Helper` wrapper main() doesn't survive that —
-        // crashes immediately with `*** stack smashing detected ***`
-        // before reaching CEF's actual code. The helper most often
-        // observed crashing is the `unzip.mojom.Unzipper` utility used
-        // to unpack the variations seed. Killing variations means that
-        // helper is never spawned, sidestepping the bug entirely.
-        // (Also disables remote experiment overrides, which we don't
-        // want under a kiosk-style overlay anyway.)
+        // Disable Chrome's variations-seed, field-trial and component-
+        // update machinery. This *reduces* — but does not eliminate — a
+        // helper-subprocess crash, so it's worth spelling out.
+        //
+        // Every zygote-forked helper is spawned with
+        // `--change-stack-guard-on-fork=enable` (Chromium re-randomizes
+        // the stack canary after fork). Chromium's own main() is built
+        // with NO_STACK_PROTECTOR to survive that; the Electrobun-shipped
+        // `bun Helper` main() is not. So any helper that *returns from*
+        // `CefExecuteProcess` aborts with `*** stack smashing detected ***`
+        // at the end of main(). Long-lived helpers (renderer, GPU) only
+        // return at shutdown, so in practice it's the short-lived utility
+        // helpers — `unzip.mojom.Unzipper`, `patch.mojom.FilePatcher` —
+        // that visibly die, each leaving a coredump and (in desktop mode)
+        // a DrKonqi "encountered a fatal error" popup.
+        //
+        // The crash is post-work and harmless: the helper has already
+        // finished unzipping/patching when main() returns, and the browser
+        // process is unaffected.
+        //
+        // These flags kill the variations-seed unzip path, but they do NOT
+        // cover everything: CEF still runs the component updater ~60s after
+        // launch and updates the CRLSet, which spawns Unzipper + FilePatcher
+        // regardless of `disable-component-update` (observed 2026-08-17,
+        // CertificateRevocation 10718 → 10720). The real fix is rebuilding
+        // `bun Helper` with `-fno-stack-protector` on main() and vendoring
+        // it next to libNativeWrapper.so — an upstream Electrobun bug.
+        // Note `--change-stack-guard-on-fork=disable` is not a workaround:
+        // the zygote host appends `enable` when building each child's
+        // command line, overwriting anything set here.
+        //
+        // (Disabling variations also kills remote experiment overrides,
+        // which we don't want under a kiosk-style overlay anyway.)
         "disable-features":
           "FieldTrialConfig,Variations,GlicActorUi,LensOverlay",
         "disable-field-trial-config": "",
