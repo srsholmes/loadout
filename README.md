@@ -63,15 +63,28 @@ On **SteamOS** the installer additionally builds a small `libwebkit2gtk-4.1`
 library closure (the overlay's native wrapper dlopens it) from a Fedora
 container via `podman` — shipped in SteamOS Holo 3.7+ — the first time, then
 caches it. This is kept out of the download on purpose so the release stays
-small; Bazzite/CachyOS/Fedora already provide these libraries and skip the step
-entirely.
+small; a host that already provides all three of the wrapper's libraries
+(`libwebkit2gtk-4.1.so.0`, `libjavascriptcoregtk-4.1.so.0`,
+`libayatana-appindicator3.so.1`) skips the step entirely.
+
+Distros vary in which of the three they ship, and it can change under you —
+CachyOS provides webkit2gtk-4.1 but not `libayatana-appindicator`, and a
+missing one means the overlay exits at startup and systemd restarts it in a
+loop. The installer verifies all three after install and names the package if
+any are absent.
 
 To install or roll back to a **specific version**, set `LOADOUT_VERSION` to a
 [release tag](https://github.com/srsholmes/loadout/releases):
 
 ```sh
-LOADOUT_VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/install.sh | LOADOUT_VERSION=v0.1.0 sh
 ```
+
+The assignment has to go on `sh`, not at the front of the line. Written the
+other way round — `LOADOUT_VERSION=… curl … | sh` — the variable is set for
+`curl`, which never reads it, while `sh` runs with a clean environment and
+silently installs the **latest** release instead. Look for `Pinned to release
+…` in the output to confirm it took effect.
 
 > If this repository is private, the install command will 404 until it's made
 > public; `install.sh` honours a `GITHUB_TOKEN` env var for authenticated
