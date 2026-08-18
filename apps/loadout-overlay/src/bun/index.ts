@@ -10,6 +10,13 @@
 // in source order, so placing this side-effect import first guarantees
 // process.env.DISPLAY is set before libNativeWrapper is even resolved.
 import "./native/display-detect";
+
+// Registers the crash handlers. MUST stay above the `electrobun/bun` import
+// below: Electrobun installs an `uncaughtException` listener that natively
+// force-exits, and listeners run in registration order — anything registered
+// after it is dead code. See crash-init.ts.
+import "./crash-init";
+
 import { detectOverlayDisplay } from "./native/display-detect";
 const DISPLAY = detectOverlayDisplay();
 
@@ -54,6 +61,7 @@ import {
 } from "./native/process-control";
 
 import { trace } from "./native/trace";
+import { captureFatalSync } from "@loadout/crash-report";
 import { createOverlayState } from "./lib/overlay-state";
 import { routeWake, isStartupWakePhantom } from "./lib/wake-routing";
 import { loadPersistedShortcuts } from "./lib/persisted-shortcuts";
@@ -1120,6 +1128,10 @@ overlayManagementLoop({
   toggleOverlay,
 }).catch((e) => {
   console.error("[overlay] management loop crashed:", e);
+  // Spooled synchronously, not sent. `process.exit(1)` on the next line kills
+  // any in-flight request, so an async send here would never arrive — the
+  // report is written to disk and shipped by the next start instead.
+  captureFatalSync(e);
   process.exit(1);
 });
 
@@ -1149,3 +1161,6 @@ function runShutdown(): Promise<void> {
 }
 process.on("SIGINT", runShutdown);
 process.on("SIGTERM", runShutdown);
+// Global uncaughtException / unhandledRejection handlers live in
+// ./crash-init, imported at the top of this file — they must be registered
+// before `electrobun/bun` installs its own force-exiting listener.

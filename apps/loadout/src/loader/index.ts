@@ -18,6 +18,7 @@ import {
   loadPlugins,
   withSandboxedFetch,
 } from "./plugin-manager";
+import { unsandboxedFetch } from "./sandboxed-fetch";
 import { resolveDisabledPlugins, DISABLED_PLUGINS_KEY } from "./user-config";
 import { createRpcHandler } from "./rpc-handler";
 import { log } from "./logger";
@@ -39,6 +40,9 @@ import {
 import { SteamInjector } from "../injector";
 import { dispatchRoute, type RouteContext } from "./routes";
 import { cleanupStaleSelfUpdateArtifacts } from "./self-update";
+import { initCrashReporting, captureErrorSync, captureFatalSync } from "@loadout/crash-report";
+import { chownToTarget } from "./target-user";
+import { LOADER_VERSION } from "../version";
 
 // Global error handlers — prevent plugin crashes from killing the server.
 // The real fix is process isolation (P1 TODO), but this keeps the server alive
@@ -90,14 +94,51 @@ export function shouldRethrowUncaught(
   return false;
 }
 
+// Opt-in crash reporting. Inert unless the user granted consent *and* a
+// collector URL was compiled in — see packages/crash-report. Here, at module
+// scope before the handlers below, means the reporter is live for the
+// earliest possible failure.
+//
+// `fetchImpl` is passed explicitly and must stay that way. `plugin-manager`
+// replaces `globalThis.fetch` with a proxy that resolves the *calling
+// plugin's* sandboxed fetch via AsyncLocalStorage, and it is imported before
+// this module — so anything the reporter captured for itself would be that
+// proxy. A crash inside a plugin-scoped async callback (a setInterval
+// registered in onLoad, say) would then have its report evaluated against
+// that plugin's network allow-list, silently dropped, and logged as the
+// plugin attempting to reach the collector.
+// `chown` matters because this process is root and writes under the desktop
+// user's $HOME, which the user-level overlay also writes to. Without it the
+// state directory is created root-owned and every overlay write fails EACCES
+// silently — leaving the overlay with no spool and no rate limiting.
+initCrashReporting({
+  process: "backend",
+  release: LOADER_VERSION,
+  fetchImpl: unsandboxedFetch,
+  chown: chownToTarget,
+});
+
 process.on("unhandledRejection", (reason) => {
   log.error(`Unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : reason}`);
+  captureErrorSync(reason);
 });
 process.on("uncaughtException", (err) => {
   log.error(`Uncaught exception: ${err.stack ?? err.message}`);
+  // Reported before the swallow decision, deliberately. In production this
+  // handler keeps the server alive (A-009), which means these exceptions are
+  // invisible today — not just to us, but to the user, who sees only that
+  // something quietly stopped working. This is the single highest-value
+  // capture point in the codebase for exactly that reason.
+  //
+  // The two branches need different transports. When we rethrow (OOM, or
+  // debug mode) the process dies on this tick, so an async send would be
+  // killed in flight — spool it instead and let the next start ship it. When
+  // we swallow, the server lives on and an ordinary send completes.
   if (shouldRethrowUncaught(err)) {
+    captureFatalSync(err);
     throw err;
   }
+  captureErrorSync(err);
 });
 
 /**

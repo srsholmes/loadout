@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@noriginmedia/norigin-spatial-navigation": "^3.0.0",
+    "@loadout/crash-report": "workspace:*",
     "@loadout/deck-hid": "workspace:*",
     "@loadout/devices": "workspace:*",
     "@loadout/exec": "workspace:*",
