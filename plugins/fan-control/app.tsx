@@ -198,6 +198,15 @@ function FanControl() {
         setCustomActive(true);
         setActivePreset(null);
       }
+      // While a preset or the custom curve is driving, the slider is a
+      // readout, not a setting: the curve rewrites the duty every 2s and
+      // the user's last manual value has nothing to do with what the fan
+      // is doing. Track the live percent so it agrees with the "Fan speed"
+      // row above it (issue #265 follow-up).
+      const live = info.fans?.[0]?.percent;
+      if ((info.activePreset || info.customCurveActive) && typeof live === "number") {
+        setSliderValue(live);
+      }
       setLoading(false);
     },
   });
@@ -928,7 +937,8 @@ function FanHomeWidget() {
   //     percent field on direct hwmon paths).
   const [manualSpeed, setManualSpeed] = useState(50);
   const [autoDuty, setAutoDuty] = useState(0);
-  const [, setActivePreset] = useState<string | null>(null);
+  const [activePreset, setActivePreset] = useState<string | null>(null);
+  const [customActive, setCustomActive] = useState(false);
   const [error, setError] = useState(false);
   const { gameProfiles, boundToGame, persistGameProfile } = usePerGameProfiles(
     call,
@@ -995,6 +1005,7 @@ function FanHomeWidget() {
       if (info.cpuTempC > 0) setTempC(info.cpuTempC);
       if (info.mode) setMode(info.mode);
       setActivePreset(info.activePreset ?? null);
+      setCustomActive(Boolean(info.customCurveActive));
     }, [deriveAutoDuty]),
   });
 
@@ -1009,6 +1020,8 @@ function FanHomeWidget() {
   }
 
   const displayRpm = rpm ?? 0;
+  /** A built-in preset or the user's curve is rewriting the duty every 2s. */
+  const curveDriven = activePreset !== null || customActive;
   const sliderDisabled = mode !== "manual";
   // Match TDP's chip semantics so per-game state reads identically across
   // the two performance widgets.
@@ -1049,7 +1062,10 @@ function FanHomeWidget() {
       </div>
 
       <Slider
-        value={mode === "manual" ? manualSpeed : autoDuty}
+        // A preset/custom curve reports hardware mode "manual" (it owns
+        // pwm_enable), but the duty is the curve's, not the user's — so
+        // show the live value rather than a stale manualSpeed.
+        value={mode === "manual" && !curveDriven ? manualSpeed : autoDuty}
         min={0}
         max={100}
         step={1}
