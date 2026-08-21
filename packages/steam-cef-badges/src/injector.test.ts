@@ -195,6 +195,86 @@ describe("SteamCefBadgeInjector — render-target selection", () => {
     await inj.stop();
   });
 
+  it("renders into a BPM window whose title is localized (#259)", async () => {
+    // Steam translates the window title (`SP_WindowTitle_BigPicture`), so
+    // matching it in English left non-English clients with no window in the
+    // render tier — the badges fell through to the MainMenu popup, which is
+    // *not* localized, and appeared only inside the Steam menu.
+    tabsResponse = [
+      tab("SharedJSContext", "https://steamloopback.host/"),
+      tab("MainMenu_uid2", POPUP),
+      tab("Режим Big Picture", BPM_WINDOW, "ru-bpm"),
+    ];
+    const inj = makeInjector(() => true);
+    await inj.start();
+
+    const script = (ws: string) =>
+      evalCalls.some((c) => c.wsUrl === ws && c.expr.includes("/*bpm-script*/"));
+    expect(script("ws://ru-bpm")).toBe(true);
+    expect(script("ws://MainMenu_uid2")).toBe(false);
+    await inj.stop();
+  });
+
+  it("renders into the real captured Gaming Mode target list, localized", async () => {
+    // Verbatim from a live Gaming Mode session (loadout.service journal,
+    // 2026-08-20), with only the window title swapped for its Russian
+    // translation — i.e. exactly what issue #259's reporter had on screen.
+    const GAMING_BPM =
+      "about:blank?createflags=6292738&minwidth=853&minheight=534&pid=0&browser=-1&browserType=4&useragent=Valve%20Steam%20Gamepad";
+    tabsResponse = [
+      tab("QuickAccess_uid2", "about:blank?browserviewpopup=1&requestid=2&parentpopup=2", "qam"),
+      tab("MainMenu_uid2", "about:blank?browserviewpopup=1&requestid=1&parentpopup=2", "menu"),
+      tab("Режим Big Picture", GAMING_BPM, "bpm"),
+      tab("SharedJSContext", "https://steamloopback.host/routes/login", "shared"),
+    ];
+    const inj = makeInjector(() => true);
+    await inj.start();
+
+    const script = (ws: string) =>
+      evalCalls.some((c) => c.wsUrl === ws && c.expr.includes("/*bpm-script*/"));
+    expect(script("ws://bpm")).toBe(true);
+    expect(script("ws://menu")).toBe(false);
+    expect(script("ws://qam")).toBe(false);
+    await inj.stop();
+  });
+
+  it("elects the localized Gaming-Mode window over the desktop window", async () => {
+    // The desktop client's window is titled "Steam" in every locale, so a
+    // BPM-shaped window under any other title is the Gaming-Mode one.
+    tabsResponse = [
+      tab("SharedJSContext", "https://steamloopback.host/routes/", "shared"),
+      tab("Steam", "about:blank?browserType=4&useragent=Valve%20Steam%20Client", "desktop-bpm"),
+      tab("Steam 大屏幕模式", `${BPM_WINDOW}&useragent=Valve%20Steam%20Gamepad`, "zh-bpm"),
+    ];
+    const inj = makeInjector(() => true);
+    await inj.start();
+
+    const script = (ws: string) =>
+      evalCalls.some((c) => c.wsUrl === ws && c.expr.includes("/*bpm-script*/"));
+    expect(script("ws://zh-bpm")).toBe(true);
+    expect(script("ws://desktop-bpm")).toBe(false);
+    await inj.stop();
+  });
+
+  it("never treats a desktop chrome popup as the BPM window", async () => {
+    // Desktop Steam runs ~10 `about:blank` menu targets ("Store Root Menu",
+    // "Profile Supernav", …). None carries a browserType, so relaxing the
+    // title match must not promote them to a render target.
+    const SUPERNAV = "about:blank?createflags=4538378&pid=0&browser=-1&openerid=3";
+    tabsResponse = [
+      tab("SharedJSContext", "https://steamloopback.host/routes/", "shared"),
+      tab("Store Root Menu", SUPERNAV, "supernav"),
+      tab("Notifications Menu", SUPERNAV, "notifications"),
+    ];
+    const inj = makeInjector(() => true);
+    await inj.start();
+
+    expect(clientsConstructed).not.toContain("ws://supernav");
+    expect(clientsConstructed).not.toContain("ws://notifications");
+    expect(inj.getStatus().detail).toMatch(/no Big Picture window/i);
+    await inj.stop();
+  });
+
   it("scrubs a badge an earlier build left in the Steam menu popup", async () => {
     tabsResponse = [
       tab("SharedJSContext", "https://steamloopback.host/"),

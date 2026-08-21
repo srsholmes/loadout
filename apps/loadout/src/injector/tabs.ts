@@ -89,14 +89,22 @@ export async function findSharedJSContext(options: GetTabsOptions): Promise<CEFT
   return tab;
 }
 
+// The English window title. Steam localizes it (`SP_WindowTitle_BigPicture`
+// — "Режим Big Picture", "Big-Picture-Modus", "Steamin televisiotila"), so it
+// is a hint, never the test. See the same note in
+// packages/steam-cef-badges/src/injector.ts, and issue #259.
 const BIG_PICTURE_TITLE = "Steam Big Picture Mode";
+// Steam's own marker for a Big Picture browser window — locale-independent,
+// and carried by both the Gaming Mode and desktop BPM shapes.
+const BPM_BROWSER_TYPE = "browserType=4";
+// The Steam menu / QAM / toasts are browser-view popups, each its own CEF
+// target. They are chrome drawn over the UI, never the UI window itself.
+const BROWSER_VIEW_POPUP_MARKER = "browserviewpopup=1";
 
 export function isBigPictureMode(tab: CEFTab): boolean {
-  // Gaming mode: "Steam Big Picture Mode"
-  // Desktop BPM: "Steam" with browserType=4 in the URL
+  if (tab.url.includes(BROWSER_VIEW_POPUP_MARKER)) return false;
   if (tab.title === BIG_PICTURE_TITLE) return true;
-  if (tab.title === "Steam" && tab.url.includes("browserType=4")) return true;
-  return false;
+  return tab.url.includes(BPM_BROWSER_TYPE);
 }
 
 export async function findBigPictureTab(options: GetTabsOptions): Promise<CEFTab> {

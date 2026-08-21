@@ -13,6 +13,45 @@ describe("isTargetTab", () => {
     expect(isTargetTab({ title: "Steam Big Picture Mode" })).toBe(true);
   });
 
+  // Issue #259. Captured verbatim from a Russian Deck in Gaming Mode: the
+  // window title is Steam's translated `SP_WindowTitle_BigPicture`, so
+  // title-only matching dropped the tab the visible UI is painted in and no
+  // theme CSS applied at all.
+  it("matches the Big Picture window when its title is localized", () => {
+    const GAMING_BPM =
+      "about:blank?createflags=6292738&minwidth=853&minheight=534&pid=0&browser=-1&browserType=4&useragent=Valve%20Steam%20Gamepad";
+    expect(isTargetTab({ title: "Режим Big Picture", url: GAMING_BPM })).toBe(true);
+    expect(isTargetTab({ title: "Big-Picture-Modus", url: GAMING_BPM })).toBe(true);
+    expect(isTargetTab({ title: "Steam 大屏幕模式", url: GAMING_BPM })).toBe(true);
+  });
+
+  it("still matches the popups the BPM UI needs, which carry no browserType", () => {
+    // These are the other live targets from the same capture — theme CSS
+    // wants them too, so the new URL path must not displace them.
+    expect(
+      isTargetTab({
+        title: "MainMenu_uid2",
+        url: "about:blank?browserviewpopup=1&requestid=1&parentpopup=2",
+      }),
+    ).toBe(true);
+    expect(
+      isTargetTab({
+        title: "QuickAccess_uid2",
+        url: "about:blank?browserviewpopup=1&requestid=2&parentpopup=2",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not let the URL path widen the title allowlist", () => {
+    // A tab we already rejected stays rejected when it carries no marker.
+    expect(
+      isTargetTab({ title: "MainMenuSettings", url: "about:blank?createflags=512" }),
+    ).toBe(false);
+    expect(
+      isTargetTab({ title: "DevTools", url: "devtools://devtools/bundled/x.html" }),
+    ).toBe(false);
+  });
+
   it("matches the BPM MainMenu_uid<N> popup tab for common session ids", () => {
     expect(isTargetTab({ title: "MainMenu_uid2" })).toBe(true);
     expect(isTargetTab({ title: "MainMenu_uid0" })).toBe(true);
