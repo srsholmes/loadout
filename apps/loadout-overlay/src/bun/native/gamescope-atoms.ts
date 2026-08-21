@@ -244,7 +244,10 @@ export class GamescopeAtoms {
    *        - _NET_WM_WINDOW_TYPE = _NET_WM_WINDOW_TYPE_NORMAL set
    *        - STEAM_GAME = 769 (Steam's own appID — set on real BPM, not
    *          on the renderer-only helper)
-   *      Among those, prefer one currently asserting overlay/focus.
+   *      Among those, prefer one currently asserting overlay/focus, then
+   *      one that merely *has* STEAM_OVERLAY (Steam sets it on its own BPM
+   *      window; the helper that also passes the filter never has it —
+   *      issue #263).
    *   3. Fallback: first managed window we found (preserves legacy /
    *      desktop-Steam behaviour for shapes we haven't surveyed).
    *
@@ -347,7 +350,14 @@ export class GamescopeAtoms {
     // guaranteed non-empty and pool[0] below is always defined.
     const pool = managed.length > 0 ? managed : candidates;
 
-    // Prefer a pool window currently claiming overlay/focus.
+    // Prefer a pool window currently claiming overlay/focus. The same read
+    // also answers "does this window carry STEAM_OVERLAY at all?" for the
+    // tier below, so record it here rather than re-reading: `_hasAtom` would
+    // spawn an extra xprop per candidate on every cold resolve and every
+    // quiet-tick re-resolve, and it never takes the libxcb path — so on a
+    // host running fine over libxcb without xprop the next tier would
+    // silently never fire.
+    const carriesOverlay: string[] = [];
     for (const id of pool) {
       const atoms = await this._readAtoms(id, [
         "STEAM_OVERLAY",
@@ -358,6 +368,45 @@ export class GamescopeAtoms {
         (atoms.get("STEAM_INPUT_FOCUS") ?? 0) !== 0
       ) {
         return id;
+      }
+      // A true presence test: both _readAtoms paths drop absent atoms —
+      // xprop's regex never matches "NAME:  not found.", and getCardinals
+      // skips a zero-length reply (x11.ts).
+      if (atoms.has("STEAM_OVERLAY")) carriesOverlay.push(id);
+    }
+
+    // Nothing is asserting. Prefer a window that *has* STEAM_OVERLAY at all,
+    // even reading 0.
+    //
+    // The loop above cannot make this distinction on value alone: `?? 0`
+    // collapses "absent" and "present, value 0" into the same thing. A live
+    // survey on a Deck in Gaming Mode (issue #263) showed why that matters —
+    // the filtered pool is two windows, not one, and only the real BPM
+    // window carries the property:
+    //
+    //   0x3000035  1920x1200  STEAM_GAME=769  STEAM_OVERLAY=0  ← real BPM
+    //   0x2800003   200x200   STEAM_GAME=769  (absent)         ← renderer helper
+    //
+    // Steam sets it on its own BPM window as self-state (see the atom table
+    // in docs/overlay-gamescope-integration.md). With BPM sitting at 0 in
+    // BPM home — the common case — the pool fell through to `pool[0]`, which
+    // candidate order makes the 200×200 helper.
+    //
+    // Gated on the structural filter having matched something. With `managed`
+    // empty the pool is the *raw* class-search result — MENU/tooltip popups,
+    // VRStream, 10×10 utility windows — and promoting one of those over
+    // pool[0] would change the desktop-Steam and other unsurveyed shapes that
+    // the pool[0] fallback exists to preserve. Within a filtered pool this is
+    // strictly a reordering: it cannot shrink the candidate set, cannot
+    // introduce a "no window found" path, and lands on exactly the previous
+    // answer when no candidate carries the property.
+    if (managed.length > 0) {
+      const carrier = carriesOverlay[0];
+      if (carrier) {
+        trace(
+          `[gamescope-atoms] _pickBpmWindow → ${carrier} (has STEAM_OVERLAY; pool: ${pool.join(",")})`,
+        );
+        return carrier;
       }
     }
     // pool is non-empty (guarded above), so pool[0] is always defined; the
@@ -676,9 +725,32 @@ export class GamescopeAtoms {
     if (!this.steamWindowId) await this.findSteamWindow();
     if (!this.steamWindowId) return;
 
+    // Never *create* STEAM_OVERLAY on a window that never advertised it.
+    //
+    // This write is unconditional where show()'s zero-pass is guarded by
+    // _steamSnapshotIsAsserted(), so it used to stamp the atom onto whatever
+    // window we resolved — including a wrong one. That mattered once
+    // _pickBpmWindow started keying on the property's presence: a single
+    // open/close cycle after a mis-pick marked the renderer helper, the
+    // helper then satisfied that tier for the rest of the session, and the
+    // trace line printed "(has STEAM_OVERLAY; …)" as if it had worked. Our
+    // own bookkeeping would have become the evidence for repeating it.
+    //
+    // Skipping is safe: with the atom absent, gamescope never treated the
+    // window as an overlay candidate (isOverlay is false), so there is no
+    // claim to release and none of the input-halt reasoning below applies.
+    // Both reclaim-path callers of _zeroSteamFocusAtoms are already gated on
+    // Steam actively asserting STEAM_OVERLAY=1, so they can't create it either.
+    if (!snap?.has("STEAM_OVERLAY")) {
+      trace(
+        "[gamescope-atoms] hide: Steam's window carried no STEAM_OVERLAY at show() — leaving it absent rather than creating one",
+      );
+      return;
+    }
+
     const gamesRunning = await this._getRootAtom("STEAM_GAMES_RUNNING");
     const gameAlive = gamesRunning !== null && gamesRunning > 0;
-    const snapOverlay = snap?.get("STEAM_OVERLAY") ?? 0;
+    const snapOverlay = snap.get("STEAM_OVERLAY") ?? 0;
 
     const targetOverlay = gameAlive ? snapOverlay : 0;
     await this._setOn(this.steamWindowId, "STEAM_OVERLAY", targetOverlay);

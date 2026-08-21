@@ -203,9 +203,23 @@ where WM_NAME isn't `"Steam Big Picture Mode"`.
    — only the real BPM has this name.
 2. **Fallback: scored heuristic.** Filter `--class steamwebhelper` and
    `--class steam` results to those with both `_NET_WM_WINDOW_TYPE`
-   set *and* `STEAM_GAME = 769` (Steam's own appID). Prefer one
-   asserting overlay/focus; else first qualifying.
+   set *and* `STEAM_GAME = 769` (Steam's own appID). Among those,
+   in order:
+   - one asserting overlay/focus (`STEAM_OVERLAY` or
+     `STEAM_INPUT_FOCUS` non-zero);
+   - else one that merely **has** `STEAM_OVERLAY`, even reading 0.
+     Steam sets it on its own BPM window as self-state, and the
+     200×200 renderer helper that also passes the filter never
+     carries one — so presence separates the two where value cannot.
+     Only applied when the filter matched something; on the raw
+     candidate list it would promote menu popups and utility windows
+     (issue #263);
+   - else first qualifying.
 3. Last resort: first managed candidate.
+
+Note the WM_NAME in step 1 is Steam's localized `SP_WindowTitle_BigPicture`
+string ("Режим Big Picture", "Big-Picture-Modus", …), so on a non-English
+client step 1 cannot match and every lookup lands on step 2.
 
 Live xprop surveys on an OneXPlayer Apex showed Steam runs ~10
 windows of class `steamwebhelper` or `steam` simultaneously — the
