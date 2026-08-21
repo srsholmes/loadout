@@ -14,9 +14,12 @@
  * game's fan setting to the user's default.
  */
 
-import type { PresetName } from "./fan-curves";
+import { FAN_CURVES, type PresetName } from "./fan-curves";
 
-const PRESET_NAMES: readonly string[] = ["silent", "balanced", "performance"];
+/** Derived, not hand-listed: a hand-copied list silently made any newly
+ *  added preset non-restorable — rejected here before applyPreset ever
+ *  saw it. */
+const PRESET_NAMES: readonly string[] = Object.keys(FAN_CURVES);
 
 export type GlobalFanMode =
   /** One of the built-in curves. */

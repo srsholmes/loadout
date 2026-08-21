@@ -256,9 +256,20 @@ export default class FanControlBackend implements PluginBackend {
    */
   private fanIntentEpoch = 0;
 
+  /**
+   * The last duty the *user* asked for, before the safety floor and before
+   * any per-game profile. Distinct from `lastUserSpeedPwm`, which the
+   * watchdog needs as the last value actually written: that one is the
+   * floor-raised PWM and is set on every write, including profile applies.
+   * Persisting from it laundered a game's duty — or a hot moment's 100% —
+   * into the user's saved global preference.
+   */
+  private lastUserRequestedPercent: number | null = null;
+
   // Issue #265. The user's persisted global choice, restored once fan
-  // hardware is detected. Guarded so the retry scanner — which re-fires
-  // onFound after every successful rescan — only restores on the first.
+  // hardware is detected. The scanner latches and fires onFound at most
+  // once, so the guard is not for it: it is for the two independent
+  // callers — that onFound, and the ectool path in onLoad.
   private restoredGlobalMode = false;
 
   // Per-game state. The engine owns the {profiles, perGameEnabled, snapshot,
@@ -352,6 +363,13 @@ export default class FanControlBackend implements PluginBackend {
       },
     });
     await this.hardwareScanner.start();
+
+    // scanHardware() reports "found" only for a hwmon PWM or RPM-target
+    // device — deliberately not for ectool (see its comment). So on a host
+    // where ectool is the only write path, onFound never fires and the
+    // restore above never runs, while every user choice still persists.
+    // restoreGlobalMode's own guard makes the double call a no-op.
+    if (this.useEctool) await this.restoreGlobalMode();
 
     // Emit fan status updates every 2 seconds. Also runs the safety
     // watchdog on the same cadence — independent of the curve loop and
@@ -514,17 +532,41 @@ export default class FanControlBackend implements PluginBackend {
    */
   private async restoreGlobalMode(): Promise<void> {
     if (this.restoredGlobalMode) return;
+    // Set before the first await: two callers (the hardware scanner's
+    // onFound and the ectool path in onLoad) can both reach here.
     this.restoredGlobalMode = true;
 
-    let mode: GlobalFanMode | null = null;
-    try {
-      const stored = await readPluginStorage<{ globalMode?: unknown }>(PLUGIN_ID);
-      mode = sanitiseGlobalMode(stored.globalMode);
-    } catch (err) {
-      console.error("[fan-control] Failed to read saved fan mode:", err);
+    // A game whose profile is already bound owns the fan. On the late-driver
+    // path this runs up to 30s after startup, by which time a launch may
+    // have applied a profile — restoring over it would hand the fan back to
+    // the global curve while the game is still running.
+    if (this.profileEngine.getActiveAppId() !== null) {
+      console.log(
+        "[fan-control] Skipping saved-mode restore — a per-game profile is active",
+      );
       return;
     }
+
+    const epoch = this.fanIntentEpoch;
+    const stored = await readPluginStorage<{ globalMode?: unknown }>(PLUGIN_ID);
+    const mode = sanitiseGlobalMode(stored.globalMode);
     if (!mode) return;
+    // The storage read is an await, and RPCs are live by the time the late
+    // rescan fires: a user tapping Auto in that window must not be reverted.
+    if (this.supersededSince(epoch)) return;
+
+    if (mode.kind === "manual" && mode.percent === null) {
+      // "Manual" with no duty. Asserting it would stop Valve's
+      // jupiter-fan-control on the RPM-target path without writing a target
+      // to replace it — and that hardware has no safety watchdog either
+      // (see safetyWatchdogTick's guard), so nothing would own the fan.
+      // There is no duty worth restoring, so leave the firmware's default.
+      console.log(
+        "[fan-control] Saved mode is manual with no speed — leaving the fan as the firmware set it",
+      );
+      return;
+    }
+
     await this.applyGlobalMode(mode);
   }
 
@@ -587,13 +629,7 @@ export default class FanControlBackend implements PluginBackend {
     }
     if (this.customCurveActive) return { kind: "custom" };
     if (this.manualModeRequested === "manual") {
-      return {
-        kind: "manual",
-        percent:
-          this.lastUserSpeedPwm !== null
-            ? pwmToPercent(this.lastUserSpeedPwm)
-            : null,
-      };
+      return { kind: "manual", percent: this.lastUserRequestedPercent };
     }
     if (this.manualModeRequested === "auto") return { kind: "auto" };
     return null;
@@ -726,17 +762,17 @@ export default class FanControlBackend implements PluginBackend {
     percent: number,
     { persist = true }: { persist?: boolean } = {},
   ): Promise<{ success: boolean; error?: string }> {
-    const result = await this.applyUserFanSpeed(percent);
-    if (result.success && persist) {
+    if (persist) {
       // The *requested* percent, not the safety-floor-raised one applied
       // below: baking a hot-moment override into the saved preference would
-      // have the user come back to fans they never asked for.
-      await this.persistGlobalMode({
-        kind: "manual",
-        percent: clampPercent(percent),
-      });
+      // have the user come back to fans they never asked for. Recorded
+      // before the write so a superseded call still reflects the user's
+      // choice (see applyPreset).
+      const requested = clampPercent(percent);
+      this.lastUserRequestedPercent = requested;
+      await this.persistGlobalMode({ kind: "manual", percent: requested });
     }
-    return result;
+    return this.applyUserFanSpeed(percent);
   }
 
   /** The user-facing write: safety floor, curve-loop teardown, mode flip.
@@ -744,10 +780,15 @@ export default class FanControlBackend implements PluginBackend {
    *  the safety watchdog and curve loop use. */
   private async applyUserFanSpeed(percent: number): Promise<{ success: boolean; error?: string }> {
     // Newer intent than any preset/curve apply still awaiting I/O.
-    this.fanIntentEpoch++;
+    const epoch = ++this.fanIntentEpoch;
     // Safety override (issue #97): user's value first, then the floor
     // can only RAISE it. Fails safe to 100% on any temp-read error.
     const safePercent = await this.applySafetyFloor(percent);
+    // The floor read spawns sensor reads, so a newer intent can land while
+    // we wait. Without this an older call went on to stop the newer one's
+    // curve loop and null its flags, leaving a loop running with no flags
+    // set — which makes the watchdog and the loop both write every tick.
+    if (this.supersededSince(epoch)) return { success: true };
     const clamped = clampPercent(safePercent);
     const pwmValue = percentToPwm(clamped);
 
@@ -821,23 +862,21 @@ export default class FanControlBackend implements PluginBackend {
     mode: "auto" | "manual",
     { persist = true }: { persist?: boolean } = {},
   ): Promise<{ success: boolean; error?: string }> {
-    const result = await this.applyUserFanMode(mode);
-    if (result.success && persist) {
+    if (persist) {
       await this.persistGlobalMode(
         mode === "auto"
           ? { kind: "auto" }
           : {
               kind: "manual",
               // Flipping to manual without naming a speed: carry the last
-              // duty the user asked for, if there is one.
-              percent:
-                this.lastUserSpeedPwm !== null
-                  ? pwmToPercent(this.lastUserSpeedPwm)
-                  : null,
+              // duty the *user* asked for, if there is one. Never
+              // lastUserSpeedPwm — that carries whatever was last written,
+              // including a per-game profile's duty and the safety floor.
+              percent: this.lastUserRequestedPercent,
             },
       );
     }
-    return result;
+    return this.applyUserFanMode(mode);
   }
 
   private async applyUserFanMode(
@@ -904,9 +943,16 @@ export default class FanControlBackend implements PluginBackend {
     }
 
     const epoch = ++this.fanIntentEpoch;
-    this.activePreset = name;
-    this.customCurveActive = false;
     console.log(`[fan-control] Applying preset: ${name}`);
+
+    // Persist at the point of intent, before any I/O. Persisting on success
+    // instead meant a tap that got superseded mid-apply — by a per-game
+    // profile, or by the user's own next tap — was applied but never
+    // recorded, and left storage to whichever chain happened to finish last.
+    if (persist) {
+      this.lastUserRequestedPercent = null;
+      await this.persistGlobalMode({ kind: "preset", name });
+    }
 
     // Set to manual mode first
     const modeResult = await this.setFanModeInternal("manual");
@@ -916,11 +962,17 @@ export default class FanControlBackend implements PluginBackend {
     // Apply curve immediately, then start a loop
     await this.applyCurve(curve);
     if (this.supersededSince(epoch)) return { success: true };
-    this.startCurveLoop(curve);
 
-    // Persist last: only a preset that actually took effect is worth
-    // restoring on the next boot (issue #265).
-    if (persist) await this.persistGlobalMode({ kind: "preset", name });
+    // Commit point. activePreset/customCurveActive are set here, with the
+    // loop, and never optimistically on entry — the safety watchdog skips
+    // its own write when either flag is set, on the understanding that the
+    // curve loop owns the fan (see safetyWatchdogTick). Setting them early
+    // broke that: a superseded or failed apply left the flag set with no
+    // loop running, so at >=75 C the watchdog flagged engaged and wrote
+    // nothing at all.
+    this.activePreset = name;
+    this.customCurveActive = false;
+    this.startCurveLoop(curve);
 
     return { success: true };
   }
@@ -958,8 +1010,13 @@ export default class FanControlBackend implements PluginBackend {
     }
 
     if (this.customCurveActive) {
+      // Restarting the loop is an intent of its own: without an epoch, a
+      // per-game profile applying "auto" during the applyCurve await had its
+      // loop teardown undone here, leaving a curve running against
+      // pwm_enable=2 with customCurveActive already false.
+      const epoch = ++this.fanIntentEpoch;
       await this.applyCurve(curve);
-      this.startCurveLoop(curve);
+      if (!this.supersededSince(epoch)) this.startCurveLoop(curve);
     }
 
     return { success: true, curve: curve.map((p) => ({ ...p })) };
@@ -974,22 +1031,25 @@ export default class FanControlBackend implements PluginBackend {
   ): Promise<{ success: boolean; error?: string }> {
     const curve = this.customCurve;
     const epoch = ++this.fanIntentEpoch;
-    this.activePreset = null;
-    this.customCurveActive = true;
     console.log("[fan-control] Applying custom fan curve");
 
-    const modeResult = await this.setFanModeInternal("manual");
-    if (!modeResult.success) {
-      this.customCurveActive = false;
-      return modeResult;
+    if (persist) {
+      this.lastUserRequestedPercent = null;
+      await this.persistGlobalMode({ kind: "custom" });
     }
+
+    const modeResult = await this.setFanModeInternal("manual");
+    if (!modeResult.success) return modeResult;
     if (this.supersededSince(epoch)) return { success: true };
 
     await this.applyCurve(curve);
     if (this.supersededSince(epoch)) return { success: true };
-    this.startCurveLoop(curve);
 
-    if (persist) await this.persistGlobalMode({ kind: "custom" });
+    // Commit point — see the note in applyPreset. No rollback-on-failure
+    // needed now that the flags are only set once the loop is starting.
+    this.activePreset = null;
+    this.customCurveActive = true;
+    this.startCurveLoop(curve);
 
     return { success: true };
   }

@@ -71,6 +71,10 @@ type FanBackendInternals = {
   restoreGlobalMode(): Promise<void>;
   restoredGlobalMode: boolean;
   lastUserSpeedPwm: number | null;
+  lastUserRequestedPercent: number | null;
+  fanIntentEpoch: number;
+  applyGlobalMode(mode: unknown): Promise<void>;
+  profileEngine: { getActiveAppId(): number | null };
 };
 const internals = (b: FanControlBackend): FanBackendInternals =>
   b as unknown as FanBackendInternals;
@@ -1572,9 +1576,28 @@ describe("FanControlBackend", () => {
             exited: Promise.resolve(0),
           })) as typeof Bun.spawn,
       );
+      // A real sensor, so the floor is driven by the temperature below and
+      // not by getCpuTempCOrNull() returning null — which silently sent
+      // every setFanSpeed in this block down the "temperature unavailable,
+      // failsafe to MAX" path and made the 95 C case pass for the wrong
+      // reason.
+      internals(backend).tempSensors = [
+        {
+          inputPath: "/sys/class/hwmon/hwmon0/temp1_input",
+          label: "Tctl",
+          zone: "cpu",
+          chipName: "k10temp",
+        },
+      ];
       // Cool enough that the safety floor never rewrites the value.
       mockReadFile.mockImplementation(() => Promise.resolve("45000"));
     });
+
+    /** The duty last written to hardware, as a percent. */
+    const writtenPercent = () => {
+      const pwm = internals(backend).lastUserSpeedPwm;
+      return pwm === null ? null : Math.round((pwm / 255) * 100);
+    };
 
     afterEach(() => {
       readStorageSpy.mockRestore();
@@ -1613,12 +1636,15 @@ describe("FanControlBackend", () => {
       expect(internals(backend).curveInterval).toBeDefined();
     });
 
-    it("restores a saved manual speed", async () => {
+    it("restores a saved manual speed, at that speed", async () => {
       persisted = { globalMode: { kind: "manual", percent: 65 } };
       await internals(backend).restoreGlobalMode();
 
       expect(internals(backend).manualModeRequested).toBe("manual");
       expect(internals(backend).activePreset).toBeNull();
+      // The saved duty must actually reach the hardware write — asserting
+      // only the mode let a restore that wrote any other percent pass.
+      expect(writtenPercent()).toBe(65);
     });
 
     it("restores nothing when no mode was ever saved", async () => {
@@ -1632,7 +1658,17 @@ describe("FanControlBackend", () => {
     });
 
     it("ignores a malformed saved mode instead of throwing during load", async () => {
+      // An unknown preset name is caught by the sanitiser. Asserting only
+      // activePreset would also pass without it, since applyPreset bails on
+      // the FAN_CURVES lookup — so pin a shape that WOULD reach hardware if
+      // the value were used raw.
+      persisted = { globalMode: { kind: "manual", percent: "80" } };
+      await internals(backend).restoreGlobalMode();
+      expect(writtenPercent()).toBeNull();
+      expect(internals(backend).manualModeRequested).toBeNull();
+
       persisted = { globalMode: { kind: "preset", name: "turbo" } };
+      internals(backend).restoredGlobalMode = false;
       await internals(backend).restoreGlobalMode();
       expect(internals(backend).activePreset).toBeNull();
     });
@@ -1712,6 +1748,112 @@ describe("FanControlBackend", () => {
       expect(persisted.globalMode).toEqual({ kind: "manual", percent: 35 });
     });
 
+    it("restores from onLoad, not just when called directly", async () => {
+      // The #265 fix itself: the wiring from plugin load to restore. Every
+      // other restore test calls the private method by hand, so deleting
+      // `await this.restoreGlobalMode()` from the scanner's onFound left
+      // the whole suite green.
+      persisted = { globalMode: { kind: "preset", name: "performance" } };
+      const fresh = new FanControlBackend();
+      const internalsFresh = internals(fresh);
+      // Hardware the scanner will find on its first pass.
+      internalsFresh.scanHardware = () => {
+        internalsFresh.activeFanDevice = {
+          dir: "/sys/class/hwmon/hwmon0",
+          chipName: "test",
+          fans: [
+            {
+              index: 1,
+              inputPath: "/sys/class/hwmon/hwmon0/fan1_input",
+              pwmPath: "/sys/class/hwmon/hwmon0/pwm1",
+              pwmEnablePath: "/sys/class/hwmon/hwmon0/pwm1_enable",
+            },
+          ],
+          hasPwmControl: true,
+        };
+        return Promise.resolve(true);
+      };
+      try {
+        await fresh.onLoad();
+        expect(internalsFresh.activePreset).toBe("performance");
+        expect(internalsFresh.curveInterval).toBeDefined();
+      } finally {
+        clearInterval(internalsFresh.interval);
+        clearInterval(internalsFresh.curveInterval);
+        await fresh.onUnload();
+      }
+    });
+
+    it("never leaves a preset flagged active without a curve loop", async () => {
+      // The safety watchdog skips its own write whenever activePreset or
+      // customCurveActive is set, trusting the curve loop to write instead
+      // (safetyWatchdogTick). If a superseded or failed apply leaves the
+      // flag set with no loop, nothing writes at all while the SoC is hot.
+      const superseded = backend.applyPreset("silent", { persist: false });
+      await backend.setFanMode("manual", { persist: false });
+      await superseded;
+
+      const flagged =
+        internals(backend).activePreset !== null ||
+        internals(backend).customCurveActive;
+      const looping = internals(backend).curveInterval !== undefined;
+      expect(flagged).toBe(looping);
+    });
+
+    it("leaves no preset flagged when the mode write fails", async () => {
+      // Same invariant, via the failure path: applyPreset used to set
+      // activePreset before the hardware write and never roll it back.
+      spawnSpy.mockImplementation(
+        (() =>
+          asSpawned({
+            stdout: new ReadableStream({ start(c) { c.close(); } }),
+            stderr: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("denied")); c.close(); } }),
+            stdin: null,
+            exited: Promise.resolve(1),
+          })) as typeof Bun.spawn,
+      );
+      await backend.applyPreset("silent");
+
+      expect(internals(backend).activePreset).toBeNull();
+      expect(internals(backend).curveInterval).toBeUndefined();
+    });
+
+    it("does not launder a per-game duty into the saved manual speed", async () => {
+      // setFanMode("manual") used to persist from lastUserSpeedPwm, which
+      // carries whatever was last *written* — including a profile's duty and
+      // the safety floor. Tapping Manual mid-game then saved the game's 90%
+      // as the user's global preference.
+      await backend.setFanSpeed(40);
+      expect(persisted.globalMode).toEqual({ kind: "manual", percent: 40 });
+
+      await backend.setFanSpeed(90, { persist: false }); // a per-game profile
+      await backend.setFanMode("manual");
+
+      expect(persisted.globalMode).toEqual({ kind: "manual", percent: 40 });
+    });
+
+    it("does not launder a safety-raised duty into the saved manual speed", async () => {
+      await backend.setFanSpeed(20);
+      // Now run hot enough for the floor to raise the applied duty to 100.
+      mockReadFile.mockImplementation(() => Promise.resolve("95000"));
+      await backend.setFanSpeed(20, { persist: false });
+      expect(writtenPercent()).toBe(100); // the floor really did fire
+
+      await backend.setFanMode("manual");
+      expect(persisted.globalMode).toEqual({ kind: "manual", percent: 20 });
+    });
+
+    it("records a superseded user tap all the same", async () => {
+      // Persisting on success meant a tap superseded mid-apply — by a
+      // per-game profile, or the user's own next tap — was applied but
+      // never recorded, so the next boot restored a mode they had left.
+      const tap = backend.applyPreset("silent");
+      await backend.setFanSpeed(55, { persist: false });
+      await tap;
+
+      expect(persisted.globalMode).toEqual({ kind: "preset", name: "silent" });
+    });
+
     it("lets a newer intent win over an in-flight preset apply", async () => {
       // Reproduces the on-device failure: exit-restore and the next
       // profile's apply are separate awaited chains, so a game *switch*
@@ -1725,6 +1867,19 @@ describe("FanControlBackend", () => {
       expect(internals(backend).activePreset).toBeNull();
       expect(internals(backend).curveInterval).toBeUndefined();
       expect(internals(backend).manualModeRequested).toBe("manual");
+    });
+
+    it("does not let a stale manual write override a newer Auto", async () => {
+      // applyUserFanSpeed mutates shared state after awaiting the safety
+      // floor (several sensor reads). Without an epoch check, a slider drag
+      // that lost the race still went on to flip pwm_enable back to manual
+      // and write its duty — silently undoing the Auto the user had just
+      // chosen, with nothing to correct it afterwards.
+      const stale = backend.setFanSpeed(30, { persist: false });
+      await backend.setFanMode("auto", { persist: false });
+      await stale;
+
+      expect(internals(backend).manualModeRequested).toBe("auto");
     });
 
     it("lets a newer intent win over an in-flight custom-curve apply", async () => {
