@@ -114,6 +114,14 @@ function toRpcProfile(entry: {
 interface FanModeSnapshot {
   mode: "auto" | "manual";
   speed: number | null;
+  /**
+   * The global mode in effect when the game launched. Without it, exiting a
+   * game restored a bare duty — so a user on the Silent curve came back to a
+   * fixed manual speed and stayed there until the next backend restart
+   * (issue #265 follow-on). In-memory only; the engine never persists
+   * snapshots, so this needs no sanitising on read.
+   */
+  globalMode: GlobalFanMode | null;
 }
 
 interface FanInfoResult {
@@ -269,6 +277,15 @@ export default class FanControlBackend implements PluginBackend {
     onRestore: async (snap) => {
       // Same reasoning as onApply: restoring the pre-game snapshot is not a
       // user choice, so it must not be written to storage.
+      //
+      // Prefer the captured global mode: a preset or custom curve has to be
+      // re-applied as a *curve* (restarting the loop), which a mode+speed
+      // snapshot can't express — restoring that alone left the user pinned
+      // at whatever duty the curve happened to be at when the game started.
+      if (snap.globalMode) {
+        await this.applyGlobalMode(snap.globalMode);
+        return;
+      }
       if (snap.mode === "manual" && typeof snap.speed === "number") {
         await this.setFanSpeed(snap.speed, { persist: false });
       } else {
@@ -493,7 +510,17 @@ export default class FanControlBackend implements PluginBackend {
       return;
     }
     if (!mode) return;
+    await this.applyGlobalMode(mode);
+  }
 
+  /**
+   * Re-assert a global mode without recording it — shared by the on-load
+   * restore and by the per-game engine's onRestore when a game exits.
+   *
+   * Always `persist: false`: neither caller represents a fresh user choice,
+   * and writing here would let a game exit overwrite what the user picked.
+   */
+  private async applyGlobalMode(mode: GlobalFanMode): Promise<void> {
     try {
       switch (mode.kind) {
         case "preset":
@@ -520,8 +547,28 @@ export default class FanControlBackend implements PluginBackend {
           break;
       }
     } catch (err) {
-      console.error("[fan-control] Failed to restore saved fan mode:", err);
+      console.error("[fan-control] Failed to apply fan mode:", err);
     }
+  }
+
+  /** The global mode implied by current in-memory state, for snapshotting
+   *  before a per-game profile takes over. */
+  private currentGlobalMode(): GlobalFanMode | null {
+    if (this.activePreset !== null) {
+      return { kind: "preset", name: this.activePreset };
+    }
+    if (this.customCurveActive) return { kind: "custom" };
+    if (this.manualModeRequested === "manual") {
+      return {
+        kind: "manual",
+        percent:
+          this.lastUserSpeedPwm !== null
+            ? pwmToPercent(this.lastUserSpeedPwm)
+            : null,
+      };
+    }
+    if (this.manualModeRequested === "auto") return { kind: "auto" };
+    return null;
   }
 
   async getFanInfo(): Promise<FanInfoResult> {
@@ -1674,6 +1721,8 @@ export default class FanControlBackend implements PluginBackend {
     const info = await this.getFanInfo();
     const mode = info.mode === "manual" ? "manual" : "auto";
     const percent = info.fans[0]?.percent ?? null;
-    return { mode, speed: percent };
+    // globalMode is what actually gets restored on exit when set; mode/speed
+    // stay as the fallback for a snapshot taken with no global mode active.
+    return { mode, speed: percent, globalMode: this.currentGlobalMode() };
   }
 }

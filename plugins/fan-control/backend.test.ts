@@ -1667,6 +1667,70 @@ describe("FanControlBackend", () => {
       await backend.handleGameExit(730);
       expect(persisted.globalMode).toEqual({ kind: "preset", name: "silent" });
     });
+
+    it("puts the user back on their curve when a game with a profile exits", async () => {
+      // Found on-device: the restore worked, then a per-game profile applied
+      // a second later and the snapshot could only put back a *duty*, so the
+      // user sat at a fixed speed until the next backend restart.
+      await backend.applyPreset("silent");
+      expect(internals(backend).activePreset).toBe("silent");
+
+      await backend.setPerGameEnabled(true);
+      await backend.setGameProfile(730, "Test Game", {
+        mode: "manual",
+        speed: 90,
+      });
+
+      await backend.handleGameLaunch(730, "Test Game");
+      // The game's manual profile owns the fan while it runs.
+      expect(internals(backend).activePreset).toBeNull();
+      expect(internals(backend).manualModeRequested).toBe("manual");
+
+      await backend.handleGameExit(730);
+      // ...and the curve is running again afterwards, not a static duty.
+      expect(internals(backend).activePreset).toBe("silent");
+      expect(internals(backend).curveInterval).toBeDefined();
+      // Still the user's choice on disk — the round trip wrote nothing.
+      expect(persisted.globalMode).toEqual({ kind: "preset", name: "silent" });
+    });
+
+    it("restores a manual global choice through the same path", async () => {
+      // A manual speed is itself a global mode, so it round-trips via
+      // applyGlobalMode rather than the raw mode+speed fallback.
+      await backend.setFanSpeed(35);
+      await backend.setPerGameEnabled(true);
+      await backend.setGameProfile(731, "Other Game", {
+        mode: "manual",
+        speed: 80,
+      });
+
+      await backend.handleGameLaunch(731, "Other Game");
+      await backend.handleGameExit(731);
+
+      expect(internals(backend).activePreset).toBeNull();
+      expect(internals(backend).manualModeRequested).toBe("manual");
+      expect(persisted.globalMode).toEqual({ kind: "manual", percent: 35 });
+    });
+
+    it("falls back to the mode+speed snapshot when nothing global was active", async () => {
+      // No preset, no custom curve, no manual choice — currentGlobalMode()
+      // is null, so the snapshot's mode/speed is all there is to put back.
+      // This path must behave exactly as it did before the globalMode field
+      // existed.
+      expect(internals(backend).manualModeRequested).toBeNull();
+
+      await backend.setPerGameEnabled(true);
+      await backend.setGameProfile(731, "Other Game", {
+        mode: "manual",
+        speed: 80,
+      });
+      await backend.handleGameLaunch(731, "Other Game");
+      await backend.handleGameExit(731);
+
+      expect(internals(backend).activePreset).toBeNull();
+      // Nothing global was ever chosen, so nothing was written for it.
+      expect(persisted.globalMode).toBeUndefined();
+    });
   });
 
 });
