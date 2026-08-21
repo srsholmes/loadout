@@ -219,6 +219,48 @@ describe("GamescopeAtoms", () => {
       expect(map._NET_WM_WINDOW_OPACITY).toBe("0");
     });
 
+    it("hide() does not create STEAM_OVERLAY on Steam's window when it had none (#263)", async () => {
+      // The write used to be unconditional, so it stamped the atom onto
+      // whatever window we resolved — including a mis-picked one. Once
+      // _pickBpmWindow keys on the property's presence, that turns a single
+      // wrong resolve into a self-confirming one for the rest of the session.
+      mockRun.mockImplementation((cmd: string[]) => {
+        const xdotoolStdout = mockXdotoolSearch(cmd);
+        if (xdotoolStdout !== null) {
+          return Promise.resolve({ stdout: xdotoolStdout, exitCode: 0 });
+        }
+        // Every atom read comes back absent — the fresh-boot shape, before
+        // Steam has set STEAM_OVERLAY on its own window.
+        if (cmd[2] === "xprop" && cmd[3] === "-id" && !cmd.includes("-f")) {
+          return Promise.resolve({
+            stdout: "STEAM_OVERLAY:  not found.\nSTEAM_INPUT_FOCUS:  not found.\n",
+            exitCode: 0,
+          });
+        }
+        return Promise.resolve({ stdout: "", exitCode: 0 });
+      });
+      const atoms = new GamescopeAtoms({
+        display: ":0",
+        windowName: "X",
+        forceXprop: true,
+      });
+      await atoms.show();
+      await atoms.hide();
+
+      const steamWrites = capturedXprops().filter(
+        (c) => c.target === STEAM_WIN_ID,
+      );
+      expect(steamWrites.map((c) => c.atom)).not.toContain("STEAM_OVERLAY");
+
+      // Our own window is still torn down normally — the guard is scoped to
+      // Steam's window and must not affect the overlay's own atoms.
+      const own = Object.fromEntries(
+        capturedOwnXprops().map((c) => [c.atom, c.value]),
+      );
+      expect(own.STEAM_OVERLAY).toBe("0");
+      expect(own._NET_WM_WINDOW_OPACITY).toBe("0");
+    });
+
     it("a show() right after a hide() re-opens the overlay", async () => {
       const atoms = new GamescopeAtoms({ display: ":0", windowName: "X", forceXprop: true });
       await atoms.hide();
@@ -891,8 +933,10 @@ HDMI-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis
     const BPM = "0x3000035"; // 1920x1200 real BPM, STEAM_OVERLAY=0
 
     /** Route xprop/xdotool for the surveyed window set. `bpmTitle` stands in
-     *  for the localized WM_NAME so tier 1 never fires. */
-    function mockSurveyedWindows(bpmTitle: string) {
+     *  for the localized WM_NAME so tier 1 never fires. `helperHasOverlay`
+     *  marks the helper with STEAM_OVERLAY too — the state our own hide()
+     *  write used to create — so the presence tier would pick it. */
+    function mockSurveyedWindows(bpmTitle: string, helperHasOverlay = false) {
       mockRun.mockImplementation((cmd: string[]) => {
         if (cmd.includes("xdotool")) {
           // Both windows come back from the class search, helper first.
@@ -934,11 +978,12 @@ HDMI-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis
         }
         // The crux: present-but-zero on BPM, absent on the helper.
         if (asks("STEAM_OVERLAY")) {
-          const overlay = isBpm
+          const carries = isBpm || helperHasOverlay;
+          const overlay = carries
             ? "STEAM_OVERLAY(CARDINAL) = 0"
             : "STEAM_OVERLAY:  not found.";
           const focus = asks("STEAM_INPUT_FOCUS")
-            ? isBpm
+            ? carries
               ? "\nSTEAM_INPUT_FOCUS(CARDINAL) = 0"
               : "\nSTEAM_INPUT_FOCUS:  not found."
             : "";
@@ -959,13 +1004,43 @@ HDMI-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis
     });
 
     it("still takes the WM_NAME fast path on an English client", async () => {
-      mockSurveyedWindows("Steam Big Picture Mode");
+      // The helper carries STEAM_OVERLAY too and sorts first, so the
+      // presence tier would return the *helper*. Getting BPM back can only
+      // mean tier 1 short-circuited ahead of it.
+      mockSurveyedWindows("Steam Big Picture Mode", true);
       const atoms = new GamescopeAtoms({
         display: ":0",
         windowName: "X",
         forceXprop: true,
       });
       expect(await atoms.findSteamWindow()).toBe(BPM);
+    });
+
+    it("does not promote on the unfiltered pool, only inside a filtered one", async () => {
+      // With no candidate passing the STEAM_GAME=769 filter, `pool` is the
+      // raw class-search result — MENU/tooltip popups, VRStream, 10x10
+      // utilities. Promoting one of those over pool[0] would change the
+      // desktop-Steam and unsurveyed shapes the fallback exists to preserve.
+      mockSurveyedWindows("Режим Big Picture");
+      const prev = mockRun.getMockImplementation();
+      mockRun.mockImplementation((cmd: string[]) => {
+        // Nothing is tagged with Steam's appID => `managed` comes back empty.
+        if (cmd.includes("xprop") && cmd.includes("STEAM_GAME")) {
+          return Promise.resolve({
+            stdout: "STEAM_GAME:  not found.\n",
+            exitCode: 0,
+          });
+        }
+        return prev!(cmd);
+      });
+      const atoms = new GamescopeAtoms({
+        display: ":0",
+        windowName: "X",
+        forceXprop: true,
+      });
+      // BPM still carries STEAM_OVERLAY, but the filter matched nothing, so
+      // we must return pool[0] exactly as before.
+      expect(await atoms.findSteamWindow()).toBe(HELPER);
     });
 
     it("falls back to the previous answer when no candidate has STEAM_OVERLAY", async () => {
