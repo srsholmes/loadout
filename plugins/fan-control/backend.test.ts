@@ -68,6 +68,9 @@ type FanBackendInternals = {
   setFanSpeedInternal(percent: number): Promise<{ success: boolean; error?: string }>;
   safetyWatchdogTick(): Promise<void>;
   getCpuTempCOrNull(): Promise<number | null>;
+  restoreGlobalMode(): Promise<void>;
+  restoredGlobalMode: boolean;
+  lastUserSpeedPwm: number | null;
 };
 const internals = (b: FanControlBackend): FanBackendInternals =>
   b as unknown as FanBackendInternals;
@@ -1523,4 +1526,147 @@ describe("FanControlBackend", () => {
       expect(temps[0].tempC).toBe(0);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Issue #265: the global mode (preset / custom / manual / auto) has to
+  // survive a reboot or a `loadout.service` restart. Before this, applyPreset
+  // only set in-memory state, so the curve loop never restarted and the UI
+  // fell back to whatever pwm1_enable said — manual, on drivers like oxp_ec.
+  // ---------------------------------------------------------------------------
+
+  describe("global mode persistence (#265)", () => {
+    let readStorageSpy: ReturnType<typeof spyOn>;
+    let writeStorageSpy: ReturnType<typeof spyOn>;
+    let persisted: Record<string, unknown>;
+
+    beforeEach(() => {
+      persisted = {};
+      readStorageSpy = spyOn(storage, "readPluginStorage").mockImplementation(
+        (() => Promise.resolve(persisted)) as typeof storage.readPluginStorage,
+      );
+      writeStorageSpy = spyOn(storage, "writePluginStorage").mockImplementation(
+        ((_id: string, data: Record<string, unknown>) => {
+          persisted = data;
+          return Promise.resolve();
+        }) as typeof storage.writePluginStorage,
+      );
+      internals(backend).activeFanDevice = {
+        dir: "/sys/class/hwmon/hwmon0",
+        chipName: "test",
+        fans: [
+          {
+            index: 1,
+            inputPath: "/sys/class/hwmon/hwmon0/fan1_input",
+            pwmPath: "/sys/class/hwmon/hwmon0/pwm1",
+            pwmEnablePath: "/sys/class/hwmon/hwmon0/pwm1_enable",
+          },
+        ],
+        hasPwmControl: true,
+      };
+      spawnSpy.mockImplementation(
+        (() =>
+          asSpawned({
+            stdout: new ReadableStream({ start(c) { c.close(); } }),
+            stderr: new ReadableStream({ start(c) { c.close(); } }),
+            stdin: null,
+            exited: Promise.resolve(0),
+          })) as typeof Bun.spawn,
+      );
+      // Cool enough that the safety floor never rewrites the value.
+      mockReadFile.mockImplementation(() => Promise.resolve("45000"));
+    });
+
+    afterEach(() => {
+      readStorageSpy.mockRestore();
+      writeStorageSpy.mockRestore();
+    });
+
+    it("persists a preset selection", async () => {
+      await backend.applyPreset("silent");
+      expect(persisted.globalMode).toEqual({ kind: "preset", name: "silent" });
+    });
+
+    it("persists the custom curve and each manual/auto choice", async () => {
+      await backend.applyCustomCurve();
+      expect(persisted.globalMode).toEqual({ kind: "custom" });
+
+      await backend.setFanSpeed(70);
+      expect(persisted.globalMode).toEqual({ kind: "manual", percent: 70 });
+
+      await backend.setFanMode("auto");
+      expect(persisted.globalMode).toEqual({ kind: "auto" });
+    });
+
+    it("saves the requested speed, not a safety-raised one", async () => {
+      // 95 °C forces the safety floor well above the user's 20%. Persisting
+      // the floor would have the user reboot into fans they never chose.
+      mockReadFile.mockImplementation(() => Promise.resolve("95000"));
+      await backend.setFanSpeed(20);
+      expect(persisted.globalMode).toEqual({ kind: "manual", percent: 20 });
+    });
+
+    it("restores a saved preset once fan hardware is found", async () => {
+      persisted = { globalMode: { kind: "preset", name: "performance" } };
+      await internals(backend).restoreGlobalMode();
+
+      expect(internals(backend).activePreset).toBe("performance");
+      expect(internals(backend).curveInterval).toBeDefined();
+    });
+
+    it("restores a saved manual speed", async () => {
+      persisted = { globalMode: { kind: "manual", percent: 65 } };
+      await internals(backend).restoreGlobalMode();
+
+      expect(internals(backend).manualModeRequested).toBe("manual");
+      expect(internals(backend).activePreset).toBeNull();
+    });
+
+    it("restores nothing when no mode was ever saved", async () => {
+      persisted = {};
+      await internals(backend).restoreGlobalMode();
+
+      expect(internals(backend).activePreset).toBeNull();
+      expect(internals(backend).curveInterval).toBeUndefined();
+      // And doesn't write a mode back out just for having looked.
+      expect(persisted.globalMode).toBeUndefined();
+    });
+
+    it("ignores a malformed saved mode instead of throwing during load", async () => {
+      persisted = { globalMode: { kind: "preset", name: "turbo" } };
+      await internals(backend).restoreGlobalMode();
+      expect(internals(backend).activePreset).toBeNull();
+    });
+
+    it("restores only once, however often the hardware scanner re-fires", async () => {
+      persisted = { globalMode: { kind: "preset", name: "silent" } };
+      await internals(backend).restoreGlobalMode();
+      internals(backend).activePreset = null;
+      await internals(backend).restoreGlobalMode();
+      // Second call is a no-op: a rescan must not stomp a selection the user
+      // has changed since the first one.
+      expect(internals(backend).activePreset).toBeNull();
+    });
+
+    it("does not let a per-game profile overwrite the user's global choice", async () => {
+      // The crux of the persist:false wiring, driven through the real
+      // PerGameEngine rather than by passing the flag by hand: a game
+      // applying its own fan profile must not promote that setting to the
+      // system default, or the next boot would restore the game's fans.
+      await backend.applyPreset("silent");
+      expect(persisted.globalMode).toEqual({ kind: "preset", name: "silent" });
+
+      await backend.setPerGameEnabled(true);
+      await backend.setGameProfile(730, "Test Game", {
+        mode: "manual",
+        speed: 90,
+      });
+      await backend.handleGameLaunch(730, "Test Game");
+      expect(persisted.globalMode).toEqual({ kind: "preset", name: "silent" });
+
+      // Exiting restores the pre-game snapshot — also not a user choice.
+      await backend.handleGameExit(730);
+      expect(persisted.globalMode).toEqual({ kind: "preset", name: "silent" });
+    });
+  });
+
 });

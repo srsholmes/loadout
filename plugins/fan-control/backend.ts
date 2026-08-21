@@ -23,6 +23,7 @@ import {
   type PresetName,
 } from "./lib/fan-curves";
 import { DEFAULT_CUSTOM_CURVE, sanitiseCurve } from "./lib/custom-curve";
+import { sanitiseGlobalMode, type GlobalFanMode } from "./lib/global-mode";
 import { readPluginStorage, mutatePluginStorage } from "@loadout/plugin-storage";
 import {
   classifyTempZone,
@@ -232,6 +233,11 @@ export default class FanControlBackend implements PluginBackend {
   // stay hidden.
   private manualModeRequested: "auto" | "manual" | null = null;
 
+  // Issue #265. The user's persisted global choice, restored once fan
+  // hardware is detected. Guarded so the retry scanner — which re-fires
+  // onFound after every successful rescan — only restores on the first.
+  private restoredGlobalMode = false;
+
   // Per-game state. The engine owns the {profiles, perGameEnabled, snapshot,
   // boundAppId} state machine — we just wire in the apply/snapshot/restore
   // operations and delegate the RPC surface.
@@ -245,10 +251,13 @@ export default class FanControlBackend implements PluginBackend {
     guard: () => Boolean(this.activeFanDevice?.hasPwmControl) || this.useEctool,
     onSnapshot: () => this.captureModeSnapshot(),
     onApply: async (payload, ctx) => {
+      // persist:false — this is the *game's* profile, not the user's global
+      // choice. Persisting here would promote a per-game setting to the
+      // system default the next time the plugin loaded (issue #265).
       if (payload.mode === "manual" && typeof payload.speed === "number") {
-        await this.setFanSpeed(payload.speed);
+        await this.setFanSpeed(payload.speed, { persist: false });
       } else {
-        await this.setFanMode(payload.mode);
+        await this.setFanMode(payload.mode, { persist: false });
       }
       console.log(
         `[fan-control] Applied per-game profile for ${ctx.gameName || `App ${ctx.appId}`}: ${payload.mode}` +
@@ -258,10 +267,12 @@ export default class FanControlBackend implements PluginBackend {
       );
     },
     onRestore: async (snap) => {
+      // Same reasoning as onApply: restoring the pre-game snapshot is not a
+      // user choice, so it must not be written to storage.
       if (snap.mode === "manual" && typeof snap.speed === "number") {
-        await this.setFanSpeed(snap.speed);
+        await this.setFanSpeed(snap.speed, { persist: false });
       } else {
-        await this.setFanMode("auto");
+        await this.setFanMode("auto", { persist: false });
       }
     },
   });
@@ -302,6 +313,9 @@ export default class FanControlBackend implements PluginBackend {
       scan: () => this.scanHardware(),
       intervalMs: 30_000,
       onFound: async () => {
+        // Restore before the first emit so the UI's opening state already
+        // reflects the saved mode rather than the driver's power-on default.
+        await this.restoreGlobalMode();
         this.emit?.({ event: "fan-update", data: await this.getFanInfo() });
       },
     });
@@ -439,6 +453,77 @@ export default class FanControlBackend implements PluginBackend {
   }
 
   /** Returns comprehensive fan status. */
+  /**
+   * Record the user's global choice. Best-effort: a storage failure must not
+   * fail the fan operation the user actually asked for, so it logs and
+   * continues. mutatePluginStorage is used (not a bare write) so a concurrent
+   * custom-curve save into the same file can't lost-update it.
+   */
+  private async persistGlobalMode(mode: GlobalFanMode): Promise<void> {
+    try {
+      await mutatePluginStorage<Record<string, unknown>>(PLUGIN_ID, (existing) => ({
+        ...existing,
+        globalMode: mode,
+      }));
+    } catch (err) {
+      console.error("[fan-control] Failed to persist fan mode:", err);
+    }
+  }
+
+  /**
+   * Re-apply the persisted global choice. Called from the hardware
+   * scanner's onFound, not from onLoad directly: a preset means writing
+   * PWM, and on hosts where the driver module (oxpec and friends) lands
+   * after our service starts there is nothing to write to yet.
+   *
+   * Deliberately does nothing when no mode was saved — an install that has
+   * never chosen one keeps the pre-#265 behaviour of leaving the fans to
+   * whatever the firmware set.
+   */
+  private async restoreGlobalMode(): Promise<void> {
+    if (this.restoredGlobalMode) return;
+    this.restoredGlobalMode = true;
+
+    let mode: GlobalFanMode | null = null;
+    try {
+      const stored = await readPluginStorage<{ globalMode?: unknown }>(PLUGIN_ID);
+      mode = sanitiseGlobalMode(stored.globalMode);
+    } catch (err) {
+      console.error("[fan-control] Failed to read saved fan mode:", err);
+      return;
+    }
+    if (!mode) return;
+
+    try {
+      switch (mode.kind) {
+        case "preset":
+          console.log(`[fan-control] Restoring saved preset: ${mode.name}`);
+          await this.applyPreset(mode.name, { persist: false });
+          break;
+        case "custom":
+          console.log("[fan-control] Restoring saved custom curve");
+          await this.applyCustomCurve({ persist: false });
+          break;
+        case "manual":
+          console.log(
+            `[fan-control] Restoring manual mode${mode.percent !== null ? ` at ${mode.percent}%` : ""}`,
+          );
+          if (mode.percent !== null) {
+            await this.setFanSpeed(mode.percent, { persist: false });
+          } else {
+            await this.setFanMode("manual", { persist: false });
+          }
+          break;
+        case "auto":
+          console.log("[fan-control] Restoring auto mode");
+          await this.setFanMode("auto", { persist: false });
+          break;
+      }
+    } catch (err) {
+      console.error("[fan-control] Failed to restore saved fan mode:", err);
+    }
+  }
+
   async getFanInfo(): Promise<FanInfoResult> {
     if (!this.activeFanDevice && !this.useEctool) {
       return this.unavailableFanInfo();
@@ -557,7 +642,32 @@ export default class FanControlBackend implements PluginBackend {
   }
 
   /** Sets fan speed as a percentage (0-100). Enforces safety limits. */
-  async setFanSpeed(percent: number): Promise<{ success: boolean; error?: string }> {
+  /**
+   * Set a manual fan duty. `persist` is false for writes we make on the
+   * user's behalf (per-game profiles, restoring a saved mode) so they can't
+   * be mistaken for a new global choice — see {@link persistGlobalMode}.
+   */
+  async setFanSpeed(
+    percent: number,
+    { persist = true }: { persist?: boolean } = {},
+  ): Promise<{ success: boolean; error?: string }> {
+    const result = await this.applyUserFanSpeed(percent);
+    if (result.success && persist) {
+      // The *requested* percent, not the safety-floor-raised one applied
+      // below: baking a hot-moment override into the saved preference would
+      // have the user come back to fans they never asked for.
+      await this.persistGlobalMode({
+        kind: "manual",
+        percent: clampPercent(percent),
+      });
+    }
+    return result;
+  }
+
+  /** The user-facing write: safety floor, curve-loop teardown, mode flip.
+   *  Distinct from setFanSpeedInternal below, which is the bare duty write
+   *  the safety watchdog and curve loop use. */
+  private async applyUserFanSpeed(percent: number): Promise<{ success: boolean; error?: string }> {
     // Safety override (issue #97): user's value first, then the floor
     // can only RAISE it. Fails safe to 100% on any temp-read error.
     const safePercent = await this.applySafetyFloor(percent);
@@ -628,8 +738,34 @@ export default class FanControlBackend implements PluginBackend {
     }
   }
 
-  /** Sets fan mode: "auto" (kernel-controlled) or "manual" (user-controlled). */
-  async setFanMode(mode: "auto" | "manual"): Promise<{ success: boolean; error?: string }> {
+  /** Sets fan mode: "auto" (kernel-controlled) or "manual" (user-controlled).
+   *  See {@link setFanSpeed} for what `persist` is doing here. */
+  async setFanMode(
+    mode: "auto" | "manual",
+    { persist = true }: { persist?: boolean } = {},
+  ): Promise<{ success: boolean; error?: string }> {
+    const result = await this.applyUserFanMode(mode);
+    if (result.success && persist) {
+      await this.persistGlobalMode(
+        mode === "auto"
+          ? { kind: "auto" }
+          : {
+              kind: "manual",
+              // Flipping to manual without naming a speed: carry the last
+              // duty the user asked for, if there is one.
+              percent:
+                this.lastUserSpeedPwm !== null
+                  ? pwmToPercent(this.lastUserSpeedPwm)
+                  : null,
+            },
+      );
+    }
+    return result;
+  }
+
+  private async applyUserFanMode(
+    mode: "auto" | "manual",
+  ): Promise<{ success: boolean; error?: string }> {
     if (mode === "auto") {
       this.stopCurveLoop();
       this.activePreset = null;
@@ -682,6 +818,7 @@ export default class FanControlBackend implements PluginBackend {
   /** Applies a fan curve preset. Starts a loop that adjusts speed based on temperature. */
   async applyPreset(
     name: PresetName,
+    { persist = true }: { persist?: boolean } = {},
   ): Promise<{ success: boolean; error?: string }> {
     const curve = FAN_CURVES[name];
     if (!curve) {
@@ -699,6 +836,10 @@ export default class FanControlBackend implements PluginBackend {
     // Apply curve immediately, then start a loop
     await this.applyCurve(curve);
     this.startCurveLoop(curve);
+
+    // Persist last: only a preset that actually took effect is worth
+    // restoring on the next boot (issue #265).
+    if (persist) await this.persistGlobalMode({ kind: "preset", name });
 
     return { success: true };
   }
@@ -747,7 +888,9 @@ export default class FanControlBackend implements PluginBackend {
    * Makes the saved custom curve the active control mode. Same shape as
    * applyPreset — switch to manual, apply once, then run the curve loop.
    */
-  async applyCustomCurve(): Promise<{ success: boolean; error?: string }> {
+  async applyCustomCurve(
+    { persist = true }: { persist?: boolean } = {},
+  ): Promise<{ success: boolean; error?: string }> {
     const curve = this.customCurve;
     this.activePreset = null;
     this.customCurveActive = true;
@@ -761,6 +904,8 @@ export default class FanControlBackend implements PluginBackend {
 
     await this.applyCurve(curve);
     this.startCurveLoop(curve);
+
+    if (persist) await this.persistGlobalMode({ kind: "custom" });
 
     return { success: true };
   }
