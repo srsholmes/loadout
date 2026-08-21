@@ -1,7 +1,20 @@
 import { describe, it, expect } from "bun:test";
 import { sanitiseGlobalMode } from "./global-mode";
+import { FAN_CURVES } from "./fan-curves";
 
 describe("sanitiseGlobalMode", () => {
+  it("accepts every preset the curve table defines", () => {
+    // Derived, not hand-listed: PRESET_NAMES used to be a copy of these
+    // keys, so adding a fourth preset silently made it non-restorable —
+    // rejected here before applyPreset ever saw it.
+    for (const name of Object.keys(FAN_CURVES)) {
+      expect(sanitiseGlobalMode({ kind: "preset", name })).toEqual({
+        kind: "preset",
+        name: name as never,
+      });
+    }
+  });
+
   it("round-trips each mode the backend persists", () => {
     expect(sanitiseGlobalMode({ kind: "preset", name: "silent" })).toEqual({
       kind: "preset",

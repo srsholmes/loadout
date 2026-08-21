@@ -266,6 +266,17 @@ export default class FanControlBackend implements PluginBackend {
    */
   private lastUserRequestedPercent: number | null = null;
 
+  /**
+   * The user's global choice as we last knew it — read from storage at load,
+   * or recorded by the last persist. Kept explicitly rather than inferred
+   * from activePreset/customCurveActive/manualModeRequested, because those
+   * describe *what is driving the fan right now*, which is a different
+   * question: during an apply they still describe the previous mode, and
+   * while a per-game profile is bound they describe the game's setting.
+   * Inferring from them made the per-game snapshot capture the wrong mode.
+   */
+  private globalModeIntent: GlobalFanMode | null = null;
+
   // Issue #265. The user's persisted global choice, restored once fan
   // hardware is detected. The scanner latches and fires onFound at most
   // once, so the guard is not for it: it is for the two independent
@@ -308,8 +319,12 @@ export default class FanControlBackend implements PluginBackend {
       // re-applied as a *curve* (restarting the loop), which a mode+speed
       // snapshot can't express — restoring that alone left the user pinned
       // at whatever duty the curve happened to be at when the game started.
-      if (snap.globalMode) {
-        await this.applyGlobalMode(snap.globalMode);
+      // `?? globalModeIntent` covers a snapshot taken before the mode was
+      // known — a game already running when the late-driver restore reads
+      // storage. Without it that session never gets back to the saved mode.
+      const target = snap.globalMode ?? this.globalModeIntent;
+      if (target) {
+        await this.applyGlobalMode(target);
         return;
       }
       if (snap.mode === "manual" && typeof snap.speed === "number") {
@@ -510,6 +525,7 @@ export default class FanControlBackend implements PluginBackend {
    * custom-curve save into the same file can't lost-update it.
    */
   private async persistGlobalMode(mode: GlobalFanMode): Promise<void> {
+    this.globalModeIntent = mode;
     try {
       await mutatePluginStorage<Record<string, unknown>>(PLUGIN_ID, (existing) => ({
         ...existing,
@@ -536,21 +552,26 @@ export default class FanControlBackend implements PluginBackend {
     // onFound and the ectool path in onLoad) can both reach here.
     this.restoredGlobalMode = true;
 
-    // A game whose profile is already bound owns the fan. On the late-driver
-    // path this runs up to 30s after startup, by which time a launch may
-    // have applied a profile — restoring over it would hand the fan back to
-    // the global curve while the game is still running.
-    if (this.profileEngine.getActiveAppId() !== null) {
-      console.log(
-        "[fan-control] Skipping saved-mode restore — a per-game profile is active",
-      );
-      return;
-    }
-
     const epoch = this.fanIntentEpoch;
     const stored = await readPluginStorage<{ globalMode?: unknown }>(PLUGIN_ID);
     const mode = sanitiseGlobalMode(stored.globalMode);
     if (!mode) return;
+
+    // Record the intent before any decision not to apply it now. Skipping
+    // the apply must not lose the choice: it is what a per-game profile
+    // hands back to when its game exits.
+    this.globalModeIntent = mode;
+
+    // A game whose profile is already bound owns the fan. Restoring over it
+    // would hand the fan back to the global curve mid-game; the intent
+    // recorded above is what puts the user back on it at exit.
+    if (this.profileEngine.getActiveAppId() !== null) {
+      console.log(
+        "[fan-control] Deferring saved-mode restore — a per-game profile is active",
+      );
+      return;
+    }
+
     // The storage read is an await, and RPCs are live by the time the late
     // rescan fires: a user tapping Auto in that window must not be reverted.
     if (this.supersededSince(epoch)) return;
@@ -593,6 +614,10 @@ export default class FanControlBackend implements PluginBackend {
             `[fan-control] Restoring manual mode${mode.percent !== null ? ` at ${mode.percent}%` : ""}`,
           );
           if (mode.percent !== null) {
+            // Record it as the user's requested duty too: without this the
+            // first game launch snapshots {manual, null} and exiting leaves
+            // the fan at the game's duty instead of the restored one.
+            this.lastUserRequestedPercent = mode.percent;
             await this.setFanSpeed(mode.percent, { persist: false });
           } else {
             await this.setFanMode("manual", { persist: false });
@@ -624,15 +649,7 @@ export default class FanControlBackend implements PluginBackend {
   /** The global mode implied by current in-memory state, for snapshotting
    *  before a per-game profile takes over. */
   private currentGlobalMode(): GlobalFanMode | null {
-    if (this.activePreset !== null) {
-      return { kind: "preset", name: this.activePreset };
-    }
-    if (this.customCurveActive) return { kind: "custom" };
-    if (this.manualModeRequested === "manual") {
-      return { kind: "manual", percent: this.lastUserRequestedPercent };
-    }
-    if (this.manualModeRequested === "auto") return { kind: "auto" };
-    return null;
+    return this.globalModeIntent;
   }
 
   async getFanInfo(): Promise<FanInfoResult> {
@@ -883,11 +900,14 @@ export default class FanControlBackend implements PluginBackend {
     mode: "auto" | "manual",
   ): Promise<{ success: boolean; error?: string }> {
     this.fanIntentEpoch++;
-    if (mode === "auto") {
-      this.stopCurveLoop();
-      this.activePreset = null;
-      this.customCurveActive = false;
-    }
+    // Both directions end curve control: "auto" hands the fan to the
+    // kernel/EC, "manual" hands it to the user's own duty. Leaving the loop
+    // running under "manual" meant tapping Manual while a preset was active
+    // rewrote storage to {manual, ...} while the preset kept driving the fan
+    // and the UI kept showing it selected.
+    this.stopCurveLoop();
+    this.activePreset = null;
+    this.customCurveActive = false;
     this.manualModeRequested = mode;
 
     // RPM-target path: no pwm_enable to flip — "manual" means we own
@@ -1016,7 +1036,12 @@ export default class FanControlBackend implements PluginBackend {
       // pwm_enable=2 with customCurveActive already false.
       const epoch = ++this.fanIntentEpoch;
       await this.applyCurve(curve);
-      if (!this.supersededSince(epoch)) this.startCurveLoop(curve);
+      // customCurveActive is re-read: a preset applied during the await
+      // commits its own flags at the end, so the value we branched on above
+      // can be stale and we would start the custom loop over the preset's.
+      if (!this.supersededSince(epoch) && this.customCurveActive) {
+        this.startCurveLoop(curve);
+      }
     }
 
     return { success: true, curve: curve.map((p) => ({ ...p })) };
