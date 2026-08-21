@@ -244,7 +244,10 @@ export class GamescopeAtoms {
    *        - _NET_WM_WINDOW_TYPE = _NET_WM_WINDOW_TYPE_NORMAL set
    *        - STEAM_GAME = 769 (Steam's own appID — set on real BPM, not
    *          on the renderer-only helper)
-   *      Among those, prefer one currently asserting overlay/focus.
+   *      Among those, prefer one currently asserting overlay/focus, then
+   *      one that merely *has* STEAM_OVERLAY (Steam sets it on its own BPM
+   *      window; the helper that also passes the filter never has it —
+   *      issue #263).
    *   3. Fallback: first managed window we found (preserves legacy /
    *      desktop-Steam behaviour for shapes we haven't surveyed).
    *
@@ -357,6 +360,36 @@ export class GamescopeAtoms {
         (atoms.get("STEAM_OVERLAY") ?? 0) !== 0 ||
         (atoms.get("STEAM_INPUT_FOCUS") ?? 0) !== 0
       ) {
+        return id;
+      }
+    }
+
+    // Nothing is asserting. Prefer a window that *has* STEAM_OVERLAY at all,
+    // even reading 0.
+    //
+    // The loop above cannot make this distinction: `?? 0` collapses "absent"
+    // and "present, value 0" into the same thing. A live survey on a Deck in
+    // Gaming Mode (issue #263) showed why that matters — the pool is two
+    // windows, not one, and only the real BPM window carries the property:
+    //
+    //   0x3000035  1920x1200  STEAM_GAME=769  STEAM_OVERLAY=0  ← real BPM
+    //   0x2800003   200x200   STEAM_GAME=769  (absent)         ← renderer helper
+    //
+    // Steam sets it on its own BPM window as self-state (see the atom table
+    // in docs/overlay-gamescope-integration.md); the helper never gets one.
+    // Verified as Steam's write, not ours: the overlay had touched no window
+    // in that Steam session. With BPM sitting at 0 in BPM home — the common
+    // case — the pool fell through to `pool[0]`, which candidate order makes
+    // the 200×200 helper.
+    //
+    // Strictly a reordering *within* the existing pool: it cannot shrink the
+    // candidate set or introduce a new "no window found" path, and when no
+    // candidate carries the property we land on exactly the previous answer.
+    for (const id of pool) {
+      if (await this._hasAtom(id, "STEAM_OVERLAY")) {
+        trace(
+          `[gamescope-atoms] _pickBpmWindow → ${id} (has STEAM_OVERLAY; pool: ${pool.join(",")})`,
+        );
         return id;
       }
     }

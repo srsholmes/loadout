@@ -880,4 +880,115 @@ HDMI-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis
       expect(xdotoolWindowVerbs()).toEqual([]);
     });
   });
+
+  // Issue #263. Reproduces the window set surveyed live on a Deck in Gaming
+  // Mode: two windows pass the STEAM_GAME=769 + _NET_WM_WINDOW_TYPE filter,
+  // neither asserts overlay/focus, and only the real BPM window carries
+  // STEAM_OVERLAY at all (reading 0). The renderer helper comes first in
+  // candidate order, so `pool[0]` used to hand back the wrong window.
+  describe("findSteamWindow — BPM vs renderer helper (#263)", () => {
+    const HELPER = "0x2800003"; // 200x200 steamwebhelper, no STEAM_OVERLAY
+    const BPM = "0x3000035"; // 1920x1200 real BPM, STEAM_OVERLAY=0
+
+    /** Route xprop/xdotool for the surveyed window set. `bpmTitle` stands in
+     *  for the localized WM_NAME so tier 1 never fires. */
+    function mockSurveyedWindows(bpmTitle: string) {
+      mockRun.mockImplementation((cmd: string[]) => {
+        if (cmd.includes("xdotool")) {
+          // Both windows come back from the class search, helper first.
+          if (cmd.includes("--class")) {
+            return Promise.resolve({
+              stdout: `${parseInt(HELPER, 16)}\n${parseInt(BPM, 16)}\n`,
+              exitCode: 0,
+            });
+          }
+          return Promise.resolve({ stdout: "10\n", exitCode: 0 });
+        }
+        if (!cmd.includes("xprop")) {
+          return Promise.resolve({ stdout: "", exitCode: 0 });
+        }
+        const idIdx = cmd.indexOf("-id");
+        const id = idIdx >= 0 ? cmd[idIdx + 1] ?? "" : "";
+        const isBpm = Number(id) === parseInt(BPM, 16);
+        const asks = (a: string) => cmd.includes(a);
+
+        if (asks("_NET_WM_NAME") || asks("WM_NAME")) {
+          const title = isBpm ? bpmTitle : "steamwebhelper";
+          return Promise.resolve({
+            stdout: `_NET_WM_NAME(UTF8_STRING) = "${title}"\n`,
+            exitCode: 0,
+          });
+        }
+        // Both are managed, both tagged with Steam's own appID.
+        if (asks("_NET_WM_WINDOW_TYPE")) {
+          return Promise.resolve({
+            stdout: "_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_NORMAL\n",
+            exitCode: 0,
+          });
+        }
+        if (asks("STEAM_GAME")) {
+          return Promise.resolve({
+            stdout: "STEAM_GAME(CARDINAL) = 769\n",
+            exitCode: 0,
+          });
+        }
+        // The crux: present-but-zero on BPM, absent on the helper.
+        if (asks("STEAM_OVERLAY")) {
+          const overlay = isBpm
+            ? "STEAM_OVERLAY(CARDINAL) = 0"
+            : "STEAM_OVERLAY:  not found.";
+          const focus = asks("STEAM_INPUT_FOCUS")
+            ? isBpm
+              ? "\nSTEAM_INPUT_FOCUS(CARDINAL) = 0"
+              : "\nSTEAM_INPUT_FOCUS:  not found."
+            : "";
+          return Promise.resolve({ stdout: `${overlay}${focus}\n`, exitCode: 0 });
+        }
+        return Promise.resolve({ stdout: "", exitCode: 0 });
+      });
+    }
+
+    it("picks the BPM window, not the helper, when the title is localized", async () => {
+      mockSurveyedWindows("Режим Big Picture");
+      const atoms = new GamescopeAtoms({
+        display: ":0",
+        windowName: "X",
+        forceXprop: true,
+      });
+      expect(await atoms.findSteamWindow()).toBe(BPM);
+    });
+
+    it("still takes the WM_NAME fast path on an English client", async () => {
+      mockSurveyedWindows("Steam Big Picture Mode");
+      const atoms = new GamescopeAtoms({
+        display: ":0",
+        windowName: "X",
+        forceXprop: true,
+      });
+      expect(await atoms.findSteamWindow()).toBe(BPM);
+    });
+
+    it("falls back to the previous answer when no candidate has STEAM_OVERLAY", async () => {
+      // Guarantees the change can only reorder within the pool: strip the
+      // property from both and we land on pool[0], exactly as before.
+      mockSurveyedWindows("Режим Big Picture");
+      const prev = mockRun.getMockImplementation();
+      mockRun.mockImplementation((cmd: string[]) => {
+        if (cmd.includes("xprop") && cmd.includes("STEAM_OVERLAY")) {
+          return Promise.resolve({
+            stdout: "STEAM_OVERLAY:  not found.\n",
+            exitCode: 0,
+          });
+        }
+        return prev!(cmd);
+      });
+      const atoms = new GamescopeAtoms({
+        display: ":0",
+        windowName: "X",
+        forceXprop: true,
+      });
+      expect(await atoms.findSteamWindow()).toBe(HELPER);
+    });
+  });
+
 });
