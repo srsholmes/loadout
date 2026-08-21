@@ -106,7 +106,20 @@ const SHARED_JS_NAMES = [
   "SP",
   "Steam",
 ];
+/**
+ * The English Big Picture window title. Only ever a *hint*: it is Steam's
+ * `SP_WindowTitle_BigPicture` localization string, so it is translated in
+ * every non-English client — "Режим Big Picture" (ru), "Big-Picture-Modus"
+ * (de), "Steam 大屏幕模式" (zh), "Steamin televisiotila" (fi). Matching on it
+ * is what broke badges under any non-English Steam (issue #259): the window
+ * failed `isBigPictureWindow`, so `_pickRenderKeys` fell through to the
+ * legacy `MainMenu_uid<N>` tier — whose titles are *not* localized — and the
+ * badges rendered inside the Steam menu and nowhere else.
+ */
 const BIG_PICTURE_TITLE = "Steam Big Picture Mode";
+/** The desktop client's main window title. Not localized (a brand name), and
+ *  in `SHARED_JS_NAMES` — see {@link preferGamingModeWindow}. */
+const DESKTOP_WINDOW_TITLE = "Steam";
 /** Per-session `MainMenu_uid<N>` popups. On older builds these could host
  *  the visible React UI, so they stay as a *fallback* render target — but
  *  never alongside the real BPM window (see `_pickRenderKeys`). */
@@ -121,8 +134,14 @@ const BPM_PREFIX_TARGETS = ["MainMenu"];
  */
 const BROWSER_VIEW_POPUP_MARKER = "browserviewpopup=1";
 
-/** Steam's own marker for a Big Picture browser window. */
+/** Steam's own marker for a Big Picture browser window. Verified present on
+ *  a live Gaming Mode target: `about:blank?createflags=6292738&minwidth=853
+ *  &minheight=534&pid=0&browser=-1&browserType=4&useragent=Valve%20Steam%20
+ *  Gamepad`. */
 const BPM_BROWSER_TYPE = "browserType=4";
+/** Gaming Mode's window carries the gamepad user agent; the desktop client's
+ *  carries `Valve%20Steam%20Client`. Both live captures, and locale-proof. */
+const GAMEPAD_USER_AGENT = "useragent=Valve%20Steam%20Gamepad";
 
 /** Ceiling on the rediscovery back-off, in health ticks (~5s each). */
 const MAX_DISCOVERY_SKIPS = 63;
@@ -139,15 +158,45 @@ function isMenuPopup(tab: CefTab): boolean {
 
 /**
  * The main Big Picture window — the one hosting the library / game-detail
- * DOM. Mirrors `isBigPictureMode` in apps/loadout/src/injector/tabs.ts:
- * Gaming Mode titles it "Steam Big Picture Mode", desktop BPM titles it
- * "Steam" and marks it with `browserType=4`. Popups are excluded outright
- * so a renamed popup can never be mistaken for the window.
+ * DOM. Mirrors `isBigPictureMode` in apps/loadout/src/injector/tabs.ts.
+ *
+ * Identified by `browserType=4`, Steam's own machine-readable marker for a
+ * Big Picture browser window, rather than by window title: the title is a
+ * translated string (see {@link BIG_PICTURE_TITLE}) and no substring of it
+ * survives across all 32 of Steam's languages. `browserType=4` is carried by
+ * both shapes — Gaming Mode and desktop BPM — in every locale.
+ *
+ * The English title stays as an independent path so a build that drops the
+ * marker still matches where it used to. Popups are excluded outright so a
+ * renamed popup can never be mistaken for the window, and the chrome popups
+ * desktop Steam runs (`Store Root Menu`, `Profile Supernav`, … — also
+ * `about:blank`) carry no `browserType` at all.
  */
 function isBigPictureWindow(tab: CefTab): boolean {
   if (isBrowserViewPopup(tab) || isMenuPopup(tab)) return false;
   if (tab.title === BIG_PICTURE_TITLE) return true;
-  return tab.title === "Steam" && tab.url.includes(BPM_BROWSER_TYPE);
+  return tab.url.includes(BPM_BROWSER_TYPE);
+}
+
+/**
+ * Rank a Big Picture window for the single-window election in
+ * {@link SteamBadgeInjector._pickRenderKeys}. Higher wins.
+ *
+ * Gaming Mode's window is the one hosting the UI the user is actually
+ * looking at, so it outranks a desktop BPM window. Title-matching alone
+ * can't tell them apart outside English — but the URL can: Gaming Mode's
+ * window is the only one built with the gamepad user agent.
+ *
+ * The title tiers below it are fallbacks for a build that drops the
+ * useragent parameter. Even then the locales are covered: the desktop
+ * window is titled "Steam" everywhere, so *any other* title on a BPM-shaped
+ * window is a localized `SP_WindowTitle_BigPicture`.
+ */
+function preferGamingModeWindow(tab: CefTab): number {
+  if (tab.url.includes(GAMEPAD_USER_AGENT)) return 3;
+  if (tab.title === BIG_PICTURE_TITLE) return 2;
+  if (tab.title !== DESKTOP_WINDOW_TITLE) return 1;
+  return 0;
 }
 
 /** URL patterns the GamepadUI / shared context is served from. */
@@ -779,10 +828,15 @@ export class SteamCefBadgeInjector<TBadgeData> {
   private _pickRenderKeys(candidates: { key: string; tab: CefTab }[]): string[] {
     // Exactly one window: two BPM-shaped tabs (the Gaming-Mode one plus a
     // desktop `Steam`/browserType=4 window) would otherwise both get a badge
-    // and an independent gate. Prefer the Gaming-Mode title.
+    // and an independent gate. Prefer the Gaming-Mode window.
     const windows = candidates.filter((c) => isBigPictureWindow(c.tab));
-    const preferred =
-      windows.find((c) => c.tab.title === BIG_PICTURE_TITLE) ?? windows[0];
+    const preferred = windows.reduce<(typeof windows)[number] | undefined>(
+      (best, c) =>
+        !best || preferGamingModeWindow(c.tab) > preferGamingModeWindow(best.tab)
+          ? c
+          : best,
+      undefined,
+    );
     if (preferred) return [preferred.key];
 
     // Menu popups stay plural: on legacy builds the UI really was split

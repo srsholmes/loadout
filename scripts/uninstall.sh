@@ -128,6 +128,31 @@ as_root() {
     fi
 }
 
+# Remove a tree that may hold root-owned files, and report honestly.
+#
+# The backend is a root system unit (SYSTEM_SERVICE_FILE) run with HOME
+# pointed at the user's home, so everything it writes under ~/.config/loadout
+# and ~/.local/share/loadout lands owned by root — including whole
+# directories like `plugins/`, which the user then cannot unlink entries from
+# no matter who owns the parent. A plain `rm -rf` leaves those subtrees on
+# disk, and because its status was discarded we printed "Removed" over the
+# failure. That is issue #261.
+#
+# Unprivileged first, so a user-owned tree (SteamOS, overlay-only installs)
+# never triggers a password prompt, then escalate for whatever is left.
+remove_tree() {
+    rm -rf "$1" 2>/dev/null || true
+    if [ ! -e "$1" ]; then
+        return 0
+    fi
+    info "Some files under $1 are owned by root (written by the backend service) — removing them needs sudo..."
+    as_root rm -rf "$1" 2>/dev/null || true
+    if [ -e "$1" ]; then
+        return 1
+    fi
+    return 0
+}
+
 # Reverse the input-plumber plugin's system-level changes: remove the wake
 # profile and udev rules we wrote, then restart InputPlumber so the button
 # mapping is dropped from its *running* state too.
@@ -382,8 +407,11 @@ main() {
     if [ -d "$INSTALL_DIR" ]; then
         if prompt_yn "Remove plugin data at $INSTALL_DIR? (y/N)"; then
             info "Removing plugin data..."
-            rm -rf "$INSTALL_DIR"
-            success "Removed $INSTALL_DIR"
+            if remove_tree "$INSTALL_DIR"; then
+                success "Removed $INSTALL_DIR"
+            else
+                warn "Could not fully remove $INSTALL_DIR — re-run the uninstaller with sudo available."
+            fi
         else
             info "Plugin data preserved at: $INSTALL_DIR"
         fi
@@ -394,18 +422,43 @@ main() {
     # --- Remove overlay install directory ---
     if [ -d "$OVERLAY_INSTALL_DIR" ]; then
         info "Removing overlay tree at $OVERLAY_INSTALL_DIR..."
-        rm -rf "$OVERLAY_INSTALL_DIR"
-        success "Overlay removed."
+        if remove_tree "$OVERLAY_INSTALL_DIR"; then
+            success "Overlay removed."
+        else
+            warn "Could not fully remove $OVERLAY_INSTALL_DIR — re-run the uninstaller with sudo available."
+        fi
     else
         info "Overlay directory not found (already removed)."
     fi
+
+    # The in-app self-updater stages a new overlay beside the live one and
+    # keeps the previous generation as a rollback copy
+    # (apps/loadout-overlay/src/bun/lib/updater.ts). Each is a full ~100 MB
+    # tree with the bundled libs, and neither is under OVERLAY_INSTALL_DIR —
+    # so an uninstall that only removed the live dir left them on disk.
+    for _leftover in \
+        "$OVERLAY_INSTALL_DIR.staging" \
+        "$OVERLAY_INSTALL_DIR.old" \
+        "$OVERLAY_INSTALL_DIR.update.tar.xz"; do
+        if [ -e "$_leftover" ]; then
+            info "Removing update leftover at $_leftover..."
+            if remove_tree "$_leftover"; then
+                success "Removed $_leftover"
+            else
+                warn "Could not remove $_leftover — re-run the uninstaller with sudo available."
+            fi
+        fi
+    done
 
     # --- Ask about configuration ---
     if [ -d "$CONFIG_DIR" ]; then
         if prompt_yn "Remove configuration? (y/N)"; then
             info "Removing configuration..."
-            rm -rf "$CONFIG_DIR"
-            success "Configuration removed."
+            if remove_tree "$CONFIG_DIR"; then
+                success "Configuration removed."
+            else
+                warn "Could not fully remove $CONFIG_DIR — re-run the uninstaller with sudo available."
+            fi
         else
             info "Configuration preserved at: $CONFIG_DIR"
         fi
