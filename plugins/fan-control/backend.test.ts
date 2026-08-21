@@ -1712,6 +1712,37 @@ describe("FanControlBackend", () => {
       expect(persisted.globalMode).toEqual({ kind: "manual", percent: 35 });
     });
 
+    it("lets a newer intent win over an in-flight preset apply", async () => {
+      // Reproduces the on-device failure: exit-restore and the next
+      // profile's apply are separate awaited chains, so a game *switch*
+      // interleaves them. Without the epoch guard the restore's
+      // startCurveLoop lands after the profile's setFanSpeed stopped it, and
+      // the curve drives the fan while the profile is meant to own it.
+      const restore = backend.applyPreset("silent", { persist: false });
+      await backend.setFanSpeed(48, { persist: false });
+      await restore;
+
+      expect(internals(backend).activePreset).toBeNull();
+      expect(internals(backend).curveInterval).toBeUndefined();
+      expect(internals(backend).manualModeRequested).toBe("manual");
+    });
+
+    it("lets a newer intent win over an in-flight custom-curve apply", async () => {
+      const restore = backend.applyCustomCurve({ persist: false });
+      await backend.setFanSpeed(48, { persist: false });
+      await restore;
+
+      expect(internals(backend).customCurveActive).toBe(false);
+      expect(internals(backend).curveInterval).toBeUndefined();
+    });
+
+    it("still starts the curve loop when nothing supersedes it", async () => {
+      // The guard must not break the ordinary path.
+      await backend.applyPreset("silent");
+      expect(internals(backend).activePreset).toBe("silent");
+      expect(internals(backend).curveInterval).toBeDefined();
+    });
+
     it("falls back to the mode+speed snapshot when nothing global was active", async () => {
       // No preset, no custom curve, no manual choice — currentGlobalMode()
       // is null, so the snapshot's mode/speed is all there is to put back.

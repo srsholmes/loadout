@@ -241,6 +241,21 @@ export default class FanControlBackend implements PluginBackend {
   // stay hidden.
   private manualModeRequested: "auto" | "manual" | null = null;
 
+  /**
+   * Bumped by every call that expresses a new fan-control intent (preset,
+   * custom curve, manual speed, mode flip). Long chains capture it on entry
+   * and bail before mutating shared state if a newer intent has landed.
+   *
+   * Found on device: `handleGameExit` and `handleGameLaunch` are separate
+   * awaited chains driven independently by the injector's fan-out, so a game
+   * *switch* interleaves the exit-restore with the next profile's apply. The
+   * restore's `startCurveLoop` ran after the profile's `setFanSpeed` had
+   * already stopped it, leaving the curve driving the fan while the profile
+   * was supposed to own it — and the UI showing a preset that wasn't
+   * actually in charge.
+   */
+  private fanIntentEpoch = 0;
+
   // Issue #265. The user's persisted global choice, restored once fan
   // hardware is detected. Guarded so the retry scanner — which re-fires
   // onFound after every successful rescan — only restores on the first.
@@ -551,6 +566,19 @@ export default class FanControlBackend implements PluginBackend {
     }
   }
 
+  /**
+   * True when a newer fan intent landed while this one was awaiting I/O.
+   * The caller must then stop touching shared state — no curve loop, no
+   * persist — and leave the winner's state alone.
+   */
+  private supersededSince(epoch: number): boolean {
+    if (epoch === this.fanIntentEpoch) return false;
+    console.log(
+      "[fan-control] Fan intent superseded mid-apply — leaving the newer one in charge",
+    );
+    return true;
+  }
+
   /** The global mode implied by current in-memory state, for snapshotting
    *  before a per-game profile takes over. */
   private currentGlobalMode(): GlobalFanMode | null {
@@ -715,6 +743,8 @@ export default class FanControlBackend implements PluginBackend {
    *  Distinct from setFanSpeedInternal below, which is the bare duty write
    *  the safety watchdog and curve loop use. */
   private async applyUserFanSpeed(percent: number): Promise<{ success: boolean; error?: string }> {
+    // Newer intent than any preset/curve apply still awaiting I/O.
+    this.fanIntentEpoch++;
     // Safety override (issue #97): user's value first, then the floor
     // can only RAISE it. Fails safe to 100% on any temp-read error.
     const safePercent = await this.applySafetyFloor(percent);
@@ -813,6 +843,7 @@ export default class FanControlBackend implements PluginBackend {
   private async applyUserFanMode(
     mode: "auto" | "manual",
   ): Promise<{ success: boolean; error?: string }> {
+    this.fanIntentEpoch++;
     if (mode === "auto") {
       this.stopCurveLoop();
       this.activePreset = null;
@@ -872,6 +903,7 @@ export default class FanControlBackend implements PluginBackend {
       return { success: false, error: `Unknown preset: ${name}` };
     }
 
+    const epoch = ++this.fanIntentEpoch;
     this.activePreset = name;
     this.customCurveActive = false;
     console.log(`[fan-control] Applying preset: ${name}`);
@@ -879,9 +911,11 @@ export default class FanControlBackend implements PluginBackend {
     // Set to manual mode first
     const modeResult = await this.setFanModeInternal("manual");
     if (!modeResult.success) return modeResult;
+    if (this.supersededSince(epoch)) return { success: true };
 
     // Apply curve immediately, then start a loop
     await this.applyCurve(curve);
+    if (this.supersededSince(epoch)) return { success: true };
     this.startCurveLoop(curve);
 
     // Persist last: only a preset that actually took effect is worth
@@ -939,6 +973,7 @@ export default class FanControlBackend implements PluginBackend {
     { persist = true }: { persist?: boolean } = {},
   ): Promise<{ success: boolean; error?: string }> {
     const curve = this.customCurve;
+    const epoch = ++this.fanIntentEpoch;
     this.activePreset = null;
     this.customCurveActive = true;
     console.log("[fan-control] Applying custom fan curve");
@@ -948,8 +983,10 @@ export default class FanControlBackend implements PluginBackend {
       this.customCurveActive = false;
       return modeResult;
     }
+    if (this.supersededSince(epoch)) return { success: true };
 
     await this.applyCurve(curve);
+    if (this.supersededSince(epoch)) return { success: true };
     this.startCurveLoop(curve);
 
     if (persist) await this.persistGlobalMode({ kind: "custom" });
