@@ -168,6 +168,47 @@ describe("fan-control plugin", () => {
     });
   });
 
+  it("tracks the live duty in the slider while a preset drives the fan", async () => {
+    // A preset puts the hardware in manual mode but the *curve* owns the
+    // duty, rewriting it every 2s. The slider used to keep showing the
+    // user's last manual value (or its 50/100 default), so it disagreed
+    // with the "Fan speed" row right above it.
+    callMock.mockImplementation((method: string) => {
+      if (method === "getFanInfo")
+        return Promise.resolve({
+          ...mockFanInfo,
+          mode: "manual" as const,
+          activePreset: "silent",
+          fans: [{ index: 0, rpm: 1500, pwm: 77, percent: 30 }],
+        });
+      if (method === "getCustomCurve") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+    const container = createContainer();
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      const slider = container.querySelector('input[type="range"]');
+      expect(slider).not.toBeNull();
+      expect(Number((slider as HTMLInputElement).value)).toBe(30);
+    });
+
+    // And it follows the curve as the duty moves.
+    const handler = eventHandlers.get("fan-update");
+    expect(handler).toBeDefined();
+    handler?.({
+      ...mockFanInfo,
+      mode: "manual" as const,
+      activePreset: "silent",
+      fans: [{ index: 0, rpm: 2600, pwm: 140, percent: 55 }],
+    });
+    await waitFor(() => {
+      const slider = container.querySelector('input[type="range"]');
+      expect(Number((slider as HTMLInputElement).value)).toBe(55);
+    });
+  });
+
   it("shows unavailable message when no fan hardware", async () => {
     callMock.mockImplementation((method: string) => {
       if (method === "getFanInfo")
