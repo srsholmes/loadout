@@ -143,6 +143,19 @@ interface FanInfoResult {
    *  Sticky: stays true through the WARM_C → release-hysteresis band so
    *  the UI banner doesn't flicker as temp wobbles around 75 °C. */
   safetyEngaged: boolean;
+  /**
+   * Whether `fans[].percent` is a real reading. False on hardware that has
+   * no PWM to read back — ectool, and the Deck's RPM-target path, where the
+   * field is hard 0. A UI showing duty must use {@link commandedPercent}
+   * there instead, or it reads out 0% while the fan is plainly spinning.
+   */
+  reportsDuty: boolean;
+  /**
+   * The duty we last *told* the fan to run at, as a percent — including a
+   * per-game profile's and the safety floor's writes, since those are as
+   * real as the user's. Null before anything has been commanded.
+   */
+  commandedPercent: number | null;
 }
 
 interface TempResult {
@@ -497,6 +510,8 @@ export default class FanControlBackend implements PluginBackend {
       activePreset: this.activePreset,
       customCurveActive: this.customCurveActive,
       usingEctool: false,
+      reportsDuty: false,
+      commandedPercent: null,
       warning: null,
       safetyEngaged: false,
     };
@@ -639,8 +654,6 @@ export default class FanControlBackend implements PluginBackend {
     }
   }
 
-  /** The global mode implied by current in-memory state, for snapshotting
-   *  before a per-game profile takes over. */
   async getFanInfo(): Promise<FanInfoResult> {
     if (!this.activeFanDevice && !this.useEctool) {
       return this.unavailableFanInfo();
@@ -681,6 +694,9 @@ export default class FanControlBackend implements PluginBackend {
         activePreset: this.activePreset,
         customCurveActive: this.customCurveActive,
         usingEctool: true,
+        // ectool gives us RPM only; percent above is a placeholder.
+        reportsDuty: false,
+        commandedPercent: this.commandedPercent(),
         warning,
         safetyEngaged: this.safetyEngaged,
       };
@@ -735,9 +751,19 @@ export default class FanControlBackend implements PluginBackend {
       activePreset: this.activePreset,
       customCurveActive: this.customCurveActive,
       usingEctool: false,
+      // Only a device with a pwm path reads its duty back; an RPM-target
+      // device (steamdeck_hwmon) leaves percent at 0.
+      reportsDuty: device.hasPwmControl === true,
+      commandedPercent: this.commandedPercent(),
       warning,
       safetyEngaged: this.safetyEngaged,
     };
+  }
+
+  /** The duty last written to the fan, as a percent — the only duty figure
+   *  available on hardware that can't report its own. */
+  private commandedPercent(): number | null {
+    return this.lastUserSpeedPwm === null ? null : pwmToPercent(this.lastUserSpeedPwm);
   }
 
   /** Returns all detected temperature sensors with current readings. */

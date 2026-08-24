@@ -65,6 +65,8 @@ interface FanInfo {
   fanCount: number;
   available: boolean;
   activePreset: string | null;
+  reportsDuty?: boolean;
+  commandedPercent?: number | null;
   customCurveActive: boolean;
   usingEctool: boolean;
   warning: string | null;
@@ -72,6 +74,28 @@ interface FanInfo {
 }
 
 type Preset = "silent" | "balanced" | "performance";
+
+/**
+ * How long a local selection stays authoritative over incoming events.
+ * fan-update is emitted on an unconditional 2s cadence, so one already in
+ * flight when the user taps would otherwise undo the optimistic update. A
+ * backend change swallowed inside the window is re-asserted by the next tick.
+ */
+const OPTIMISTIC_MS = 2500;
+
+/**
+ * The duty to display. `fans[0].percent` is a real reading only where the
+ * hardware exposes a PWM to read back; on ectool and the Deck's RPM-target
+ * path it is hard 0, so showing it would read 0% with the fan plainly
+ * spinning — and, worse, drive the slider to 0 on every tick. There we show
+ * what we last commanded instead.
+ */
+function displayDuty(info: FanInfo | null): number | null {
+  if (!info) return null;
+  if (info.reportsDuty === false) return info.commandedPercent ?? null;
+  const live = info.fans?.[0]?.percent;
+  return typeof live === "number" ? live : (info.commandedPercent ?? null);
+}
 
 const PRESETS: { key: Preset; label: string; description: string }[] = [
   { key: "silent", label: "Silent", description: "Quiet, ramps up gently" },
@@ -174,7 +198,6 @@ function FanControl() {
   // optimistic update. Inside this window we keep our own answer; outside it
   // the backend is authoritative — see the fan-update handler.
   const localSelectAtRef = useRef(0);
-  const OPTIMISTIC_MS = 2500;
   const [customPoints, setCustomPoints] = useState<FanCurvePoint[]>(() =>
     DEFAULT_CUSTOM_CURVE.map((p) => ({ ...p })),
   );
@@ -210,12 +233,9 @@ function FanControl() {
       // this on "a curve is driving" was wrong for exactly the case reported:
       // a game's profile applied 80%, the RPM readout followed it, and the
       // slider sat at the stale manual value until the panel was remounted.
-      const live = info.fans?.[0]?.percent;
-      if (
-        typeof live === "number" &&
-        Date.now() - localSelectAtRef.current > OPTIMISTIC_MS
-      ) {
-        setSliderValue(live);
+      const duty = displayDuty(info);
+      if (duty !== null && Date.now() - localSelectAtRef.current > OPTIMISTIC_MS) {
+        setSliderValue(duty);
       }
       setLoading(false);
     },
@@ -226,10 +246,8 @@ function FanControl() {
     call("getFanInfo").then((info) => {
       const data = info as FanInfo;
       setFanInfo(data);
-      const primary = data.fans[0];
-      if (primary) {
-        setSliderValue(primary.percent);
-      }
+      const duty = displayDuty(data);
+      if (duty !== null) setSliderValue(duty);
       setActivePreset(data.activePreset ? (data.activePreset as Preset) : null);
       setCustomActive(Boolean(data.customCurveActive));
       setLoading(false);
@@ -962,6 +980,9 @@ function FanHomeWidget() {
     currentGame,
   );
   const slidingRef = useRef(false);
+  /** See OPTIMISTIC_MS — the widget mirrors backend state too, so a fresh
+   *  tap here needs the same protection from an in-flight tick. */
+  const localSelectAtRef = useRef(0);
   // Note on auto-mode duty: the backend can only report a live duty %
   // when it has direct hwmon PWM-register access. On ectool-only paths
   // (e.g. OXP Apex), `info.fans[0].percent` is hardcoded 0 because
@@ -979,9 +1000,8 @@ function FanHomeWidget() {
   // Returns the backend's PWM-derived `percent` directly. Will be 0 on
   // ectool-only hardware where the EC's duty isn't readable.
   const deriveAutoDuty = useCallback((info: FanInfo): number => {
-    const first = info.fans?.[0];
-    if (!first) return 0;
-    return Math.max(0, Math.min(100, first.percent));
+    const duty = displayDuty(info);
+    return duty === null ? 0 : Math.max(0, Math.min(100, duty));
   }, []);
 
   useEffect(() => {
@@ -990,12 +1010,8 @@ function FanHomeWidget() {
       const primary = info.fans[0];
       if (primary) {
         setRpm(primary.rpm);
-        // Seed manualSpeed from the live percent only if the backend
-        // can actually report it (direct hwmon). On ectool we leave the
-        // 50 default so the slider doesn't snap to 0 when the user
-        // flips to Manual.
-        const reported = primary.percent;
-        if (reported > 0) setManualSpeed(reported);
+        const seeded = displayDuty(info);
+        if (seeded !== null) setManualSpeed(seeded);
         setAutoDuty(deriveAutoDuty(info));
       }
       setTempC(info.cpuTempC > 0 ? info.cpuTempC : null);
@@ -1011,17 +1027,27 @@ function FanHomeWidget() {
       const primary = info.fans?.[0];
       if (primary) {
         setRpm(primary.rpm);
-        // Always refresh the auto-duty estimate. The render-time selector
-        // below picks whether to display it (mode === "auto") or the
-        // user's manualSpeed (mode === "manual"). This keeps the slider
-        // ticking in auto without ever clobbering the user's manual
-        // value with a derived guess that won't match their PWM%.
         setAutoDuty(deriveAutoDuty(info));
+        // manualSpeed was written only at mount and by the user's own drag,
+        // so a per-game profile applying its duty on game launch left this
+        // slider stale while the RPM metric above it moved — the same bug
+        // fixed in the panel. Mirrored here too, except while the user is
+        // dragging or has just tapped.
+        const duty = displayDuty(info);
+        if (
+          duty !== null &&
+          !slidingRef.current &&
+          Date.now() - localSelectAtRef.current > OPTIMISTIC_MS
+        ) {
+          setManualSpeed(duty);
+        }
       }
       if (info.cpuTempC > 0) setTempC(info.cpuTempC);
-      if (info.mode) setMode(info.mode);
-      setActivePreset(info.activePreset ?? null);
-      setCustomActive(Boolean(info.customCurveActive));
+      if (Date.now() - localSelectAtRef.current > OPTIMISTIC_MS) {
+        if (info.mode) setMode(info.mode);
+        setActivePreset(info.activePreset ?? null);
+        setCustomActive(Boolean(info.customCurveActive));
+      }
     }, [deriveAutoDuty]),
   });
 
@@ -1092,6 +1118,7 @@ function FanHomeWidget() {
         }}
         onCommit={(val) => {
           slidingRef.current = false;
+          localSelectAtRef.current = Date.now();
           setManualSpeed(val);
           call("setFanSpeed", val).catch(() => {});
           persistGameProfile("manual", val);
@@ -1103,9 +1130,9 @@ function FanHomeWidget() {
           active={mode === "auto"}
           onSelect={() => {
             // Optimistic — flip the local mode immediately so the slider
-            // re-binds to autoDuty on the next render. The fan-update
-            // event lands up to 2 s later and would otherwise leave the
-            // slider stuck on the user's manual value during that gap.
+            // re-binds to autoDuty on the next render. The stamp is what
+            // stops an already-in-flight event bouncing it straight back.
+            localSelectAtRef.current = Date.now();
             setMode("auto");
             call("setFanMode", "auto").catch(() => {});
             persistGameProfile("auto");
@@ -1117,6 +1144,7 @@ function FanHomeWidget() {
         <SegmentedItem
           active={mode === "manual"}
           onSelect={() => {
+            localSelectAtRef.current = Date.now();
             setMode("manual");
             call("setFanMode", "manual").catch(() => {});
             persistGameProfile("manual", manualSpeed);

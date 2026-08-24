@@ -209,6 +209,44 @@ describe("fan-control plugin", () => {
     });
   });
 
+  it("does not drive the slider to 0 on hardware that can't report duty", async () => {
+    // ectool hosts and the Deck's RPM-target path leave fans[].percent at a
+    // hard 0 — there is no PWM to read back. Syncing the slider from it would
+    // snap the readout to 0% every tick while the fan is plainly spinning,
+    // making the manual slider unusable on exactly the two devices Loadout
+    // targets. The backend sends what it last commanded instead.
+    const noDutyInfo = {
+      ...mockFanInfo,
+      mode: "manual" as const,
+      reportsDuty: false,
+      commandedPercent: 60,
+      fans: [{ index: 0, rpm: 3200, pwm: 0, percent: 0 }],
+    };
+    callMock.mockImplementation((method: string) => {
+      if (method === "getFanInfo") return Promise.resolve(noDutyInfo);
+      if (method === "getCustomCurve") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+    const container = createContainer();
+    const { mount } = await import("./app");
+    mount(container);
+
+    const slider = await waitFor(() => {
+      const el = container.querySelector('input[type="range"]');
+      if (!el) throw new Error("slider not yet rendered");
+      return el as HTMLInputElement;
+    });
+    expect(Number(slider.value)).toBe(60);
+
+    await act(async () => {
+      eventHandlers.get("fan-update")?.({ ...noDutyInfo, commandedPercent: 75 });
+    });
+
+    expect(
+      Number((container.querySelector('input[type="range"]') as HTMLInputElement).value),
+    ).toBe(75);
+  });
+
   it("follows a per-game profile's duty in the slider, with no preset active", async () => {
     // The reported case: launching a game applied its profile at 80%, the RPM
     // readout followed, and the slider stayed on the stale manual value until
