@@ -83,6 +83,10 @@ interface TempSensor {
   chipName: string;
 }
 
+/** How long the curve loop may go without completing a write before the
+ *  safety watchdog stops deferring to it. Two missed 2s ticks. */
+const CURVE_STALE_MS = 5000;
+
 const PLUGIN_ID = "fan-control";
 
 /** The bit of a profile that varies per app — see GameProfile<FanProfilePayload>. */
@@ -271,6 +275,24 @@ export default class FanControlBackend implements PluginBackend {
   private curveTickBusy = false;
 
   /**
+   * Bumped whenever the curve loop starts or stops. A tick checks its flags
+   * synchronously at *enqueue* time, then waits for the lock — by the time it
+   * runs, the mode may have been replaced and its loop stopped, but
+   * clearInterval cannot recall a tick that is already queued. It would then
+   * write the old curve's duty over the new mode's, with no loop left running
+   * to correct it. The generation it captured tells it to stand down.
+   */
+  private curveGen = 0;
+
+  /**
+   * When the curve loop last completed a write. The safety watchdog defers to
+   * the curve loop while a curve is driving — but that write now goes through
+   * the op lock, so a stalled operation would silence both. If the loop looks
+   * stalled, the watchdog stops deferring and writes itself.
+   */
+  private lastCurveWriteAt = 0;
+
+  /**
    * The user's global choice as we last knew it — read from storage at load,
    * or recorded by the last persist. Kept explicitly rather than inferred
    * from activePreset/customCurveActive/manualModeRequested, because those
@@ -281,11 +303,20 @@ export default class FanControlBackend implements PluginBackend {
    */
   private globalModeIntent: GlobalFanMode | null = null;
 
-  // Issue #265. The user's persisted global choice, restored once fan
-  // hardware is detected. The scanner latches and fires onFound at most
-  // once, so the guard is not for it: it is for the two independent
-  // callers — that onFound, and the ectool path in onLoad.
-  private restoredGlobalMode = false;
+  /**
+   * Which write path the saved mode has been applied to. Not a boolean:
+   * ectool is the fallback used when no hwmon control exists *yet*, and on a
+   * host with a late-loading driver the scanner finds one 30s later. A latch
+   * would mean that device — the one that ends up owning the fan — never
+   * receives the saved mode, and for manual/auto there is no periodic writer
+   * to correct it. So an ectool restore is provisional: a hwmon device
+   * appearing afterwards gets its own.
+   */
+  private restoredVia: "none" | "ectool" | "hwmon" = "none";
+
+  /** Whether the user has expressed a choice this session, as opposed to one
+   *  we restored. A user choice always wins over the stored value. */
+  private userChoseThisSession = false;
 
   // Per-game state. The engine owns the {profiles, perGameEnabled, snapshot,
   // boundAppId} state machine — we just wire in the apply/snapshot/restore
@@ -526,6 +557,7 @@ export default class FanControlBackend implements PluginBackend {
    */
   private async persistGlobalMode(mode: GlobalFanMode): Promise<void> {
     this.globalModeIntent = mode;
+    this.userChoseThisSession = true;
     try {
       await mutatePluginStorage<Record<string, unknown>>(PLUGIN_ID, (existing) => ({
         ...existing,
@@ -551,21 +583,23 @@ export default class FanControlBackend implements PluginBackend {
   }
 
   private async restoreGlobalModeLocked(): Promise<void> {
-    if (this.restoredGlobalMode) return;
-    // Set before the first await: two callers (the hardware scanner's
-    // onFound and the ectool path in onLoad) can both reach here.
-    this.restoredGlobalMode = true;
+    // A choice the user made this session always wins over the stored one:
+    // the restore exists for a session that hasn't expressed one yet. (No
+    // RPC can land during the await below — every writer of globalModeIntent
+    // runs under this same lock — so this is read once, up front.)
+    if (this.userChoseThisSession) return;
 
-    // A choice the user already made this session wins over the stored one:
-    // the restore exists for a session that hasn't expressed one yet. Read
-    // before the storage read is applied, since that await is a window in
-    // which an RPC can land.
-    const chosenAlready = this.globalModeIntent !== null;
+    const via: "ectool" | "hwmon" =
+      this.activeFanDevice?.hasPwmControl || this.activeFanDevice?.hasRpmTargetControl
+        ? "hwmon"
+        : "ectool";
+    // hwmon is final; a second ectool pass has nothing new to say.
+    if (this.restoredVia === "hwmon" || this.restoredVia === via) return;
+    this.restoredVia = via;
 
     const stored = await readPluginStorage<{ globalMode?: unknown }>(PLUGIN_ID);
     const mode = sanitiseGlobalMode(stored.globalMode);
     if (!mode) return;
-    if (chosenAlready || this.globalModeIntent !== null) return;
 
     // Record the intent before any decision not to apply it now. Skipping
     // the apply must not lose the choice: it is what a per-game profile
@@ -1210,6 +1244,8 @@ export default class FanControlBackend implements PluginBackend {
   /** Starts the curve evaluation loop (every 2 seconds). */
   private startCurveLoop(curve: FanCurvePoint[]): void {
     this.stopCurveLoop();
+    const gen = ++this.curveGen;
+    this.lastCurveWriteAt = Date.now();
     this.curveInterval = setInterval(() => {
       // Synchronous bail first: by the time a queued tick runs, the mode may
       // have changed and this curve is no longer the one driving the fan.
@@ -1217,14 +1253,25 @@ export default class FanControlBackend implements PluginBackend {
       // Ticks slower than the interval skip rather than pile up.
       if (this.curveTickBusy) return;
       this.curveTickBusy = true;
-      void this._serialize(() => this.applyCurve(curve)).finally(() => {
+      void this._serialize(() => this.runCurveTick(gen, curve)).finally(() => {
         this.curveTickBusy = false;
       });
     }, 2000);
   }
 
   /** Stops the curve evaluation loop. */
+  /** One curve tick. Runs under the op lock, so `gen` is re-checked here
+   *  rather than at enqueue time — see {@link curveGen}. */
+  private async runCurveTick(gen: number, curve: FanCurvePoint[]): Promise<void> {
+    if (gen !== this.curveGen) return;
+    await this.applyCurve(curve);
+    this.lastCurveWriteAt = Date.now();
+  }
+
   private stopCurveLoop(): void {
+    // Bumped even when no interval is armed: a tick queued by a previous loop
+    // may still be waiting on the lock, and this is what tells it to stand down.
+    this.curveGen++;
     if (this.curveInterval) {
       clearInterval(this.curveInterval);
       this.curveInterval = undefined;
@@ -1393,7 +1440,18 @@ export default class FanControlBackend implements PluginBackend {
     // flag engaged and let the curve loop do the write. (customCurveActive
     // matters because applyCustomCurve sets activePreset=null while still
     // running startCurveLoop.)
-    if (this.activePreset !== null || this.customCurveActive) return;
+    //
+    // Only while the loop is demonstrably still writing, though. Its write
+    // goes through the op lock, so a stalled operation — a `tee` blocked on a
+    // wedged EC, `systemctl stop` waiting out a unit timeout — silences it,
+    // and deferring unconditionally would silence the safety floor with it.
+    // This watchdog is deliberately outside the lock; that is worth nothing
+    // if it hands its job to something that is inside.
+    const curveWriting =
+      Date.now() - this.lastCurveWriteAt < CURVE_STALE_MS;
+    if ((this.activePreset !== null || this.customCurveActive) && curveWriting) {
+      return;
+    }
 
     // Manual mode (or pure-auto with no user intent): the watchdog is
     // the only periodic writer, so it owns the write here. Pass the
