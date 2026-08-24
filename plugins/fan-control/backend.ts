@@ -83,9 +83,24 @@ interface TempSensor {
   chipName: string;
 }
 
-/** How long the curve loop may go without completing a write before the
- *  safety watchdog stops deferring to it. Two missed 2s ticks. */
+/**
+ * How long the curve loop may go without completing a write before the safety
+ * watchdog stops deferring to it and writes itself.
+ *
+ * Ticks that overrun skip rather than queue (see `curveTickBusy`), so the gap
+ * between completed writes quantises to 4s, 6s, 8s… — this trips on the first
+ * gap of 6s, i.e. one tick that ran long enough to miss the next two.
+ *
+ * The backstop, not the fix: a write that hangs is bounded by
+ * WRITE_TIMEOUT_MS, so the loop recovers on its own. This covers a loop that
+ * is merely slow, at the cost of the watchdog briefly writing the same node —
+ * a fan that flaps beats a fan that stops at 85 °C.
+ */
 const CURVE_STALE_MS = 5000;
+
+/** Ceiling on a single sysfs fan write. Generous — these normally take
+ *  microseconds; this is only to stop a wedged EC holding the lock forever. */
+const WRITE_TIMEOUT_MS = 5000;
 
 const PLUGIN_ID = "fan-control";
 
@@ -155,9 +170,10 @@ interface FanInfoResult {
    */
   reportsDuty: boolean;
   /**
-   * The duty we last *told* the fan to run at, as a percent — including a
-   * per-game profile's and the safety floor's writes, since those are as
-   * real as the user's. Null before anything has been commanded.
+   * The duty we last *told* the fan to run at, as a percent — including the
+   * curve loop's, a per-game profile's and the safety floor's writes, since
+   * those are as real as the user's. Null before anything has been
+   * commanded, and cleared when the fan is handed back to auto.
    */
   commandedPercent: number | null;
 }
@@ -240,6 +256,16 @@ export default class FanControlBackend implements PluginBackend {
   // — without it the release silently drops the user from Manual at X%
   // back to Auto.
   private lastUserSpeedPwm: number | null = null;
+
+  /**
+   * The duty last written to the fan by *anyone* — the user, the curve loop,
+   * a per-game profile, the safety floor. Distinct from lastUserSpeedPwm,
+   * which the watchdog reads as "what the user asked for" and
+   * restoreOriginalModes rewrites; reusing that one would have both meanings
+   * fighting over one field. This is what hardware that can't report its own
+   * duty shows in the UI.
+   */
+  private lastCommandedPwm: number | null = null;
   // Paths we've already warned about for missing pwm_enable. Without
   // this the watchdog tick spams the journal every 2 s on the rare
   // legacy hwmon driver that exposes pwm but not pwm_enable.
@@ -439,8 +465,18 @@ export default class FanControlBackend implements PluginBackend {
 
   async onUnload(): Promise<void> {
     clearInterval(this.interval);
-    clearInterval(this.curveInterval);
+    // stopCurveLoop, not a bare clearInterval: a tick already queued on the
+    // op lock survives clearInterval, and would otherwise pass its generation
+    // check and write pwm_enable=1 plus a duty *after* restoreOriginalModes
+    // had handed the fan back — leaving it pinned in manual with no loop.
+    this.stopCurveLoop();
+    this.activePreset = null;
+    this.customCurveActive = false;
     this.hardwareScanner?.stop();
+
+    // Drain: anything mid-flight finishes before we restore, so the teardown
+    // is the last writer rather than racing one.
+    await this._serialize(async () => {});
 
     // Safety: restore auto mode on unload
     await this.restoreOriginalModes();
@@ -583,12 +619,6 @@ export default class FanControlBackend implements PluginBackend {
   }
 
   private async restoreGlobalModeLocked(): Promise<void> {
-    // A choice the user made this session always wins over the stored one:
-    // the restore exists for a session that hasn't expressed one yet. (No
-    // RPC can land during the await below — every writer of globalModeIntent
-    // runs under this same lock — so this is read once, up front.)
-    if (this.userChoseThisSession) return;
-
     const via: "ectool" | "hwmon" =
       this.activeFanDevice?.hasPwmControl || this.activeFanDevice?.hasRpmTargetControl
         ? "hwmon"
@@ -597,14 +627,21 @@ export default class FanControlBackend implements PluginBackend {
     if (this.restoredVia === "hwmon" || this.restoredVia === via) return;
     this.restoredVia = via;
 
-    const stored = await readPluginStorage<{ globalMode?: unknown }>(PLUGIN_ID);
-    const mode = sanitiseGlobalMode(stored.globalMode);
+    // A choice the user made this session outranks the stored one — but it
+    // still has to be applied to a device that appeared afterwards. Bailing
+    // outright here re-opened the very hole this method's tri-state closes:
+    // the user taps Manual during the ectool window, the hwmon driver loads
+    // 30s later, and nothing ever writes their duty to the device that ends
+    // up owning the fan.
+    let mode: GlobalFanMode | null;
+    if (this.userChoseThisSession) {
+      mode = this.globalModeIntent;
+    } else {
+      const stored = await readPluginStorage<{ globalMode?: unknown }>(PLUGIN_ID);
+      mode = sanitiseGlobalMode(stored.globalMode);
+      if (mode) this.globalModeIntent = mode;
+    }
     if (!mode) return;
-
-    // Record the intent before any decision not to apply it now. Skipping
-    // the apply must not lose the choice: it is what a per-game profile
-    // hands back to when its game exits.
-    this.globalModeIntent = mode;
 
     // A game whose profile is already bound owns the fan. Restoring over it
     // would hand the fan back to the global curve mid-game; the intent
@@ -797,7 +834,7 @@ export default class FanControlBackend implements PluginBackend {
   /** The duty last written to the fan, as a percent — the only duty figure
    *  available on hardware that can't report its own. */
   private commandedPercent(): number | null {
-    return this.lastUserSpeedPwm === null ? null : pwmToPercent(this.lastUserSpeedPwm);
+    return this.lastCommandedPwm === null ? null : pwmToPercent(this.lastCommandedPwm);
   }
 
   /** Returns all detected temperature sensors with current readings. */
@@ -854,6 +891,9 @@ export default class FanControlBackend implements PluginBackend {
     // Setting a specific speed implies manual mode.
     this.manualModeRequested = "manual";
     this.lastUserSpeedPwm = pwmValue;
+    // Also the last commanded duty — this path writes the fan directly
+    // rather than going through setFanSpeedInternal.
+    this.lastCommandedPwm = pwmValue;
 
     // RPM-target path (steamdeck_hwmon): stop Valve's jupiter-fan-control
     // daemon first so our write isn't overwritten by its PID loop within
@@ -946,6 +986,9 @@ export default class FanControlBackend implements PluginBackend {
     this.activePreset = null;
     this.customCurveActive = false;
     this.manualModeRequested = mode;
+    // In auto the EC owns the duty; a stale figure here would have the UI
+    // showing a fabricated value for a fan we are no longer driving.
+    if (mode === "auto") this.lastCommandedPwm = null;
 
     // RPM-target path: no pwm_enable to flip — "manual" means we own
     // fan1_target, "auto" means hand it back to Valve's daemon.
@@ -1407,7 +1450,18 @@ export default class FanControlBackend implements PluginBackend {
    * to manual before writing pwm.
    */
   private async safetyWatchdogTick(): Promise<void> {
-    if (!this.activeFanDevice?.hasPwmControl && !this.useEctool) return;
+    // RPM-target hardware (steamdeck_hwmon) is covered too: persisting a
+    // manual mode means the fan can now come up unattended at boot with
+    // jupiter-fan-control stopped, where before this plugin only held manual
+    // while the user was in the UI. setFanSpeedInternal already routes to
+    // setFanSpeedViaRpmTarget, so the floor reaches that hardware unchanged.
+    if (
+      !this.activeFanDevice?.hasPwmControl &&
+      !this.activeFanDevice?.hasRpmTargetControl &&
+      !this.useEctool
+    ) {
+      return;
+    }
 
     const tempC = await this.getCpuTempCOrNull();
     if (tempC === null) {
@@ -1582,6 +1636,8 @@ export default class FanControlBackend implements PluginBackend {
    * mode or running a preset curve.
    */
   private async setFanSpeedInternal(percent: number): Promise<{ success: boolean; error?: string }> {
+    // Recorded for every writer, not just the user's — see lastCommandedPwm.
+    this.lastCommandedPwm = percentToPwm(clampPercent(percent));
     const clamped = clampPercent(percent);
     const pwmValue = percentToPwm(clamped);
 
@@ -1817,8 +1873,13 @@ export default class FanControlBackend implements PluginBackend {
   /** Writes a value to a hwmon sysfs file via tee. The backend runs as
    *  root (system service), so no sudo/pkexec is needed. */
   private async writeHwmon(path: string, value: string): Promise<void> {
+    // Bounded: a sysfs write to a wedged EC can block in the kernel, and this
+    // runs under the op lock — an unbounded one would stall every fan
+    // operation behind it for the life of the process, including the curve
+    // loop the safety watchdog defers to.
     const { stderr, exitCode } = await runFull(["tee", path], {
       stdin: value,
+      timeoutMs: WRITE_TIMEOUT_MS,
     });
     if (exitCode !== 0) {
       throw new Error(`Failed to write "${value}" to ${path}: ${stderr.trim()}`);

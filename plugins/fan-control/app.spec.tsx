@@ -46,6 +46,10 @@ const mockFanInfo = {
   available: true,
   activePreset: null,
   customCurveActive: false,
+  // The real backend always sends these; without them displayDuty correctly
+  // refuses to trust fans[].percent.
+  reportsDuty: true,
+  commandedPercent: null,
   usingEctool: false,
   warning: null,
 };

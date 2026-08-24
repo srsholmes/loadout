@@ -78,8 +78,8 @@ type FanBackendInternals = {
   curveGen: number;
   useEctool: boolean;
   lastUserSpeedPwm: number | null;
-  lastUserRequestedPercent: number | null;
-  fanIntentEpoch: number;
+  lastCommandedPwm: number | null;
+  rpmTargetPath?: string;
   applyGlobalMode(mode: unknown): Promise<void>;
   profileEngine: { getActiveAppId(): number | null };
 };
@@ -1925,6 +1925,17 @@ describe("FanControlBackend", () => {
       persisted = { globalMode: { kind: "manual", percent: 45 } };
       const fresh = new FanControlBackend();
       const fi = internals(fresh);
+      // A real sensor on the fresh instance: without one getCpuTempCOrNull
+      // returns null and every write fails safe to MAX, so the duty asserted
+      // below would be 255 regardless of what the restore did.
+      fi.tempSensors = [
+        {
+          inputPath: "/sys/class/hwmon/hwmon0/temp1_input",
+          label: "Tctl",
+          zone: "cpu",
+          chipName: "k10temp",
+        },
+      ];
       try {
         // First pass: ectool only, no hwmon device.
         fi.useEctool = true;
@@ -1946,14 +1957,217 @@ describe("FanControlBackend", () => {
           ],
           hasPwmControl: true,
         };
+        const writes: { path: string; valuePromise: Promise<string> }[] = [];
+        spawnSpy.mockImplementation(
+          ((cmd: SpawnArgv, opts: { stdin?: ReadableStream<Uint8Array> }) => {
+            if (cmd[0] === "tee") {
+              const valuePromise = (async () => {
+                if (!opts?.stdin) return "";
+                const reader = opts.stdin.getReader();
+                let out = "";
+                for (;;) {
+                  const { value, done } = await reader.read();
+                  if (done) break;
+                  if (value) out += new TextDecoder().decode(value);
+                }
+                return out;
+              })();
+              writes.push({ path: cmd[1] ?? "", valuePromise });
+            }
+            return asSpawned({
+              stdout: new ReadableStream({ start(c) { c.close(); } }),
+              stderr: new ReadableStream({ start(c) { c.close(); } }),
+              stdin: null,
+              exited: Promise.resolve(0),
+            });
+          }) as typeof Bun.spawn,
+        );
+
         await fi.restoreGlobalMode();
 
         expect(fi.restoredVia).toBe("hwmon");
-        expect(fi.manualModeRequested).toBe("manual");
+        // The point of the tri-state: the duty reaches the device that now
+        // owns the fan. 45% of 255 = 115. Asserting manualModeRequested
+        // alone passed even when the hwmon write never happened, because the
+        // ectool pass had already set it.
+        const duties = await Promise.all(
+          writes.filter((w) => w.path.endsWith("/pwm1")).map((w) => w.valuePromise),
+        );
+        expect(duties).toContain("115");
       } finally {
         clearInterval(fi.interval);
         clearInterval(fi.curveInterval);
       }
+    });
+
+    it("applies a choice made during the ectool window to the hwmon device", async () => {
+      // The user-choice guard has to outrank the *stored* value without
+      // blocking the re-apply — otherwise tapping Manual during the ectool
+      // window leaves the hwmon device, which ends up owning the fan, never
+      // receiving it.
+      persisted = { globalMode: { kind: "manual", percent: 45 } };
+      const fresh = new FanControlBackend();
+      const fi = internals(fresh);
+      fi.tempSensors = [
+        {
+          inputPath: "/sys/class/hwmon/hwmon0/temp1_input",
+          label: "Tctl",
+          zone: "cpu",
+          chipName: "k10temp",
+        },
+      ];
+      try {
+        fi.useEctool = true;
+        fi.activeFanDevice = null;
+        await fi.restoreGlobalMode();
+
+        // The user picks something else before the driver shows up.
+        await fresh.setFanSpeed(30);
+
+        fi.activeFanDevice = {
+          dir: "/sys/class/hwmon/hwmon0",
+          chipName: "test",
+          fans: [
+            {
+              index: 1,
+              inputPath: "/sys/class/hwmon/hwmon0/fan1_input",
+              pwmPath: "/sys/class/hwmon/hwmon0/pwm1",
+              pwmEnablePath: "/sys/class/hwmon/hwmon0/pwm1_enable",
+            },
+          ],
+          hasPwmControl: true,
+        };
+        const writes: { path: string; valuePromise: Promise<string> }[] = [];
+        spawnSpy.mockImplementation(
+          ((cmd: SpawnArgv, opts: { stdin?: ReadableStream<Uint8Array> }) => {
+            if (cmd[0] === "tee") {
+              const valuePromise = (async () => {
+                if (!opts?.stdin) return "";
+                const reader = opts.stdin.getReader();
+                let out = "";
+                for (;;) {
+                  const { value, done } = await reader.read();
+                  if (done) break;
+                  if (value) out += new TextDecoder().decode(value);
+                }
+                return out;
+              })();
+              writes.push({ path: cmd[1] ?? "", valuePromise });
+            }
+            return asSpawned({
+              stdout: new ReadableStream({ start(c) { c.close(); } }),
+              stderr: new ReadableStream({ start(c) { c.close(); } }),
+              stdin: null,
+              exited: Promise.resolve(0),
+            });
+          }) as typeof Bun.spawn,
+        );
+
+        await fi.restoreGlobalMode();
+
+        // The user's 30%, not the stored 45%. percentToPwm rounds 30% to 77.
+        const duties = await Promise.all(
+          writes.filter((w) => w.path.endsWith("/pwm1")).map((w) => w.valuePromise),
+        );
+        expect(duties).toContain("77");
+        expect(duties).not.toContain("115");
+      } finally {
+        clearInterval(fi.interval);
+        clearInterval(fi.curveInterval);
+      }
+    });
+
+    it("reports the duty the curve commanded, not just the user's", async () => {
+      // commandedPercent is what hardware that can't read its duty back shows
+      // in the UI. Reading it off lastUserSpeedPwm meant a preset's curve —
+      // which writes through setFanSpeedInternal — left it frozen at the last
+      // manual value, or null, exactly where the readout is needed most.
+      expect(internals(backend).lastUserSpeedPwm).toBeNull();
+
+      await backend.applyPreset("silent");
+
+      const info = await backend.getFanInfo();
+      expect(info.commandedPercent).not.toBeNull();
+      expect(internals(backend).lastUserSpeedPwm).toBeNull();
+    });
+
+    it("stops reporting a commanded duty once the fan is handed back to auto", async () => {
+      await backend.setFanSpeed(40);
+      expect((await backend.getFanInfo()).commandedPercent).toBe(40);
+
+      await backend.setFanMode("auto");
+      // The EC owns the duty now; a stale figure would have the UI showing a
+      // fabricated value for a fan we aren't driving.
+      expect((await backend.getFanInfo()).commandedPercent).toBeNull();
+    });
+
+    it("keeps the safety floor on RPM-target hardware", async () => {
+      // Persisting a manual mode means a Deck can now boot unattended with
+      // jupiter-fan-control stopped and no curve loop — where before, manual
+      // only lasted while the user was in the UI. The watchdog skipped that
+      // hardware entirely, so nothing supervised the fan.
+      internals(backend).activeFanDevice = {
+        dir: "/sys/class/hwmon/hwmon0",
+        chipName: "steamdeck_hwmon",
+        fans: [
+          {
+            index: 1,
+            inputPath: "/sys/class/hwmon/hwmon0/fan1_input",
+            pwmPath: null,
+            pwmEnablePath: null,
+            rpmTargetPath: "/sys/class/hwmon/hwmon0/fan1_target",
+          },
+        ],
+        hasPwmControl: false,
+        hasRpmTargetControl: true,
+      };
+      const writes: string[] = [];
+      spawnSpy.mockImplementation(
+        ((cmd: SpawnArgv) => {
+          if (cmd[0] === "tee") writes.push(cmd[1] ?? "");
+          return asSpawned({
+            stdout: new ReadableStream({ start(c) { c.close(); } }),
+            stderr: new ReadableStream({ start(c) { c.close(); } }),
+            stdin: null,
+            exited: Promise.resolve(0),
+          });
+        }) as typeof Bun.spawn,
+      );
+      mockReadFile.mockImplementation(() => Promise.resolve("88000")); // hot
+
+      await internals(backend).safetyWatchdogTick();
+
+      expect(internals(backend).safetyEngaged).toBe(true);
+      expect(writes.some((w) => w.endsWith("fan1_target"))).toBe(true);
+    });
+
+    it("a tick queued at unload cannot write after the fan is handed back", async () => {
+      // onUnload used to clearInterval directly, which neither bumps the
+      // generation nor clears the flags — so a tick already queued on the op
+      // lock passed both checks and wrote pwm_enable=1 plus a duty after
+      // restoreOriginalModes had given the fan back.
+      await backend.applyPreset("silent");
+      const b = internals(backend);
+      const gen = b.curveGen;
+
+      await backend.onUnload();
+
+      const writes: string[] = [];
+      spawnSpy.mockImplementation(
+        ((cmd: SpawnArgv) => {
+          if (cmd[0] === "tee") writes.push(cmd[1] ?? "");
+          return asSpawned({
+            stdout: new ReadableStream({ start(c) { c.close(); } }),
+            stderr: new ReadableStream({ start(c) { c.close(); } }),
+            stdin: null,
+            exited: Promise.resolve(0),
+          });
+        }) as typeof Bun.spawn,
+      );
+      await b._serialize(() => b.runCurveTick(gen, FAN_CURVES.silent));
+
+      expect(writes).toEqual([]);
+      expect(b.activePreset).toBeNull();
     });
 
     it("tells the UI whether fans[].percent is a real reading", async () => {
@@ -1990,17 +2204,24 @@ describe("FanControlBackend", () => {
     it("never leaves a preset flagged active without a curve loop", async () => {
       // The safety watchdog skips its own write whenever activePreset or
       // customCurveActive is set, trusting the curve loop to write instead
-      // (safetyWatchdogTick). If a superseded or failed apply leaves the
-      // flag set with no loop, nothing writes at all while the SoC is hot.
-      const superseded = backend.applyPreset("silent", { persist: false });
-      await backend.setFanMode("manual", { persist: false });
-      await superseded;
+      // (safetyWatchdogTick). A flag set with no loop running therefore
+      // silences the safety floor entirely.
+      //
+      // Asserted positively rather than as `flagged === looping`, which both
+      // -false satisfies: apply a preset, then check the flag and the loop
+      // agree in the state where the flag is actually set.
+      await backend.applyPreset("silent");
+      expect(internals(backend).activePreset).toBe("silent");
+      expect(internals(backend).curveInterval).toBeDefined();
 
-      const flagged =
-        internals(backend).activePreset !== null ||
-        internals(backend).customCurveActive;
-      const looping = internals(backend).curveInterval !== undefined;
-      expect(flagged).toBe(looping);
+      // ...and after something supersedes it, neither is left behind. The
+      // superseding call takes the lock second, which is the order that
+      // actually occurs — a preset apply already in flight when the user
+      // taps Manual.
+      await backend.setFanMode("manual");
+      expect(internals(backend).activePreset).toBeNull();
+      expect(internals(backend).customCurveActive).toBe(false);
+      expect(internals(backend).curveInterval).toBeUndefined();
     });
 
     it("leaves no preset flagged when the mode write fails", async () => {

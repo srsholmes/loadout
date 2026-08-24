@@ -84,6 +84,23 @@ type Preset = "silent" | "balanced" | "performance";
 const OPTIMISTIC_MS = 2500;
 
 /**
+ * Tracks a local selection so incoming events can't undo it. Both components
+ * mirror backend state and both need this, so it lives in one place rather
+ * than as a ref plus an inline Date.now() comparison repeated at four sites.
+ */
+function useOptimisticWindow() {
+  const atRef = useRef(0);
+  return {
+    /** Mark a selection the user just made. */
+    stamp: useCallback(() => {
+      atRef.current = Date.now();
+    }, []),
+    /** True when the user's own choice should still win over an event. */
+    isFresh: useCallback(() => Date.now() - atRef.current <= OPTIMISTIC_MS, []),
+  };
+}
+
+/**
  * The duty to display. `fans[0].percent` is a real reading only where the
  * hardware exposes a PWM to read back; on ectool and the Deck's RPM-target
  * path it is hard 0, so showing it would read 0% with the fan plainly
@@ -92,7 +109,11 @@ const OPTIMISTIC_MS = 2500;
  */
 function displayDuty(info: FanInfo | null): number | null {
   if (!info) return null;
-  if (info.reportsDuty === false) return info.commandedPercent ?? null;
+  // Absent, not just false: reportsDuty is optional on the wire, and a
+  // payload without it carrying percent 0 is indistinguishable from hardware
+  // that can't report — which is the case that snaps sliders to 0. Trust a
+  // reading only when the backend has said it is one.
+  if (info.reportsDuty !== true) return info.commandedPercent ?? null;
   const live = info.fans?.[0]?.percent;
   return typeof live === "number" ? live : (info.commandedPercent ?? null);
 }
@@ -193,11 +214,7 @@ function FanControl() {
   const [sliderValue, setSliderValue] = useState(50);
   const [activePreset, setActivePreset] = useState<Preset | null>(null);
   const [customActive, setCustomActive] = useState(false);
-  // When the user last made a selection locally. Events are emitted on a 2s
-  // cadence, so one already in flight when they tap would otherwise undo the
-  // optimistic update. Inside this window we keep our own answer; outside it
-  // the backend is authoritative — see the fan-update handler.
-  const localSelectAtRef = useRef(0);
+  const { stamp: stampSelection, isFresh: selectionFresh } = useOptimisticWindow();
   const [customPoints, setCustomPoints] = useState<FanCurvePoint[]>(() =>
     DEFAULT_CUSTOM_CURVE.map((p) => ({ ...p })),
   );
@@ -222,7 +239,7 @@ function FanControl() {
       // preset until the panel was remounted. The optimistic window below is
       // what protects a fresh tap from a tick already in flight; outside it
       // the backend is the truth.
-      if (Date.now() - localSelectAtRef.current > OPTIMISTIC_MS) {
+      if (!selectionFresh()) {
         setActivePreset(info.activePreset ? (info.activePreset as Preset) : null);
         setCustomActive(Boolean(info.customCurveActive));
       }
@@ -234,7 +251,7 @@ function FanControl() {
       // a game's profile applied 80%, the RPM readout followed it, and the
       // slider sat at the stale manual value until the panel was remounted.
       const duty = displayDuty(info);
-      if (duty !== null && Date.now() - localSelectAtRef.current > OPTIMISTIC_MS) {
+      if (duty !== null && !selectionFresh()) {
         setSliderValue(duty);
       }
       setLoading(false);
@@ -264,7 +281,7 @@ function FanControl() {
 
   const handleSetMode = useCallback(
     async (mode: "auto" | "manual") => {
-      localSelectAtRef.current = Date.now();
+      stampSelection();
       await call("setFanMode", mode);
       if (mode === "auto") {
         setActivePreset(null);
@@ -274,39 +291,39 @@ function FanControl() {
         persistGameProfile("manual", sliderValue);
       }
     },
-    [call, persistGameProfile, sliderValue],
+    [call, persistGameProfile, sliderValue, stampSelection],
   );
 
   const handleSetSpeed = useCallback(
     async (percent: number) => {
-      localSelectAtRef.current = Date.now();
+      stampSelection();
       setSliderValue(percent);
       setActivePreset(null);
       setCustomActive(false);
       await call("setFanSpeed", percent);
       persistGameProfile("manual", percent);
     },
-    [call, persistGameProfile],
+    [call, persistGameProfile, stampSelection],
   );
 
   const handleApplyPreset = useCallback(
     async (preset: Preset) => {
-      localSelectAtRef.current = Date.now();
+      stampSelection();
       setActivePreset(preset);
       setCustomActive(false);
       await call("applyPreset", preset);
       persistGameProfile("manual", sliderValue);
     },
-    [call, persistGameProfile, sliderValue],
+    [call, persistGameProfile, sliderValue, stampSelection],
   );
 
   const handleSelectCustom = useCallback(async () => {
-    localSelectAtRef.current = Date.now();
+    stampSelection();
     setActivePreset(null);
     setCustomActive(true);
     await call("applyCustomCurve").catch(() => {});
     persistGameProfile("manual", sliderValue);
-  }, [call, persistGameProfile, sliderValue]);
+  }, [call, persistGameProfile, sliderValue, stampSelection]);
 
   // Persist edited points to the backend. setCustomCurve sanitises and
   // returns the canonical curve, which we adopt so the UI never drifts
@@ -542,8 +559,8 @@ function FanControl() {
               <Slider
                 value={sliderValue}
                 onChange={(val) => {
-                  // handleSetSpeed stamps localSelectAtRef synchronously, so
-                  // the readout sync above can't yank the thumb mid-drag.
+                  // handleSetSpeed stamps the optimistic window synchronously,
+                  // so the readout sync above can't yank the thumb mid-drag.
                   setSliderValue(val);
                   handleSetSpeed(val);
                 }}
@@ -980,9 +997,7 @@ function FanHomeWidget() {
     currentGame,
   );
   const slidingRef = useRef(false);
-  /** See OPTIMISTIC_MS — the widget mirrors backend state too, so a fresh
-   *  tap here needs the same protection from an in-flight tick. */
-  const localSelectAtRef = useRef(0);
+  const { stamp: stampSelection, isFresh: selectionFresh } = useOptimisticWindow();
   // Note on auto-mode duty: the backend can only report a live duty %
   // when it has direct hwmon PWM-register access. On ectool-only paths
   // (e.g. OXP Apex), `info.fans[0].percent` is hardcoded 0 because
@@ -1037,18 +1052,18 @@ function FanHomeWidget() {
         if (
           duty !== null &&
           !slidingRef.current &&
-          Date.now() - localSelectAtRef.current > OPTIMISTIC_MS
+          !selectionFresh()
         ) {
           setManualSpeed(duty);
         }
       }
       if (info.cpuTempC > 0) setTempC(info.cpuTempC);
-      if (Date.now() - localSelectAtRef.current > OPTIMISTIC_MS) {
+      if (!selectionFresh()) {
         if (info.mode) setMode(info.mode);
         setActivePreset(info.activePreset ?? null);
         setCustomActive(Boolean(info.customCurveActive));
       }
-    }, [deriveAutoDuty]),
+    }, [deriveAutoDuty, selectionFresh]),
   });
 
   if (error) {
@@ -1118,7 +1133,7 @@ function FanHomeWidget() {
         }}
         onCommit={(val) => {
           slidingRef.current = false;
-          localSelectAtRef.current = Date.now();
+          stampSelection();
           setManualSpeed(val);
           call("setFanSpeed", val).catch(() => {});
           persistGameProfile("manual", val);
@@ -1132,7 +1147,7 @@ function FanHomeWidget() {
             // Optimistic — flip the local mode immediately so the slider
             // re-binds to autoDuty on the next render. The stamp is what
             // stops an already-in-flight event bouncing it straight back.
-            localSelectAtRef.current = Date.now();
+            stampSelection();
             setMode("auto");
             call("setFanMode", "auto").catch(() => {});
             persistGameProfile("auto");
@@ -1144,7 +1159,7 @@ function FanHomeWidget() {
         <SegmentedItem
           active={mode === "manual"}
           onSelect={() => {
-            localSelectAtRef.current = Date.now();
+            stampSelection();
             setMode("manual");
             call("setFanMode", "manual").catch(() => {});
             persistGameProfile("manual", manualSpeed);
