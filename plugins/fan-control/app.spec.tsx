@@ -3,7 +3,7 @@ import { describe, it, expect, mock, beforeEach } from "bun:test";
 // module for the partial-mock spread. (bun's mock.module is not hoisted,
 // unlike vitest's vi.mock — static imports evaluate first.)
 import * as actualUi from "@loadout/ui";
-import { waitFor, fireEvent } from "../../test/render";
+import { waitFor, fireEvent, act } from "../../test/render";
 
 const callMock = mock((_method: string) => Promise.resolve(null));
 const eventHandlers = new Map<string, (data: unknown) => void>();
@@ -46,6 +46,10 @@ const mockFanInfo = {
   available: true,
   activePreset: null,
   customCurveActive: false,
+  // The real backend always sends these; without them displayDuty correctly
+  // refuses to trust fans[].percent.
+  reportsDuty: true,
+  commandedPercent: null,
   usingEctool: false,
   warning: null,
 };
@@ -165,6 +169,207 @@ describe("fan-control plugin", () => {
     mount(container);
     await waitFor(() => {
       expect(eventHandlers.has("fan-update")).toBe(true);
+    });
+  });
+
+  it("tracks the live duty in the slider while a preset drives the fan", async () => {
+    // A preset puts the hardware in manual mode but the *curve* owns the
+    // duty, rewriting it every 2s. The slider used to keep showing the
+    // user's last manual value (or its 50/100 default), so it disagreed
+    // with the "Fan speed" row right above it.
+    callMock.mockImplementation((method: string) => {
+      if (method === "getFanInfo")
+        return Promise.resolve({
+          ...mockFanInfo,
+          mode: "manual" as const,
+          activePreset: "silent",
+          fans: [{ index: 0, rpm: 1500, pwm: 77, percent: 30 }],
+        });
+      if (method === "getCustomCurve") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+    const container = createContainer();
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      const slider = container.querySelector('input[type="range"]');
+      expect(slider).not.toBeNull();
+      expect(Number((slider as HTMLInputElement).value)).toBe(30);
+    });
+
+    // And it follows the curve as the duty moves.
+    const handler = eventHandlers.get("fan-update");
+    expect(handler).toBeDefined();
+    handler?.({
+      ...mockFanInfo,
+      mode: "manual" as const,
+      activePreset: "silent",
+      fans: [{ index: 0, rpm: 2600, pwm: 140, percent: 55 }],
+    });
+    await waitFor(() => {
+      const slider = container.querySelector('input[type="range"]');
+      expect(Number((slider as HTMLInputElement).value)).toBe(55);
+    });
+  });
+
+  it("does not drive the slider to 0 on hardware that can't report duty", async () => {
+    // ectool hosts and the Deck's RPM-target path leave fans[].percent at a
+    // hard 0 — there is no PWM to read back. Syncing the slider from it would
+    // snap the readout to 0% every tick while the fan is plainly spinning,
+    // making the manual slider unusable on exactly the two devices Loadout
+    // targets. The backend sends what it last commanded instead.
+    const noDutyInfo = {
+      ...mockFanInfo,
+      mode: "manual" as const,
+      reportsDuty: false,
+      commandedPercent: 60,
+      fans: [{ index: 0, rpm: 3200, pwm: 0, percent: 0 }],
+    };
+    callMock.mockImplementation((method: string) => {
+      if (method === "getFanInfo") return Promise.resolve(noDutyInfo);
+      if (method === "getCustomCurve") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+    const container = createContainer();
+    const { mount } = await import("./app");
+    mount(container);
+
+    const slider = await waitFor(() => {
+      const el = container.querySelector('input[type="range"]');
+      if (!el) throw new Error("slider not yet rendered");
+      return el as HTMLInputElement;
+    });
+    expect(Number(slider.value)).toBe(60);
+
+    await act(async () => {
+      eventHandlers.get("fan-update")?.({ ...noDutyInfo, commandedPercent: 75 });
+    });
+
+    expect(
+      Number((container.querySelector('input[type="range"]') as HTMLInputElement).value),
+    ).toBe(75);
+  });
+
+  it("follows a per-game profile's duty in the slider, with no preset active", async () => {
+    // The reported case: launching a game applied its profile at 80%, the RPM
+    // readout followed, and the slider stayed on the stale manual value until
+    // the panel was remounted. No preset or custom curve is involved, so
+    // gating the sync on those flags missed it entirely.
+    const manualInfo = { ...mockFanInfo, mode: "manual" as const };
+    callMock.mockImplementation((method: string) => {
+      if (method === "getFanInfo")
+        return Promise.resolve({
+          ...manualInfo,
+          fans: [{ index: 0, rpm: 2400, pwm: 128, percent: 50 }],
+        });
+      if (method === "getCustomCurve") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+    const container = createContainer();
+    const { mount } = await import("./app");
+    mount(container);
+
+    const slider = await waitFor(() => {
+      const el = container.querySelector('input[type="range"]');
+      if (!el) throw new Error("slider not yet rendered");
+      return el as HTMLInputElement;
+    });
+    expect(Number(slider.value)).toBe(50);
+
+    // A per-game profile takes the fan to 80%.
+    await act(async () => {
+      eventHandlers.get("fan-update")?.({
+        ...manualInfo,
+        activePreset: null,
+        customCurveActive: false,
+        fans: [{ index: 0, rpm: 4200, pwm: 204, percent: 80 }],
+      });
+    });
+
+    expect(
+      Number((container.querySelector('input[type="range"]') as HTMLInputElement).value),
+    ).toBe(80);
+  });
+
+  it("keeps a fresh selection when a stale tick contradicts it", async () => {
+    // fan-update is emitted on a 2s cadence, so one is often already in
+    // flight when the user taps. Mirroring the backend unconditionally would
+    // let that tick undo the tap. The window is why clearing is safe.
+    // Presets only render in Manual mode.
+    const manualInfo = { ...mockFanInfo, mode: "manual" as const };
+    callMock.mockImplementation((method: string) => {
+      if (method === "getFanInfo") return Promise.resolve(manualInfo);
+      if (method === "getCustomCurve") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+    const container = createContainer();
+    const { mount } = await import("./app");
+    mount(container);
+
+    const silent = await waitFor(() => {
+      const btn = Array.from(container.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Silent"),
+      );
+      if (!btn) throw new Error("Silent button not yet rendered");
+      return btn;
+    });
+    fireEvent.click(silent);
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("applyPreset", "silent");
+    });
+
+    // A tick from before the tap: the backend hasn't applied it yet.
+    // Flushed inside act() and asserted synchronously — waitFor would
+    // satisfy a "nothing changed" assertion on its first poll, before React
+    // had even processed the update, and pass whatever the handler did.
+    await act(async () => {
+      eventHandlers.get("fan-update")?.({
+        ...manualInfo,
+        activePreset: null,
+        customCurveActive: false,
+      });
+    });
+
+    // The selection stands.
+    expect(container.textContent).toContain("Active preset");
+  });
+
+  it("clears the preset when something else takes the fan", async () => {
+    // A per-game profile applying on game launch clears activePreset in the
+    // backend. The panel used to only ever *assert* a selection, never clear
+    // it, so it kept showing the preset until it was remounted — reported on
+    // device as "the fans kicked in at 80% but the UI didn't update until I
+    // switched plugins and came back".
+    callMock.mockImplementation((method: string) => {
+      if (method === "getFanInfo")
+        return Promise.resolve({
+          ...mockFanInfo,
+          mode: "manual" as const,
+          activePreset: "silent",
+          fans: [{ index: 0, rpm: 1500, pwm: 77, percent: 30 }],
+        });
+      if (method === "getCustomCurve") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+    const container = createContainer();
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Active preset");
+    });
+
+    // The game's profile takes over: no preset, manual duty at 80%.
+    eventHandlers.get("fan-update")?.({
+      ...mockFanInfo,
+      mode: "manual" as const,
+      activePreset: null,
+      customCurveActive: false,
+      fans: [{ index: 0, rpm: 4200, pwm: 204, percent: 80 }],
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).not.toContain("Active preset");
     });
   });
 
