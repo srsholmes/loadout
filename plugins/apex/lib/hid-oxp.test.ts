@@ -1,7 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import {
   getHidOxpStatus,
-  setHidOxpBlacklist,
+  removeHidOxpBlacklist,
   HID_OXP_CONF,
   BLACKLIST_LINE,
   type HidOxpDeps,
@@ -70,28 +70,29 @@ describe("getHidOxpStatus", () => {
   });
 });
 
-describe("setHidOxpBlacklist", () => {
-  it("writes the drop-in when enabling", async () => {
-    const { deps, files } = makeDeps({ [PROC_MODULES]: loadedModules });
-    const s = await setHidOxpBlacklist(deps, true);
-    expect(files.get(HID_OXP_CONF)).toBe(`${BLACKLIST_LINE}\n`);
-    expect(s).toEqual({ blacklisted: true, moduleLoaded: true, rebootRequired: true });
-  });
-
-  it("removes the drop-in when disabling", async () => {
+describe("removeHidOxpBlacklist", () => {
+  it("removes the drop-in", async () => {
     const { deps, files } = makeDeps({
       [PROC_MODULES]: loadedModules,
       [HID_OXP_CONF]: `${BLACKLIST_LINE}\n`,
     });
-    const s = await setHidOxpBlacklist(deps, false);
+    const s = await removeHidOxpBlacklist(deps);
     expect(files.has(HID_OXP_CONF)).toBe(false);
     expect(s.blacklisted).toBe(false);
   });
 
-  it("disabling when already absent is a no-op (idempotent)", async () => {
+  it("is idempotent when the drop-in is already absent", async () => {
     const { deps, files } = makeDeps({ [PROC_MODULES]: loadedModules });
-    const s = await setHidOxpBlacklist(deps, false);
+    const s = await removeHidOxpBlacklist(deps);
     expect(files.has(HID_OXP_CONF)).toBe(false);
     expect(s.blacklisted).toBe(false);
+  });
+
+  it("exposes no way to apply the blacklist", async () => {
+    // Deliberate: it disabled the driver instead of fixing the wake bug, and
+    // takes rumble/gamepad-mode/button-mapping with it. If this assertion is
+    // ever in the way, the answer is in ./xhci.ts, not here.
+    const mod = (await import("./hid-oxp")) as Record<string, unknown>;
+    expect(Object.keys(mod).some((k) => /^set|apply|enable/i.test(k))).toBe(false);
   });
 });

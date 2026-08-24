@@ -12,7 +12,7 @@ import {
 } from "./lib/xhci";
 import {
   getHidOxpStatus,
-  setHidOxpBlacklist,
+  removeHidOxpBlacklist,
   type HidOxpDeps,
   type HidOxpStatus,
 } from "./lib/hid-oxp";
@@ -122,9 +122,9 @@ export default class ApexBackend implements PluginBackend {
       : { ok: false, error: res.stderr || `systemctl exited ${res.exitCode}` };
   }
 
-  // IO dependencies for the hid-oxp blacklist. The backend runs as root, so
-  // it writes /etc/modprobe.d directly; readFile/removeFile swallow ENOENT so
-  // "absent" is a normal, non-throwing state.
+  // IO for clearing the old hid-oxp blacklist. The backend runs as root, so
+  // it touches /etc/modprobe.d directly; readFile/removeFile swallow ENOENT
+  // so "absent" is a normal, non-throwing state.
   private get hidOxpDeps(): HidOxpDeps {
     return {
       readFile: async (path) => {
@@ -134,7 +134,6 @@ export default class ApexBackend implements PluginBackend {
           return null;
         }
       },
-      writeFile: (path, content) => writeFile(path, content, "utf8"),
       removeFile: async (path) => {
         try {
           await rm(path);
@@ -240,23 +239,26 @@ export default class ApexBackend implements PluginBackend {
   }
 
   /**
-   * Enable/disable the hid-oxp driver blacklist — the OneXPlayer HID driver
-   * implicated in the xHCI controller dying on wake. Writes/removes a
-   * modprobe.d drop-in; takes effect on the next reboot (the returned status
-   * flags `rebootRequired` while the change is staged). See ./lib/hid-oxp.ts.
+   * Remove the old hid-oxp driver blacklist. Removal only — there is
+   * deliberately no way to apply it, here or in the UI: it disabled the
+   * driver instead of fixing the wake bug (that's "Recover gamepad"), and it
+   * takes every control hid-oxp exposes with it. See ./lib/hid-oxp.ts.
    */
-  async setHidOxpBlacklist(
-    enabled: boolean,
-  ): Promise<{ success: boolean; unsupported?: boolean; error?: string; hidOxp?: HidOxpStatus }> {
+  async removeHidOxpBlacklist(): Promise<{
+    success: boolean;
+    unsupported?: boolean;
+    error?: string;
+    hidOxp?: HidOxpStatus;
+  }> {
     if (this.unsupported) {
       return { success: false, unsupported: true, error: "Not running on Apex hardware." };
     }
     try {
-      const hidOxp = await setHidOxpBlacklist(this.hidOxpDeps, !!enabled);
+      const hidOxp = await removeHidOxpBlacklist(this.hidOxpDeps);
       this.emit?.({ event: "statusChanged", data: undefined });
       return { success: true, hidOxp };
     } catch (e) {
-      this.log?.warn(`[apex] setHidOxpBlacklist failed: ${e}`);
+      this.log?.warn(`[apex] removeHidOxpBlacklist failed: ${e}`);
       return { success: false, error: String(e) };
     }
   }
