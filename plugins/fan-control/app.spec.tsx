@@ -209,6 +209,47 @@ describe("fan-control plugin", () => {
     });
   });
 
+  it("follows a per-game profile's duty in the slider, with no preset active", async () => {
+    // The reported case: launching a game applied its profile at 80%, the RPM
+    // readout followed, and the slider stayed on the stale manual value until
+    // the panel was remounted. No preset or custom curve is involved, so
+    // gating the sync on those flags missed it entirely.
+    const manualInfo = { ...mockFanInfo, mode: "manual" as const };
+    callMock.mockImplementation((method: string) => {
+      if (method === "getFanInfo")
+        return Promise.resolve({
+          ...manualInfo,
+          fans: [{ index: 0, rpm: 2400, pwm: 128, percent: 50 }],
+        });
+      if (method === "getCustomCurve") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+    const container = createContainer();
+    const { mount } = await import("./app");
+    mount(container);
+
+    const slider = await waitFor(() => {
+      const el = container.querySelector('input[type="range"]');
+      if (!el) throw new Error("slider not yet rendered");
+      return el as HTMLInputElement;
+    });
+    expect(Number(slider.value)).toBe(50);
+
+    // A per-game profile takes the fan to 80%.
+    await act(async () => {
+      eventHandlers.get("fan-update")?.({
+        ...manualInfo,
+        activePreset: null,
+        customCurveActive: false,
+        fans: [{ index: 0, rpm: 4200, pwm: 204, percent: 80 }],
+      });
+    });
+
+    expect(
+      Number((container.querySelector('input[type="range"]') as HTMLInputElement).value),
+    ).toBe(80);
+  });
+
   it("keeps a fresh selection when a stale tick contradicts it", async () => {
     // fan-update is emitted on a 2s cadence, so one is often already in
     // flight when the user taps. Mirroring the backend unconditionally would

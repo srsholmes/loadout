@@ -203,13 +203,18 @@ function FanControl() {
         setActivePreset(info.activePreset ? (info.activePreset as Preset) : null);
         setCustomActive(Boolean(info.customCurveActive));
       }
-      // While a preset or the custom curve is driving, the slider is a
-      // readout, not a setting: the curve rewrites the duty every 2s and
-      // the user's last manual value has nothing to do with what the fan
-      // is doing. Track the live percent so it agrees with the "Fan speed"
-      // row above it (issue #265 follow-up).
+      // The slider reads out the duty the fan is actually running at,
+      // except while the user is working it. A curve rewrites the duty every
+      // 2s, a per-game profile sets its own, and the safety floor can raise
+      // either — none of which the user's last manual value describes. Gating
+      // this on "a curve is driving" was wrong for exactly the case reported:
+      // a game's profile applied 80%, the RPM readout followed it, and the
+      // slider sat at the stale manual value until the panel was remounted.
       const live = info.fans?.[0]?.percent;
-      if ((info.activePreset || info.customCurveActive) && typeof live === "number") {
+      if (
+        typeof live === "number" &&
+        Date.now() - localSelectAtRef.current > OPTIMISTIC_MS
+      ) {
         setSliderValue(live);
       }
       setLoading(false);
@@ -519,6 +524,8 @@ function FanControl() {
               <Slider
                 value={sliderValue}
                 onChange={(val) => {
+                  // handleSetSpeed stamps localSelectAtRef synchronously, so
+                  // the readout sync above can't yank the thumb mid-drag.
                   setSliderValue(val);
                   handleSetSpeed(val);
                 }}
