@@ -169,6 +169,12 @@ function FanControl() {
   const [sliderValue, setSliderValue] = useState(50);
   const [activePreset, setActivePreset] = useState<Preset | null>(null);
   const [customActive, setCustomActive] = useState(false);
+  // When the user last made a selection locally. Events are emitted on a 2s
+  // cadence, so one already in flight when they tap would otherwise undo the
+  // optimistic update. Inside this window we keep our own answer; outside it
+  // the backend is authoritative — see the fan-update handler.
+  const localSelectAtRef = useRef(0);
+  const OPTIMISTIC_MS = 2500;
   const [customPoints, setCustomPoints] = useState<FanCurvePoint[]>(() =>
     DEFAULT_CUSTOM_CURVE.map((p) => ({ ...p })),
   );
@@ -187,16 +193,15 @@ function FanControl() {
     handler: (data) => {
       const info = data as FanInfo;
       setFanInfo(info);
-      // Each tick only asserts a positive selection (preset XOR custom),
-      // never clears to "none" — the click handlers own clearing, so a
-      // stale 2 s-cadence event can't wipe an optimistic selection.
-      if (info.activePreset) {
-        setActivePreset(info.activePreset as Preset);
-        setCustomActive(false);
-      }
-      if (info.customCurveActive) {
-        setCustomActive(true);
-        setActivePreset(null);
+      // Mirror the backend, clearing included. This used to only ever assert
+      // a positive selection, so when something else took the fan — a
+      // per-game profile applying on game launch — the UI kept showing the
+      // preset until the panel was remounted. The optimistic window below is
+      // what protects a fresh tap from a tick already in flight; outside it
+      // the backend is the truth.
+      if (Date.now() - localSelectAtRef.current > OPTIMISTIC_MS) {
+        setActivePreset(info.activePreset ? (info.activePreset as Preset) : null);
+        setCustomActive(Boolean(info.customCurveActive));
       }
       // While a preset or the custom curve is driving, the slider is a
       // readout, not a setting: the curve rewrites the duty every 2s and
@@ -236,6 +241,7 @@ function FanControl() {
 
   const handleSetMode = useCallback(
     async (mode: "auto" | "manual") => {
+      localSelectAtRef.current = Date.now();
       await call("setFanMode", mode);
       if (mode === "auto") {
         setActivePreset(null);
@@ -250,6 +256,7 @@ function FanControl() {
 
   const handleSetSpeed = useCallback(
     async (percent: number) => {
+      localSelectAtRef.current = Date.now();
       setSliderValue(percent);
       setActivePreset(null);
       setCustomActive(false);
@@ -261,6 +268,7 @@ function FanControl() {
 
   const handleApplyPreset = useCallback(
     async (preset: Preset) => {
+      localSelectAtRef.current = Date.now();
       setActivePreset(preset);
       setCustomActive(false);
       await call("applyPreset", preset);
@@ -270,6 +278,7 @@ function FanControl() {
   );
 
   const handleSelectCustom = useCallback(async () => {
+    localSelectAtRef.current = Date.now();
     setActivePreset(null);
     setCustomActive(true);
     await call("applyCustomCurve").catch(() => {});

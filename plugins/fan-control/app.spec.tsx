@@ -3,7 +3,7 @@ import { describe, it, expect, mock, beforeEach } from "bun:test";
 // module for the partial-mock spread. (bun's mock.module is not hoisted,
 // unlike vitest's vi.mock — static imports evaluate first.)
 import * as actualUi from "@loadout/ui";
-import { waitFor, fireEvent } from "../../test/render";
+import { waitFor, fireEvent, act } from "../../test/render";
 
 const callMock = mock((_method: string) => Promise.resolve(null));
 const eventHandlers = new Map<string, (data: unknown) => void>();
@@ -206,6 +206,87 @@ describe("fan-control plugin", () => {
     await waitFor(() => {
       const slider = container.querySelector('input[type="range"]');
       expect(Number((slider as HTMLInputElement).value)).toBe(55);
+    });
+  });
+
+  it("keeps a fresh selection when a stale tick contradicts it", async () => {
+    // fan-update is emitted on a 2s cadence, so one is often already in
+    // flight when the user taps. Mirroring the backend unconditionally would
+    // let that tick undo the tap. The window is why clearing is safe.
+    // Presets only render in Manual mode.
+    const manualInfo = { ...mockFanInfo, mode: "manual" as const };
+    callMock.mockImplementation((method: string) => {
+      if (method === "getFanInfo") return Promise.resolve(manualInfo);
+      if (method === "getCustomCurve") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+    const container = createContainer();
+    const { mount } = await import("./app");
+    mount(container);
+
+    const silent = await waitFor(() => {
+      const btn = Array.from(container.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Silent"),
+      );
+      if (!btn) throw new Error("Silent button not yet rendered");
+      return btn;
+    });
+    fireEvent.click(silent);
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("applyPreset", "silent");
+    });
+
+    // A tick from before the tap: the backend hasn't applied it yet.
+    // Flushed inside act() and asserted synchronously — waitFor would
+    // satisfy a "nothing changed" assertion on its first poll, before React
+    // had even processed the update, and pass whatever the handler did.
+    await act(async () => {
+      eventHandlers.get("fan-update")?.({
+        ...manualInfo,
+        activePreset: null,
+        customCurveActive: false,
+      });
+    });
+
+    // The selection stands.
+    expect(container.textContent).toContain("Active preset");
+  });
+
+  it("clears the preset when something else takes the fan", async () => {
+    // A per-game profile applying on game launch clears activePreset in the
+    // backend. The panel used to only ever *assert* a selection, never clear
+    // it, so it kept showing the preset until it was remounted — reported on
+    // device as "the fans kicked in at 80% but the UI didn't update until I
+    // switched plugins and came back".
+    callMock.mockImplementation((method: string) => {
+      if (method === "getFanInfo")
+        return Promise.resolve({
+          ...mockFanInfo,
+          mode: "manual" as const,
+          activePreset: "silent",
+          fans: [{ index: 0, rpm: 1500, pwm: 77, percent: 30 }],
+        });
+      if (method === "getCustomCurve") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+    const container = createContainer();
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Active preset");
+    });
+
+    // The game's profile takes over: no preset, manual duty at 80%.
+    eventHandlers.get("fan-update")?.({
+      ...mockFanInfo,
+      mode: "manual" as const,
+      activePreset: null,
+      customCurveActive: false,
+      fans: [{ index: 0, rpm: 4200, pwm: 204, percent: 80 }],
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).not.toContain("Active preset");
     });
   });
 
