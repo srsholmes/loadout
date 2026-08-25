@@ -385,5 +385,12 @@ journalctl -u loadout -b --no-pager 2>/dev/null \
     | tail -20 | sed 's/^/  /' || true
 
 section "End of report"
-echo "  Paste this whole output into the issue / thread."
+# ~500 lines — past what a chat client will take as a paste, so point at the
+# redirect rather than telling people to paste it and watch them truncate the
+# half that matters.
+echo "  Send this whole report, not an excerpt — the useful part is usually"
+echo "  a section nobody thought to include."
+echo ""
+echo "  To save it to a file you can attach:"
+echo "    curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/loadout-doctor.sh | sh > ~/Desktop/loadout-doctor.txt 2>&1"
 echo ""
