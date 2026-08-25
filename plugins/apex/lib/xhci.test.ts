@@ -124,6 +124,48 @@ describe("pickController", () => {
   });
 });
 
+describe("getStatus — unrecognised gamepad", () => {
+  it("says so rather than offering a rebind that can't help", async () => {
+    // A OneXPlayer whose pad enumerates under ids we don't know: no known id
+    // on the bus, and nothing dead in the log. Before the plugin was
+    // un-gated this shape was unreachable; now it is the likely state on a
+    // sibling handheld, and treating it as "controller missing" would offer
+    // a rebind that never reports success.
+    const deps = makeDeps({
+      present: false,
+      dmesg: "",
+      paths: new Set([
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}`,
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}/driver`,
+      ]),
+    });
+
+    const status = await getStatus(deps);
+
+    expect(status.gamepadPresent).toBe(false);
+    expect(status.gamepadUnknown).toBe(true);
+    expect(status.summary).toContain("Couldn't identify");
+  });
+
+  it("does not claim ignorance when the log shows a dead controller", async () => {
+    // Same absent ids, but dmesg names a dead controller — that is a real
+    // recovery case, not an unfamiliar device.
+    const deps = makeDeps({
+      present: false,
+      dmesg: `xhci_hcd ${DEFAULT_XHCI_PCI}: HC died; cleaning up`,
+      paths: new Set([
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}`,
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}/driver`,
+      ]),
+    });
+
+    const status = await getStatus(deps);
+
+    expect(status.gamepadUnknown).toBe(false);
+    expect(status.summary).toContain("died on resume");
+  });
+});
+
 describe("getStatus", () => {
   it("reports healthy when the gamepad enumerates", async () => {
     const deps = makeDeps({

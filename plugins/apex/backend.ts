@@ -2,7 +2,7 @@ import { access, readFile, writeFile, rm } from "node:fs/promises";
 import type { PluginBackend, EmitPayload, PluginLogger, CallPlugin } from "@loadout/types";
 import { runFull, runStreaming } from "@loadout/exec";
 import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
-import { isApex } from "@loadout/devices";
+import { isApex, isOneXPlayer } from "@loadout/devices";
 import {
   getStatus as computeStatus,
   recover as runRecover,
@@ -61,6 +61,15 @@ export default class ApexBackend implements PluginBackend {
   callPlugin?: CallPlugin;
 
   private unsupported = false;
+
+  /**
+   * True on the board whose hardware constants were measured (the Apex).
+   * The fingerprint GPIO kernel arg names a specific pin — `AMDI0030:00@58`
+   * — which is board wiring, not a family constant. Applying it blind to a
+   * sibling could name the wrong pin, so that one path stays gated while the
+   * PME path, which is derived at runtime, runs everywhere.
+   */
+  private isKnownBoard = false;
   /** Serialises recover() so a double-tap can't run two rebinds at once. */
   private recovering = false;
   /** Live handle to the resume listener when auto-recover-on-wake is on. */
@@ -176,12 +185,25 @@ export default class ApexBackend implements PluginBackend {
   }
 
   async onLoad(): Promise<void> {
-    this.unsupported = !(await isApex());
+    // Family-level, not model-level. Every feature below probes for the
+    // hardware it actually touches — the fingerprint reader by USB id, the
+    // dead xHCI controller from dmesg — so gating the whole plugin on one
+    // model hid working features from siblings running the same silicon.
+    // A OneXPlayer X2 Mini Pro reported exactly that.
+    this.unsupported = !(await isOneXPlayer());
     if (this.unsupported) {
-      this.log?.info("[apex] Non-Apex hardware — plugin inert (recovery disabled).");
+      this.log?.info("[apex] Not a OneXPlayer handheld — plugin inert.");
       return;
     }
-    this.log?.info("[apex] OneXPlayer Apex detected — recovery available.");
+
+    // Whether this is the board whose *wiring* we know. Only the GPIO
+    // kernel-arg path depends on it; see setFingerprintBlock.
+    this.isKnownBoard = await isApex();
+    this.log?.info(
+      this.isKnownBoard
+        ? "[apex] OneXPlayer Apex detected — all fixes available."
+        : "[apex] OneXPlayer handheld detected — board-specific fixes limited.",
+    );
 
     // Restore the auto-recover-on-wake listener if it was left enabled.
     const settings = await readPluginStorage<ApexSettings>(PLUGIN_ID);
@@ -231,9 +253,12 @@ export default class ApexBackend implements PluginBackend {
     enabled: boolean,
   ): Promise<FingerprintResult & { unsupported?: boolean }> {
     if (this.unsupported) {
-      return { success: false, rebootRequired: false, steps: [], unsupported: true, error: "Not running on Apex hardware." };
+      return { success: false, rebootRequired: false, steps: [], unsupported: true, error: "Not running on OneXPlayer hardware." };
     }
-    const result = enabled ? await applyFingerprint(this.fpDeps) : await revertFingerprint(this.fpDeps);
+    // autoKarg only on the board whose GPIO pin we measured — see isKnownBoard.
+    const result = enabled
+      ? await applyFingerprint(this.fpDeps, { autoKarg: this.isKnownBoard })
+      : await revertFingerprint(this.fpDeps);
     this.emit?.({ event: "statusChanged", data: undefined });
     return result;
   }
@@ -251,7 +276,7 @@ export default class ApexBackend implements PluginBackend {
     hidOxp?: HidOxpStatus;
   }> {
     if (this.unsupported) {
-      return { success: false, unsupported: true, error: "Not running on Apex hardware." };
+      return { success: false, unsupported: true, error: "Not running on OneXPlayer hardware." };
     }
     try {
       const hidOxp = await removeHidOxpBlacklist(this.hidOxpDeps);
@@ -271,7 +296,7 @@ export default class ApexBackend implements PluginBackend {
     enabled: boolean,
   ): Promise<{ success: boolean; unsupported?: boolean; error?: string }> {
     if (this.unsupported) {
-      return { success: false, unsupported: true, error: "Not running on Apex hardware." };
+      return { success: false, unsupported: true, error: "Not running on OneXPlayer hardware." };
     }
     try {
       const existing = await readPluginStorage<ApexSettings>(PLUGIN_ID);
@@ -298,7 +323,7 @@ export default class ApexBackend implements PluginBackend {
         steps: [],
         gamepadPresent: false,
         unsupported: true,
-        error: "Not running on Apex hardware.",
+        error: "Not running on OneXPlayer hardware.",
       };
     }
     if (this.recovering) {

@@ -21,7 +21,15 @@
  *  firmware revisions; overridable when the caller knows better. */
 export const DEFAULT_XHCI_PCI = "0000:65:00.4";
 
-/** Internal gamepad USB IDs — both must enumerate for "healthy". */
+/**
+ * Internal gamepad USB IDs — both must enumerate for "healthy".
+ *
+ * `1a86:fe00` is the OneXPlayer HID MCU; `045e:028e` the X360-compatible pad
+ * it presents. Known good on the Apex. A sibling handheld may enumerate its
+ * pad under different ids, and this signal would then read "gamepad missing"
+ * forever — see {@link gamepadIdentified}, which tells that apart from a
+ * genuinely dropped controller so we don't offer a rebind that cannot help.
+ */
 export const GAMEPAD_IDS = ["1a86:fe00", "045e:028e"] as const;
 
 const DRIVER_DIR = "/sys/bus/pci/drivers/xhci_hcd";
@@ -64,6 +72,9 @@ export interface XhciStatus {
   driverBound: boolean;
   /** Both internal gamepad USB IDs enumerate via lsusb. */
   gamepadPresent: boolean;
+  /** No known gamepad id on the bus and nothing dead in the log — we can't
+   *  tell whether this device's pad is missing or simply unfamiliar. */
+  gamepadUnknown: boolean;
   /** The controller we'd act on (detected-dead, else default). */
   controller: string;
   /** True if the kernel log shows this controller recently died. */
@@ -108,15 +119,34 @@ function driverLinkPath(pci: string): string {
   return `${PCI_DEVICES}/${pci}/driver`;
 }
 
+/** True when the given USB id enumerates via lsusb. */
+async function usbIdPresent(run: Run, id: string): Promise<boolean> {
+  const r = await run(["lsusb", "-d", id], { timeoutMs: 5_000 });
+  return r.exitCode === 0 && r.stdout.toLowerCase().includes(id.toLowerCase());
+}
+
 /** True when every internal-gamepad USB ID enumerates via lsusb. */
 export async function gamepadPresent(run: Run): Promise<boolean> {
   for (const id of GAMEPAD_IDS) {
-    const r = await run(["lsusb", "-d", id], { timeoutMs: 5_000 });
-    if (r.exitCode !== 0 || !r.stdout.toLowerCase().includes(id.toLowerCase())) {
-      return false;
-    }
+    if (!(await usbIdPresent(run, id))) return false;
   }
   return true;
+}
+
+/**
+ * True when at least one known gamepad id is on the bus.
+ *
+ * A dead controller drops the whole bus, so "no ids" is ambiguous between
+ * "the controller died" and "this device's pad isn't one we recognise".
+ * Callers disambiguate with the dmesg signal: no ids *and* nothing dead in
+ * the log means we can't identify this hardware, and a rebind would be a shot
+ * in the dark rather than a recovery.
+ */
+export async function gamepadIdentified(run: Run): Promise<boolean> {
+  for (const id of GAMEPAD_IDS) {
+    if (await usbIdPresent(run, id)) return true;
+  }
+  return false;
 }
 
 /** Decide which controller to act on: caller override → dead-in-log →
@@ -138,22 +168,32 @@ export async function pickController(
 
 export async function getStatus(deps: XhciDeps, override?: string): Promise<XhciStatus> {
   const { controller, deadInLog } = await pickController(deps, override);
-  const [pciDeviceExists, driverBound, padPresent] = await Promise.all([
+  const [pciDeviceExists, driverBound, padPresent, anyId] = await Promise.all([
     deps.pathExists(pciDevicePath(controller)),
     deps.pathExists(driverLinkPath(controller)),
     gamepadPresent(deps.run),
+    gamepadIdentified(deps.run),
   ]);
+
+  // Neither known id, and nothing dead in the log: this is a OneXPlayer whose
+  // pad we can't identify, not a dropped controller. Saying so beats offering
+  // a rebind that would never report success.
+  const gamepadUnknown = !padPresent && !anyId && !deadInLog;
 
   let summary: string;
   if (!pciDeviceExists) summary = `PCI device ${controller} not present.`;
   else if (padPresent) summary = "Controller healthy — nothing to do.";
   else if (deadInLog) summary = "Controller died on resume — rebind to recover the gamepad.";
+  else if (gamepadUnknown)
+    summary =
+      "Couldn't identify this device's internal gamepad — recovery is only known to work on hardware using the OneXPlayer HID MCU.";
   else summary = "Gamepad not enumerating — a rebind may recover it.";
 
   return {
     pciDeviceExists,
     driverBound,
     gamepadPresent: padPresent,
+    gamepadUnknown,
     controller,
     deadInLog,
     summary,

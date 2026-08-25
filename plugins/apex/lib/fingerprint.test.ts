@@ -197,6 +197,45 @@ describe("apply / revert (SteamOS)", () => {
   });
 });
 
+describe("apply — board whose GPIO pin we haven't measured", () => {
+  it("blocks the wake path it can derive, and won't stage a karg it can't verify", async () => {
+    // KARG names a specific GPIO pin (AMDI0030:00@58) — board wiring, not a
+    // family constant. On a sibling OneXPlayer that pin may be wrong, and
+    // staging it into grub is worse than leaving the second path open. The
+    // derived PME path still applies, and the karg is offered as text.
+    const { deps, files, commands } = makeFpDeps({
+      files: { "/etc/default/grub-steamos": GRUB_SAMPLE },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+
+    const r = await apply(deps, { autoKarg: false });
+
+    // Path 2 — derived from the reader's own PCI parent — still applied.
+    expect(r.steps).toContain("controller-wake-disabled");
+    expect(r.steps).toContain("udev-rule-installed");
+    // Path 1 — not staged, and the bootloader untouched.
+    expect(r.steps).not.toContain("karg-staged");
+    expect(files["/etc/default/grub-steamos"]).not.toContain(KARG);
+    expect(commands).not.toContain("update-grub");
+    // ...but the user is told what to add if they know their board.
+    expect(r.manualKarg).toBe(KARG);
+  });
+
+  it("still stages the karg on the board we did measure", async () => {
+    const { deps, files } = makeFpDeps({
+      files: { "/etc/default/grub-steamos": GRUB_SAMPLE },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+
+    const r = await apply(deps, { autoKarg: true });
+
+    expect(r.steps).toContain("karg-staged");
+    expect(files["/etc/default/grub-steamos"]).toContain(KARG);
+  });
+});
+
 describe("apply (non-SteamOS)", () => {
   it("closes path 2 but surfaces a manual karg for the GPIO path", async () => {
     const { deps, files } = makeFpDeps({

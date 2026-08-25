@@ -8,6 +8,7 @@ interface XhciStatus {
   pciDeviceExists: boolean;
   driverBound: boolean;
   gamepadPresent: boolean;
+  gamepadUnknown?: boolean;
   controller: string;
   deadInLog: boolean;
   summary: string;
@@ -178,11 +179,12 @@ function Apex() {
             <div className="card-body p-6">
               <div className="subsection-label mb-2 flex items-center gap-2">
                 <FaTriangleExclamation className="w-3 h-3" />
-                Not a OneXPlayer Apex
+                Not a OneXPlayer handheld
               </div>
               <div className="text-sm text-base-content/80 leading-relaxed">
-                This plugin only does anything on the OneXPlayer Apex. The gamepad-recovery fix
-                rebinds Apex-specific USB hardware, so it stays disabled on other devices.
+                These fixes target OneXPlayer hardware — the gamepad recovery rebinds the USB
+                controller its internal pad sits behind, and the fingerprint block targets the
+                reader on those boards. Neither applies here.
               </div>
             </div>
           </div>
@@ -193,6 +195,10 @@ function Apex() {
 
   const status = data.status!;
   const healthy = status.gamepadPresent;
+  // On a OneXPlayer we haven't measured, the pad may enumerate under ids we
+  // don't know. Say that rather than offering a rebind that can't report
+  // success — the recovery only works on the OneXPlayer HID MCU.
+  const gamepadUnknown = status.gamepadUnknown === true;
   const hidOxp = data.hidOxp;
 
   return (
@@ -216,16 +222,23 @@ function Apex() {
           </div>
           <div className="card-body p-6 flex flex-col gap-4">
             <Alert
-              variant={healthy ? "success" : "warning"}
+              variant={healthy ? "success" : gamepadUnknown ? "info" : "warning"}
               icon={healthy ? <FaCircleCheck size={14} /> : <FaTriangleExclamation size={14} />}
-              title={healthy ? "Controller healthy" : "Controller missing"}
+              title={
+                healthy
+                  ? "Controller healthy"
+                  : gamepadUnknown
+                    ? "Gamepad not recognised"
+                    : "Controller missing"
+              }
             >
               {status.summary}
             </Alert>
 
             <div className="text-[11px] text-base-content/45 mono">
               controller {status.controller} · driver {status.driverBound ? "bound" : "unbound"} ·
-              gamepad {status.gamepadPresent ? "present" : "absent"}
+              gamepad{" "}
+              {status.gamepadPresent ? "present" : gamepadUnknown ? "unrecognised" : "absent"}
             </div>
 
             <div className="mt-2">

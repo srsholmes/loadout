@@ -241,7 +241,7 @@ describe("apex plugin", () => {
     });
   });
 
-  it("renders the not-on-Apex banner when unsupported", async () => {
+  it("renders the not-a-OneXPlayer banner when unsupported", async () => {
     callMock.mockImplementation((method: string) => {
       if (method === "getStatus") return Promise.resolve({ unsupported: true });
       return Promise.resolve({ success: true });
@@ -250,7 +250,7 @@ describe("apex plugin", () => {
     const { mount } = await import("./app");
     mount(container);
     await waitFor(() => {
-      expect(container.textContent).toContain("Not a OneXPlayer Apex");
+      expect(container.textContent).toContain("Not a OneXPlayer handheld");
     });
   });
 });

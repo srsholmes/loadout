@@ -12,6 +12,7 @@ import type { EmitPayload } from "@loadout/types";
  */
 
 let isApexResult = true;
+let isOneXPlayerResult = true;
 const recoverImpl = mock(async () => ({
   success: true,
   controller: "0000:65:00.4",
@@ -49,6 +50,7 @@ const revertFingerprintImpl = mock(async () => ({ success: true, rebootRequired:
 
 mock.module("@loadout/devices", () => ({
   isApex: async () => isApexResult,
+  isOneXPlayer: async () => isOneXPlayerResult,
 }));
 mock.module("./lib/xhci", () => ({
   getStatus: getStatusImpl,
@@ -98,6 +100,7 @@ function makeBackend() {
 describe("Apex backend", () => {
   beforeEach(() => {
     isApexResult = true;
+    isOneXPlayerResult = true;
     recoverImpl.mockClear();
     getStatusImpl.mockClear();
     hidOxpStatusImpl.mockClear();
@@ -111,8 +114,47 @@ describe("Apex backend", () => {
     startWakeListenerImpl.mockClear();
   });
 
-  it("marks itself unsupported on non-Apex hardware", async () => {
+  it("runs on a OneXPlayer that isn't an Apex", async () => {
+    // The X2 Mini Pro case. Gating the whole plugin on one model hid working
+    // features from siblings on the same silicon: the fingerprint probe and
+    // the xHCI recovery both detect their own hardware.
     isApexResult = false;
+    isOneXPlayerResult = true;
+    const { backend } = makeBackend();
+    await backend.onLoad();
+
+    const status = await backend.getStatus();
+    expect(status.unsupported).toBe(false);
+    expect(getStatusImpl).toHaveBeenCalled();
+  });
+
+  it("won't auto-stage the fingerprint karg on a board it hasn't measured", async () => {
+    // The GPIO pin in KARG is board wiring. On a sibling we apply the
+    // derived PME path but leave the bootloader alone.
+    isApexResult = false;
+    isOneXPlayerResult = true;
+    const { backend } = makeBackend();
+    await backend.onLoad();
+
+    await backend.setFingerprintBlock(true);
+
+    expect(applyFingerprintImpl).toHaveBeenCalledWith(expect.anything(), { autoKarg: false });
+  });
+
+  it("still auto-stages the karg on the Apex", async () => {
+    isApexResult = true;
+    isOneXPlayerResult = true;
+    const { backend } = makeBackend();
+    await backend.onLoad();
+
+    await backend.setFingerprintBlock(true);
+
+    expect(applyFingerprintImpl).toHaveBeenCalledWith(expect.anything(), { autoKarg: true });
+  });
+
+  it("marks itself unsupported on non-OneXPlayer hardware", async () => {
+    isApexResult = false;
+    isOneXPlayerResult = false;
     const { backend } = makeBackend();
     await backend.onLoad();
 
@@ -152,8 +194,9 @@ describe("Apex backend", () => {
     expect(events).toEqual([{ event: "statusChanged", data: undefined }]);
   });
 
-  it("refuses to remove the hid-oxp blacklist on non-Apex hardware", async () => {
+  it("refuses to remove the hid-oxp blacklist on non-OneXPlayer hardware", async () => {
     isApexResult = false;
+    isOneXPlayerResult = false;
     const { backend } = makeBackend();
     await backend.onLoad();
 
@@ -163,8 +206,9 @@ describe("Apex backend", () => {
     expect(removeHidOxpImpl).not.toHaveBeenCalled();
   });
 
-  it("refuses to recover on non-Apex hardware", async () => {
+  it("refuses to recover on non-OneXPlayer hardware", async () => {
     isApexResult = false;
+    isOneXPlayerResult = false;
     const { backend } = makeBackend();
     await backend.onLoad();
 
@@ -288,8 +332,9 @@ describe("Apex backend", () => {
     expect(recoverImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses to enable auto-recover-on-wake on non-Apex hardware", async () => {
+  it("refuses to enable auto-recover-on-wake on non-OneXPlayer hardware", async () => {
     isApexResult = false;
+    isOneXPlayerResult = false;
     const { backend } = makeBackend();
     await backend.onLoad();
 

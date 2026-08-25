@@ -137,6 +137,21 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     profiles: { Silent: 15, Balanced: 45, Performance: 75 },
   },
   {
+    // X2 Mini Pro. The DMI string has no space in "X2Mini" (per HHD's device
+    // table), so it does NOT contain "ONEXPLAYER Mini Pro" and fell through
+    // to the generic 35 W row below — badly wrong for a device users run at
+    // 80 W. Listed above that row so the substring match reaches it.
+    //
+    // TDP from HHD's own X2 Mini Pro entry, which sets the performance
+    // preset to 45 W. Unverified on hardware we hold.
+    match: "ONEXPLAYER X2Mini",
+    name: "OneXPlayer X2 Mini Pro",
+    minTdp: 5,
+    maxTdp: 65,
+    batteryMaxTdp: 45,
+    profiles: { Silent: 15, Balanced: 30, Performance: 45 },
+  },
+  {
     match: "ONEXPLAYER Mini Pro",
     name: "OneXPlayer Mini Pro",
     minTdp: 5,

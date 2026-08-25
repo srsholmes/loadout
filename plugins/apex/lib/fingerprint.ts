@@ -237,7 +237,17 @@ async function removeKargSteamos(deps: FingerprintDeps, steps: string[]): Promis
 
 // --- apply / revert ----------------------------------------------------------
 
-export async function apply(deps: FingerprintDeps): Promise<FingerprintResult> {
+export async function apply(
+  deps: FingerprintDeps,
+  /**
+   * Whether to edit the bootloader automatically. False on a OneXPlayer we
+   * haven't measured: KARG names a specific GPIO pin (`AMDI0030:00@58`),
+   * which is board wiring, not a family constant. Staging the wrong pin
+   * into grub is a worse outcome than not closing the second wake path, so
+   * those devices get the manual hint and the derived PME path only.
+   */
+  { autoKarg = true }: { autoKarg?: boolean } = {},
+): Promise<FingerprintResult> {
   const steps: string[] = [];
   const controller = await detectController(deps);
   if (!controller) {
@@ -258,7 +268,7 @@ export async function apply(deps: FingerprintDeps): Promise<FingerprintResult> {
     steps.push("karg-already-active");
     return { success: true, rebootRequired: false, steps };
   }
-  if (distro === "steamos") {
+  if (distro === "steamos" && autoKarg) {
     try {
       await addKargSteamos(deps, steps);
       return { success: true, rebootRequired: true, steps };
@@ -267,7 +277,9 @@ export async function apply(deps: FingerprintDeps): Promise<FingerprintResult> {
       return { success: false, rebootRequired: false, steps, error: `Path 1 (karg) failed: ${e}`, manualKarg: KARG };
     }
   }
-  // Unknown distro: PME blocked, but the GPIO path needs a manual karg.
+  // Unknown distro, or a board whose GPIO pin we haven't confirmed: PME is
+  // blocked either way, and the karg is offered as text for the user to
+  // apply if they know their board's pin.
   steps.push("karg-manual-required");
   return { success: true, rebootRequired: true, steps, manualKarg: KARG };
 }

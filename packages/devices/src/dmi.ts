@@ -1,13 +1,15 @@
 /**
- * DMI probe — the Apex plugin is a no-op on non-Apex hardware.
+ * DMI probe.
  *
- * The kernel exposes DMI strings under /sys/class/dmi/id/. The Apex
- * reports:
+ * The kernel exposes DMI strings under /sys/class/dmi/id/. An Apex reports:
  *   sys_vendor   = "ONE-NETBOOK"
  *   product_name = "ONEXPLAYER APEX"
  *
- * Future Apex revisions are expected to keep the "ONEXPLAYER APEX"
- * product_name prefix, hence `startsWith` rather than `===`.
+ * These predicates are for the handful of cases where a *board-specific*
+ * constant is involved — a GPIO pin number, a register map. Prefer detecting
+ * the capability you need: every other plugin in this repo asks "is the file
+ * I write present?" rather than "which device is this?", which is why they
+ * work on hardware nobody here has held.
  */
 
 import { readFile } from "node:fs/promises";
@@ -35,8 +37,31 @@ export async function readDmi(): Promise<DmiInfo> {
   return { sysVendor, productName };
 }
 
+/** OneXPlayer's vendor string. Matched loosely: firmware ships both
+ *  "ONE-NETBOOK" and "ONE-NETBOOK Technology Co., Ltd." across models —
+ *  battery-tracker already matches the longer one, so a strict equality here
+ *  was wrong even for some genuine Apexes. */
+const OXP_VENDOR = "ONE-NETBOOK";
+
 export function isApexDmi(info: DmiInfo): boolean {
-  return info.sysVendor === "ONE-NETBOOK" && info.productName.startsWith("ONEXPLAYER APEX");
+  return (
+    info.sysVendor.includes(OXP_VENDOR) &&
+    info.productName.startsWith("ONEXPLAYER APEX")
+  );
+}
+
+/** Any OneXPlayer-family handheld. Broader than {@link isApexDmi} — use it
+ *  when something applies to the family (an EC quirk, a driver name) rather
+ *  than to one board's wiring. */
+export function isOneXPlayerDmi(info: DmiInfo): boolean {
+  return (
+    info.sysVendor.includes(OXP_VENDOR) ||
+    info.productName.toUpperCase().includes("ONEXPLAYER")
+  );
+}
+
+export async function isOneXPlayer(): Promise<boolean> {
+  return isOneXPlayerDmi(await readDmi());
 }
 
 export async function isApex(): Promise<boolean> {

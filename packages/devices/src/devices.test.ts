@@ -224,3 +224,20 @@ describe("battery safety ceiling", () => {
     ).toBe(BATTERY_SAFE_MAX_WATTS);
   });
 });
+
+describe("OneXPlayer X2 Mini Pro", () => {
+  it("matches its own row, not the generic 35 W OneXPlayer fallback", () => {
+    // The DMI string per HHD's table — note "X2Mini" with no space, which
+    // is why it missed the "ONEXPLAYER Mini Pro" row and landed on the
+    // generic one. A user running 80 W was being offered a 35 W ceiling.
+    const d = matchDevice("ONEXPLAYER X2Mini PRO", "AuthenticAMD");
+    expect(d.name).toBe("OneXPlayer X2 Mini Pro");
+    expect(d.maxTdp).toBeGreaterThan(35);
+  });
+
+  it("does not shadow the plain Mini Pro", () => {
+    expect(matchDevice("ONEXPLAYER Mini Pro", "AuthenticAMD").name).toBe(
+      "OneXPlayer Mini Pro",
+    );
+  });
+});

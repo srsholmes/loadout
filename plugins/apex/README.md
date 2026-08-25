@@ -1,12 +1,28 @@
-# Apex
+# OneXPlayer
 
-> OneXPlayer Apex device fixes: recover the internal gamepad when its xHCI controller dies on resume, and block the fingerprint reader from waking the device on a light touch.
+> OneXPlayer device fixes: recover the internal gamepad when its xHCI controller dies on resume, and block the fingerprint reader from waking the device on a light touch.
 
 ## Screenshots
 
 ![Apex](./assets/screenshot.png)
 
-The plugin is DMI-gated — on any non-Apex device it renders an inert "not on Apex" banner and never touches hardware.
+The plugin runs on any OneXPlayer-family handheld and detects each feature's
+hardware for itself — the fingerprint reader by USB id, the dead xHCI controller
+from the kernel log. It was gated to the Apex alone until an X2 Mini Pro owner
+reported being locked out of fixes their hardware could use.
+
+Two things stay Apex-specific, because they are board wiring rather than family
+behaviour, and both degrade rather than misfire:
+
+- **The fingerprint GPIO kernel arg** (`AMDI0030:00@58`) names a specific pin.
+  On any other board it is offered as text to apply by hand; the PME wake path,
+  which is derived from the reader's own PCI parent, still applies everywhere.
+- **The gamepad USB ids** (`1a86:fe00`, `045e:028e`). If neither enumerates and
+  the kernel log shows nothing dead, the plugin says it can't identify the pad
+  rather than offering a rebind that could never report success.
+
+The plugin id stays `apex` so existing settings survive; only the display name
+changed.
 
 ## Gamepad recovery
 
