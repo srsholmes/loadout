@@ -251,6 +251,100 @@ journalctl --user -u loadout-overlay -b --no-pager 2>/dev/null \
     | grep -iE "start-limit|Scheduled restart|too often recently|Failed with result" \
     | tail -10 | sed 's/^/  /' || true
 
+# ---------------------------------------------------------------
+section "10. Device hardware"
+# ---------------------------------------------------------------
+# Everything a "does my handheld work" report needs, in one paste.
+#
+# The recurring failure is a board whose kernel driver never bound: no
+# oxpec/ayn-platform/etc. means no hwmon node, which means fan control has
+# nothing to write to and its safety floor is inert. That is invisible in
+# the sections above, and indistinguishable from a Loadout bug without it.
+#
+# DMI first: the exact product_name is what decides whether a driver's DMI
+# table matches, which TDP profile is picked, and what an upstream patch
+# would need to add.
+echo "  --- DMI ---"
+for f in sys_vendor product_name product_version board_name bios_version; do
+    v=$(cat "/sys/class/dmi/id/$f" 2>/dev/null)
+    printf "  %-16s %s\n" "$f:" "${v:-<unreadable>}"
+done
+
+echo ""
+echo "  --- hwmon (fan control needs fanN_input + pwmN + pwmN_enable, or a writable fanN_target) ---"
+found_hwmon=0
+for d in /sys/class/hwmon/hwmon*; do
+    [ -d "$d" ] || continue
+    found_hwmon=1
+    name=$(cat "$d/name" 2>/dev/null)
+    attrs=""
+    for a in fan1_input pwm1 pwm1_enable fan1_target temp1_input; do
+        [ -e "$d/$a" ] && attrs="$attrs $a"
+    done
+    printf "  %-28s %s\n" "$(basename "$d") ${name:-?}" "${attrs:- (no fan/temp attrs)}"
+done
+[ "$found_hwmon" -eq 1 ] || echo "  no /sys/class/hwmon entries at all"
+
+echo ""
+echo "  --- platform / HID drivers ---"
+if [ -r /proc/modules ]; then
+    mods=$(grep -iE '^(oxpec|oxp_platform|oxp_sensors|hid_oxp|ayn_platform|ayaneo_platform|gpdfan|asus_wmi) ' /proc/modules | awk '{print $1}' | tr '\n' ' ')
+    echo "  loaded: ${mods:-<none of the known handheld platform drivers>}"
+else
+    echo "  /proc/modules unreadable"
+fi
+if [ -f /etc/modprobe.d/hid-oxp.conf ]; then
+    echo "  NOTE: /etc/modprobe.d/hid-oxp.conf present — hid-oxp is blacklisted."
+    echo "        That disables rumble/gamepad-mode/button remapping. Remove it in the"
+    echo "        OneXPlayer plugin; Loadout no longer recommends it."
+fi
+
+echo ""
+echo "  --- ectool ---"
+# `command -v ectool` is not enough: the binary exists on hardware where the
+# handshake fails (no ChromeOS-style EC behind it), which is exactly the
+# fallback fan-control probes with `ectool hello`.
+if command -v ectool >/dev/null 2>&1; then
+    if ectool hello >/dev/null 2>&1; then
+        echo "  ectool hello: OK (usable fan fallback)"
+    else
+        echo "  ectool hello: FAILED (binary present but no usable EC — normal on OneXPlayer)"
+    fi
+else
+    echo "  ectool: not installed"
+fi
+
+echo ""
+echo "  --- HID device attributes ---"
+found_hid=0
+for d in /sys/bus/hid/devices/*; do
+    [ -d "$d" ] || continue
+    attrs=""
+    for a in rumble_intensity rumble_intensity_range gamepad_mode; do
+        [ -e "$d/$a" ] && attrs="$attrs $a=$(cat "$d/$a" 2>/dev/null | tr -d '\n')"
+    done
+    if [ -n "$attrs" ]; then
+        found_hid=1
+        printf "  %-30s %s\n" "$(basename "$d")" "$attrs"
+    fi
+done
+[ "$found_hid" -eq 1 ] || echo "  no HID device exposes rumble/gamepad-mode attributes"
+
+echo ""
+echo "  --- temperatures now ---"
+for d in /sys/class/hwmon/hwmon*; do
+    [ -r "$d/temp1_input" ] || continue
+    t=$(cat "$d/temp1_input" 2>/dev/null)
+    [ -n "$t" ] || continue
+    printf "  %-16s %s C\n" "$(cat "$d/name" 2>/dev/null)" "$((t / 1000))"
+done
+
+echo ""
+echo "  --- backend plugin lines (hardware detection) ---"
+journalctl -u loadout -b --no-pager 2>/dev/null \
+    | grep -iE "\[fan-control\]|\[tdp-control\]|\[vibration\]|\[apex\]" \
+    | tail -20 | sed 's/^/  /' || true
+
 section "End of report"
 echo "  Paste this whole output into the issue / thread."
 echo ""
