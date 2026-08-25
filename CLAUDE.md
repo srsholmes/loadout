@@ -30,6 +30,13 @@ restarts — so it is always safe to ask for:
 curl -fsSL https://raw.githubusercontent.com/srsholmes/loadout/main/scripts/loadout-doctor.sh | sh
 ```
 
+It prints ~500 lines, which is past what a chat client will accept as a
+paste — so for Discord reports ask for it as a file instead:
+
+```
+curl -fsSL … /loadout-doctor.sh | sh > ~/Desktop/loadout-doctor.txt 2>&1
+```
+
 It covers distro/kernel, the required tools + dlopen'd sonames, the
 install layout with the on-disk `--version`, both units, a `/up` probe,
 session/gamescope detection, both journals, and a "smoking guns" section
