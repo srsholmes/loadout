@@ -331,6 +331,45 @@ done
 [ "$found_hid" -eq 1 ] || echo "  no HID device exposes rumble/gamepad-mode attributes"
 
 echo ""
+echo "  --- USB devices ---"
+# The full table, not just a probe for ids we already know: on unfamiliar
+# hardware the useful question is what this device's internal gamepad and
+# fingerprint reader enumerate AS, which is what would let us extend the
+# id lists the OneXPlayer plugin matches on.
+if command -v lsusb >/dev/null 2>&1; then
+    lsusb 2>/dev/null | sed 's/^/  /'
+    echo ""
+    echo "  known ids the OneXPlayer plugin looks for:"
+    for pair in "1a86:fe00 gamepad HID MCU" "045e:028e gamepad (X360-compatible)" "2808:c652 fingerprint reader"; do
+        id=${pair%% *}
+        label=${pair#* }
+        if lsusb -d "$id" >/dev/null 2>&1; then
+            printf "    %-12s %-32s present\n" "$id" "$label"
+        else
+            printf "    %-12s %-32s ABSENT\n" "$id" "$label"
+        fi
+    done
+else
+    echo "  lsusb not installed — cannot check the gamepad or fingerprint reader"
+fi
+
+echo ""
+echo "  --- xHCI controllers ---"
+# The gamepad-recovery fix rebinds one of these. Which one is normally read
+# out of the kernel log; the bound list is what it would act on.
+if [ -d /sys/bus/pci/drivers/xhci_hcd ]; then
+    for l in /sys/bus/pci/drivers/xhci_hcd/0000:*; do
+        [ -e "$l" ] || continue
+        echo "  bound: $(basename "$l")"
+    done
+else
+    echo "  no xhci_hcd driver directory"
+fi
+echo "  --- controller died in this boot's log? ---"
+dmesg 2>/dev/null | grep -iE "xhci_hcd .*(HC died|assume dead)" | tail -5 | sed 's/^/  /' \
+    || echo "  (nothing, or dmesg needs root)"
+
+echo ""
 echo "  --- temperatures now ---"
 for d in /sys/class/hwmon/hwmon*; do
     [ -r "$d/temp1_input" ] || continue
