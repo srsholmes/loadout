@@ -22,6 +22,22 @@ That drops the built-in gamepad (`1a86:fe00` HID MCU + `045e:028e` Xbox 360 pad)
 
 The same logic is also available as a standalone shell script for use outside Loadout: [`scripts/fix-controller-resume.sh`](../../scripts/fix-controller-resume.sh).
 
+## The hid-oxp blacklist (removal only)
+
+Loadout once recommended blacklisting the OneXPlayer HID driver, because it
+looked implicated in the xHCI controller dying on resume. **We no longer offer
+to apply it, and shouldn't again.** It disabled the driver instead of fixing
+the wake bug — that's what **Recover gamepad** above is for — and `hid-oxp` is
+where OneXPlayer's device controls live: rumble intensity, gamepad mode and
+button remapping all disappear with it, on a machine that has no way to know
+why.
+
+What remains is a **Driver blacklist** card that appears only if the drop-in
+is still on disk, offering to remove it. There is deliberately no path to
+write it, in the UI or in [`lib/hid-oxp.ts`](lib/hid-oxp.ts) — a unit test
+asserts the module exports no `set`/`apply`/`enable` function. If the wake bug
+resurfaces, the fix belongs in [`lib/xhci.ts`](lib/xhci.ts).
+
 ## Fingerprint wake
 
 The power button's fingerprint sensor wakes the Apex from sleep on a light touch — annoying in a bag. The **Block fingerprint wake** toggle disables it as a wake source (controller PME at runtime + a GPIO kernel argument); a deliberate power-button press still wakes the device. The kernel-arg change needs a reboot, and on non-SteamOS distros the GPIO arg may need to be added manually (the panel shows the exact arg).

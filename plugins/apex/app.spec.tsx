@@ -220,7 +220,7 @@ describe("apex plugin", () => {
     ) as HTMLButtonElement;
     fireEvent.click(removeBtn);
     await waitFor(() => {
-      expect(callMock).toHaveBeenCalledWith("setHidOxpBlacklist", false);
+      expect(callMock).toHaveBeenCalledWith("removeHidOxpBlacklist");
     });
   });
 

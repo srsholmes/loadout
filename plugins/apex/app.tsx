@@ -117,7 +117,7 @@ function Apex() {
   const handleRemoveBlacklist = useCallback(async () => {
     setBlacklistBusy(true);
     try {
-      const res = (await call("setHidOxpBlacklist", false)) as {
+      const res = (await call("removeHidOxpBlacklist")) as {
         success: boolean;
         error?: string;
         hidOxp?: HidOxpStatus;
@@ -273,7 +273,9 @@ function Apex() {
                 The OneXPlayer <span className="mono">hid-oxp</span> driver is currently blacklisted
                 on this device — an older workaround for the built-in gamepad dropping out on wake.
                 <span className="font-medium"> Recover automatically on wake</span> (above) is the
-                preferred fix now, so you can safely remove the blacklist and restore the driver.
+                fix now, so you can safely remove the blacklist and restore the driver. Doing so
+                also restores the controls that live in this driver — rumble intensity, gamepad
+                mode and button remapping.
               </div>
 
               {hidOxp.rebootRequired && (

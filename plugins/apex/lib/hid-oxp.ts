@@ -1,25 +1,32 @@
 /**
- * hid-oxp driver blacklist — the OneXPlayer-specific HID kernel driver.
+ * The old `hid-oxp` driver blacklist — **removal only**.
  *
- * On the Apex, the `hid-oxp` driver appears to be implicated in the xHCI
- * USB controller dying on resume from sleep. Blacklisting it (so the kernel
- * doesn't bind it to the gamepad's HID MCU) makes the controller survive
- * wake far more reliably in field testing — a cleaner, root-cause-adjacent
- * mitigation than rebinding the dead controller after the fact (see
- * ./xhci.ts for that recovery path).
+ * ## Do not add an enable path to this file
  *
- * The blacklist is just a one-line drop-in under /etc/modprobe.d. It only
- * takes effect on the next boot: an already-loaded module stays loaded
- * until reboot, so `getHidOxpStatus` reports `rebootRequired` when the
- * blacklist is in place but the module is still resident.
+ * Loadout once recommended blacklisting the OneXPlayer HID driver, because it
+ * looked implicated in the xHCI USB controller dying on resume. That was never
+ * a fix: it disabled the driver instead of addressing the wake bug, and the
+ * real mitigation ships in ./xhci.ts — unbind/rebind the controller so the bus
+ * re-enumerates, exposed as **Recover gamepad** and as
+ * `scripts/fix-controller-resume.sh`.
  *
- * All IO is injected (`HidOxpDeps`) so the logic is unit-testable without
- * root or a real /etc + /proc.
+ * The cost has since grown. `hid-oxp` is where OneXPlayer's device controls
+ * live — rumble intensity, gamepad mode, button remapping — so a machine
+ * carrying this drop-in silently loses all of them, with nothing on screen to
+ * explain why. A future plugin reading those attributes will find no hardware
+ * on exactly the machines that took our advice.
+ *
+ * So this module reads the state and takes the blacklist *off*. There is
+ * deliberately no way to put it back on, and the UI offers none. If the wake
+ * bug resurfaces, fix it in ./xhci.ts.
+ *
+ * All IO is injected (`HidOxpDeps`) so the logic is unit-testable without root
+ * or a real /etc + /proc.
  */
 
 /** modprobe.d drop-in that disables the driver. */
 export const HID_OXP_CONF = "/etc/modprobe.d/hid-oxp.conf";
-/** The exact directive we write / look for. */
+/** The directive we look for. Never written — see the note above. */
 export const BLACKLIST_LINE = "blacklist hid-oxp";
 /** Module name as it appears in /proc/modules (underscored). */
 const MODULE_NAME = "hid_oxp";
@@ -28,8 +35,6 @@ const PROC_MODULES = "/proc/modules";
 export interface HidOxpDeps {
   /** Read a file, or resolve null when it doesn't exist. */
   readFile: (path: string) => Promise<string | null>;
-  /** Write (create/overwrite) a file. */
-  writeFile: (path: string, content: string) => Promise<void>;
   /** Remove a file; must be a no-op when it's already absent. */
   removeFile: (path: string) => Promise<void>;
   /** Optional progress sink. */
@@ -37,14 +42,19 @@ export interface HidOxpDeps {
 }
 
 export interface HidOxpStatus {
-  /** The modprobe.d drop-in is present and contains the blacklist line. */
+  /** The modprobe.d drop-in is present and carries the blacklist line. */
   blacklisted: boolean;
   /** `hid_oxp` is currently loaded (still resident until the next boot). */
   moduleLoaded: boolean;
   /**
-   * The desired state is set but a reboot is needed to reach it: blacklisted
-   * yet still loaded. (Un-blacklisting also only frees the module at the next
-   * boot, but that's the harmless direction, so we don't flag it.)
+   * The blacklist is in place but the module is still resident, so it hasn't
+   * taken effect yet.
+   *
+   * Deliberately not extended to cover "removed but not yet loaded": on a
+   * machine where hid_oxp simply isn't loaded — a gen-1 device, or a kernel
+   * without the driver — that would flag a reboot nobody needs. The UI says
+   * "reboot to restore the driver" after a successful removal instead, where
+   * the context is unambiguous.
    */
   rebootRequired: boolean;
 }
@@ -73,20 +83,13 @@ export async function getHidOxpStatus(deps: HidOxpDeps): Promise<HidOxpStatus> {
 }
 
 /**
- * Enable or disable the blacklist by writing / removing the drop-in, then
- * return the fresh status. Idempotent: enabling when already blacklisted
- * just rewrites the same line; disabling when absent is a no-op.
+ * Remove the drop-in and report the fresh status. Idempotent: removing when
+ * it's already absent is a no-op, so this is safe to call unconditionally.
  */
-export async function setHidOxpBlacklist(
+export async function removeHidOxpBlacklist(
   deps: HidOxpDeps,
-  enabled: boolean,
 ): Promise<HidOxpStatus> {
-  if (enabled) {
-    await deps.writeFile(HID_OXP_CONF, `${BLACKLIST_LINE}\n`);
-    deps.log?.(`wrote ${HID_OXP_CONF} (blacklist hid-oxp)`);
-  } else {
-    await deps.removeFile(HID_OXP_CONF);
-    deps.log?.(`removed ${HID_OXP_CONF}`);
-  }
+  await deps.removeFile(HID_OXP_CONF);
+  deps.log?.(`removed ${HID_OXP_CONF}`);
   return getHidOxpStatus(deps);
 }

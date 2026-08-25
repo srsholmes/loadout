@@ -32,8 +32,8 @@ const hidOxpStatusImpl = mock(async () => ({
   moduleLoaded: true,
   rebootRequired: false,
 }));
-const setHidOxpImpl = mock(async () => ({
-  blacklisted: true,
+const removeHidOxpImpl = mock(async () => ({
+  blacklisted: false,
   moduleLoaded: true,
   rebootRequired: true,
 }));
@@ -56,7 +56,7 @@ mock.module("./lib/xhci", () => ({
 }));
 mock.module("./lib/hid-oxp", () => ({
   getHidOxpStatus: hidOxpStatusImpl,
-  setHidOxpBlacklist: setHidOxpImpl,
+  removeHidOxpBlacklist: removeHidOxpImpl,
 }));
 mock.module("./lib/fingerprint", () => ({
   getStatus: fingerprintStatusImpl,
@@ -101,7 +101,7 @@ describe("Apex backend", () => {
     recoverImpl.mockClear();
     getStatusImpl.mockClear();
     hidOxpStatusImpl.mockClear();
-    setHidOxpImpl.mockClear();
+    removeHidOxpImpl.mockClear();
     fingerprintStatusImpl.mockClear();
     applyFingerprintImpl.mockClear();
     revertFingerprintImpl.mockClear();
@@ -138,27 +138,29 @@ describe("Apex backend", () => {
     expect(hidOxpStatusImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("toggles the hid-oxp blacklist and emits statusChanged", async () => {
+  it("removes the hid-oxp blacklist and emits statusChanged", async () => {
     const { backend, events } = makeBackend();
     await backend.onLoad();
 
-    const res = await backend.setHidOxpBlacklist(true);
+    const res = await backend.removeHidOxpBlacklist();
     expect(res.success).toBe(true);
     expect(res.hidOxp?.rebootRequired).toBe(true);
-    expect(setHidOxpImpl).toHaveBeenCalledTimes(1);
-    expect(setHidOxpImpl).toHaveBeenCalledWith(expect.anything(), true);
+    expect(removeHidOxpImpl).toHaveBeenCalledTimes(1);
+    // No second argument — removal is the only operation; there is
+    // deliberately no way to apply the blacklist.
+    expect(removeHidOxpImpl).toHaveBeenCalledWith(expect.anything());
     expect(events).toEqual([{ event: "statusChanged", data: undefined }]);
   });
 
-  it("refuses to toggle the hid-oxp blacklist on non-Apex hardware", async () => {
+  it("refuses to remove the hid-oxp blacklist on non-Apex hardware", async () => {
     isApexResult = false;
     const { backend } = makeBackend();
     await backend.onLoad();
 
-    const res = await backend.setHidOxpBlacklist(true);
+    const res = await backend.removeHidOxpBlacklist();
     expect(res.unsupported).toBe(true);
     expect(res.success).toBe(false);
-    expect(setHidOxpImpl).not.toHaveBeenCalled();
+    expect(removeHidOxpImpl).not.toHaveBeenCalled();
   });
 
   it("refuses to recover on non-Apex hardware", async () => {
