@@ -57,21 +57,24 @@ beforeEach(() => {
 });
 
 describe("vibration plugin", () => {
-  it("renders one control per level in the device's range", async () => {
+  it("renders a slider spanning the device's range, at the current level", async () => {
     const container = createContainer();
     const { mount } = await import("./app");
     mount(container);
 
-    await waitFor(() => {
-      expect(container.textContent).toContain("Rumble intensity");
+    const range = await waitFor(() => {
+      const el = container.querySelector('input[type="range"]') as HTMLInputElement | null;
+      if (!el) throw new Error("slider not rendered yet");
+      return el;
     });
-    // 0-5 inclusive is six levels, the lowest labelled Off.
-    const buttons = [...container.querySelectorAll('[role="button"], button')];
-    expect(buttons.some((b) => b.textContent?.trim() === "Off")).toBe(true);
-    expect(buttons.some((b) => b.textContent?.trim() === "5")).toBe(true);
+    expect(range.min).toBe("0");
+    expect(range.max).toBe("5");
+    // Integer steps only — the attribute is a u8.
+    expect(range.step).toBe("1");
+    expect(range.value).toBe("3");
   });
 
-  it("derives the levels from the device, not from a hardcoded 0-5", async () => {
+  it("derives the bounds from the device, not from a hardcoded 0-5", async () => {
     callMock.mockImplementation((method: string) =>
       method === "getInfo"
         ? Promise.resolve({ ...available, min: 1, max: 10, intensity: 4 })
@@ -82,33 +85,63 @@ describe("vibration plugin", () => {
     mount(container);
 
     await waitFor(() => {
-      const buttons = [...container.querySelectorAll('[role="button"], button')];
-      expect(buttons.some((b) => b.textContent?.trim() === "10")).toBe(true);
+      const el = container.querySelector('input[type="range"]') as HTMLInputElement | null;
+      if (!el) throw new Error("slider not rendered yet");
+      expect(el.min).toBe("1");
+      expect(el.max).toBe("10");
     });
   });
 
-  it("sends the chosen level to the backend", async () => {
+  it("sends the released level to the backend", async () => {
     const container = createContainer();
     const { mount } = await import("./app");
     mount(container);
 
-    const level = await waitFor(() => {
-      const btn = [...container.querySelectorAll('[role="button"], button')].find(
-        (b) => b.textContent?.trim() === "2",
-      );
-      if (!btn) throw new Error("level 2 not rendered yet");
-      return btn;
+    const range = await waitFor(() => {
+      const el = container.querySelector('input[type="range"]') as HTMLInputElement | null;
+      if (!el) throw new Error("slider not rendered yet");
+      return el;
     });
-    fireEvent.click(level);
+    fireEvent.change(range, { target: { value: "2" } });
+    fireEvent.blur(range);
 
     await waitFor(() => {
       expect(callMock).toHaveBeenCalledWith("setIntensity", 2);
     });
   });
 
+  it("does not write while the thumb is still moving", async () => {
+    // Each write is a synchronous HID report to the MCU. Dragging 5 -> 0
+    // must cost one write, not one per level passed through.
+    const container = createContainer();
+    const { mount } = await import("./app");
+    mount(container);
+
+    const range = await waitFor(() => {
+      const el = container.querySelector('input[type="range"]') as HTMLInputElement | null;
+      if (!el) throw new Error("slider not rendered yet");
+      return el;
+    });
+    await act(async () => {
+      for (const v of ["4", "3", "2", "1"]) {
+        fireEvent.change(range, { target: { value: v } });
+      }
+    });
+
+    expect(callMock.mock.calls.filter(([m]) => m === "setIntensity")).toHaveLength(0);
+    // The readout still tracks the thumb, so the drag isn't silent.
+    expect(container.textContent).toContain("Level 1");
+
+    fireEvent.blur(range);
+    await waitFor(() => {
+      expect(callMock.mock.calls.filter(([m]) => m === "setIntensity")).toHaveLength(1);
+    });
+    expect(callMock).toHaveBeenCalledWith("setIntensity", 1);
+  });
+
   it("surfaces a failed write instead of throwing", async () => {
     // An RPC resolving null — method missing, transport hiccup — used to
-    // throw out of the onSelect handler, where nothing catches it.
+    // throw out of the commit handler, where nothing catches it.
     callMock.mockImplementation((method: string) =>
       method === "getInfo" ? Promise.resolve(available) : Promise.resolve(null),
     );
@@ -116,15 +149,14 @@ describe("vibration plugin", () => {
     const { mount } = await import("./app");
     mount(container);
 
-    const level = await waitFor(() => {
-      const btn = [...container.querySelectorAll('[role="button"], button')].find(
-        (b) => b.textContent?.trim() === "2",
-      );
-      if (!btn) throw new Error("level 2 not rendered yet");
-      return btn;
+    const range = await waitFor(() => {
+      const el = container.querySelector('input[type="range"]') as HTMLInputElement | null;
+      if (!el) throw new Error("slider not rendered yet");
+      return el;
     });
     await act(async () => {
-      fireEvent.click(level);
+      fireEvent.change(range, { target: { value: "2" } });
+      fireEvent.blur(range);
     });
 
     // Still mounted and re-read the truth rather than crashing.

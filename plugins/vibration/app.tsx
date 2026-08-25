@@ -3,7 +3,7 @@ import { FaGamepad, FaTriangleExclamation } from "react-icons/fa6";
 import {
   Alert,
   Button,
-  SegmentedItem,
+  Slider,
   Spinner,
   notify,
   useBackend,
@@ -20,10 +20,6 @@ interface VibrationInfo {
   max: number;
   intensity: number | null;
   source: "stored" | "driver" | null;
-}
-
-function levels(min: number, max: number): number[] {
-  return Array.from({ length: max - min + 1 }, (_, i) => min + i);
 }
 
 function Vibration() {
@@ -43,11 +39,15 @@ function Vibration() {
     handler: useCallback((data: unknown) => setInfo(data as VibrationInfo), []),
   });
 
+  /** The value under the user's thumb, so the readout tracks a drag without
+   *  a backend round-trip per step. Null when not dragging. */
+  const [dragging, setDragging] = useState<number | null>(null);
+
   const handleSet = useCallback(
     async (level: number) => {
       setBusy(true);
-      // Optimistic: the write is a single sysfs poke and the segmented
-      // control should not lag the user's thumb.
+      // Optimistic: the write is a single sysfs poke, and the readout
+      // should not lag the thumb the user just released.
       setInfo((prev) => (prev ? { ...prev, intensity: level, source: "stored" } : prev));
       try {
         // Defensive: an RPC that resolves null (method missing, transport
@@ -129,20 +129,31 @@ function Vibration() {
           <div className="flex items-baseline justify-between gap-3">
             <div className="metric-label">Rumble intensity</div>
             <div className="mono text-sm">
-              {info.intensity === null ? "—" : intensityLabel(info.intensity, { min, max })}
+              {dragging !== null
+                ? intensityLabel(dragging, { min, max })
+                : info.intensity === null
+                  ? "—"
+                  : intensityLabel(info.intensity, { min, max })}
             </div>
           </div>
 
-          <div className="segmented flex">
-            {levels(min, max).map((level) => (
-              <SegmentedItem
-                key={level}
-                active={info.intensity === level}
-                onSelect={() => handleSet(level)}
-              >
-                {level === min ? "Off" : String(level)}
-              </SegmentedItem>
-            ))}
+          <Slider
+            value={dragging ?? info.intensity ?? min}
+            min={min}
+            max={max}
+            step={1}
+            // onCommit, not onChange: every step is a synchronous HID report
+            // to the MCU, so writing on each drag tick would spam the device
+            // for values the user is only passing through.
+            onChange={setDragging}
+            onCommit={(level) => {
+              setDragging(null);
+              void handleSet(level);
+            }}
+          />
+          <div className="flex justify-between mono text-[11px] text-base-content/50">
+            <span>Off</span>
+            <span>{max}</span>
           </div>
 
           <div className="text-xs text-base-content/55 leading-relaxed">
@@ -163,7 +174,7 @@ function Vibration() {
   );
 }
 
-/** Homepage widget — the level, and one tap to silence or restore it. */
+/** Homepage widget — the level, adjustable without opening the plugin. */
 function VibrationWidget() {
   const { call, useEvent } = useBackend("vibration");
   const [info, setInfo] = useState<VibrationInfo | null>(null);
@@ -190,20 +201,15 @@ function VibrationWidget() {
         <div className="metric-value mono">{intensityLabel(current, { min, max })}</div>
         <div className="metric-unit">RUMBLE</div>
       </div>
-      <div className="segmented flex mt-3">
-        {levels(min, max).map((level) => (
-          <SegmentedItem
-            key={level}
-            active={current === level}
-            onSelect={() => {
-              setInfo((prev) => (prev ? { ...prev, intensity: level } : prev));
-              void call("setIntensity", level);
-            }}
-          >
-            {level === min ? "Off" : String(level)}
-          </SegmentedItem>
-        ))}
-      </div>
+      <Slider
+        value={current}
+        min={min}
+        max={max}
+        step={1}
+        style={{ marginTop: "0.75rem" }}
+        onChange={(level) => setInfo((prev) => (prev ? { ...prev, intensity: level } : prev))}
+        onCommit={(level) => void call("setIntensity", level)}
+      />
     </div>
   );
 }
