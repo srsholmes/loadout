@@ -397,3 +397,139 @@ describe("input-plumber plugin", () => {
   // InputPlumber), and the IP path only runs on non-Deck hosts (isDeck:false),
   // so isDeck:true + ipActive:false can never occur.
 });
+
+// ---------------------------------------------------------------------------
+// Device config drop-in
+// ---------------------------------------------------------------------------
+
+const applicableConfig = {
+  applicable: true,
+  label: "OneXPlayer X2 Mini Pro",
+  path: "/etc/inputplumber/devices.d/50-onexplayer_x2.yaml",
+  installed: false,
+  hasCompositeDevices: false,
+  superseded: false,
+};
+
+function rpcWithDeviceConfig(deviceConfig: unknown) {
+  callMock.mockImplementation((method: string) => {
+    if (method === "getStatus") return Promise.resolve(installedActiveStatus);
+    if (method === "isInstallRunning") return Promise.resolve({ running: false });
+    if (method === "getDeviceConfigStatus") return Promise.resolve(deviceConfig);
+    if (method === "installDeviceConfig" || method === "removeDeviceConfig") {
+      return Promise.resolve({
+        success: true,
+        status: { ...applicableConfig, installed: method === "installDeviceConfig" },
+      });
+    }
+    return Promise.resolve(null);
+  });
+}
+
+async function mountWith(deviceConfig: unknown): Promise<HTMLDivElement> {
+  rpcWithDeviceConfig(deviceConfig);
+  const container = document.createElement("div");
+  const { mount } = await import("./app");
+  mount(container);
+  // Wait for the page itself, so "section absent" assertions can't pass
+  // simply because nothing has rendered yet.
+  await waitFor(() => expect(container.textContent).toContain("Active"));
+  return container;
+}
+
+describe("device config drop-in", () => {
+  beforeEach(() => {
+    callMock.mockReset();
+    eventHandlers.clear();
+  });
+
+  it("offers a config when InputPlumber doesn't recognise the device", async () => {
+    const container = await mountWith(applicableConfig);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Controller support for this device");
+      expect(container.textContent).toContain("OneXPlayer X2 Mini Pro");
+      expect(container.textContent).toContain("Install config");
+    });
+  });
+
+  it("says nothing on a device we have no config for", async () => {
+    const container = await mountWith({ ...applicableConfig, applicable: false });
+    expect(container.textContent).not.toContain("Controller support for this device");
+  });
+
+  it("says nothing when InputPlumber already drives the device", async () => {
+    // The one outcome to avoid: handing a config to hardware that works.
+    const container = await mountWith({ ...applicableConfig, hasCompositeDevices: true });
+    expect(container.textContent).not.toContain("Controller support for this device");
+  });
+
+  it("still shows the card when our config is why the device works", async () => {
+    // hasCompositeDevices is true *because* we installed it — the user needs
+    // a way back out.
+    const container = await mountWith({
+      ...applicableConfig,
+      installed: true,
+      hasCompositeDevices: true,
+    });
+    await waitFor(() => {
+      expect(container.textContent).toContain("Remove config");
+    });
+  });
+
+  it("warns when upstream has shipped its own and ours is shadowing it", async () => {
+    const container = await mountWith({
+      ...applicableConfig,
+      installed: true,
+      hasCompositeDevices: true,
+      superseded: true,
+    });
+    await waitFor(() => {
+      expect(container.textContent).toContain("taking precedence");
+    });
+  });
+
+  it("installs on click and flips to the remove action", async () => {
+    const container = await mountWith(applicableConfig);
+    const btn = await waitFor(() => {
+      const el = [...container.querySelectorAll('[role="button"], button')].find(
+        (b) => b.textContent?.trim() === "Install config",
+      );
+      if (!el) throw new Error("install button not rendered yet");
+      return el;
+    });
+    fireEvent.click(btn);
+
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("installDeviceConfig");
+      expect(container.textContent).toContain("Remove config");
+    });
+  });
+
+  it("surfaces a failed write instead of silently doing nothing", async () => {
+    rpcWithDeviceConfig(applicableConfig);
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") return Promise.resolve(installedActiveStatus);
+      if (method === "isInstallRunning") return Promise.resolve({ running: false });
+      if (method === "getDeviceConfigStatus") return Promise.resolve(applicableConfig);
+      if (method === "installDeviceConfig")
+        return Promise.resolve({ success: false, error: "EACCES", status: applicableConfig });
+      return Promise.resolve(null);
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    const btn = await waitFor(() => {
+      const el = [...container.querySelectorAll('[role="button"], button')].find(
+        (b) => b.textContent?.trim() === "Install config",
+      );
+      if (!el) throw new Error("install button not rendered yet");
+      return el;
+    });
+    fireEvent.click(btn);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("EACCES");
+    });
+  });
+});

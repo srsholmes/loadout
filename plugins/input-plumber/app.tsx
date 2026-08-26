@@ -17,6 +17,7 @@ import {
   useFocusable,
 } from "@loadout/ui";
 import { labelFor, parseCapability } from "./lib/profile";
+import type { DeviceConfigStatus } from "./lib/device-config";
 import type {
   InstallLogEvent,
   InstallRunResult,
@@ -331,7 +332,118 @@ function InputPlumberPanel() {
         </div>
         )}
 
+        <DeviceConfigSection />
+
         <WakeButtonSection />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Device config drop-in
+// ---------------------------------------------------------------------------
+
+/**
+ * InputPlumber only builds a CompositeDevice for hardware one of its configs
+ * matches. On a handheld it doesn't recognise there is no composite device at
+ * all, so the wake-button picker below has nothing to list and overlay
+ * intercept has nothing to act on — the whole plugin looks broken on hardware
+ * that is fine. For the devices we can describe, offer to supply the config.
+ *
+ * Renders nothing unless we have a config for *this* machine and InputPlumber
+ * has genuinely come up empty, so it stays invisible on every device that
+ * already works.
+ */
+function DeviceConfigSection() {
+  const { call, useEvent } = useBackend("input-plumber");
+  const [status, setStatus] = useState<DeviceConfigStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    call("getDeviceConfigStatus").then((d) => setStatus(d as DeviceConfigStatus));
+  }, [call]);
+
+  useEvent({
+    event: "device-config-status",
+    handler: useCallback((data: unknown) => setStatus(data as DeviceConfigStatus), []),
+  });
+
+  const act = useCallback(
+    async (method: "installDeviceConfig" | "removeDeviceConfig") => {
+      setBusy(true);
+      setError(null);
+      try {
+        const res = (await call(method)) as
+          | { success: boolean; error?: string; status: DeviceConfigStatus }
+          | null;
+        if (res?.status) setStatus(res.status);
+        if (!res?.success) setError(res?.error ?? "Couldn't change the InputPlumber config.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [call],
+  );
+
+  if (!status?.applicable) return null;
+  // Nothing to say on a device InputPlumber already drives, unless we're the
+  // reason it does.
+  if (status.hasCompositeDevices && !status.installed) return null;
+
+  return (
+    <div className="card mt-3.5">
+      <div className="card-body p-4.5">
+        <div className="flex items-center gap-2 mb-2">
+          <FaGamepad className="opacity-60" />
+          <div className="font-medium">Controller support for this device</div>
+        </div>
+
+        {status.installed ? (
+          <>
+            <div className="subsection-desc">
+              Loadout is supplying InputPlumber&apos;s config for the {status.label}. Remove it if
+              you&apos;d rather InputPlumber managed this device itself.
+            </div>
+            {status.superseded && (
+              <div className="subsection-desc mt-2">
+                InputPlumber now ships its own config for this device, and Loadout&apos;s is taking
+                precedence over it. Removing ours is probably the better choice — theirs is tested
+                on the hardware.
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="subsection-desc">
+            InputPlumber doesn&apos;t recognise the {status.label}, so it isn&apos;t managing this
+            device&apos;s controller at all — which is why there&apos;s no wake button to pick
+            below. Loadout can supply a config for it.
+          </div>
+        )}
+
+        <div className="subsection-desc mono text-[11px] mt-2 text-base-content/40">
+          {status.path}
+        </div>
+
+        {error && <div className="subsection-desc mt-2">{error}</div>}
+
+        <div className="flex gap-2 mt-3.5 flex-wrap">
+          <FocusButton
+            onClick={() => void act(status.installed ? "removeDeviceConfig" : "installDeviceConfig")}
+            disabled={busy}
+          >
+            {busy
+              ? "Working…"
+              : status.installed
+                ? "Remove config"
+                : "Install config"}
+          </FocusButton>
+        </div>
+
+        <div className="subsection-desc mt-2">
+          InputPlumber restarts either way, which briefly drops the controller.
+        </div>
       </div>
     </div>
   );

@@ -14,8 +14,20 @@
  */
 
 import type { PluginBackend, EmitPayload, PluginLogger } from "@loadout/types";
+import { mkdir, writeFile, readdir, unlink } from "node:fs/promises";
+import { readDmi } from "@loadout/devices";
 import * as installer from "./lib/install";
 import * as wake from "./lib/wake-trigger";
+import * as ipdbus from "./lib/ipdbus";
+import {
+  DEVICES_D,
+  NOT_APPLICABLE,
+  UPSTREAM_DEVICES_DIR,
+  configPath,
+  findDeviceConfig,
+  isSupersededByUpstream,
+  type DeviceConfigStatus,
+} from "./lib/device-config";
 import type {
   InstallStartResult,
   WakeStatus,
@@ -308,6 +320,96 @@ export default class InputPlumberBackend implements PluginBackend {
     const r = await wake.clearWakeButton();
     this.emit?.({ event: "wake-status", data: await wake.getWakeStatus() });
     return r;
+  }
+
+  // ── Device config ────────────────────────────────────────────────────────
+  //
+  // InputPlumber only builds a CompositeDevice for hardware one of its
+  // configs matches. On a handheld it has no config for, every feature this
+  // plugin offers is inert — so for the devices we can describe, offer to
+  // drop one in. See lib/device-config.ts for why this is a shadowing
+  // drop-in rather than a Loadout-branded addition.
+
+  async getDeviceConfigStatus(): Promise<DeviceConfigStatus> {
+    const config = findDeviceConfig(await readDmi());
+    if (!config) return NOT_APPLICABLE;
+
+    const path = configPath(config);
+    // Composite devices are the actual question — "does InputPlumber already
+    // drive this machine" — not whether the daemon is merely installed.
+    const [installed, composites, upstream] = await Promise.all([
+      Bun.file(path)
+        .exists()
+        .catch(() => false),
+      ipdbus.listCompositeDevicePaths().catch(() => [] as string[]),
+      readdir(UPSTREAM_DEVICES_DIR).catch(() => [] as string[]),
+    ]);
+
+    return {
+      applicable: true,
+      label: config.label,
+      path,
+      installed,
+      hasCompositeDevices: composites.length > 0,
+      superseded: isSupersededByUpstream(config, upstream),
+    };
+  }
+
+  /** Write the config and restart InputPlumber so it picks it up. */
+  async installDeviceConfig(): Promise<{
+    success: boolean;
+    error?: string;
+    status: DeviceConfigStatus;
+  }> {
+    const config = findDeviceConfig(await readDmi());
+    if (!config) {
+      return { success: false, error: "No InputPlumber config for this device.", status: NOT_APPLICABLE };
+    }
+    try {
+      await mkdir(DEVICES_D, { recursive: true });
+      await writeFile(configPath(config), config.yaml, "utf-8");
+      this.log?.info(`[input-plumber] installed device config ${configPath(config)}`);
+    } catch (e) {
+      this.log?.warn(`[input-plumber] could not write device config: ${e}`);
+      return { success: false, error: String(e), status: await this.getDeviceConfigStatus() };
+    }
+
+    // The daemon reads configs at startup only.
+    const restart = await wake.restartInputPlumber();
+    const status = await this.getDeviceConfigStatus();
+    this.emit?.({ event: "device-config-status", data: status });
+    return restart.ok
+      ? { success: true, status }
+      : { success: false, error: `Config written, but InputPlumber didn't restart: ${restart.error}`, status };
+  }
+
+  /** Remove the config we installed and restart InputPlumber. */
+  async removeDeviceConfig(): Promise<{
+    success: boolean;
+    error?: string;
+    status: DeviceConfigStatus;
+  }> {
+    const config = findDeviceConfig(await readDmi());
+    if (!config) {
+      return { success: false, error: "No InputPlumber config for this device.", status: NOT_APPLICABLE };
+    }
+    try {
+      await unlink(configPath(config));
+      this.log?.info(`[input-plumber] removed device config ${configPath(config)}`);
+    } catch (e) {
+      // Already gone is the outcome the user asked for, not a failure.
+      const code = (e as NodeJS.ErrnoException)?.code;
+      if (code !== "ENOENT") {
+        this.log?.warn(`[input-plumber] could not remove device config: ${e}`);
+        return { success: false, error: String(e), status: await this.getDeviceConfigStatus() };
+      }
+    }
+    const restart = await wake.restartInputPlumber();
+    const status = await this.getDeviceConfigStatus();
+    this.emit?.({ event: "device-config-status", data: status });
+    return restart.ok
+      ? { success: true, status }
+      : { success: false, error: `Config removed, but InputPlumber didn't restart: ${restart.error}`, status };
   }
 
   /** Recovery: restart the InputPlumber daemon and re-load the wake profile.
