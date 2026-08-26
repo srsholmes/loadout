@@ -229,7 +229,7 @@ export default class ApexBackend implements PluginBackend {
   }> {
     if (this.unsupported) return { unsupported: true };
     const [status, hidOxp, fingerprint, settings] = await Promise.all([
-      computeStatus(this.deps),
+      computeStatus(this.deps, undefined, this.isKnownBoard),
       getHidOxpStatus(this.hidOxpDeps),
       fingerprintStatus(this.fpDeps),
       readPluginStorage<ApexSettings>(PLUGIN_ID),
@@ -338,7 +338,7 @@ export default class ApexBackend implements PluginBackend {
 
     this.recovering = true;
     try {
-      const result = await runRecover(this.deps);
+      const result = await runRecover(this.deps, { knownBoard: this.isKnownBoard });
       this.emit?.({ event: "statusChanged", data: undefined });
       return result;
     } finally {

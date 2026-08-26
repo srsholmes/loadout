@@ -47,6 +47,21 @@ const healthyStatus = {
   hidOxp: { blacklisted: false, moduleLoaded: true, rebootRequired: false },
 };
 
+const unknownGamepadStatus = {
+  unsupported: false,
+  status: {
+    pciDeviceExists: true,
+    driverBound: true,
+    gamepadPresent: false,
+    gamepadUnknown: true,
+    controller: "0000:65:00.4",
+    deadInLog: false,
+    summary:
+      "Couldn't identify this device's internal gamepad — recovery is only known to work on hardware using the OneXPlayer HID MCU.",
+  },
+  autoRecoverOnWake: true,
+};
+
 const missingStatus = {
   unsupported: false,
   status: {
@@ -252,5 +267,55 @@ describe("apex plugin", () => {
     await waitFor(() => {
       expect(container.textContent).toContain("Not a OneXPlayer handheld");
     });
+  });
+});
+
+describe("unrecognised gamepad", () => {
+  beforeEach(() => {
+    callMock.mockReset();
+    eventHandlers.clear();
+  });
+
+  it("disables recovery rather than rebinding a controller we can't identify", async () => {
+    // The rebind targets an address measured on an Apex. On another board
+    // that address may host something else entirely, so offering the button
+    // here is offering a destructive no-op.
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") return Promise.resolve(unknownGamepadStatus);
+      return Promise.resolve(null);
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    const btn = await waitFor(() => {
+      const el = [...container.querySelectorAll("button")].find((b) =>
+        b.textContent?.includes("Recover gamepad"),
+      );
+      if (!el) throw new Error("recover button not rendered yet");
+      return el;
+    });
+    expect((btn as HTMLButtonElement).disabled).toBe(true);
+    // And the copy no longer promises it is harmless.
+    expect(container.textContent).not.toContain("no harm in pressing it");
+  });
+
+  it("does not leave auto-recover-on-wake armed, which would run it unattended", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") return Promise.resolve(unknownGamepadStatus);
+      return Promise.resolve(null);
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Recover automatically on wake");
+    });
+    // Stored setting says true; the device can't support it, so the control
+    // must not read as armed.
+    const toggles = [...container.querySelectorAll('input[type="checkbox"]')];
+    const armed = toggles.filter((t) => (t as HTMLInputElement).checked);
+    expect(armed).toHaveLength(0);
   });
 });

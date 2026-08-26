@@ -28,7 +28,10 @@ export interface DeviceInfo {
   profiles: { Silent: number; Balanced: number; Performance: number };
 }
 
-const KNOWN_DEVICES: DeviceInfo[] = [
+/** The device table, ordered specific-first. Exported so tests can assert
+ *  ordering and invariants across every row rather than a hand-copied
+ *  sample that silently misses rows added later. */
+export const KNOWN_DEVICES: DeviceInfo[] = [
   // Steam Deck
   {
     match: "Galileo",

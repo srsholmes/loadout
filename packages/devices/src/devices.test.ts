@@ -5,6 +5,7 @@ import {
   effectiveMaxWatts,
   isBatteryLimited,
   BATTERY_SAFE_MAX_WATTS,
+  KNOWN_DEVICES,
 } from "./devices";
 
 describe("matchDevice", () => {
@@ -18,19 +19,18 @@ describe("matchDevice", () => {
   });
 
   it("carries a battery cap on every match (<= the plugged max)", () => {
-    const cases = [
-      "ONEXPLAYER APEX",
-      "Galileo",
-      "ASUS ROG Ally X RC72LA",
-      "Claw 8 AI",
-      "Some Unknown Laptop", // vendor fallback
-    ];
-    for (const dmi of cases) {
-      const d = matchDevice(dmi, "AMD");
-      expect(typeof d.batteryMaxTdp).toBe("number");
-      expect(d.batteryMaxTdp).toBeLessThanOrEqual(d.maxTdp);
-      expect(d.batteryMaxTdp).toBeGreaterThanOrEqual(d.minTdp);
+    // Driven off KNOWN_DEVICES itself, not a hand-copied list: the previous
+    // five-string version didn't include the X2Mini row added later, so a new
+    // row could violate the invariant with nothing to catch it.
+    for (const device of KNOWN_DEVICES) {
+      expect(typeof device.batteryMaxTdp).toBe("number");
+      expect(device.batteryMaxTdp).toBeLessThanOrEqual(device.maxTdp);
+      expect(device.batteryMaxTdp).toBeGreaterThanOrEqual(device.minTdp);
     }
+    // The vendor fallback is not in KNOWN_DEVICES, so check it separately.
+    const fallback = matchDevice("Some Unknown Laptop", "AMD");
+    expect(fallback.batteryMaxTdp).toBeLessThanOrEqual(fallback.maxTdp);
+    expect(fallback.batteryMaxTdp).toBeGreaterThanOrEqual(fallback.minTdp);
   });
 
   it("is order-sensitive: more specific entries win over generic ones", () => {
@@ -232,7 +232,22 @@ describe("OneXPlayer X2 Mini Pro", () => {
     // generic one. A user running 80 W was being offered a 35 W ceiling.
     const d = matchDevice("ONEXPLAYER X2Mini PRO", "AuthenticAMD");
     expect(d.name).toBe("OneXPlayer X2 Mini Pro");
-    expect(d.maxTdp).toBeGreaterThan(35);
+    // Pinned exactly, like every other device in this file. `> 35` passed
+    // for any value at all above the generic row.
+    expect(d.minTdp).toBe(5);
+    expect(d.maxTdp).toBe(65);
+    expect(d.batteryMaxTdp).toBe(45);
+  });
+
+  it("sits above the generic OneXPlayer row, which would otherwise claim it", () => {
+    // Matching is first-substring-wins, so this is about ORDER, not just
+    // strings. Asserting "ONEXPLAYER Mini Pro" still resolves correctly
+    // can't fail — neither string contains the other — so it proved nothing.
+    const x2 = KNOWN_DEVICES.findIndex((d) => d.match === "ONEXPLAYER X2Mini");
+    const generic = KNOWN_DEVICES.findIndex((d) => d.match === "ONEXPLAYER");
+    expect(x2).toBeGreaterThanOrEqual(0);
+    expect(generic).toBeGreaterThanOrEqual(0);
+    expect(x2).toBeLessThan(generic);
   });
 
   it("does not shadow the plain Mini Pro", () => {

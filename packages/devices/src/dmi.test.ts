@@ -39,6 +39,10 @@ describe("isOneXPlayerDmi", () => {
   it("matches the whole OneXPlayer family, not one model", () => {
     // The X2 Mini Pro's DMI string, per HHD's device table. It shares the
     // Apex's silicon but was locked out by a model-specific gate.
+    // Neutral vendor on purpose: with "ONE-NETBOOK" here the function
+    // short-circuits on the vendor branch and this list pins nothing —
+    // "Jupiter" would pass just as well. The product branch is what's under
+    // test.
     for (const productName of [
       "ONEXPLAYER APEX",
       "ONEXPLAYER X2Mini PRO",
@@ -46,8 +50,15 @@ describe("isOneXPlayerDmi", () => {
       "ONEXPLAYER G1 A",
       "ONEXPLAYER F1 Pro",
     ]) {
-      expect(isOneXPlayerDmi({ sysVendor: "ONE-NETBOOK", productName })).toBe(true);
+      expect(isOneXPlayerDmi({ sysVendor: "Default string", productName })).toBe(true);
     }
+  });
+
+  it("normalises case on both fields, not just one", () => {
+    expect(isOneXPlayerDmi({ sysVendor: "One-Netbook", productName: "Default string" })).toBe(true);
+    expect(isOneXPlayerDmi({ sysVendor: "Default string", productName: "OneXPlayer X1" })).toBe(
+      true,
+    );
   });
 
   it("matches on either field, since firmware is inconsistent", () => {

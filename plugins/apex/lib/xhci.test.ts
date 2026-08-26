@@ -164,6 +164,66 @@ describe("getStatus — unrecognised gamepad", () => {
     expect(status.gamepadUnknown).toBe(false);
     expect(status.summary).toContain("died on resume");
   });
+
+  it("on a known board, absent ids mean missing even when dmesg has rolled", async () => {
+    // The Apex's own failure mode: the controller dies, both USB ids vanish,
+    // and by the time the user opens the plugin the kernel ring buffer has
+    // wrapped past the "HC died" line. Inferring "unrecognised gamepad" from
+    // that told an Apex owner we couldn't identify their pad and disabled the
+    // one button that fixes it.
+    const deps = makeDeps({
+      present: false,
+      dmesg: "",
+      paths: new Set([
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}`,
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}/driver`,
+      ]),
+    });
+
+    const status = await getStatus(deps, undefined, true);
+
+    expect(status.gamepadUnknown).toBe(false);
+    expect(status.summary).toContain("not enumerating");
+  });
+
+  it("refuses to rebind a guessed controller on an unmeasured board", async () => {
+    // DEFAULT_XHCI_PCI was measured on an Apex. 65:00.4 is a commonplace AMD
+    // xHCI address, so on another board it may exist and host something else
+    // entirely — unbinding it is destructive for no benefit, and this runs
+    // unattended on every wake when auto-recover is on.
+    const deps = makeDeps({
+      present: false,
+      dmesg: "",
+      paths: new Set([
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}`,
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}/driver`,
+      ]),
+    });
+
+    const res = await recover(deps, { knownBoard: false });
+
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("nothing safe to rebind");
+    // Nothing was touched.
+    expect(res.steps).toEqual([]);
+  });
+
+  it("still rebinds on an unmeasured board when the kernel names the dead controller", async () => {
+    // The address came from dmesg, not from our Apex-measured default, so
+    // there's no guessing involved.
+    const deps = makeDeps({
+      present: false,
+      dmesg: `xhci_hcd ${DEFAULT_XHCI_PCI}: HC died; cleaning up`,
+      paths: new Set([
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}`,
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}/driver`,
+      ]),
+    });
+
+    const res = await recover(deps, { knownBoard: false });
+
+    expect(res.steps.length).toBeGreaterThan(0);
+  });
 });
 
 describe("getStatus", () => {

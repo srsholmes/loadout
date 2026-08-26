@@ -50,12 +50,29 @@ export function isApexDmi(info: DmiInfo): boolean {
   );
 }
 
-/** Any OneXPlayer-family handheld. Broader than {@link isApexDmi} — use it
- *  when something applies to the family (an EC quirk, a driver name) rather
- *  than to one board's wiring. */
+/**
+ * Any OneXPlayer-family handheld. Broader than {@link isApexDmi} — use it
+ * when something applies to the family (an EC quirk, a driver name) rather
+ * than to one board's wiring.
+ *
+ * Either field is enough, deliberately: firmware is inconsistent about both,
+ * and a new model whose product string we've never seen should still get the
+ * family's fixes rather than waiting on a release here.
+ *
+ * The cost of the vendor branch is that One-Netbook's non-handheld lines
+ * (OneMix, OneGx) report the same `sys_vendor` and will match too. That is
+ * accepted rather than overlooked: everything behind this gate is
+ * capability-detected — a machine with no OneXPlayer MCU finds no gamepad to
+ * recover and no reader to block, and `recover()` refuses outright on a board
+ * we haven't measured. An inert plugin entry on a OneMix is a better failure
+ * than a locked-out OneXPlayer, which is the bug this whole gate replaced.
+ */
 export function isOneXPlayerDmi(info: DmiInfo): boolean {
+  // Case-normalised on both fields. Matching one case-sensitively and the
+  // other not made the "firmware is inconsistent" argument apply to only
+  // half of it.
   return (
-    info.sysVendor.includes(OXP_VENDOR) ||
+    info.sysVendor.toUpperCase().includes(OXP_VENDOR) ||
     info.productName.toUpperCase().includes("ONEXPLAYER")
   );
 }

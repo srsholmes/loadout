@@ -242,7 +242,7 @@ function Apex() {
             </div>
 
             <div className="mt-2">
-              <Button onClick={handleRecover} disabled={busy}>
+              <Button onClick={handleRecover} disabled={busy || gamepadUnknown}>
                 <span className="flex items-center gap-2">
                   <FaRotate className={busy ? "animate-spin" : undefined} size={13} />
                   {busy ? "Recovering…" : "Recover gamepad"}
@@ -251,8 +251,9 @@ function Apex() {
             </div>
 
             <div className="text-xs text-base-content/55 leading-relaxed">
-              Safe to run any time — if the controller is already working it does nothing, so
-              there's no harm in pressing it.
+              {gamepadUnknown
+                ? "Unavailable on this device: recovery works by rebinding the USB controller the gamepad sits behind, and we can't tell which one that is here. Rebinding the wrong one would reset whatever else is attached to it."
+                : "Safe to run any time — if the controller is already working it does nothing, so there's no harm in pressing it."}
             </div>
 
             <div className="flex justify-between items-start gap-4 pt-4 mt-1 border-t border-base-300">
@@ -261,13 +262,14 @@ function Apex() {
                   Recover automatically on wake
                 </span>
                 <span className="text-xs text-base-content/55 leading-relaxed">
-                  Run this recovery whenever the device wakes from sleep, so you never have to
-                  press the button. Only rebinds if the gamepad is actually missing.
+                  {gamepadUnknown
+                    ? "Unavailable while the gamepad can't be identified — this would run the same unsafe rebind unattended, on every wake."
+                    : "Run this recovery whenever the device wakes from sleep, so you never have to press the button. Only rebinds if the gamepad is actually missing."}
                 </span>
               </div>
               <Toggle
-                checked={!!data.autoRecoverOnWake}
-                disabled={autoWakeBusy}
+                checked={!!data.autoRecoverOnWake && !gamepadUnknown}
+                disabled={autoWakeBusy || gamepadUnknown}
                 onChange={handleToggleAutoWake}
               />
             </div>
