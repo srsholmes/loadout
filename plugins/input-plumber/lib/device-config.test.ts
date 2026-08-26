@@ -7,6 +7,7 @@ import {
   configPath,
   findDeviceConfig,
   isSupersededByUpstream,
+  parseUpstreamMatches,
   shouldOfferInstall,
   type DeviceConfigStatus,
 } from "./device-config";
@@ -80,6 +81,43 @@ describe("the shipped configs", () => {
     }
   });
 
+  it("keeps USB ids as strings, not numbers", () => {
+    // InputPlumber glob-matches evdev ids against a %04x-formatted string.
+    // Unquoted, "045e" is the number 45 to a YAML parser — which serde would
+    // reject outright, and InputPlumber would then skip the file with only a
+    // log line to show for it.
+    const doc = Bun.YAML.parse(X2_MINI_PRO.yaml) as {
+      source_devices: { evdev?: { vendor_id?: unknown; product_id?: unknown } }[];
+    };
+    for (const src of doc.source_devices) {
+      if (!src.evdev?.vendor_id && !src.evdev?.product_id) continue;
+      expect(typeof src.evdev.vendor_id).toBe("string");
+      expect(typeof src.evdev.product_id).toBe("string");
+    }
+  });
+
+  it("joins the MCU's second evdev node instead of forking a composite", () => {
+    // The 1a86:fe00 MCU exposes TWO evdev nodes under one name (input0, and
+    // input1 with a mouse). Left unique, the second forks a second
+    // CompositeDevice off this same config — duplicate virtual pads.
+    const doc = Bun.YAML.parse(X2_MINI_PRO.yaml) as {
+      source_devices: { unique?: boolean; evdev?: { name?: string } }[];
+    };
+    const mcu = doc.source_devices.find((s) => s.evdev?.name === "HID 1a86:fe00");
+    expect(mcu?.unique).toBe(false);
+  });
+
+  it("does not swallow external XInput pads into the handheld's composite", () => {
+    // 045e:028e is the generic XInput id. unique:false here would fold any
+    // external Xbox pad into the built-in controller; the name narrows it.
+    const doc = Bun.YAML.parse(X2_MINI_PRO.yaml) as {
+      source_devices: { unique?: boolean; evdev?: { name?: string; vendor_id?: string } }[];
+    };
+    const pad = doc.source_devices.find((s) => s.evdev?.vendor_id === "045e");
+    expect(pad?.evdev?.name).toBe("Microsoft X-Box 360 pad");
+    expect(pad?.unique).not.toBe(false);
+  });
+
   it("does not claim the system keyboard or map the back paddles", () => {
     // Both are deliberate omissions (see the module docblock); a later edit
     // adding either should have to argue with this test first.
@@ -132,12 +170,63 @@ describe("configPath", () => {
   });
 });
 
-describe("isSupersededByUpstream", () => {
-  it("spots upstream shipping the same basename", () => {
-    expect(isSupersededByUpstream(X2_MINI_PRO, ["50-onexplayer_apex.yaml"])).toBe(false);
+describe("parseUpstreamMatches", () => {
+  it("pulls the DMI pairs a config claims", () => {
     expect(
-      isSupersededByUpstream(X2_MINI_PRO, ["50-onexplayer_apex.yaml", "50-onexplayer_x2.yaml"]),
+      parseUpstreamMatches(`version: 1
+kind: CompositeDevice
+matches:
+  - dmi_data:
+      product_name: ONEXPLAYER X1 A
+      sys_vendor: ONE-NETBOOK
+  - dmi_data:
+      product_name: ONEXPLAYER X1 i
+      sys_vendor: ONE-NETBOOK
+`),
+    ).toEqual([
+      { productName: "ONEXPLAYER X1 A", sysVendor: "ONE-NETBOOK" },
+      { productName: "ONEXPLAYER X1 i", sysVendor: "ONE-NETBOOK" },
+    ]);
+  });
+
+  it("yields nothing rather than throwing on anything unexpected", () => {
+    // These are files another project ships, in a schema it can extend. A
+    // parse error here would break the whole status probe.
+    for (const bad of ["", "just a string", "{{{", "matches: not-a-list", "version: 1"]) {
+      expect(parseUpstreamMatches(bad)).toEqual([]);
+    }
+    // A match with no dmi_data (InputPlumber also supports other match
+    // kinds) contributes nothing rather than an undefined-filled entry.
+    expect(parseUpstreamMatches("matches:\n  - dmi_data:\n      product_name: X\n")).toEqual([]);
+  });
+});
+
+describe("isSupersededByUpstream", () => {
+  it("spots upstream claiming this machine's DMI", () => {
+    expect(
+      isSupersededByUpstream(X2_MINI_PRO, [
+        { productName: "ONEXPLAYER APEX", sysVendor: "ONE-NETBOOK" },
+      ]),
+    ).toBe(false);
+    expect(
+      isSupersededByUpstream(X2_MINI_PRO, [
+        { productName: "ONEXPLAYER APEX", sysVendor: "ONE-NETBOOK" },
+        { productName: "ONEXPLAYER X2Mini PRO", sysVendor: "ONE-NETBOOK" },
+      ]),
     ).toBe(true);
+  });
+
+  it("still spots it when upstream picks a different filename", () => {
+    // The whole point of keying on DMI. Their family is named
+    // 50-onexplayer_apex / _x1 / _mini_pro, so 50-onexplayer_x2_mini_pro.yaml
+    // is at least as likely as our 50-onexplayer_x2.yaml — and under a
+    // different name BOTH configs load and both match this machine.
+    const upstreamFile = `matches:
+  - dmi_data:
+      product_name: ONEXPLAYER X2Mini PRO
+      sys_vendor: ONE-NETBOOK
+`;
+    expect(isSupersededByUpstream(X2_MINI_PRO, parseUpstreamMatches(upstreamFile))).toBe(true);
   });
 });
 

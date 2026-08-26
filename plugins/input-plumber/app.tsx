@@ -17,7 +17,7 @@ import {
   useFocusable,
 } from "@loadout/ui";
 import { labelFor, parseCapability } from "./lib/profile";
-import type { DeviceConfigStatus } from "./lib/device-config";
+import { shouldOfferInstall, type DeviceConfigStatus } from "./lib/device-config";
 import type {
   InstallLogEvent,
   InstallRunResult,
@@ -332,7 +332,7 @@ function InputPlumberPanel() {
         </div>
         )}
 
-        <DeviceConfigSection />
+        <DeviceConfigSection daemonUp={status.installed && status.serviceActive} />
 
         <WakeButtonSection />
       </div>
@@ -355,14 +355,16 @@ function InputPlumberPanel() {
  * has genuinely come up empty, so it stays invisible on every device that
  * already works.
  */
-function DeviceConfigSection() {
+function DeviceConfigSection({ daemonUp }: { daemonUp: boolean }) {
   const { call, useEvent } = useBackend("input-plumber");
   const [status, setStatus] = useState<DeviceConfigStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    call("getDeviceConfigStatus").then((d) => setStatus(d as DeviceConfigStatus));
+    call("getDeviceConfigStatus")
+      .then((d) => setStatus(d as DeviceConfigStatus))
+      .catch(() => setStatus(null));
   }, [call]);
 
   useEvent({
@@ -380,6 +382,11 @@ function DeviceConfigSection() {
           | null;
         if (res?.status) setStatus(res.status);
         if (!res?.success) setError(res?.error ?? "Couldn't change the InputPlumber config.");
+      } catch (e) {
+        // This call restarts InputPlumber, so the RPC can outlive the socket.
+        // Failing silently would leave a written config and a UI claiming
+        // nothing happened.
+        setError(String(e));
       } finally {
         setBusy(false);
       }
@@ -387,10 +394,14 @@ function DeviceConfigSection() {
     [call],
   );
 
-  if (!status?.applicable) return null;
-  // Nothing to say on a device InputPlumber already drives, unless we're the
-  // reason it does.
-  if (status.hasCompositeDevices && !status.installed) return null;
+  if (!status) return null;
+  // "InputPlumber doesn't recognise this device" is the wrong diagnosis when
+  // InputPlumber isn't running at all — the install card above says the true
+  // thing, and this would send the user down the wrong path.
+  if (!daemonUp) return null;
+  // One source of truth for the offer; `installed` is the separate
+  // remove path.
+  if (!shouldOfferInstall(status) && !status.installed) return null;
 
   return (
     <div className="card mt-3.5">
@@ -426,7 +437,11 @@ function DeviceConfigSection() {
           {status.path}
         </div>
 
-        {error && <div className="subsection-desc mt-2">{error}</div>}
+        {error && (
+          <div className="subsection-desc mt-2" style={{ color: "var(--color-error)" }}>
+            {error}
+          </div>
+        )}
 
         <div className="flex gap-2 mt-3.5 flex-wrap">
           <FocusButton

@@ -15,21 +15,33 @@ otherwise completely conventional.
 
 For devices we can describe, this plugin offers to drop a config into
 `/etc/inputplumber/devices.d`. That directory is searched *before*
-`/usr/share/inputplumber/devices`, with ties broken by basename — so these
-files deliberately use the name upstream would use, and *shadow* a future
-upstream config rather than loading alongside it and matching the same
-machine twice. When upstream does ship one, the UI says so and suggests
-removing ours, since theirs is tested on the hardware.
+`/usr/share/inputplumber/devices`, with ties broken by basename, and the
+first config matching a given source device wins — so these files use the
+name upstream would use, and a same-name upstream config is shadowed rather
+than loading alongside ours and matching the same machine twice.
 
-The card only appears when we have a config for this exact machine **and**
-InputPlumber has genuinely produced no composite devices. A device that
-already works is never offered one.
+That only holds for an *identical* basename, though, and upstream may well
+pick a different one (their family runs `50-onexplayer_apex.yaml`,
+`50-onexplayer_x1.yaml`, `50-onexplayer_mini_pro.yaml`). So "has upstream
+caught up" is decided by reading the DMI pairs their configs claim, not by
+comparing filenames — otherwise the UI would report "not superseded" in
+exactly the case where both configs load and the user most needs telling.
+
+The card only appears when InputPlumber is actually running, we have a
+config for this exact machine, and it has genuinely produced no composite
+devices. A device that already works is never offered one.
 
 Currently shipped:
 
 | Device | DMI `product_name` | Notes |
 | --- | --- | --- |
 | OneXPlayer X2 Mini Pro | `ONEXPLAYER X2Mini PRO` | Not in InputPlumber 0.78.1. Gamepad + MCU only. |
+
+Note the MCU exposes two evdev nodes under one name, so its source entry
+needs `unique: false` or InputPlumber forks a second CompositeDevice off the
+same config — duplicate virtual pads. Upstream's Apex and X1 configs avoid
+this by pinning `phys_path`; without that board's topology, joining is the
+portable equivalent.
 
 Each config is deliberately minimal — enough to make a composite device
 exist, and no more. See the docblock in `lib/device-config.ts` for what is

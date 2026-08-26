@@ -14,7 +14,8 @@
  */
 
 import type { PluginBackend, EmitPayload, PluginLogger } from "@loadout/types";
-import { mkdir, writeFile, readdir, unlink } from "node:fs/promises";
+import { mkdir, writeFile, readdir, readFile, unlink } from "node:fs/promises";
+import { join } from "node:path";
 import { readDmi } from "@loadout/devices";
 import * as installer from "./lib/install";
 import * as wake from "./lib/wake-trigger";
@@ -26,7 +27,9 @@ import {
   configPath,
   findDeviceConfig,
   isSupersededByUpstream,
+  parseUpstreamMatches,
   type DeviceConfigStatus,
+  type UpstreamMatch,
 } from "./lib/device-config";
 import type {
   InstallStartResult,
@@ -342,7 +345,7 @@ export default class InputPlumberBackend implements PluginBackend {
         .exists()
         .catch(() => false),
       ipdbus.listCompositeDevicePaths().catch(() => [] as string[]),
-      readdir(UPSTREAM_DEVICES_DIR).catch(() => [] as string[]),
+      this.readUpstreamMatches(),
     ]);
 
     return {
@@ -353,6 +356,23 @@ export default class InputPlumberBackend implements PluginBackend {
       hasCompositeDevices: composites.length > 0,
       superseded: isSupersededByUpstream(config, upstream),
     };
+  }
+
+  /**
+   * Every DMI pair InputPlumber's own configs claim.
+   *
+   * Read rather than inferred from filenames: upstream may well name their
+   * X2 config something other than ours, in which case both load and both
+   * match, and only the DMI tells us so.
+   */
+  private async readUpstreamMatches(): Promise<UpstreamMatch[]> {
+    const files = await readdir(UPSTREAM_DEVICES_DIR).catch(() => [] as string[]);
+    const docs = await Promise.all(
+      files
+        .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
+        .map((f) => readFile(join(UPSTREAM_DEVICES_DIR, f), "utf-8").catch(() => "")),
+    );
+    return docs.flatMap(parseUpstreamMatches);
   }
 
   /** Write the config and restart InputPlumber so it picks it up. */
@@ -393,8 +413,10 @@ export default class InputPlumberBackend implements PluginBackend {
     if (!config) {
       return { success: false, error: "No InputPlumber config for this device.", status: NOT_APPLICABLE };
     }
+    let removed = false;
     try {
       await unlink(configPath(config));
+      removed = true;
       this.log?.info(`[input-plumber] removed device config ${configPath(config)}`);
     } catch (e) {
       // Already gone is the outcome the user asked for, not a failure.
@@ -404,6 +426,15 @@ export default class InputPlumberBackend implements PluginBackend {
         return { success: false, error: String(e), status: await this.getDeviceConfigStatus() };
       }
     }
+
+    // Restarting drops the controller for seconds; skip it when there was
+    // nothing on disk to stop InputPlumber reading.
+    if (!removed) {
+      const status = await this.getDeviceConfigStatus();
+      this.emit?.({ event: "device-config-status", data: status });
+      return { success: true, status };
+    }
+
     const restart = await wake.restartInputPlumber();
     const status = await this.getDeviceConfigStatus();
     this.emit?.({ event: "device-config-status", data: status });

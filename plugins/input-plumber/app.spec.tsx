@@ -411,9 +411,9 @@ const applicableConfig = {
   superseded: false,
 };
 
-function rpcWithDeviceConfig(deviceConfig: unknown) {
+function rpcWithDeviceConfig(deviceConfig: unknown, install = installedActiveStatus) {
   callMock.mockImplementation((method: string) => {
-    if (method === "getStatus") return Promise.resolve(installedActiveStatus);
+    if (method === "getStatus") return Promise.resolve(install);
     if (method === "isInstallRunning") return Promise.resolve({ running: false });
     if (method === "getDeviceConfigStatus") return Promise.resolve(deviceConfig);
     if (method === "installDeviceConfig" || method === "removeDeviceConfig") {
@@ -426,14 +426,19 @@ function rpcWithDeviceConfig(deviceConfig: unknown) {
   });
 }
 
-async function mountWith(deviceConfig: unknown): Promise<HTMLDivElement> {
-  rpcWithDeviceConfig(deviceConfig);
+async function mountWith(
+  deviceConfig: unknown,
+  install = installedActiveStatus,
+): Promise<HTMLDivElement> {
+  rpcWithDeviceConfig(deviceConfig, install);
   const container = document.createElement("div");
   const { mount } = await import("./app");
   mount(container);
   // Wait for the page itself, so "section absent" assertions can't pass
   // simply because nothing has rendered yet.
-  await waitFor(() => expect(container.textContent).toContain("Active"));
+  await waitFor(() =>
+    expect(container.textContent).toContain(install.installed ? "Active" : "Not installed"),
+  );
   return container;
 }
 
@@ -485,6 +490,50 @@ describe("device config drop-in", () => {
     });
     await waitFor(() => {
       expect(container.textContent).toContain("taking precedence");
+    });
+  });
+
+  it("says nothing when InputPlumber isn't installed at all", async () => {
+    // "InputPlumber doesn't recognise this device" is the wrong diagnosis
+    // when the daemon isn't there — the install card says the true thing.
+    const container = await mountWith(applicableConfig, notInstalledStatus);
+    expect(container.textContent).not.toContain("Controller support for this device");
+  });
+
+  it("stops offering a config once upstream ships one for this machine", async () => {
+    // The UI gate and shouldOfferInstall must agree: writing a config that
+    // shadows a freshly-shipped upstream one is the thing to avoid.
+    const container = await mountWith({ ...applicableConfig, superseded: true });
+    expect(container.textContent).not.toContain("Install config");
+  });
+
+  it("surfaces a rejected RPC rather than going quiet", async () => {
+    // installDeviceConfig restarts InputPlumber, so the call can outlive the
+    // socket. Failing silently leaves a written config and a UI claiming
+    // nothing happened.
+    rpcWithDeviceConfig(applicableConfig);
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") return Promise.resolve(installedActiveStatus);
+      if (method === "isInstallRunning") return Promise.resolve({ running: false });
+      if (method === "getDeviceConfigStatus") return Promise.resolve(applicableConfig);
+      if (method === "installDeviceConfig") return Promise.reject(new Error("WebSocket closed"));
+      return Promise.resolve(null);
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    const btn = await waitFor(() => {
+      const el = [...container.querySelectorAll('[role="button"], button')].find(
+        (b) => b.textContent?.trim() === "Install config",
+      );
+      if (!el) throw new Error("install button not rendered yet");
+      return el;
+    });
+    fireEvent.click(btn);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("WebSocket closed");
     });
   });
 

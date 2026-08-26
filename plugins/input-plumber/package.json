@@ -52,6 +52,7 @@
         "/etc/udev/rules.d",
         "/etc/loadout/inputplumber",
         "/etc/inputplumber",
+        "/usr/share/inputplumber",
         "/usr/share/polkit-1/actions",
         "/sys/class/hidraw",
         "/dev/hidraw*"

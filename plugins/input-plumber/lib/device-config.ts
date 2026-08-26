@@ -107,13 +107,26 @@ matches:
       sys_vendor: ONE-NETBOOK
 
 source_devices:
+  # Quoted: these are glob-matched as strings against a %04x-formatted id.
+  # Unquoted, 045e is a number to some YAML parsers.
+  #
+  # \`name\` as well as the ids, and no \`unique: false\`: 045e:028e is the
+  # generic XInput id, so an external Xbox pad would otherwise be folded into
+  # the handheld's own composite device instead of presenting separately.
   - group: gamepad
-    unique: false
     evdev:
-      vendor_id: 045e
-      product_id: 028e
+      name: Microsoft X-Box 360 pad
+      vendor_id: "045e"
+      product_id: "028e"
       handler: event*
+  # unique: false because the MCU exposes TWO evdev nodes under this one
+  # name (input0 keyboard, input1 keyboard+mouse). Left unique, the second
+  # forks a second CompositeDevice off this same config — duplicate virtual
+  # pads, which is the "works in menus, not in Steam" signature. Upstream's
+  # Apex and X1 configs avoid it by pinning phys_path; we don't have this
+  # board's topology, so we join instead.
   - group: keyboard
+    unique: false
     evdev:
       name: HID 1a86:fe00
       handler: event*
@@ -163,14 +176,51 @@ export function configPath(config: DeviceConfig): string {
   return `${DEVICES_D}/${config.filename}`;
 }
 
+/** A DMI pair some upstream config claims. */
+export interface UpstreamMatch {
+  productName: string;
+  sysVendor: string;
+}
+
 /**
- * Whether InputPlumber now ships its own config under this basename, meaning
- * ours is shadowing it and should be removed. Ours winning is the correct
- * behaviour while it is the only config; it is the wrong behaviour once
- * upstream — which can test the hardware — has one.
+ * Pull the DMI pairs a config file claims. Tolerant by design: this reads
+ * files another project ships, in a schema it can extend, so anything
+ * unrecognised yields no matches rather than throwing.
  */
-export function isSupersededByUpstream(config: DeviceConfig, upstreamFiles: string[]): boolean {
-  return upstreamFiles.includes(config.filename);
+export function parseUpstreamMatches(yamlText: string): UpstreamMatch[] {
+  let doc: unknown;
+  try {
+    doc = Bun.YAML.parse(yamlText);
+  } catch {
+    return [];
+  }
+  const matches = (doc as { matches?: unknown })?.matches;
+  if (!Array.isArray(matches)) return [];
+  return matches.flatMap((m) => {
+    const dmi = (m as { dmi_data?: { product_name?: unknown; sys_vendor?: unknown } })?.dmi_data;
+    if (typeof dmi?.product_name !== "string" || typeof dmi?.sys_vendor !== "string") return [];
+    return [{ productName: dmi.product_name, sysVendor: dmi.sys_vendor }];
+  });
+}
+
+/**
+ * Whether InputPlumber now ships its own config for this machine, meaning
+ * ours should be removed. Ours winning is correct while it is the only
+ * config; it is wrong once upstream — which can test the hardware — has one.
+ *
+ * Deliberately keyed on the DMI upstream claims, not on our filename. We
+ * name files the way upstream would so a same-name config is shadowed rather
+ * than duplicated, but there is no guarantee they pick that name: their
+ * family runs `50-onexplayer_apex.yaml`, `50-onexplayer_x1.yaml`,
+ * `50-onexplayer_mini_pro.yaml`, so `50-onexplayer_x2_mini_pro.yaml` is at
+ * least as likely as ours. Under a different name both configs load and both
+ * match — and a filename check would report "not superseded" in exactly the
+ * case where the user most needs telling.
+ */
+export function isSupersededByUpstream(config: DeviceConfig, upstream: UpstreamMatch[]): boolean {
+  return upstream.some(
+    (m) => m.productName === config.productName && m.sysVendor === config.sysVendor,
+  );
 }
 
 export interface DeviceConfigStatus {
