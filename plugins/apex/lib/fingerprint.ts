@@ -1,6 +1,6 @@
 /**
  * Fingerprint wake block — stop the OneXPlayer Apex power-button fingerprint
- * reader (FocalTech 2808:c652) from waking the device from sleep on a light
+ * reader (FocalTech, vendor 2808) from waking the device from sleep on a light
  * TOUCH. A power-button PRESS still wakes it (separate ACPI fixed event), and
  * the internal gamepad's controller is untouched.
  *
@@ -26,9 +26,18 @@ export const GPIO_ACPI_DEV = "AMDI0030:00";
 export const GPIO_PIN = "58";
 export const KARG = `gpiolib_acpi.ignore_wake=${GPIO_ACPI_DEV}@${GPIO_PIN}`;
 
-/** FocalTech fingerprint reader USB id. */
+/**
+ * FocalTech fingerprint reader USB ids.
+ *
+ * The reader is not one part across the family: the Apex ships `c652`, the
+ * X2 Mini Pro ships `5952`. Both are FocalTech (vendor 2808) and both sit
+ * behind an xHCI controller that PME-wakes the machine, so the fix is the
+ * same — only the product id differs. A single hardcoded id silently made
+ * this feature unavailable on every OneXPlayer whose reader wasn't the
+ * Apex's, which is exactly the failure un-gating the plugin is meant to end.
+ */
 export const FP_VENDOR = "2808";
-export const FP_PRODUCT = "c652";
+export const FP_PRODUCTS: readonly string[] = ["c652", "5952"];
 
 export const UDEV_RULE_PATH = "/etc/udev/rules.d/90-loadout-fingerprint-no-wake.rules";
 const GRUB_STEAMOS = "/etc/default/grub-steamos";
@@ -87,16 +96,18 @@ const USB_DEVICES = "/sys/bus/usb/devices";
  * the reader isn't present.
  */
 export async function detectController(deps: FingerprintDeps): Promise<string | null> {
-  // `lsusb` confirms presence; the sysfs walk resolves the controller.
-  const present = await deps.run(["lsusb", "-d", `${FP_VENDOR}:${FP_PRODUCT}`], { timeoutMs: 5_000 });
+  // `lsusb` is only a cheap "is there a FocalTech device at all" gate —
+  // vendor-only, so a new reader id doesn't need adding in two places. The
+  // sysfs walk below is what filters to an actual reader.
+  const present = await deps.run(["lsusb", "-d", `${FP_VENDOR}:`], { timeoutMs: 5_000 });
   if (present.exitCode !== 0) return null;
 
   // Find which usb bus the reader is on, then map that bus to its PCI host.
   // `readlink -f /sys/bus/usb/devices/usbN` → /sys/devices/pci…/0000:bb:dd.f/usbN
   const ls = await deps.run(["sh", "-c",
     `for d in ${USB_DEVICES}/*; do ` +
-    `[ "$(cat "$d/idVendor" 2>/dev/null)" = "${FP_VENDOR}" ] && ` +
-    `[ "$(cat "$d/idProduct" 2>/dev/null)" = "${FP_PRODUCT}" ] && ` +
+    `[ "$(cat "$d/idVendor" 2>/dev/null)" = "${FP_VENDOR}" ] || continue; ` +
+    `case "$(cat "$d/idProduct" 2>/dev/null)" in ${FP_PRODUCTS.join("|")}) ;; *) continue ;; esac; ` +
     `busnum=$(cat "$d/busnum") && ` +
     `basename "$(dirname "$(readlink -f "${USB_DEVICES}/usb$busnum")")" && break; ` +
     `done`,

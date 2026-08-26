@@ -8,9 +8,13 @@ import {
   removeKargFromGrubSteamos,
   KARG,
   UDEV_RULE_PATH,
+  FP_PRODUCTS,
   type FingerprintDeps,
 } from "./fingerprint";
 import type { RunResult } from "./xhci";
+import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /**
  * Fingerprint-wake-block tests. All hardware/OS access is injected, so these
@@ -109,6 +113,91 @@ describe("detectController", () => {
   it("returns null when the reader is absent", async () => {
     const { deps } = makeFpDeps({ fpPresent: false });
     expect(await detectController(deps)).toBeNull();
+  });
+
+  /**
+   * The cases above stub `sh` wholesale, so they never exercise the shell we
+   * actually ship — a dropped product id would pass every one of them. These
+   * run the emitted script for real against a fixture sysfs tree.
+   *
+   * The reader is not one part across the family: the Apex ships 2808:c652,
+   * the X2 Mini Pro ships 2808:5952.
+   */
+  describe("the emitted sysfs scan (executed for real)", () => {
+    async function runScanAgainst(
+      devices: { name: string; vendor: string; product: string; busnum: string }[],
+    ): Promise<string> {
+      const root = await mkdtemp(join(tmpdir(), "loadout-fp-"));
+      const devDir = join(root, "devices");
+      // The bus's root hub resolves through a symlink to its PCI parent,
+      // which is the whole point of the walk under test.
+      await mkdir(join(root, "pci", CTRL, "usb3"), { recursive: true });
+      await mkdir(devDir, { recursive: true });
+      for (const d of devices) {
+        await mkdir(join(devDir, d.name), { recursive: true });
+        await writeFile(join(devDir, d.name, "idVendor"), d.vendor);
+        await writeFile(join(devDir, d.name, "idProduct"), d.product);
+        await writeFile(join(devDir, d.name, "busnum"), d.busnum);
+      }
+      await symlink(join(root, "pci", CTRL, "usb3"), join(devDir, "usb3"));
+
+      // Capture the real command, then retarget it at the fixture.
+      let script = "";
+      const { deps } = makeFpDeps({});
+      const capturing: FingerprintDeps = {
+        ...deps,
+        run: async (cmd) => {
+          if (cmd[0] === "sh") {
+            script = cmd[2]!;
+            return { exitCode: 0, stdout: "", stderr: "" } as RunResult;
+          }
+          return deps.run(cmd);
+        },
+      };
+      await detectController(capturing);
+      expect(script).not.toBe("");
+
+      const proc = Bun.spawn(["sh", "-c", script.replaceAll("/sys/bus/usb/devices", devDir)], {
+        stdout: "pipe",
+      });
+      const out = await new Response(proc.stdout).text();
+      await rm(root, { recursive: true, force: true });
+      return out.trim();
+    }
+
+    it("pins the reader ids we've confirmed on real hardware", () => {
+      // The parameterised case below derives from FP_PRODUCTS, so on its own
+      // it would shrink silently if an id were dropped rather than fail.
+      // These two are each attested by a device: c652 the Apex, 5952 the
+      // X2 Mini Pro (doctor report, 2026-08-26).
+      expect(FP_PRODUCTS).toContain("c652");
+      expect(FP_PRODUCTS).toContain("5952");
+    });
+
+    it.each(FP_PRODUCTS.map((pid) => [pid]))("finds the reader with product id %s", async (pid) => {
+      const found = await runScanAgainst([
+        { name: "1-1", vendor: "1a86", product: "8091", busnum: "1" },
+        { name: "3-3", vendor: "2808", product: pid, busnum: "3" },
+      ]);
+      expect(found).toBe(CTRL);
+    });
+
+    it("ignores a FocalTech device that isn't a known reader", async () => {
+      // 2808 also covers FocalTech touch controllers. Disabling wakeup on one
+      // of those would be the wrong device entirely.
+      const found = await runScanAgainst([
+        { name: "3-2", vendor: "2808", product: "1234", busnum: "3" },
+      ]);
+      expect(found).toBe("");
+    });
+
+    it("skips past a non-reader to find the real one on the same vendor", async () => {
+      const found = await runScanAgainst([
+        { name: "3-2", vendor: "2808", product: "1234", busnum: "3" },
+        { name: "3-3", vendor: "2808", product: "5952", busnum: "3" },
+      ]);
+      expect(found).toBe(CTRL);
+    });
   });
 });
 
