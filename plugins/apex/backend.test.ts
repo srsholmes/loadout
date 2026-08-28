@@ -418,6 +418,8 @@ describe("rumble RPCs on non-OneXPlayer hardware", () => {
     expect((await backend.getRumbleInfo()).available).toBe(false);
     expect(rumbleGetInfoSpy).not.toHaveBeenCalled();
     expect((await backend.setRumbleIntensity(3)).success).toBe(false);
+  });
+});
 
 describe("fingerprint self-heal", () => {
   beforeEach(() => {
@@ -464,6 +466,35 @@ describe("fingerprint self-heal", () => {
     const notice = await backend.getFingerprintHealNotice();
     expect(applyFingerprintImpl).toHaveBeenCalledTimes(1);
     expect(notice?.restored).toBe(true);
+  });
+
+  it("adopts a block that was already on before this feature shipped", async () => {
+    // Otherwise the users this exists for — who enabled it months ago — have
+    // no stored flag and are never healed.
+    storage = {};
+    fingerprintStatusImpl.mockImplementation(async () => ({
+      supported: true,
+      applied: true,
+      kargUnpersisted: false,
+      rebootPending: false,
+      kargActive: true,
+      distro: "steamos",
+    }));
+    const { backend } = makeBackend();
+    await backend.onLoad();
+    await backend.getFingerprintHealNotice();
+    expect(storage.fingerprintBlock).toBe(true);
+    // Already in effect, so nothing to re-apply right now.
+    expect(applyFingerprintImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not adopt a block the user had switched off", async () => {
+    storage = { fingerprintBlock: false };
+    const { backend } = makeBackend();
+    await backend.onLoad();
+    await backend.getFingerprintHealNotice();
+    expect(storage.fingerprintBlock).toBe(false);
+    expect(applyFingerprintImpl).not.toHaveBeenCalled();
   });
 
   it("leaves a device alone whose owner never enabled it", async () => {

@@ -531,6 +531,8 @@ describe("distros whose bootloader we don't edit", () => {
   it("still reports the SteamOS case", async () => {
     const { deps } = makeFpDeps({ ...liveNotStaged, distro: "steamos" });
     expect((await getStatus(deps, true)).kargUnpersisted).toBe(true);
+  });
+});
 
 describe("shouldHeal", () => {
   const ok = { supported: true, applied: true, kargUnpersisted: false };

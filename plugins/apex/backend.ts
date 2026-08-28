@@ -297,6 +297,20 @@ export default class ApexBackend implements PluginBackend {
         readPluginStorage<ApexSettings>(PLUGIN_ID),
         fingerprintStatus(this.fpDeps, this.isKnownBoard),
       ]);
+      // Backfill for anyone who turned the block on before this shipped:
+      // there is no stored flag yet, so without this the very users the
+      // feature exists for would never be healed. A block that is currently
+      // in effect is proof enough that they wanted it — and recording it now
+      // is the only chance to, before an update erases the evidence.
+      if (settings.fingerprintBlock === undefined && status.applied) {
+        await mutatePluginStorage<ApexSettings>(PLUGIN_ID, (existing) => ({
+          ...existing,
+          fingerprintBlock: true,
+        }));
+        settings.fingerprintBlock = true;
+        this.log?.info("[apex] recorded the existing fingerprint wake block as wanted");
+      }
+
       if (!shouldHeal({ wanted: settings.fingerprintBlock, status })) return;
 
       this.log?.warn(
