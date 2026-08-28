@@ -71,6 +71,7 @@ interface StatusResult {
   fingerprint?: FingerprintStatus;
   autoRecoverOnWake?: boolean;
   listenerRunning?: boolean;
+  fingerprintBlockWanted?: boolean;
 }
 
 interface FingerprintResult {
@@ -572,11 +573,11 @@ function Apex() {
                     Disables the sensor&apos;s USB-controller wake
                     {data.fingerprint.kargAutomatic
                       ? " and adds a kernel parameter for the GPIO wake line."
-                      : "; the GPIO wake line needs a kernel parameter we can't add here."}
+                      : "; the GPIO wake line needs a kernel parameter this distro won't let us add."}
                   </span>
                 </div>
                 <Toggle
-                  checked={!!data.fingerprint.applied}
+                  checked={!!data.fingerprintBlockWanted}
                   disabled={fpBusy}
                   onChange={handleToggleFingerprint}
                 />
@@ -628,7 +629,7 @@ function Apex() {
                   The wake block had been removed — system updates regenerate the files it lives
                   in. It has been re-applied automatically
                   {healed.manualKarg
-                    ? ", but the GPIO layer needs a kernel argument this distro's bootloader isn't one we manage — see below."
+                    ? ", but the GPIO layer still needs a kernel argument this distro won't let us add — see below."
                     : healed.rebootRequired
                       ? ", though the kernel-argument layer needs a reboot to come back."
                       : ", and is in effect now."}
@@ -641,8 +642,8 @@ function Apex() {
                   icon={<FaCircleInfo size={14} />}
                   title="Active, but not saved to your bootloader"
                 >
-                  The kernel argument is live on this boot but missing from the bootloader config —
-                  a SteamOS update regenerates that file and drops it. The block still works right
+                  The kernel argument is live on this boot but missing from the boot configuration
+                  — a system update can regenerate that and drop it. The block still works right
                   now; switch it off and on again to write it back, so it survives the next reboot.
                 </Alert>
               )}
@@ -650,7 +651,9 @@ function Apex() {
               {/* The touch has two independent wake paths and this one closes
                   only with a kernel arg, so these are genuinely incomplete
                   blocks — not niceties. */}
-              {!data.fingerprint.kargActive && data.fingerprint.kargMode === "manual" && (
+              {data.fingerprint.applied &&
+                !data.fingerprint.kargActive &&
+                data.fingerprint.kargMode === "manual" && (
                 <Alert
                   variant="warning"
                   icon={<FaTriangleExclamation size={14} />}
@@ -667,11 +670,16 @@ function Apex() {
                       gpiolib_acpi.ignore_wake=AMDI0030:00@58
                     </div>
                     <div className="leading-relaxed">to your kernel command line, then reboot.</div>
+                    <div className="leading-relaxed text-base-content/45">
+                      We do this automatically on SteamOS and on Bazzite (and other rpm-ostree
+                      images). Elsewhere — CachyOS and Arch included — the bootloader isn&apos;t one
+                      we edit, so this step is yours.
+                    </div>
                   </div>
                 </Alert>
               )}
 
-              {data.fingerprint.kargMode === "none" && (
+              {data.fingerprint.applied && data.fingerprint.kargMode === "none" && (
                 <Alert
                   variant="warning"
                   icon={<FaTriangleExclamation size={14} />}

@@ -50,8 +50,9 @@ IP_DECK_HIDRAW_RULE="/etc/udev/rules.d/72-loadout-deck-hidraw.rules"
 # re-disabling the reader's controller wakeup on every boot with no Loadout
 # installed to undo it — the user's fingerprint wake stays blocked forever and
 # nothing on the system explains why. The kernel arg is deliberately NOT
-# stripped here: editing a bootloader during an uninstall is a worse failure
-# mode than a stale arg, and it is inert once the udev rule is gone.
+# stripped (editing a bootloader during an uninstall is a worse failure than a
+# stale arg) — but it is NOT inert either: the two wake paths are independent,
+# so the arg keeps the GPIO line disarmed on its own. We print it instead.
 FP_WAKE_RULE="/etc/udev/rules.d/90-loadout-fingerprint-no-wake.rules"
 # Written only by Loadout versions predating #87 (when the Deck moved to a
 # native hidraw watcher). Left in place it keeps InputPlumber claiming the
@@ -173,6 +174,39 @@ remove_tree() {
 # Everything here is best-effort: a failure leaves the user with a working
 # system and printed instructions, and must not abort the rest of the
 # uninstall (hence the `|| warn` on each privileged step).
+# Undo the fingerprint wake block. Its own function called from main(), NOT
+# part of revert_inputplumber(): that returns early for anyone with no
+# InputPlumber artefacts on disk, which is most people who used this feature —
+# so the removal never ran for exactly the users it was written for.
+revert_fingerprint_block() {
+    [ -f "$FP_WAKE_RULE" ] || return 0
+
+    info "Reverting the fingerprint wake block..."
+    # The rule names the controller it disables; re-enable it now rather than
+    # leaving wake off until the next boot.
+    fp_ctrl="$(sed -n 's/.*KERNEL=="\([0-9a-f:.]*\)".*/\1/p' "$FP_WAKE_RULE" 2>/dev/null | head -1)"
+    if as_root rm -f "$FP_WAKE_RULE"; then
+        as_root udevadm control --reload 2>/dev/null || true
+        if [ -n "$fp_ctrl" ] && [ -e "/sys/bus/pci/devices/$fp_ctrl/power/wakeup" ]; then
+            printf 'enabled' | as_root tee "/sys/bus/pci/devices/$fp_ctrl/power/wakeup" >/dev/null 2>&1 || true
+        fi
+        success "Fingerprint wake restored."
+    else
+        warn "Could not remove $FP_WAKE_RULE — fingerprint wake will stay blocked."
+    fi
+
+    # The kernel arg is deliberately left alone: editing a bootloader during an
+    # uninstall is a worse failure than a stale arg. But it is NOT inert — it
+    # independently suppresses the GPIO wake line — so say so rather than
+    # leaving the user to wonder why a touch still doesn't wake the device.
+    if grep -q "gpiolib_acpi.ignore_wake=" /proc/cmdline 2>/dev/null; then
+        warn "A kernel argument from Loadout is still on your command line:"
+        warn "  gpiolib_acpi.ignore_wake=AMDI0030:00@58"
+        warn "  It keeps the power button's GPIO wake line disarmed. Remove it"
+        warn "  from your bootloader config and reboot to fully restore wake."
+    fi
+}
+
 revert_inputplumber() {
     ip_found=0
     # Whether any of what we found actually involves InputPlumber. The Deck
@@ -260,20 +294,6 @@ revert_inputplumber() {
     fi
     if [ "$ip_removed_input_rule" -eq 1 ] || [ "$ip_removed_hidraw_rule" -eq 1 ]; then
         as_root udevadm control --reload 2>/dev/null || true
-    fi
-    # Undo the fingerprint wake block, and re-enable the controller now rather
-    # than leaving it disabled until the next boot.
-    if [ -f "$FP_WAKE_RULE" ]; then
-        fp_ctrl="$(sed -n 's/.*KERNEL=="\([0-9a-f:.]*\)".*/\1/p' "$FP_WAKE_RULE" 2>/dev/null | head -1)"
-        if as_root rm -f "$FP_WAKE_RULE"; then
-            info "Removed the fingerprint wake block ($FP_WAKE_RULE)"
-            as_root udevadm control --reload 2>/dev/null || true
-            if [ -n "$fp_ctrl" ] && [ -e "/sys/bus/pci/devices/$fp_ctrl/power/wakeup" ]; then
-                printf 'enabled' | as_root tee "/sys/bus/pci/devices/$fp_ctrl/power/wakeup" >/dev/null 2>&1 || true
-            fi
-        else
-            warn "Could not remove $FP_WAKE_RULE — fingerprint wake will stay blocked"
-        fi
     fi
     if [ "$ip_removed_input_rule" -eq 1 ]; then
         as_root udevadm trigger --subsystem-match=input 2>/dev/null || true
@@ -371,6 +391,7 @@ main() {
     # After the services are stopped, so the backend can't re-apply the
     # profile between our delete and the InputPlumber restart.
     revert_inputplumber
+    revert_fingerprint_block
 
     # --- Remove .desktop file ---
     if [ -f "$DESKTOP_FILE" ]; then

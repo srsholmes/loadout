@@ -697,3 +697,77 @@ describe("reboot button", () => {
     expect(container.textContent).not.toContain("finish applying");
   });
 });
+
+describe("fingerprint block: what the UI claims", () => {
+  beforeEach(() => {
+    callMock.mockReset();
+    notifyMock.mockReset();
+    eventHandlers.clear();
+  });
+
+  const fp = (over: Record<string, unknown> = {}) => ({
+    ...healthyStatus,
+    fingerprintBlockWanted: false,
+    fingerprint: {
+      supported: true,
+      applied: false,
+      rebootPending: false,
+      kargUnpersisted: false,
+      kargApplicable: true,
+      kargAutomatic: false,
+      kargMode: "manual",
+      kargActive: false,
+      udevRuleInstalled: false,
+      distro: "cachyos",
+      controller: "0000:67:00.0",
+      ...over,
+    },
+  });
+
+  async function mountWith(status: unknown) {
+    callMock.mockImplementation((method: string) =>
+      method === "getStatus" ? Promise.resolve(status) : Promise.resolve(null),
+    );
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => expect(container.textContent).toContain("Fingerprint"));
+    return container;
+  }
+
+  it("keeps the switch on what the user chose, not on a derived state", async () => {
+    // Binding `checked` to `applied` made the toggle spring back off whenever
+    // the second wake path wasn't closed — and flipping it again called
+    // revert(), undoing the path that had worked.
+    const container = await mountWith({ ...fp(), fingerprintBlockWanted: true });
+    const toggles = [...container.querySelectorAll('input[type="checkbox"]')];
+    expect(toggles.some((t) => (t as HTMLInputElement).checked)).toBe(true);
+  });
+
+  it("does not claim the controller is blocked when the block is off", async () => {
+    // Both "one wake path is still open" alerts opened by asserting the USB
+    // controller *is* blocked — rendered next to a toggle sitting at OFF.
+    const container = await mountWith(fp({ kargMode: "none", applied: false }));
+    expect(container.textContent).not.toContain("is blocked at its USB controller");
+  });
+
+  it("says a wake path is still open once the block IS on but the karg isn't", async () => {
+    const container = await mountWith({
+      ...fp({ kargMode: "none", applied: true, udevRuleInstalled: true }),
+      fingerprintBlockWanted: true,
+    });
+    await waitFor(() => expect(container.textContent).toContain("One wake path is still open"));
+  });
+
+  it("names the distros we automate, so a CachyOS user knows why they're doing it by hand", async () => {
+    const container = await mountWith({
+      ...fp({ kargMode: "manual", applied: true, udevRuleInstalled: true }),
+      fingerprintBlockWanted: true,
+    });
+    await waitFor(() => {
+      expect(container.textContent).toContain("SteamOS");
+      expect(container.textContent).toContain("Bazzite");
+      expect(container.textContent).toContain("CachyOS");
+    });
+  });
+});

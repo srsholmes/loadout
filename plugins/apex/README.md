@@ -15,24 +15,31 @@ close** — closing one leaves the device wakeable:
   `gpiolib_acpi.ignore_wake=AMDI0030:00@58`. Boot-time, so it needs a reboot,
   and it names a pin that is board wiring rather than a family constant.
 
-Because the karg is the only way to close path 1, "which bootloader is this"
-decides whether we can deliver a complete block:
+Because the karg is the only way to close path 1, whether we can deliver a
+complete block depends on the boot mechanism:
 
-| Distro | Kernel arg | Result |
+| System | Kernel arg | Result |
 | --- | --- | --- |
 | SteamOS | `/etc/default/grub-steamos`, behind `steamos-readonly` | automatic |
 | Bazzite and other rpm-ostree images | `rpm-ostree kargs` | automatic |
-| CachyOS / Arch / Fedora | `/etc/default/grub` + `grub-mkconfig` | automatic, verified against the generated `grub.cfg` |
-| Anything else | — | we print the arg; you add it |
+| **Everything else, CachyOS and Arch included** | — | we print the arg; you add it |
 | A board whose pin we haven't measured | — | withheld: the wrong pin is worse than none |
 
-GRUB is *assumed* on the Arch/Fedora family. CachyOS also ships systemd-boot
-and limine, where `/etc/default/grub` exists but nothing reads it — so after
-writing we check the karg actually reached `grub.cfg` and roll back with an
-error if it didn't, rather than reporting a block the device doesn't have.
+**We do not edit GRUB.** An earlier attempt did, and it was wrong in ways that
+could leave a machine unbootable: `/etc/default/grub` is *sourced*, so a value
+that isn't double-quoted (common on encrypted or hibernating systems) got a
+second assignment appended and the user's real `cryptdevice=`/`resume=` args
+were discarded. Fedora needs `grub2-mkconfig` and BLS entries rather than that
+file at all, and CachyOS may boot via systemd-boot or limine, where the file
+exists and nothing reads it. None of that is verifiable before a reboot, so
+GRUB systems get an instruction instead of an edit.
 
-Where we can't stage it, the UI says one wake path is still open. It does not
-claim the block is complete.
+Detection is by mechanism, not distro name — `/run/ostree-booted` rather than
+a list of IDs, because Silverblue and Kinoite both report `ID=fedora`.
+
+Where we can't stage it, the UI says one wake path is still open and names the
+systems we do automate, so it's clear why the step is manual. It never claims
+the block is complete.
 
 ### Healing itself
 

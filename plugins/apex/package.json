@@ -26,7 +26,8 @@
         "sh",
         "udevadm",
         "steamos-readonly",
-        "update-grub"
+        "update-grub",
+        "rpm-ostree"
       ],
       "filesystem": [
         "/sys/bus/hid/devices"

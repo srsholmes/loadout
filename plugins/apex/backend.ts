@@ -407,6 +407,10 @@ export default class ApexBackend implements PluginBackend {
     fingerprint?: FingerprintStatus;
     autoRecoverOnWake?: boolean;
     listenerRunning?: boolean;
+    /** The user's stored choice. The toggle reflects THIS, not `applied` —
+     *  binding a switch to a derived hardware state made it spring back
+     *  whenever the second wake path wasn't closed yet. */
+    fingerprintBlockWanted?: boolean;
   }> {
     if (this.unsupported) return { unsupported: true };
     const [status, hidOxp, fingerprint, settings] = await Promise.all([
@@ -422,6 +426,7 @@ export default class ApexBackend implements PluginBackend {
       fingerprint,
       autoRecoverOnWake: !!settings.autoRecoverOnWake,
       listenerRunning: this.wakeStop !== null,
+      fingerprintBlockWanted: settings.fingerprintBlock ?? fingerprint.applied,
     };
   }
 
