@@ -80,6 +80,12 @@ export interface FingerprintStatus {
   applied: boolean;
   /** A reboot is needed to finish applying/reverting (the karg changed). */
   rebootPending: boolean;
+  /**
+   * The karg is live on this boot but absent from the bootloader config,
+   * while the block is still meant to be on — so the next grub regeneration
+   * drops it. Re-applying re-stages it; a reboot would LOSE it.
+   */
+  kargUnpersisted: boolean;
   distro: string;
 }
 
@@ -147,6 +153,18 @@ export async function getStatus(
     : false;
 
   const path2Closed = controllerWakeDisabled && udevRuleInstalled;
+
+  // `kargStaged !== kargActive` treated both directions as "reboot
+  // required", which is wrong in one of them. Live-but-not-staged happens
+  // when a SteamOS A/B update regenerates /etc/default/grub-steamos and
+  // drops our line while the running kernel still carries it from the last
+  // boot. Nothing is staged, the block is working, and rebooting is the one
+  // action that would undo it — so reporting "reboot to finish applying"
+  // was both false and actively harmful advice.
+  //
+  // The udev rule is our marker for "the block is meant to be on", which is
+  // what separates that case from a revert still waiting on a reboot.
+  const kargLiveOnly = kargActive && !kargStaged;
   return {
     supported: controller !== null,
     controller,
@@ -161,8 +179,10 @@ export async function getStatus(
     // The natural response is to flip it again — which calls revert() and
     // undoes the one path that had worked.
     applied: path2Closed && (kargActive || !kargApplicable),
-    // Reboot pending when the karg's staged state disagrees with the live one.
-    rebootPending: kargStaged !== kargActive,
+    // Staged but not yet live → a reboot applies it. Live but not staged
+    // *and* the block was reverted → a reboot finishes removing it.
+    rebootPending: (kargStaged && !kargActive) || (kargLiveOnly && !udevRuleInstalled),
+    kargUnpersisted: kargLiveOnly && udevRuleInstalled,
     distro,
   };
 }

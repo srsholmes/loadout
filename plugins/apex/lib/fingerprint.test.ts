@@ -369,3 +369,67 @@ describe("apply (non-SteamOS)", () => {
     expect(files[UDEV_RULE_PATH]).toContain(CTRL); // path 2 still applied
   });
 });
+
+describe("rebootPending vs kargUnpersisted", () => {
+  /**
+   * `kargStaged !== kargActive` collapsed four distinct states into two, and
+   * got one of them backwards: on a device where a SteamOS A/B update had
+   * regenerated grub-steamos and dropped our line, the karg was still live
+   * from the last boot, so the UI said "a kernel-parameter change is staged,
+   * reboot to finish applying" — while nothing was staged, the block was
+   * working, and rebooting was the single action that would undo it.
+   */
+  const blockOn = {
+    [UDEV_RULE_PATH]: "(rule)",
+    [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+  };
+
+  it("staged but not live: a reboot applies it", async () => {
+    const { deps } = makeFpDeps({
+      // Staged in the bootloader, absent from the live cmdline.
+      files: { ...blockOn, "/etc/default/grub-steamos": addKargToGrubSteamos(GRUB_SAMPLE) },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+    const s = await getStatus(deps, true);
+    expect(s.kargActive).toBe(false);
+    expect(s.rebootPending).toBe(true);
+    expect(s.kargUnpersisted).toBe(false);
+  });
+
+  it("live and staged: nothing pending", async () => {
+    const { deps } = makeFpDeps({
+      files: { ...blockOn, "/etc/default/grub-steamos": addKargToGrubSteamos(GRUB_SAMPLE) },
+      cmdline: `BOOT_IMAGE=x quiet ${KARG}`,
+      distro: "steamos",
+    });
+    const s = await getStatus(deps, true);
+    expect(s.rebootPending).toBe(false);
+    expect(s.kargUnpersisted).toBe(false);
+  });
+
+  it("live but not staged, block still on: needs re-staging, NOT a reboot", async () => {
+    // The real-device case. Rebooting here loses the protection.
+    const { deps } = makeFpDeps({
+      files: { ...blockOn, "/etc/default/grub-steamos": GRUB_SAMPLE },
+      cmdline: `BOOT_IMAGE=x quiet ${KARG}`,
+      distro: "steamos",
+    });
+    const s = await getStatus(deps, true);
+    expect(s.kargActive).toBe(true);
+    expect(s.rebootPending).toBe(false);
+    expect(s.kargUnpersisted).toBe(true);
+  });
+
+  it("live but not staged, block reverted: a reboot finishes removing it", async () => {
+    // No udev rule — the user turned it off, and the karg lingers until reboot.
+    const { deps } = makeFpDeps({
+      files: { "/etc/default/grub-steamos": GRUB_SAMPLE },
+      cmdline: `BOOT_IMAGE=x quiet ${KARG}`,
+      distro: "steamos",
+    });
+    const s = await getStatus(deps, true);
+    expect(s.rebootPending).toBe(true);
+    expect(s.kargUnpersisted).toBe(false);
+  });
+});

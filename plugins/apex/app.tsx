@@ -40,6 +40,7 @@ interface FingerprintStatus {
   supported: boolean;
   applied: boolean;
   rebootPending: boolean;
+  kargUnpersisted: boolean;
   kargActive: boolean;
   /** False when this board's GPIO pin is unconfirmed, so the karg path is
    *  unavailable and PME blocking is the whole of the fix. */
@@ -468,6 +469,18 @@ function Apex() {
                 <Alert variant="warning" icon={<FaTriangleExclamation size={14} />} title="Reboot required">
                   A kernel-parameter change is staged. Reboot to finish applying the fingerprint
                   wake block.
+                </Alert>
+              )}
+
+              {data.fingerprint.kargUnpersisted && (
+                <Alert
+                  variant="info"
+                  icon={<FaCircleInfo size={14} />}
+                  title="Active, but not saved to your bootloader"
+                >
+                  The kernel argument is live on this boot but missing from the bootloader config —
+                  a SteamOS update regenerates that file and drops it. The block still works right
+                  now; switch it off and on again to write it back, so it survives the next reboot.
                 </Alert>
               )}
 
