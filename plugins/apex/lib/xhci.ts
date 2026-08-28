@@ -27,7 +27,7 @@ export const DEFAULT_XHCI_PCI = "0000:65:00.4";
  * `1a86:fe00` is the OneXPlayer HID MCU; `045e:028e` the X360-compatible pad
  * it presents. Known good on the Apex. A sibling handheld may enumerate its
  * pad under different ids, and this signal would then read "gamepad missing"
- * forever — see {@link gamepadIdentified}, which tells that apart from a
+ * forever — see {@link gamepadPresence}, whose `any` tells that apart from a
  * genuinely dropped controller so we don't offer a rebind that cannot help.
  */
 export const GAMEPAD_IDS = ["1a86:fe00", "045e:028e"] as const;
@@ -134,28 +134,17 @@ export async function gamepadPresent(run: Run): Promise<boolean> {
 }
 
 /**
- * True when at least one known gamepad id is on the bus.
- *
- * A dead controller drops the whole bus, so "no ids" is ambiguous between
- * "the controller died" and "this device's pad isn't one we recognise".
- * Callers disambiguate with the dmesg signal: no ids *and* nothing dead in
- * the log means we can't identify this hardware, and a rebind would be a shot
- * in the dark rather than a recovery.
- */
-export async function gamepadIdentified(run: Run): Promise<boolean> {
-  for (const id of GAMEPAD_IDS) {
-    if (await usbIdPresent(run, id)) return true;
-  }
-  return false;
-}
-
-/**
  * Both answers from one pass over the ids.
  *
- * `getStatus` needs "all present" and "any present", and calling the two
- * helpers above independently spawned `lsusb` up to four times per poll for
- * the same two ids — and `identified` is redundant whenever `present` is
- * true, since all implies any.
+ * `all` is "the pad is healthy". `any` distinguishes the two readings of
+ * "no ids": a dead controller drops the whole bus, so zero ids is ambiguous
+ * between "the controller died" and "this device's pad isn't one we
+ * recognise" — {@link getStatus} resolves that with the board and the dmesg
+ * signal.
+ *
+ * One pass rather than two helpers: `getStatus` needs both answers, and
+ * asking separately spawned `lsusb` up to four times per poll over the same
+ * two ids, with the second pass redundant whenever the first said yes.
  */
 async function gamepadPresence(run: Run): Promise<{ all: boolean; any: boolean }> {
   let any = false;
