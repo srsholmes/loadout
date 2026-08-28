@@ -171,6 +171,9 @@ export async function getStatus(
   // they do not have. Saying nothing beats saying something false.
   const bootloaderKnown = distro === "steamos";
   const kargLiveOnly = bootloaderKnown && kargActive && !kargStaged;
+  // Distinct from kargApplicable, which means "we know this board's pin" and
+  // still drives the manual hint we show off SteamOS.
+  const kargAutomatic = kargApplicable && bootloaderKnown;
   return {
     supported: controller !== null,
     controller,
@@ -179,12 +182,18 @@ export async function getStatus(
     kargActive,
     kargStaged,
     kargApplicable,
-    // On a board whose pin we haven't confirmed the karg is never staged, so
-    // requiring kargActive left `applied` permanently false: the user flipped
-    // the switch on, PME *was* blocked, and the control sprang back to off.
-    // The natural response is to flip it again — which calls revert() and
-    // undoes the one path that had worked.
-    applied: path2Closed && (kargActive || !kargApplicable),
+    // The karg only counts toward "applied" where we can actually put it
+    // there: a confirmed board AND a bootloader we edit. Requiring kargActive
+    // anywhere else left `applied` permanently false — the user flipped the
+    // switch on, PME *was* blocked, and the control sprang back to off. The
+    // natural response is to flip it again, which calls revert() and undoes
+    // the one path that had worked.
+    //
+    // That held for unmeasured boards, and — until this — for an Apex on
+    // CachyOS or Bazzite too, where we deliberately never stage the karg. It
+    // also made the startup self-heal fire on every single boot there,
+    // re-applying and announcing "restored after a system update" forever.
+    applied: path2Closed && (kargActive || !kargAutomatic),
     // Staged but not yet live → a reboot applies it. Live but not staged
     // *and* the block was reverted → a reboot finishes removing it.
     rebootPending: (kargStaged && !kargActive) || (kargLiveOnly && !udevRuleInstalled),

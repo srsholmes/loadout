@@ -597,3 +597,71 @@ describe("shouldHeal", () => {
     );
   });
 });
+
+describe("an Apex on a distro whose bootloader we don't edit", () => {
+  /**
+   * CachyOS/Bazzite: the board is measured (so we know the pin) but we never
+   * stage the karg there. Counting it toward `applied` anyway left the toggle
+   * springing back to off with PME genuinely blocking the wake — and made the
+   * startup self-heal re-apply and toast "restored after a system update" on
+   * every boot, forever.
+   */
+  const pmeApplied = {
+    [UDEV_RULE_PATH]: "(rule)",
+    [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+  };
+
+  it.each([["cachyos"], ["bazzite"], ["arch"]])(
+    "%s: PME blocking alone counts as applied",
+    async (distro) => {
+      const { deps } = makeFpDeps({
+        files: { ...pmeApplied },
+        cmdline: "BOOT_IMAGE=x quiet",
+        distro,
+      });
+      const s = await getStatus(deps, true); // known board
+      expect(s.kargActive).toBe(false);
+      expect(s.applied).toBe(true);
+    },
+  );
+
+  it("so the startup heal leaves it alone instead of firing every boot", async () => {
+    const { deps } = makeFpDeps({
+      files: { ...pmeApplied },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "cachyos",
+    });
+    const status = await getStatus(deps, true);
+    expect(shouldHeal({ wanted: true, status })).toBe(false);
+  });
+
+  it("still heals there when the block genuinely goes missing", async () => {
+    const { deps } = makeFpDeps({
+      files: {},
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "cachyos",
+    });
+    const status = await getStatus(deps, true);
+    expect(status.applied).toBe(false);
+    expect(shouldHeal({ wanted: true, status })).toBe(true);
+  });
+
+  it("on SteamOS the karg is still required for applied", async () => {
+    // Where we DO stage it, a missing karg still means half-applied.
+    const { deps } = makeFpDeps({
+      files: { ...pmeApplied, "/etc/default/grub-steamos": GRUB_SAMPLE },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+    expect((await getStatus(deps, true)).applied).toBe(false);
+  });
+
+  it("an unmeasured board is unaffected — PME is the whole fix there", async () => {
+    const { deps } = makeFpDeps({
+      files: { ...pmeApplied, "/etc/default/grub-steamos": GRUB_SAMPLE },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+    expect((await getStatus(deps, false)).applied).toBe(true);
+  });
+});
