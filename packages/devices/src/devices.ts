@@ -147,7 +147,13 @@ export const KNOWN_DEVICES: DeviceInfo[] = [
     //
     // TDP from HHD's own X2 Mini Pro entry, which sets the performance
     // preset to 45 W. Unverified on hardware we hold.
-    match: "ONEXPLAYER X2Mini",
+    //
+    // Matched with the " PRO" suffix on purpose. Substring matching on
+    // "ONEXPLAYER X2Mini" would also claim the non-Pro X2 Mini — different
+    // silicon — and hand it this ceiling under the Pro's name. A TDP ceiling
+    // is safety-relevant, so the non-Pro falls through to the conservative
+    // generic row until someone reports its real envelope.
+    match: "ONEXPLAYER X2Mini PRO",
     name: "OneXPlayer X2 Mini Pro",
     minTdp: 5,
     maxTdp: 65,

@@ -44,10 +44,14 @@ export async function readDmi(): Promise<DmiInfo> {
 const OXP_VENDOR = "ONE-NETBOOK";
 
 export function isApexDmi(info: DmiInfo): boolean {
-  return (
-    info.sysVendor.includes(OXP_VENDOR) &&
-    info.productName.startsWith("ONEXPLAYER APEX")
-  );
+  // Case-normalised for the same reason isOneXPlayerDmi is, and it matters
+  // more here: this drives `isKnownBoard`, so firmware reporting
+  // "One-Netbook" would make a genuine Apex an *unknown* board — the karg
+  // would stop auto-staging and recover() would refuse whenever dmesg had
+  // wrapped. That is the regression on our one testable device.
+  const vendor = info.sysVendor.toUpperCase();
+  const product = info.productName.toUpperCase();
+  return vendor.includes(OXP_VENDOR) && product.startsWith("ONEXPLAYER APEX");
 }
 
 /**

@@ -253,11 +253,33 @@ describe("getStatus", () => {
     expect(s.summary).toContain("died on resume");
   });
 
-  it("flags a missing PCI device", async () => {
+  it("flags a missing PCI device on a board we know", async () => {
+    // knownBoard, so `controller` is a real address for this hardware rather
+    // than a guess — its absence is genuinely worth reporting.
     const deps = makeDeps({ present: false, paths: new Set() });
-    const s = await getStatus(deps);
+    const s = await getStatus(deps, undefined, true);
     expect(s.pciDeviceExists).toBe(false);
     expect(s.summary).toContain("not present");
+  });
+
+  it("does not report a missing controller over a working gamepad", async () => {
+    // `controller` falls back to DEFAULT_XHCI_PCI, measured on an Apex, so on
+    // a sibling board that address usually doesn't exist. Leading with it
+    // told users of a perfectly healthy device that a PCI device was missing.
+    const deps = makeDeps({ present: true, paths: new Set() });
+    const s = await getStatus(deps);
+    expect(s.pciDeviceExists).toBe(false);
+    expect(s.gamepadPresent).toBe(true);
+    expect(s.summary).toContain("healthy");
+  });
+
+  it("still says which pad it can't identify when the guessed address is absent", async () => {
+    // The gamepadUnknown line was unreachable whenever the fallback address
+    // didn't resolve — i.e. on exactly the devices it was written for.
+    const deps = makeDeps({ present: false, dmesg: "", paths: new Set() });
+    const s = await getStatus(deps);
+    expect(s.gamepadUnknown).toBe(true);
+    expect(s.summary).toContain("Couldn't identify");
   });
 });
 

@@ -149,6 +149,24 @@ export async function gamepadIdentified(run: Run): Promise<boolean> {
   return false;
 }
 
+/**
+ * Both answers from one pass over the ids.
+ *
+ * `getStatus` needs "all present" and "any present", and calling the two
+ * helpers above independently spawned `lsusb` up to four times per poll for
+ * the same two ids — and `identified` is redundant whenever `present` is
+ * true, since all implies any.
+ */
+async function gamepadPresence(run: Run): Promise<{ all: boolean; any: boolean }> {
+  let any = false;
+  let all = true;
+  for (const id of GAMEPAD_IDS) {
+    if (await usbIdPresent(run, id)) any = true;
+    else all = false;
+  }
+  return { all, any };
+}
+
 /** Decide which controller to act on: caller override → dead-in-log →
  *  the known Apex default. */
 export async function pickController(
@@ -172,12 +190,13 @@ export async function getStatus(
   knownBoard = false,
 ): Promise<XhciStatus> {
   const { controller, deadInLog } = await pickController(deps, override);
-  const [pciDeviceExists, driverBound, padPresent, anyId] = await Promise.all([
+  const [pciDeviceExists, driverBound, presence] = await Promise.all([
     deps.pathExists(pciDevicePath(controller)),
     deps.pathExists(driverLinkPath(controller)),
-    gamepadPresent(deps.run),
-    gamepadIdentified(deps.run),
+    gamepadPresence(deps.run),
   ]);
+  const padPresent = presence.all;
+  const anyId = presence.any;
 
   // Neither known id, on a board we haven't measured: this is a OneXPlayer
   // whose pad we can't identify, not a dropped controller. Saying so beats
@@ -195,13 +214,20 @@ export async function getStatus(
   // rebind, so that is not "an unfamiliar device" either.
   const gamepadUnknown = !padPresent && !anyId && !knownBoard && !deadInLog;
 
+  // Order matters. `controller` may be DEFAULT_XHCI_PCI — a guess measured on
+  // an Apex — so on a sibling board that address usually does NOT exist, and
+  // leading with `!pciDeviceExists` reported "PCI device 0000:65:00.4 not
+  // present" over a perfectly healthy gamepad, while making the
+  // gamepadUnknown line below unreachable on exactly the devices it was
+  // written for. What the pad is doing outranks whether our guessed address
+  // resolves.
   let summary: string;
-  if (!pciDeviceExists) summary = `PCI device ${controller} not present.`;
-  else if (padPresent) summary = "Controller healthy — nothing to do.";
+  if (padPresent) summary = "Controller healthy — nothing to do.";
   else if (deadInLog) summary = "Controller died on resume — rebind to recover the gamepad.";
   else if (gamepadUnknown)
     summary =
       "Couldn't identify this device's internal gamepad — recovery is only known to work on hardware using the OneXPlayer HID MCU.";
+  else if (!pciDeviceExists) summary = `PCI device ${controller} not present.`;
   else summary = "Gamepad not enumerating — a rebind may recover it.";
 
   return {

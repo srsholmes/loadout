@@ -291,7 +291,7 @@ describe("apply — board whose GPIO pin we haven't measured", () => {
     // KARG names a specific GPIO pin (AMDI0030:00@58) — board wiring, not a
     // family constant. On a sibling OneXPlayer that pin may be wrong, and
     // staging it into grub is worse than leaving the second path open. The
-    // derived PME path still applies, and the karg is offered as text.
+    // derived PME path still applies.
     const { deps, files, commands } = makeFpDeps({
       files: { "/etc/default/grub-steamos": GRUB_SAMPLE },
       cmdline: "BOOT_IMAGE=x quiet",
@@ -307,8 +307,39 @@ describe("apply — board whose GPIO pin we haven't measured", () => {
     expect(r.steps).not.toContain("karg-staged");
     expect(files["/etc/default/grub-steamos"]).not.toContain(KARG);
     expect(commands).not.toContain("update-grub");
-    // ...but the user is told what to add if they know their board.
-    expect(r.manualKarg).toBe(KARG);
+    // ...and we don't hand the pin over as an instruction either. Printing
+    // "add gpiolib_acpi.ignore_wake=AMDI0030:00@58" to a user on a board we
+    // haven't measured is the same act as staging it, with extra steps — and
+    // the UI renders it as a flat instruction, not as a caveated example.
+    expect(r.manualKarg).toBeUndefined();
+    expect(r.steps).toContain("karg-not-applicable");
+    // The operation still succeeded: PME blocking is the whole fix here, so
+    // it must not report a half-failure the user would try to "fix".
+    expect(r.success).toBe(true);
+    expect(r.rebootRequired).toBe(false);
+  });
+
+  it("reports itself applied, rather than springing the switch back to off", async () => {
+    // getStatus required kargActive for `applied`, but the karg is never
+    // staged on this board — so the switch went on, PME *was* blocked, and
+    // the next refresh flipped it back to off. Flipping again calls revert()
+    // and undoes the one path that worked.
+    const { deps } = makeFpDeps({
+      files: {
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+      },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+
+    const unmeasured = await getStatus(deps, false);
+    expect(unmeasured.kargActive).toBe(false);
+    expect(unmeasured.applied).toBe(true);
+
+    // On a board we HAVE measured the karg is still genuinely required.
+    const measured = await getStatus(deps, true);
+    expect(measured.applied).toBe(false);
   });
 
   it("still stages the karg on the board we did measure", async () => {

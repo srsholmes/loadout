@@ -69,7 +69,14 @@ export interface FingerprintStatus {
   kargActive: boolean;
   /** Karg staged in the bootloader config but not yet booted. */
   kargStaged: boolean;
-  /** Both paths fully closed and active right now. */
+  /**
+   * Whether the karg path is usable on this board at all. False when we
+   * haven't confirmed the board's GPIO pin, in which case PME blocking is
+   * the whole of the fix and `applied` must not wait on a karg that will
+   * never be staged.
+   */
+  kargApplicable: boolean;
+  /** Fully applied — as far as this board allows. */
   applied: boolean;
   /** A reboot is needed to finish applying/reverting (the karg changed). */
   rebootPending: boolean;
@@ -118,7 +125,10 @@ export async function detectController(deps: FingerprintDeps): Promise<string | 
 
 // --- status ------------------------------------------------------------------
 
-export async function getStatus(deps: FingerprintDeps): Promise<FingerprintStatus> {
+export async function getStatus(
+  deps: FingerprintDeps,
+  kargApplicable = false,
+): Promise<FingerprintStatus> {
   const distro = await deps.distroId();
   const controller = await detectController(deps);
   const cmdline = await deps.readCmdline();
@@ -144,7 +154,13 @@ export async function getStatus(deps: FingerprintDeps): Promise<FingerprintStatu
     udevRuleInstalled,
     kargActive,
     kargStaged,
-    applied: path2Closed && kargActive,
+    kargApplicable,
+    // On a board whose pin we haven't confirmed the karg is never staged, so
+    // requiring kargActive left `applied` permanently false: the user flipped
+    // the switch on, PME *was* blocked, and the control sprang back to off.
+    // The natural response is to flip it again — which calls revert() and
+    // undoes the one path that had worked.
+    applied: path2Closed && (kargActive || !kargApplicable),
     // Reboot pending when the karg's staged state disagrees with the live one.
     rebootPending: kargStaged !== kargActive,
     distro,
@@ -288,9 +304,17 @@ export async function apply(
       return { success: false, rebootRequired: false, steps, error: `Path 1 (karg) failed: ${e}`, manualKarg: KARG };
     }
   }
-  // Unknown distro, or a board whose GPIO pin we haven't confirmed: PME is
-  // blocked either way, and the karg is offered as text for the user to
-  // apply if they know their board's pin.
+  // A board whose GPIO pin we haven't confirmed. PME is blocked, which is
+  // the whole fix we can offer here — and we deliberately do NOT hand over
+  // KARG, because AMDI0030:00@58 is the Apex's wiring. Printing it as an
+  // instruction is the same act as staging it, just with extra steps.
+  if (!autoKarg) {
+    steps.push("karg-not-applicable");
+    return { success: true, rebootRequired: false, steps };
+  }
+
+  // Known board, distro whose bootloader we don't edit: we know the right
+  // pin, so offer it as text for the user to apply.
   steps.push("karg-manual-required");
   return { success: true, rebootRequired: true, steps, manualKarg: KARG };
 }

@@ -29,6 +29,18 @@ describe("isSteamDeckDmi", () => {
 });
 
 describe("isApexDmi", () => {
+  it("normalises case on both fields", () => {
+    // This drives isKnownBoard. Firmware reporting "One-Netbook" instead of
+    // "ONE-NETBOOK" would make a genuine Apex an *unknown* board: the GPIO
+    // karg stops auto-staging and recover() refuses whenever dmesg has
+    // wrapped — the regression on the one device we can test.
+    expect(isApexDmi({ sysVendor: "One-Netbook", productName: "ONEXPLAYER APEX" })).toBe(true);
+    expect(isApexDmi({ sysVendor: "ONE-NETBOOK", productName: "OneXPlayer Apex" })).toBe(true);
+    expect(
+      isApexDmi({ sysVendor: "one-netbook technology co., ltd.", productName: "onexplayer apex" }),
+    ).toBe(true);
+  });
+
   it("still matches the APEX and rejects the Deck", () => {
     expect(isApexDmi({ sysVendor: "ONE-NETBOOK", productName: "ONEXPLAYER APEX 1" })).toBe(true);
     expect(isApexDmi({ sysVendor: "Valve", productName: "Jupiter" })).toBe(false);

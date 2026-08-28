@@ -231,7 +231,7 @@ export default class ApexBackend implements PluginBackend {
     const [status, hidOxp, fingerprint, settings] = await Promise.all([
       computeStatus(this.deps, undefined, this.isKnownBoard),
       getHidOxpStatus(this.hidOxpDeps),
-      fingerprintStatus(this.fpDeps),
+      fingerprintStatus(this.fpDeps, this.isKnownBoard),
       readPluginStorage<ApexSettings>(PLUGIN_ID),
     ]);
     return {

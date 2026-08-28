@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { FaGamepad, FaTriangleExclamation, FaCircleCheck, FaRotate, FaMicrochip, FaFingerprint } from "react-icons/fa6";
+import { FaGamepad, FaTriangleExclamation, FaCircleCheck, FaCircleInfo, FaRotate, FaMicrochip, FaFingerprint } from "react-icons/fa6";
 import { Alert, Button, Spinner, Toggle, mountComponent, notify, useBackend } from "@loadout/ui";
 
 export const icon = FaGamepad;
@@ -25,6 +25,9 @@ interface FingerprintStatus {
   applied: boolean;
   rebootPending: boolean;
   kargActive: boolean;
+  /** False when this board's GPIO pin is unconfirmed, so the karg path is
+   *  unavailable and PME blocking is the whole of the fix. */
+  kargApplicable: boolean;
   distro: string;
 }
 
@@ -207,7 +210,7 @@ function Apex() {
         <div className="card">
           <div className="card-body p-6">
             <div className="text-sm text-base-content/80 leading-relaxed">
-              On the OneXPlayer Apex the xHCI USB controller can die when the device wakes from
+              On OneXPlayer handhelds the xHCI USB controller can die when the device wakes from
               sleep, which drops the built-in gamepad off the bus — it looks dead and restarting
               InputPlumber doesn't help. This rebinds the controller so the pad re-enumerates.
             </div>
@@ -223,7 +226,15 @@ function Apex() {
           <div className="card-body p-6 flex flex-col gap-4">
             <Alert
               variant={healthy ? "success" : gamepadUnknown ? "info" : "warning"}
-              icon={healthy ? <FaCircleCheck size={14} /> : <FaTriangleExclamation size={14} />}
+              icon={
+                healthy ? (
+                  <FaCircleCheck size={14} />
+                ) : gamepadUnknown ? (
+                  <FaCircleInfo size={14} />
+                ) : (
+                  <FaTriangleExclamation size={14} />
+                )
+              }
               title={
                 healthy
                   ? "Controller healthy"
@@ -268,8 +279,12 @@ function Apex() {
                 </span>
               </div>
               <Toggle
-                checked={!!data.autoRecoverOnWake && !gamepadUnknown}
-                disabled={autoWakeBusy || gamepadUnknown}
+                checked={!!data.autoRecoverOnWake}
+                // Can't be armed on a device where recovery is unavailable —
+                // but if it's already on (ids were recognised, then the pad
+                // dropped), it must stay switchable OFF or the user is stuck
+                // with a listener they can see and can't stop.
+                disabled={autoWakeBusy || (gamepadUnknown && !data.autoRecoverOnWake)}
                 onChange={handleToggleAutoWake}
               />
             </div>
@@ -330,7 +345,7 @@ function Apex() {
             </div>
             <div className="card-body p-6 flex flex-col gap-4">
               <div className="text-sm text-base-content/80 leading-relaxed">
-                The power button's fingerprint sensor wakes the Apex from sleep on a light touch —
+                The power button's fingerprint sensor wakes the device from sleep on a light touch —
                 annoying in a bag. This blocks it as a wake source; a deliberate power-button{" "}
                 <span className="font-medium">press</span> still wakes the device.
               </div>
@@ -359,12 +374,23 @@ function Apex() {
                 </Alert>
               )}
 
-              {!data.fingerprint.kargActive && data.fingerprint.distro !== "steamos" && (
+              {!data.fingerprint.kargActive &&
+                data.fingerprint.kargApplicable &&
+                data.fingerprint.distro !== "steamos" && (
+                  <div className="text-xs text-base-content/55 leading-relaxed">
+                    On {data.fingerprint.distro || "this distro"} the GPIO kernel arg can&apos;t be
+                    applied automatically yet. Add{" "}
+                    <span className="mono">gpiolib_acpi.ignore_wake=AMDI0030:00@58</span> to your
+                    kernel command line and reboot to fully block the touch wake.
+                  </div>
+                )}
+
+              {!data.fingerprint.kargApplicable && (
                 <div className="text-xs text-base-content/55 leading-relaxed">
-                  On {data.fingerprint.distro || "this distro"} the GPIO kernel arg can't be applied
-                  automatically yet. Add{" "}
-                  <span className="mono">gpiolib_acpi.ignore_wake=AMDI0030:00@58</span> to your
-                  kernel command line and reboot to fully block the touch wake.
+                  Wake from the reader is blocked at its USB controller, which is derived from your
+                  hardware. There&apos;s a second, belt-and-braces kernel argument we apply on the
+                  Apex, but it names a specific GPIO pin on that board — we don&apos;t know this
+                  model&apos;s, and the wrong pin is worse than none.
                 </div>
               )}
             </div>
@@ -378,9 +404,9 @@ function Apex() {
 function Header() {
   return (
     <div className="flex flex-col gap-0.5 min-w-0">
-      <h1 className="text-xl font-semibold tracking-[-0.015em] m-0 leading-tight">Apex</h1>
+      <h1 className="text-xl font-semibold tracking-[-0.015em] m-0 leading-tight">OneXPlayer</h1>
       <span className="text-[11.5px] text-base-content/55 tracking-[0.02em] truncate leading-tight">
-        OneXPlayer Apex fixes
+        Gamepad + fingerprint fixes
       </span>
     </div>
   );

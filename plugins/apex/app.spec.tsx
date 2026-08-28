@@ -90,7 +90,9 @@ describe("apex plugin", () => {
     const { mountHeader } = await import("./app");
     mountHeader(container);
     await waitFor(() => {
-      expect(container.querySelector("h1")?.textContent).toBe("Apex");
+      // Must track package.json's plugin name — the list and the in-overlay
+      // topbar disagreeing is the visible half of a half-done rename.
+      expect(container.querySelector("h1")?.textContent).toBe("OneXPlayer");
     });
   });
 
@@ -312,10 +314,35 @@ describe("unrecognised gamepad", () => {
     await waitFor(() => {
       expect(container.textContent).toContain("Recover automatically on wake");
     });
-    // Stored setting says true; the device can't support it, so the control
-    // must not read as armed.
-    const toggles = [...container.querySelectorAll('input[type="checkbox"]')];
-    const armed = toggles.filter((t) => (t as HTMLInputElement).checked);
-    expect(armed).toHaveLength(0);
+    // The listener is genuinely running (the backend starts it from stored
+    // settings), so showing it as off would be a lie the user can't act on.
+    // What matters is that they can still switch it OFF — disabling the
+    // control left them watching a listener they had no way to stop.
+    const toggle = [...container.querySelectorAll('input[type="checkbox"]')].at(-1) as
+      | HTMLInputElement
+      | undefined;
+    expect(toggle).toBeDefined();
+    expect(toggle!.checked).toBe(true);
+    expect(toggle!.disabled).toBe(false);
+  });
+
+  it("won't let it be armed on a device where recovery can't work", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus")
+        return Promise.resolve({ ...unknownGamepadStatus, autoRecoverOnWake: false });
+      return Promise.resolve(null);
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Recover automatically on wake");
+    });
+    const toggle = [...container.querySelectorAll('input[type="checkbox"]')].at(-1) as
+      | HTMLInputElement
+      | undefined;
+    expect(toggle!.checked).toBe(false);
+    expect(toggle!.disabled).toBe(true);
   });
 });

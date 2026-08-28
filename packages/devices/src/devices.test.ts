@@ -243,11 +243,19 @@ describe("OneXPlayer X2 Mini Pro", () => {
     // Matching is first-substring-wins, so this is about ORDER, not just
     // strings. Asserting "ONEXPLAYER Mini Pro" still resolves correctly
     // can't fail — neither string contains the other — so it proved nothing.
-    const x2 = KNOWN_DEVICES.findIndex((d) => d.match === "ONEXPLAYER X2Mini");
+    const x2 = KNOWN_DEVICES.findIndex((d) => d.match === "ONEXPLAYER X2Mini PRO");
     const generic = KNOWN_DEVICES.findIndex((d) => d.match === "ONEXPLAYER");
     expect(x2).toBeGreaterThanOrEqual(0);
     expect(generic).toBeGreaterThanOrEqual(0);
     expect(x2).toBeLessThan(generic);
+  });
+
+  it("leaves the non-Pro X2 Mini alone rather than guessing its ceiling", () => {
+    // Different silicon. Substring matching on "ONEXPLAYER X2Mini" would
+    // claim it and hand it the Pro's 65 W under the Pro's name.
+    const d = matchDevice("ONEXPLAYER X2Mini", "AuthenticAMD");
+    expect(d.name).not.toBe("OneXPlayer X2 Mini Pro");
+    expect(d.maxTdp).toBeLessThan(65);
   });
 
   it("does not shadow the plain Mini Pro", () => {
