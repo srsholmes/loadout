@@ -2,6 +2,62 @@
 
 > OneXPlayer device fixes: recover the internal gamepad when its xHCI controller dies on resume, and block the fingerprint reader from waking the device on a light touch.
 
+## Fingerprint wake block, and why it heals itself
+
+The power button's fingerprint reader wakes the device from sleep on a light
+touch. The block closes two paths:
+
+- **Controller PME** — `power/wakeup=disabled` on the xHCI controller hosting
+  the reader, plus a udev rule to persist it. This is the layer that actually
+  stops the wake, it's derived from your hardware at runtime, and it takes
+  effect immediately.
+- **GPIO kernel arg** — `gpiolib_acpi.ignore_wake=...`, belt-and-braces, and
+  only live after a reboot. It names a specific pin, which is board wiring,
+  so it is only staged on boards we have measured.
+
+Both live in `/etc`, and a SteamOS A/B update regenerates that tree — so an
+update silently removes the block and the device quietly starts waking on a
+touch again, with nothing to tell you.
+
+So the plugin checks at startup and puts it back. The user's choice is stored
+in plugin storage under `$HOME` (`fingerprintBlock`), not inferred from
+`/etc`: every signal in the live status is derived from the files an update
+deletes, so after one they cannot distinguish "never wanted it" from "wanted
+it and the OS ate it". Healing off those would enable the block on machines
+whose owner deliberately never turned it on.
+
+The re-apply runs fire-and-forget from `onLoad`. The loader awaits each
+plugin's `onLoad` in turn with no timeout and the HTTP server does not start
+until that loop finishes, so blocking on `update-grub` here would stall the
+whole backend boot.
+
+You are told it happened via a toast at overlay startup — the plugin declares
+`loadOnStartup` and exports `init()`, which pulls the outcome and waits for
+the window to actually be on screen before notifying (the overlay boots
+hidden, so a toast fired at boot is consumed by nobody). The same notice
+renders as an alert on the plugin page if you get there first.
+
+## Vibration
+
+Sets the gamepad's global rumble level (`rumble_intensity`, 0-5), a single
+attenuator the MCU applies to everything — so it scales rumble even in games
+that ignore Steam's own setting.
+
+It lives here rather than in a plugin of its own because it is
+OneXPlayer-only in practice. `rumble_intensity` is a `hid-oxp` attribute and
+no other handheld exposes an equivalent through the kernel: MSI Claw and ROG
+Ally only pass force-feedback *events* through, and Ayaneo, Legion Go and
+Orange Pi have nothing. GPD Win does have a real global setting
+(off/medium/high) but writes it into a config blob over the `wincontrols`
+vendor HID protocol with no sysfs at all, sharing no mechanism with this. A
+standalone plugin would have meant a permanently dead sidebar entry on every
+non-OneXPlayer device.
+
+The value we store wins over the one the driver reports: `rumble_intensity`
+reads back a driver-side cache initialised to maximum on probe, which never
+queries the MCU, so it says 5 after every module load regardless of what the
+firmware is doing. We re-apply the stored level on load for the same reason.
+
 ## Screenshots
 
 ![Apex](./assets/screenshot.png)

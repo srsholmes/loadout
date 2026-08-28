@@ -15,7 +15,7 @@
   "plugin": {
     "id": "apex",
     "name": "OneXPlayer",
-    "description": "OneXPlayer device fixes: recover the internal gamepad when its xHCI controller dies on resume — manually or automatically on every wake — and block the fingerprint reader from waking the device on a light touch.",
+    "description": "OneXPlayer device fixes: recover the internal gamepad when its xHCI controller dies on resume \u2014 manually or automatically on every wake \u2014 and block the fingerprint reader from waking the device on a light touch; set the gamepad's global rumble intensity.",
     "permissions": {
       "commands": [
         "tee",
@@ -27,12 +27,16 @@
         "udevadm",
         "steamos-readonly",
         "update-grub"
+      ],
+      "filesystem": [
+        "/sys/bus/hid/devices"
       ]
     },
     "category": "Device",
-    "subtitle": "Gamepad + fingerprint fixes",
+    "subtitle": "Gamepad, vibration + fingerprint",
     "target": {
       "type": "overlay"
-    }
+    },
+    "loadOnStartup": true
   }
 }

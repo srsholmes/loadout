@@ -1,7 +1,7 @@
 import { access, readFile, writeFile, rm } from "node:fs/promises";
 import type { PluginBackend, EmitPayload, PluginLogger, CallPlugin } from "@loadout/types";
 import { runFull, runStreaming } from "@loadout/exec";
-import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
+import { readPluginStorage, mutatePluginStorage } from "@loadout/plugin-storage";
 import { isApex, isOneXPlayer } from "@loadout/devices";
 import {
   getStatus as computeStatus,
@@ -10,6 +10,7 @@ import {
   type XhciStatus,
   type RecoverResult,
 } from "./lib/xhci";
+import { RumbleControl, type RumbleInfo } from "./lib/rumble-control";
 import {
   getHidOxpStatus,
   removeHidOxpBlacklist,
@@ -20,6 +21,7 @@ import {
   getStatus as fingerprintStatus,
   apply as applyFingerprint,
   revert as revertFingerprint,
+  shouldHeal,
   type FingerprintDeps,
   type FingerprintStatus,
   type FingerprintResult,
@@ -32,7 +34,40 @@ const PLUGIN_ID = "apex";
 interface ApexSettings {
   /** Run the gamepad recovery automatically whenever the device resumes. */
   autoRecoverOnWake?: boolean;
+  /** Global rumble level the user chose. Re-applied on load, because the
+   *  driver's own cache resets to maximum on every module load. */
+  rumbleIntensity?: number;
+  /**
+   * Whether the user wants the fingerprint wake block on.
+   *
+   * Deliberately stored here rather than inferred from `/etc`: a SteamOS A/B
+   * update regenerates that tree and deletes both the udev rule and the grub
+   * line, which is precisely the evidence the old code used to decide the
+   * block was wanted. `$HOME` survives those updates, so this is the only
+   * record that can outlive one. Absent = never chose.
+   */
+  fingerprintBlock?: boolean;
 }
+
+/** What a startup self-heal did, surfaced once so the UI can say so. */
+export interface FingerprintHealNotice {
+  /** The block was re-applied. */
+  restored: boolean;
+  /** A reboot is still needed to bring the GPIO karg layer up. */
+  rebootRequired: boolean;
+  /** Set when the re-apply itself failed. */
+  error?: string;
+}
+
+/** Shape returned when this isn't OneXPlayer hardware at all. */
+const UNAVAILABLE_RUMBLE: RumbleInfo = {
+  available: false,
+  devicePath: null,
+  min: 0,
+  max: 5,
+  intensity: null,
+  source: null,
+};
 
 /**
  * How long to wait after a resume before checking the gamepad. The kernel
@@ -184,6 +219,20 @@ export default class ApexBackend implements PluginBackend {
     };
   }
 
+  /** Global rumble intensity — a hid-oxp attribute, so OneXPlayer-only. */
+  private rumble = new RumbleControl({
+    readStored: async () =>
+      (await readPluginStorage<ApexSettings>(PLUGIN_ID)).rumbleIntensity,
+    writeStored: async (rumbleIntensity) => {
+      await mutatePluginStorage<ApexSettings>(PLUGIN_ID, (existing) => ({
+        ...existing,
+        rumbleIntensity,
+      }));
+    },
+    log: (m) => this.log?.info(`[apex] ${m}`),
+    onChange: (info) => this.emit?.({ event: "rumbleChanged", data: info }),
+  });
+
   async onLoad(): Promise<void> {
     // Family-level, not model-level. Every feature below probes for the
     // hardware it actually touches — the fingerprint reader by USB id, the
@@ -210,10 +259,134 @@ export default class ApexBackend implements PluginBackend {
     if (settings.autoRecoverOnWake) {
       this.startWake();
     }
+
+    // Independent of the fixes above: this is a setting, not a repair, and it
+    // has its own retry scan because hid-oxp can bind after we load.
+    await this.rumble.start();
+
+    // Fire-and-forget — see healFingerprintBlock for why this must not be
+    // awaited. The promise is kept only so the UI can await it on demand.
+    this.healing = this.healFingerprintBlock();
   }
 
   async onUnload(): Promise<void> {
     this.stopWake();
+    this.rumble.stop();
+  }
+
+  // ---------- Fingerprint self-heal ----------
+
+  /** In-flight heal, so getFingerprintHealNotice can await it rather than
+   *  race it. */
+  private healing: Promise<void> | null = null;
+  /**
+   * Serialises everything that edits the fingerprint block.
+   *
+   * apply/revert run `steamos-readonly disable` → write grub → `update-grub`
+   * (up to 120s) → `steamos-readonly enable`. A startup heal can still be
+   * mid-sequence when the user flips the switch, and interleaving the two
+   * lets one side's readonly-enable land while the other is writing, or two
+   * update-grub runs regenerate grub.cfg concurrently. recover() has had a
+   * guard for this reason; this path had none.
+   */
+  private fpLock: Promise<unknown> = Promise.resolve();
+
+  private serialiseFingerprint<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.fpLock.then(fn, fn);
+    // Keep the chain alive regardless of outcome.
+    this.fpLock = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+  /** One-shot: read once by the UI, then cleared, so the toast fires once
+   *  per backend start rather than on every overlay restart. */
+  private healNotice: FingerprintHealNotice | null = null;
+
+  /**
+   * Put the wake block back if the user had it on and something removed it.
+   *
+   * Never awaited by onLoad. `loadPlugins()` walks plugins sequentially with
+   * no timeout and the HTTP server does not start until that loop finishes,
+   * so blocking here on `lsusb` + `udevadm` + `update-grub` would delay the
+   * whole backend boot — and update-grub alone is seconds.
+   */
+  private async healFingerprintBlock(): Promise<void> {
+    try {
+      const [settings, status] = await Promise.all([
+        readPluginStorage<ApexSettings>(PLUGIN_ID),
+        fingerprintStatus(this.fpDeps, this.isKnownBoard),
+      ]);
+      // Backfill for anyone who turned the block on before this shipped:
+      // there is no stored flag yet, so without this the very users the
+      // feature exists for would never be healed. A block that is currently
+      // in effect is proof enough that they wanted it — and recording it now
+      // is the only chance to, before an update erases the evidence.
+      let wanted = settings.fingerprintBlock;
+      if (wanted === undefined && status.applied) {
+        // Decided INSIDE the lock, not from the snapshot above: reading
+        // status shells out to lsusb and a sh loop, so seconds can pass, and
+        // a user toggling the block off in that window would otherwise have
+        // their explicit "off" overwritten with true — then see the block
+        // re-applied on the next boot. Exactly what this design exists to
+        // prevent.
+        await mutatePluginStorage<ApexSettings>(PLUGIN_ID, (existing) => {
+          if (existing.fingerprintBlock !== undefined) return existing;
+          return { ...existing, fingerprintBlock: true };
+        });
+        wanted = (await readPluginStorage<ApexSettings>(PLUGIN_ID)).fingerprintBlock;
+        if (wanted) {
+          this.log?.info("[apex] recorded the existing fingerprint wake block as wanted");
+        }
+      }
+
+      if (!shouldHeal({ wanted, status })) return;
+
+      this.log?.warn(
+        "[apex] fingerprint wake block was enabled but is no longer in effect " +
+          "(a system update usually causes this) — re-applying.",
+      );
+      const res = await this.serialiseFingerprint(() =>
+        applyFingerprint(this.fpDeps, { autoKarg: this.isKnownBoard }),
+      );
+      this.healNotice = {
+        restored: res.success,
+        rebootRequired: !!res.rebootRequired,
+        error: res.success ? undefined : (res.error ?? "Re-applying the block failed."),
+      };
+      this.log?.info(
+        res.success
+          ? `[apex] fingerprint wake block restored${res.rebootRequired ? " (reboot needed for the kernel-arg layer)" : ""}`
+          : `[apex] could not restore the fingerprint wake block: ${res.error}`,
+      );
+      this.emit?.({ event: "statusChanged", data: undefined });
+    } catch (e) {
+      // Never let a heal failure escape: onLoad ignores throws, but an
+      // unhandled rejection here would be invisible.
+      this.log?.warn(`[apex] fingerprint self-heal failed: ${e}`);
+    }
+  }
+
+  /**
+   * The heal outcome, or null. Awaits an in-flight heal first — `emit` has no
+   * replay, so a heal that finished before the overlay connected would
+   * otherwise be missed entirely.
+   *
+   * Reading does NOT consume it. Clearing here meant the startup toast
+   * destroyed the notice before it had been shown: the plugin page's own
+   * fetch always got null, so its alert was unreachable, and a webview
+   * reload before the user opened the overlay discarded the message for
+   * good. The consumer acks once it has actually surfaced it.
+   */
+  async getFingerprintHealNotice(): Promise<FingerprintHealNotice | null> {
+    await this.healing;
+    return this.healNotice;
+  }
+
+  /** Called once the notice has actually been shown to the user. */
+  async ackFingerprintHealNotice(): Promise<void> {
+    this.healNotice = null;
   }
 
   // ---------- RPC ----------
@@ -249,6 +422,27 @@ export default class ApexBackend implements PluginBackend {
    * wake paths (controller PME at runtime + the GPIO kernel arg); the karg
    * change needs a reboot, signalled via `rebootRequired`.
    */
+  // ---------- Rumble ----------
+
+  async getRumbleInfo(): Promise<RumbleInfo> {
+    if (this.unsupported) return UNAVAILABLE_RUMBLE;
+    return this.rumble.getInfo();
+  }
+
+  async setRumbleIntensity(
+    value: number,
+  ): Promise<{ success: boolean; error?: string; info?: RumbleInfo }> {
+    if (this.unsupported) return { success: false, error: "Not running on OneXPlayer hardware." };
+    return this.rumble.setIntensity(value);
+  }
+
+  async rescanRumble(): Promise<RumbleInfo> {
+    // Without this the rescan would readdir the real /sys/bus/hid/devices on
+    // a Steam Deck.
+    if (this.unsupported) return UNAVAILABLE_RUMBLE;
+    return this.rumble.rescan();
+  }
+
   async setFingerprintBlock(
     enabled: boolean,
   ): Promise<FingerprintResult & { unsupported?: boolean }> {
@@ -256,11 +450,38 @@ export default class ApexBackend implements PluginBackend {
       return { success: false, rebootRequired: false, steps: [], unsupported: true, error: "Not running on OneXPlayer hardware." };
     }
     // autoKarg only on the board whose GPIO pin we measured — see isKnownBoard.
-    const result = enabled
-      ? await applyFingerprint(this.fpDeps, { autoKarg: this.isKnownBoard })
-      : await revertFingerprint(this.fpDeps);
+    const result = await this.serialiseFingerprint(() =>
+      enabled
+        ? applyFingerprint(this.fpDeps, { autoKarg: this.isKnownBoard })
+        : revertFingerprint(this.fpDeps),
+    );
+
+    // Record the intent even when the apply partly failed: the user asked for
+    // it, and a later startup should try again rather than forget they did.
+    await mutatePluginStorage<ApexSettings>(PLUGIN_ID, (existing) => ({
+      ...existing,
+      fingerprintBlock: enabled,
+    }));
+
     this.emit?.({ event: "statusChanged", data: undefined });
     return result;
+  }
+
+  /** Reboot the device. Root already, so no polkit involved. */
+  async rebootDevice(): Promise<{ success: boolean; error?: string }> {
+    // Gated like every sibling RPC: this is a root-privileged power-cycle and
+    // should not be reachable on hardware the rest of the plugin is inert on.
+    if (this.unsupported) {
+      return { success: false, error: "Not running on OneXPlayer hardware." };
+    }
+    this.log?.info("[apex] rebooting at user request");
+    // No timeout: shutdown can take longer than any sane limit, and a timeout
+    // returns exitCode -1 — flashing "exit -1" at a user whose device is in
+    // fact rebooting correctly.
+    const r = await runFull(["systemctl", "reboot"]);
+    return r.exitCode === 0
+      ? { success: true }
+      : { success: false, error: r.stderr.trim() || `exit ${r.exitCode}` };
   }
 
   /**
@@ -299,11 +520,13 @@ export default class ApexBackend implements PluginBackend {
       return { success: false, unsupported: true, error: "Not running on OneXPlayer hardware." };
     }
     try {
-      const existing = await readPluginStorage<ApexSettings>(PLUGIN_ID);
-      await writePluginStorage<ApexSettings>(PLUGIN_ID, {
+      // mutatePluginStorage, not read->spread->write: the rumble level
+      // persists into this same file, and the lock is per-plugin — a bare
+      // write here never takes it, so one path silently clobbers the other.
+      await mutatePluginStorage<ApexSettings>(PLUGIN_ID, (existing) => ({
         ...existing,
         autoRecoverOnWake: enabled,
-      });
+      }));
       if (enabled) this.startWake();
       else this.stopWake();
       this.emit?.({ event: "statusChanged", data: undefined });

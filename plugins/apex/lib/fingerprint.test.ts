@@ -7,6 +7,7 @@ import {
   addKargToGrubSteamos,
   removeKargFromGrubSteamos,
   KARG,
+  shouldHeal,
   UDEV_RULE_PATH,
   FP_PRODUCTS,
   type FingerprintDeps,
@@ -367,5 +368,232 @@ describe("apply (non-SteamOS)", () => {
     expect(r.manualKarg).toBe(KARG);
     expect(r.rebootRequired).toBe(true);
     expect(files[UDEV_RULE_PATH]).toContain(CTRL); // path 2 still applied
+  });
+});
+
+describe("rebootPending vs kargUnpersisted", () => {
+  /**
+   * `kargStaged !== kargActive` collapsed four distinct states into two, and
+   * got one of them backwards: on a device where a SteamOS A/B update had
+   * regenerated grub-steamos and dropped our line, the karg was still live
+   * from the last boot, so the UI said "a kernel-parameter change is staged,
+   * reboot to finish applying" — while nothing was staged, the block was
+   * working, and rebooting was the single action that would undo it.
+   */
+  const blockOn = {
+    [UDEV_RULE_PATH]: "(rule)",
+    [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+  };
+
+  it("staged but not live: a reboot applies it", async () => {
+    const { deps } = makeFpDeps({
+      // Staged in the bootloader, absent from the live cmdline.
+      files: { ...blockOn, "/etc/default/grub-steamos": addKargToGrubSteamos(GRUB_SAMPLE) },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+    const s = await getStatus(deps, true);
+    expect(s.kargActive).toBe(false);
+    expect(s.rebootPending).toBe(true);
+    expect(s.kargUnpersisted).toBe(false);
+  });
+
+  it("live and staged: nothing pending", async () => {
+    const { deps } = makeFpDeps({
+      files: { ...blockOn, "/etc/default/grub-steamos": addKargToGrubSteamos(GRUB_SAMPLE) },
+      cmdline: `BOOT_IMAGE=x quiet ${KARG}`,
+      distro: "steamos",
+    });
+    const s = await getStatus(deps, true);
+    expect(s.rebootPending).toBe(false);
+    expect(s.kargUnpersisted).toBe(false);
+  });
+
+  it("live but not staged, block still on: needs re-staging, NOT a reboot", async () => {
+    // The real-device case. Rebooting here loses the protection.
+    const { deps } = makeFpDeps({
+      files: { ...blockOn, "/etc/default/grub-steamos": GRUB_SAMPLE },
+      cmdline: `BOOT_IMAGE=x quiet ${KARG}`,
+      distro: "steamos",
+    });
+    const s = await getStatus(deps, true);
+    expect(s.kargActive).toBe(true);
+    expect(s.rebootPending).toBe(false);
+    expect(s.kargUnpersisted).toBe(true);
+  });
+
+  it("live but not staged, block reverted: a reboot finishes removing it", async () => {
+    // No udev rule — the user turned it off, and the karg lingers until reboot.
+    const { deps } = makeFpDeps({
+      files: { "/etc/default/grub-steamos": GRUB_SAMPLE },
+      cmdline: `BOOT_IMAGE=x quiet ${KARG}`,
+      distro: "steamos",
+    });
+    const s = await getStatus(deps, true);
+    expect(s.rebootPending).toBe(true);
+    expect(s.kargUnpersisted).toBe(false);
+  });
+});
+
+describe("re-staging a karg that is live but lost from the bootloader", () => {
+  /**
+   * The SteamOS-update state: the running kernel still has the karg, grub no
+   * longer does. apply() used to return early on "it's already on the
+   * cmdline" and never touch grub — so the remedy the UI offers ("switch it
+   * off and on again") and the startup self-heal both reported success while
+   * changing nothing, and the warning came straight back.
+   */
+  it("writes the karg back to grub", async () => {
+    const { deps, files, commands } = makeFpDeps({
+      files: {
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        "/etc/default/grub-steamos": GRUB_SAMPLE, // karg absent
+      },
+      cmdline: `BOOT_IMAGE=x quiet ${KARG}`, // but live
+      distro: "steamos",
+    });
+
+    const r = await apply(deps, { autoKarg: true });
+
+    expect(r.success).toBe(true);
+    expect(r.steps).toContain("karg-staged");
+    expect(files["/etc/default/grub-steamos"]).toContain(KARG);
+    expect(commands).toContain("update-grub");
+    // It is already live, so there is nothing for a reboot to achieve.
+    expect(r.rebootRequired).toBe(false);
+  });
+
+  it("clears the warning it was meant to clear", async () => {
+    const { deps } = makeFpDeps({
+      files: {
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        "/etc/default/grub-steamos": GRUB_SAMPLE,
+      },
+      cmdline: `BOOT_IMAGE=x quiet ${KARG}`,
+      distro: "steamos",
+    });
+
+    expect((await getStatus(deps, true)).kargUnpersisted).toBe(true);
+    await apply(deps, { autoKarg: true });
+    expect((await getStatus(deps, true)).kargUnpersisted).toBe(false);
+  });
+
+  it("still skips the bootloader when the karg is live and staged", async () => {
+    const { deps, commands } = makeFpDeps({
+      files: {
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        "/etc/default/grub-steamos": addKargToGrubSteamos(GRUB_SAMPLE),
+      },
+      cmdline: `BOOT_IMAGE=x quiet ${KARG}`,
+      distro: "steamos",
+    });
+
+    const r = await apply(deps, { autoKarg: true });
+    expect(r.steps).toContain("karg-already-active");
+    expect(commands).not.toContain("update-grub");
+  });
+});
+
+describe("distros whose bootloader we don't edit", () => {
+  /**
+   * kargStaged can only be read on SteamOS. Without gating on that, an
+   * Arch/Bazzite user who followed our own manual-karg hint and rebooted got
+   * a permanent alert describing a grub file they don't have.
+   */
+  const liveNotStaged = {
+    files: {
+      [UDEV_RULE_PATH]: "(rule)",
+      [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+    },
+    cmdline: `BOOT_IMAGE=x quiet ${KARG}`,
+  };
+
+  it("does not claim the karg is missing from a bootloader we never wrote", async () => {
+    const { deps } = makeFpDeps({ ...liveNotStaged, distro: "arch" });
+    const s = await getStatus(deps, true);
+    expect(s.kargActive).toBe(true);
+    expect(s.kargUnpersisted).toBe(false);
+    expect(s.rebootPending).toBe(false);
+  });
+
+  it("does not claim a reboot is pending after a revert there either", async () => {
+    const { deps } = makeFpDeps({
+      files: {},
+      cmdline: `BOOT_IMAGE=x quiet ${KARG}`,
+      distro: "bazzite",
+    });
+    expect((await getStatus(deps, true)).rebootPending).toBe(false);
+  });
+
+  it("still reports the SteamOS case", async () => {
+    const { deps } = makeFpDeps({ ...liveNotStaged, distro: "steamos" });
+    expect((await getStatus(deps, true)).kargUnpersisted).toBe(true);
+  });
+});
+
+describe("rebootPending and kargUnpersisted are mutually exclusive", () => {
+  // The reboot button keys on rebootPending. If the two could ever be true
+  // together, it would offer a reboot in the one state where rebooting is
+  // what LOSES the karg.
+  const cases = [
+    { name: "staged, not live", cmdline: "quiet", grub: true, rule: true },
+    { name: "staged and live", cmdline: `quiet ${KARG}`, grub: true, rule: true },
+    { name: "live, not staged, block on", cmdline: `quiet ${KARG}`, grub: false, rule: true },
+    { name: "live, not staged, reverted", cmdline: `quiet ${KARG}`, grub: false, rule: false },
+    { name: "neither", cmdline: "quiet", grub: false, rule: false },
+  ];
+
+  it.each(cases.map((c) => [c.name, c] as const))("%s", async (_n, c) => {
+    const { deps } = makeFpDeps({
+      files: {
+        ...(c.rule ? { [UDEV_RULE_PATH]: "(rule)" } : {}),
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        "/etc/default/grub-steamos": c.grub ? addKargToGrubSteamos(GRUB_SAMPLE) : GRUB_SAMPLE,
+      },
+      cmdline: c.cmdline,
+      distro: "steamos",
+    });
+    const s = await getStatus(deps, true);
+    expect(s.rebootPending && s.kargUnpersisted).toBe(false);
+  });
+});
+
+describe("shouldHeal", () => {
+  const ok = { supported: true, applied: true, kargUnpersisted: false };
+
+  it("heals when the user wanted it and it is no longer applied", () => {
+    // The case this exists for: a SteamOS A/B update regenerated /etc and
+    // took the udev rule with it.
+    expect(shouldHeal({ wanted: true, status: { ...ok, applied: false } })).toBe(true);
+  });
+
+  it("heals when the karg is live but no longer staged", () => {
+    // `applied` is true here, but the karg is missing from the bootloader,
+    // so the protection silently expires at the next grub regeneration.
+    expect(shouldHeal({ wanted: true, status: { ...ok, kargUnpersisted: true } })).toBe(true);
+  });
+
+  it("does nothing when everything is already in effect", () => {
+    expect(shouldHeal({ wanted: true, status: ok })).toBe(false);
+  });
+
+  it("never heals on a machine whose owner didn't ask for it", () => {
+    // The important one. Every field in FingerprintStatus is derived from
+    // /etc or the live kernel — exactly what an update wipes — so healing off
+    // those would silently enable the block on devices that never had it.
+    for (const wanted of [undefined, false]) {
+      expect(shouldHeal({ wanted, status: { ...ok, applied: false } })).toBe(false);
+      expect(shouldHeal({ wanted, status: { ...ok, kargUnpersisted: true } })).toBe(false);
+    }
+  });
+
+  it("does not try on hardware with no reader", () => {
+    // apply() would fail; there is nothing to re-apply.
+    expect(shouldHeal({ wanted: true, status: { ...ok, supported: false, applied: false } })).toBe(
+      false,
+    );
   });
 });

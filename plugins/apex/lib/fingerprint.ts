@@ -80,6 +80,12 @@ export interface FingerprintStatus {
   applied: boolean;
   /** A reboot is needed to finish applying/reverting (the karg changed). */
   rebootPending: boolean;
+  /**
+   * The karg is live on this boot but absent from the bootloader config,
+   * while the block is still meant to be on — so the next grub regeneration
+   * drops it. Re-applying re-stages it; a reboot would LOSE it.
+   */
+  kargUnpersisted: boolean;
   distro: string;
 }
 
@@ -147,6 +153,24 @@ export async function getStatus(
     : false;
 
   const path2Closed = controllerWakeDisabled && udevRuleInstalled;
+
+  // `kargStaged !== kargActive` treated both directions as "reboot
+  // required", which is wrong in one of them. Live-but-not-staged happens
+  // when a SteamOS A/B update regenerates /etc/default/grub-steamos and
+  // drops our line while the running kernel still carries it from the last
+  // boot. Nothing is staged, the block is working, and rebooting is the one
+  // action that would undo it — so reporting "reboot to finish applying"
+  // was both false and actively harmful advice.
+  //
+  // The udev rule is our marker for "the block is meant to be on", which is
+  // what separates that case from a revert still waiting on a reboot.
+  // `kargStaged` can only ever be read on SteamOS — everywhere else we do not
+  // touch the bootloader, so it is hardcoded false. Without this gate, any
+  // Arch/Bazzite user who followed our own manual-karg hint and rebooted got
+  // kargLiveOnly forever, and an alert confidently describing a grub file
+  // they do not have. Saying nothing beats saying something false.
+  const bootloaderKnown = distro === "steamos";
+  const kargLiveOnly = bootloaderKnown && kargActive && !kargStaged;
   return {
     supported: controller !== null,
     controller,
@@ -161,10 +185,42 @@ export async function getStatus(
     // The natural response is to flip it again — which calls revert() and
     // undoes the one path that had worked.
     applied: path2Closed && (kargActive || !kargApplicable),
-    // Reboot pending when the karg's staged state disagrees with the live one.
-    rebootPending: kargStaged !== kargActive,
+    // Staged but not yet live → a reboot applies it. Live but not staged
+    // *and* the block was reverted → a reboot finishes removing it.
+    rebootPending: (kargStaged && !kargActive) || (kargLiveOnly && !udevRuleInstalled),
+    kargUnpersisted: kargLiveOnly && udevRuleInstalled,
     distro,
   };
+}
+
+/**
+ * Should the block be silently re-applied at startup?
+ *
+ * A SteamOS A/B update regenerates `/etc` and takes the udev rule and the
+ * grub line with it, so the device quietly goes back to waking on a light
+ * touch of the power button with nothing to tell the user.
+ *
+ * `wanted` must come from plugin storage under `$HOME`, NOT from any of the
+ * status fields below. Every signal in {@link FingerprintStatus} is derived
+ * from `/etc` or the live kernel — exactly what the update wipes — so after
+ * one they cannot tell "the user never enabled it" from "the user enabled it
+ * and the OS ate it". Healing off those would re-apply the block on machines
+ * whose owner deliberately never turned it on.
+ *
+ * `kargUnpersisted` counts as needing a heal even though `applied` is true
+ * in that state: the karg is live on this boot but missing from the
+ * bootloader, so the protection silently expires at the next grub
+ * regeneration. Re-applying re-stages it.
+ */
+export function shouldHeal(input: {
+  /** The user's stored choice. `undefined` = never chose. */
+  wanted: boolean | undefined;
+  status: Pick<FingerprintStatus, "supported" | "applied" | "kargUnpersisted">;
+}): boolean {
+  if (input.wanted !== true) return false;
+  // No reader on this machine — nothing to re-apply, and apply() would fail.
+  if (!input.status.supported) return false;
+  return !input.status.applied || input.status.kargUnpersisted;
 }
 
 // --- path 2: controller PME (runtime + udev) ---------------------------------
@@ -247,6 +303,14 @@ async function addKargSteamos(deps: FingerprintDeps, steps: string[]): Promise<b
   return true;
 }
 
+/** Whether a bootloader config currently carries the karg. */
+async function readsKarg(deps: FingerprintDeps, path: string): Promise<boolean> {
+  return deps
+    .readFile(path)
+    .then((c) => c.includes(KARG))
+    .catch(() => false);
+}
+
 async function removeKargSteamos(deps: FingerprintDeps, steps: string[]): Promise<boolean> {
   const current = await deps.readFile(GRUB_STEAMOS).catch(() => "");
   if (!current.includes(KARG)) {
@@ -291,14 +355,27 @@ export async function apply(
   // never edit a bootloader we haven't validated.
   const distro = await deps.distroId();
   const alreadyActive = (await deps.readCmdline()).includes(KARG);
-  if (alreadyActive) {
+  const canStage = distro === "steamos" && autoKarg;
+  const alreadyStaged = canStage ? await readsKarg(deps, GRUB_STEAMOS) : false;
+
+  // Only skip the bootloader edit when the karg is live AND already staged —
+  // or when we would not be editing the bootloader anyway.
+  //
+  // Live-but-unstaged is the whole SteamOS-update case: the running kernel
+  // still carries the karg while grub has lost it. Returning early there made
+  // both remedies we offer for that state — "switch it off and on again" and
+  // the startup self-heal — silently unable to put the line back, while
+  // reporting success.
+  if (alreadyActive && (alreadyStaged || !canStage)) {
     steps.push("karg-already-active");
     return { success: true, rebootRequired: false, steps };
   }
-  if (distro === "steamos" && autoKarg) {
+  if (canStage) {
     try {
       await addKargSteamos(deps, steps);
-      return { success: true, rebootRequired: true, steps };
+      // Nothing to wait for when the running kernel already has it; this
+      // call only re-persisted it for the next boot.
+      return { success: true, rebootRequired: !alreadyActive, steps };
     } catch (e) {
       // Path 2 is still applied; surface the karg failure but don't pretend.
       return { success: false, rebootRequired: false, steps, error: `Path 1 (karg) failed: ${e}`, manualKarg: KARG };

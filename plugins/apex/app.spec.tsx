@@ -346,3 +346,354 @@ describe("unrecognised gamepad", () => {
     expect(toggle!.disabled).toBe(true);
   });
 });
+
+describe("vibration card", () => {
+  beforeEach(() => {
+    callMock.mockReset();
+    eventHandlers.clear();
+  });
+
+  const withRumble = (rumble: unknown) =>
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") return Promise.resolve(healthyStatus);
+      if (method === "getRumbleInfo") return Promise.resolve(rumble);
+      if (method === "setRumbleIntensity")
+        return Promise.resolve({ success: true, info: { ...(rumble as object), intensity: 2 } });
+      return Promise.resolve(null);
+    });
+
+  const available = {
+    available: true,
+    devicePath: "/sys/bus/hid/devices/0003:1A86:FE00.0003",
+    min: 0,
+    max: 5,
+    intensity: 5,
+    source: "stored" as const,
+  };
+
+  it("offers one cell per level the device reports", async () => {
+    withRumble(available);
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Rumble intensity");
+    });
+    const cells = [...container.querySelectorAll(".segmented > button")];
+    expect(cells.map((c) => c.textContent?.trim())).toEqual(["Off", "1", "2", "3", "4", "5"]);
+  });
+
+  it("derives the cells from the device, not a hardcoded 0-5", async () => {
+    withRumble({ ...available, min: 1, max: 10, intensity: 4 });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      const cells = [...container.querySelectorAll(".segmented > button")];
+      expect(cells.at(-1)?.textContent?.trim()).toBe("10");
+    });
+  });
+
+  it("sends the chosen level to the backend", async () => {
+    withRumble(available);
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    const cell = await waitFor(() => {
+      const el = [...container.querySelectorAll(".segmented > button")].find(
+        (b) => b.textContent?.trim() === "2",
+      );
+      if (!el) throw new Error("level 2 not rendered yet");
+      return el;
+    });
+    fireEvent.click(cell);
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("setRumbleIntensity", 2);
+    });
+  });
+
+  it("explains itself and offers a retry when there's no rumble control", async () => {
+    // The standalone plugin had this; dropping it left a OneXPlayer with
+    // hid-oxp blacklisted showing nothing at all.
+    withRumble({ ...available, available: false, intensity: null, source: null });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("rumble_intensity");
+      expect(container.textContent).toContain("hid-oxp");
+    });
+    const retry = [...container.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Check again"),
+    );
+    expect(retry).toBeDefined();
+    fireEvent.click(retry!);
+    await waitFor(() => expect(callMock).toHaveBeenCalledWith("rescanRumble"));
+  });
+
+  it("keeps every level reachable by d-pad while a write is in flight", async () => {
+    // `disabled` maps to focusable:false, which unregisters the cells from
+    // spatial navigation — in the plugin whose point is being navigable.
+    withRumble(available);
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    const cells = await waitFor(() => {
+      const c = [...container.querySelectorAll(".segmented > button")];
+      if (c.length === 0) throw new Error("not rendered yet");
+      return c as HTMLButtonElement[];
+    });
+    fireEvent.click(cells[2]!);
+    for (const cell of [...container.querySelectorAll(".segmented > button")]) {
+      expect((cell as HTMLButtonElement).disabled).toBe(false);
+    }
+  });
+
+  it("hides the intensity control when the device has no rumble control", async () => {
+    // Every OneXPlayer gets this plugin, but gen-1 boards expose RGB only —
+    // an empty control would read as broken.
+    withRumble({ ...available, available: false, intensity: null, source: null });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Controller healthy");
+    });
+    expect(container.textContent).not.toContain("Rumble intensity");
+  });
+
+  it("flags a driver-reported level as unreliable", async () => {
+    withRumble({ ...available, source: "driver" });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("resets to maximum");
+    });
+  });
+});
+
+describe("startup self-heal toast", () => {
+  beforeEach(() => {
+    callMock.mockReset();
+    notifyMock.mockReset();
+    eventHandlers.clear();
+  });
+
+  function makeApi(notice: unknown) {
+    return {
+      call: mock(async (method: string) =>
+        method === "getFingerprintHealNotice" ? notice : null,
+      ),
+      subscribe: mock(() => () => {}),
+    };
+  }
+
+  /** The shell dispatches this once the window is actually on screen. */
+  function showOverlay() {
+    window.dispatchEvent(
+      new CustomEvent("loadout:overlay-visibility", { detail: { isOpen: true } }),
+    );
+  }
+
+  it("says nothing when no heal happened", async () => {
+    const { init } = await import("./app");
+    await init(makeApi(null));
+    showOverlay();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("waits for the window to be visible before toasting", async () => {
+    // The overlay boots hidden and starts at login, so a toast fired at boot
+    // is consumed while nobody is looking.
+    const { init } = await import("./app");
+    const done = init(makeApi({ restored: true, rebootRequired: false }));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(notifyMock).not.toHaveBeenCalled(); // still hidden
+
+    showOverlay();
+    await done;
+    expect(notifyMock).toHaveBeenCalled();
+    expect(String(notifyMock.mock.calls[0]![0])).toContain("restored");
+  });
+
+  it("catches the window opening while the RPC is still in flight", async () => {
+    // The listener has to be attached before the first await: the event fires
+    // once, on the transition, so a listener registered after the round-trip
+    // misses it and the toast never appears.
+    const { init } = await import("./app");
+    const done = init(makeApi({ restored: true, rebootRequired: false }));
+    showOverlay(); // fires immediately, before api.call resolves
+    await done;
+    expect(notifyMock).toHaveBeenCalled();
+  });
+
+  it("mentions the reboot only when the karg layer still needs one", async () => {
+    const { init } = await import("./app");
+    const done = init(makeApi({ restored: true, rebootRequired: true }));
+    showOverlay();
+    await done;
+    expect(String(notifyMock.mock.calls[0]![0])).toContain("Reboot");
+
+    notifyMock.mockReset();
+    const done2 = init(makeApi({ restored: true, rebootRequired: false }));
+    showOverlay();
+    await done2;
+    expect(String(notifyMock.mock.calls[0]![0])).not.toContain("Reboot");
+  });
+
+  it("shows a failed heal on the page too, not just as a toast", async () => {
+    // The page fetches the notice; dropping the !restored case meant a
+    // failed re-apply was fetched, stored and silently discarded.
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus")
+        return Promise.resolve({
+          ...healthyStatus,
+          fingerprint: {
+            supported: true,
+            applied: false,
+            rebootPending: false,
+            kargUnpersisted: false,
+            kargApplicable: true,
+            kargActive: false,
+            udevRuleInstalled: false,
+            distro: "steamos",
+            controller: "0000:67:00.0",
+          },
+        });
+      if (method === "getFingerprintHealNotice")
+        return Promise.resolve({ restored: false, rebootRequired: false, error: "EACCES" });
+      return Promise.resolve(null);
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Couldn't restore the wake block");
+      expect(container.textContent).toContain("EACCES");
+    });
+  });
+
+  it("reports a failed restore as an error, not a success", async () => {
+    const { init } = await import("./app");
+    const done = init(makeApi({ restored: false, rebootRequired: false, error: "EACCES" }));
+    showOverlay();
+    await done;
+    expect(String(notifyMock.mock.calls[0]![0])).toContain("EACCES");
+    expect((notifyMock.mock.calls[0]![1] as { kind?: string })?.kind).toBe("error");
+  });
+
+  it("stays quiet when the backend isn't reachable", async () => {
+    const { init } = await import("./app");
+    await init({
+      call: mock(async () => {
+        throw new Error("not up");
+      }),
+      subscribe: mock(() => () => {}),
+    });
+    showOverlay();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("reboot button", () => {
+  beforeEach(() => {
+    callMock.mockReset();
+    eventHandlers.clear();
+  });
+
+  const fpStatus = (over: Record<string, unknown> = {}) => ({
+    ...healthyStatus,
+    fingerprint: {
+      supported: true,
+      applied: true,
+      rebootPending: true,
+      kargUnpersisted: false,
+      kargApplicable: true,
+      kargActive: false,
+      udevRuleInstalled: true,
+      distro: "steamos",
+      controller: "0000:67:00.0",
+      ...over,
+    },
+  });
+
+  async function mountWithFp(over: Record<string, unknown> = {}) {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") return Promise.resolve(fpStatus(over));
+      if (method === "rebootDevice") return Promise.resolve({ success: true });
+      return Promise.resolve(null);
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => expect(container.textContent).toContain("Fingerprint"));
+    return container;
+  }
+
+  const findBtn = (c: HTMLElement, text: string) =>
+    [...c.querySelectorAll("button")].find((b) => b.textContent?.includes(text));
+
+  it("offers a reboot when one would actually help", async () => {
+    const container = await mountWithFp();
+    await waitFor(() => expect(findBtn(container, "Restart device")).toBeDefined());
+  });
+
+  it("does not offer one when no reboot is pending", async () => {
+    // Notably the kargUnpersisted state, where a reboot is what LOSES the
+    // karg — that the two states are mutually exclusive is pinned against
+    // getStatus in lib/fingerprint.test.ts, not here.
+    const container = await mountWithFp({ rebootPending: false, kargUnpersisted: true });
+    expect(findBtn(container, "Restart device")).toBeUndefined();
+  });
+
+  it("needs a separate confirm control, not a second press", async () => {
+    const container = await mountWithFp();
+    const btn = await waitFor(() => {
+      const b = findBtn(container, "Restart device");
+      if (!b) throw new Error("not rendered yet");
+      return b;
+    });
+    fireEvent.click(btn);
+    await waitFor(() => expect(findBtn(container, "Confirm restart")).toBeDefined());
+    expect(callMock).not.toHaveBeenCalledWith("rebootDevice");
+
+    fireEvent.click(findBtn(container, "Confirm restart")!);
+    await waitFor(() => expect(callMock).toHaveBeenCalledWith("rebootDevice"));
+  });
+
+  it("survives a held A press without rebooting", async () => {
+    // `a` is a RepeatableAction: REPEAT_DELAY_MS 500 then REPEAT_RATE_MS 200,
+    // each repeat dispatching a synthetic Enter that Button turns into an
+    // onClick. A two-click-on-one-button confirm would power-cycle the
+    // device from a single held press.
+    const container = await mountWithFp();
+    const btn = await waitFor(() => {
+      const b = findBtn(container, "Restart device");
+      if (!b) throw new Error("not rendered yet");
+      return b;
+    });
+    // The whole repeat train lands on the button that is already focused.
+    for (let i = 0; i < 8; i++) fireEvent.click(btn);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(callMock).not.toHaveBeenCalledWith("rebootDevice");
+  });
+
+  it("says a reboot finishes REMOVING the block when that is what is pending", async () => {
+    // rebootPending covers both directions; the copy used to claim
+    // "applying" even for a user who had just switched it off.
+    const container = await mountWithFp({ udevRuleInstalled: false });
+    await waitFor(() => expect(container.textContent).toContain("finish removing"));
+    expect(container.textContent).not.toContain("finish applying");
+  });
+});
