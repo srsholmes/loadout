@@ -1,11 +1,7 @@
 import { access, readFile, writeFile, rm } from "node:fs/promises";
 import type { PluginBackend, EmitPayload, PluginLogger, CallPlugin } from "@loadout/types";
 import { runFull, runStreaming } from "@loadout/exec";
-import {
-  readPluginStorage,
-  writePluginStorage,
-  mutatePluginStorage,
-} from "@loadout/plugin-storage";
+import { readPluginStorage, mutatePluginStorage } from "@loadout/plugin-storage";
 import { isApex, isOneXPlayer } from "@loadout/devices";
 import {
   getStatus as computeStatus,
@@ -41,6 +37,16 @@ interface ApexSettings {
    *  driver's own cache resets to maximum on every module load. */
   rumbleIntensity?: number;
 }
+
+/** Shape returned when this isn't OneXPlayer hardware at all. */
+const UNAVAILABLE_RUMBLE: RumbleInfo = {
+  available: false,
+  devicePath: null,
+  min: 0,
+  max: 5,
+  intensity: null,
+  source: null,
+};
 
 /**
  * How long to wait after a resume before checking the gamepad. The kernel
@@ -279,16 +285,21 @@ export default class ApexBackend implements PluginBackend {
   // ---------- Rumble ----------
 
   async getRumbleInfo(): Promise<RumbleInfo> {
+    if (this.unsupported) return UNAVAILABLE_RUMBLE;
     return this.rumble.getInfo();
   }
 
   async setRumbleIntensity(
     value: number,
   ): Promise<{ success: boolean; error?: string; info?: RumbleInfo }> {
+    if (this.unsupported) return { success: false, error: "Not running on OneXPlayer hardware." };
     return this.rumble.setIntensity(value);
   }
 
   async rescanRumble(): Promise<RumbleInfo> {
+    // Without this the rescan would readdir the real /sys/bus/hid/devices on
+    // a Steam Deck.
+    if (this.unsupported) return UNAVAILABLE_RUMBLE;
     return this.rumble.rescan();
   }
 
@@ -342,11 +353,13 @@ export default class ApexBackend implements PluginBackend {
       return { success: false, unsupported: true, error: "Not running on OneXPlayer hardware." };
     }
     try {
-      const existing = await readPluginStorage<ApexSettings>(PLUGIN_ID);
-      await writePluginStorage<ApexSettings>(PLUGIN_ID, {
+      // mutatePluginStorage, not read->spread->write: the rumble level
+      // persists into this same file, and the lock is per-plugin — a bare
+      // write here never takes it, so one path silently clobbers the other.
+      await mutatePluginStorage<ApexSettings>(PLUGIN_ID, (existing) => ({
         ...existing,
         autoRecoverOnWake: enabled,
-      });
+      }));
       if (enabled) this.startWake();
       else this.stopWake();
       this.emit?.({ event: "statusChanged", data: undefined });

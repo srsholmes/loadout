@@ -73,6 +73,9 @@ export interface RumbleDeps {
   /** Persist the level. */
   writeStored: (value: number) => Promise<void>;
   log?: (msg: string) => void;
+  /** Retry cadence while no device is found. Injectable so tests can assert
+   *  the scan actually stops rather than waiting out the real 30s. */
+  intervalMs?: number;
   /** Called when detection or the level changes, so the UI can refresh. */
   onChange?: (info: RumbleInfo) => void;
   /**
@@ -112,7 +115,7 @@ export class RumbleControl {
     this.scanner = createRetryScanner({
       label: "apex:rumble",
       scan: () => this.scan(),
-      intervalMs: 30_000,
+      intervalMs: this.deps.intervalMs ?? 30_000,
       onFound: async () => {
         await this.restore();
         this.deps.onChange?.(await this.getInfo());
@@ -127,6 +130,9 @@ export class RumbleControl {
 
   /** Find the first HID device carrying the attribute. */
   private async scan(): Promise<boolean> {
+    // Clear first: without this a rescan after the device disappeared kept
+    // reporting the old path as available.
+    this.devicePath = null;
     let entries: string[];
     try {
       entries = await this.fs.readdir(HID_DEVICES);
@@ -216,8 +222,11 @@ export class RumbleControl {
     // Nothing stored: report what the driver says, flagged as such. Its cache
     // is initialised to the maximum on probe, so this is "what it would do",
     // not necessarily what the MCU is doing.
+    // `Number("")` is 0, which is finite — so a short or empty read used to
+    // surface as a confident "Off" for a level we do not actually know.
     const raw = await this.readAttr(join(this.devicePath, INTENSITY_ATTR));
-    const parsed = raw === null ? NaN : Number(raw.trim());
+    const trimmed = raw?.trim() ?? "";
+    const parsed = trimmed === "" ? NaN : Number(trimmed);
     return {
       available: true,
       devicePath: this.devicePath,
@@ -253,7 +262,12 @@ export class RumbleControl {
 
   /** Re-run detection — for the UI's retry button after un-blacklisting. */
   async rescan(): Promise<RumbleInfo> {
-    await this.scan();
+    // Through the scanner, not scan() directly: calling scan() left the
+    // scanner's `found` flag false, so its 30s interval kept polling after a
+    // successful manual rescan and eventually re-fired onFound — an extra
+    // sysfs write and an extra change event out of nowhere.
+    if (this.scanner) await this.scanner.rescan();
+    else await this.scan();
     const info = await this.getInfo();
     this.deps.onChange?.(info);
     return info;

@@ -415,7 +415,46 @@ describe("vibration card", () => {
     });
   });
 
-  it("hides the card entirely when the device has no rumble control", async () => {
+  it("explains itself and offers a retry when there's no rumble control", async () => {
+    // The standalone plugin had this; dropping it left a OneXPlayer with
+    // hid-oxp blacklisted showing nothing at all.
+    withRumble({ ...available, available: false, intensity: null, source: null });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("rumble_intensity");
+      expect(container.textContent).toContain("hid-oxp");
+    });
+    const retry = [...container.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Check again"),
+    );
+    expect(retry).toBeDefined();
+    fireEvent.click(retry!);
+    await waitFor(() => expect(callMock).toHaveBeenCalledWith("rescanRumble"));
+  });
+
+  it("keeps every level reachable by d-pad while a write is in flight", async () => {
+    // `disabled` maps to focusable:false, which unregisters the cells from
+    // spatial navigation — in the plugin whose point is being navigable.
+    withRumble(available);
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    const cells = await waitFor(() => {
+      const c = [...container.querySelectorAll(".segmented > button")];
+      if (c.length === 0) throw new Error("not rendered yet");
+      return c as HTMLButtonElement[];
+    });
+    fireEvent.click(cells[2]!);
+    for (const cell of [...container.querySelectorAll(".segmented > button")]) {
+      expect((cell as HTMLButtonElement).disabled).toBe(false);
+    }
+  });
+
+  it("hides the intensity control when the device has no rumble control", async () => {
     // Every OneXPlayer gets this plugin, but gen-1 boards expose RGB only —
     // an empty control would read as broken.
     withRumble({ ...available, available: false, intensity: null, source: null });

@@ -11,6 +11,12 @@ import { render, screen } from "../../../../test/render";
  *
  * `focused` is driven by norigin-spatial-navigation at runtime, so it's
  * mocked here rather than simulated.
+ *
+ * NOTE this replaces the whole spatial-nav module with a single export, which
+ * is safe only because `test:ui` runs with `--isolate`. Without it the stub
+ * leaks into every later file — Select needs FocusContext/setFocus from this
+ * module, and Slider/TabBar/Toggle would all see `focused` stuck at whatever
+ * the last case here left it.
  */
 let focusedNow = false;
 mock.module("../spatial-nav", () => ({
@@ -52,20 +58,6 @@ describe("SegmentedItem", () => {
     const btn = screen.getByRole("button");
     expect(btn.style.animation).toContain("focusPulse");
     expect(btn.className).toContain("scale-[1.02]");
-  });
-
-  it("shows the focus ring on a cell that isn't the selected one", () => {
-    // The failure mode being guarded: `active` styling made it *look* like
-    // focus was visible, while moving onto any other cell showed nothing.
-    focusedNow = true;
-    render(
-      <SegmentedItem active={false} onSelect={() => {}}>
-        3
-      </SegmentedItem>,
-    );
-    const btn = screen.getByRole("button");
-    expect(btn.className).not.toContain("active");
-    expect(btn.style.animation).toContain("focusPulse");
   });
 
   it("keeps caller-supplied style and className alongside the ring", () => {

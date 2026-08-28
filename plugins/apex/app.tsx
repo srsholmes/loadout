@@ -102,6 +102,17 @@ function Apex() {
       .catch(() => setRumble(null));
   }, [refresh, call]);
 
+  const handleRescanRumble = useCallback(async () => {
+    setRumbleBusy(true);
+    try {
+      setRumble((await call("rescanRumble")) as RumbleInfo);
+    } catch (e) {
+      notify(String(e), { kind: "error" });
+    } finally {
+      setRumbleBusy(false);
+    }
+  }, [call]);
+
   const handleSetRumble = useCallback(
     async (level: number) => {
       setRumbleBusy(true);
@@ -342,6 +353,30 @@ function Apex() {
           </div>
         </div>
 
+        {rumble && !rumble.available && (
+          <div className="card">
+            <div className="card-header flex items-center gap-2 py-3.5 px-4.5 border-b border-base-300">
+              <div className="card-title flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-base-content/50">
+                <FaGamepad className="w-3 h-3" /> Vibration
+              </div>
+            </div>
+            <div className="card-body p-6 flex flex-col gap-4">
+              <div className="text-sm text-base-content/80 leading-relaxed">
+                Nothing here exposes <span className="mono">rumble_intensity</span>, so the rumble
+                level can&apos;t be set. That usually means the{" "}
+                <span className="mono">hid-oxp</span> driver isn&apos;t loaded — it needs a kernel
+                carrying it, and it can be blacklisted (see below) — or this is a
+                first-generation OneXPlayer, where the driver exposes RGB only.
+              </div>
+              <div>
+                <Button onClick={() => void handleRescanRumble()} disabled={rumbleBusy}>
+                  {rumbleBusy ? "Checking…" : "Check again"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {rumble?.available && (
           <div className="card">
             <div className="card-header flex items-center gap-2 py-3.5 px-4.5 border-b border-base-300">
@@ -364,7 +399,6 @@ function Apex() {
                   <SegmentedItem
                     key={level}
                     className="flex-1"
-                    disabled={rumbleBusy}
                     active={rumble.intensity === level}
                     onSelect={() => void handleSetRumble(level)}
                   >

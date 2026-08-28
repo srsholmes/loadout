@@ -52,8 +52,12 @@ export function SegmentedItem({
   // `focused`, and there is no :focus rule for `.segmented > button` in the
   // shell CSS. So a controller user could move through a segmented control
   // with nothing on screen changing — indistinguishable from it not being
-  // navigable at all. Button/Slider/Toggle all already pulse-and-scale;
-  // this now matches them.
+  // navigable at all. Same pulse-and-scale Button/Slider/Toggle already use.
+  //
+  // (The transition class is inert here: the shell's unlayered
+  // `.segmented > button { transition: all 120ms }` beats a Tailwind utility
+  // in @layer utilities, so the scale animates at 120ms. Kept for
+  // consistency with the other controls, and it applies if that rule goes.)
   const classes = [
     active ? "active" : "",
     "transition-transform duration-100",

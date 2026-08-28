@@ -132,6 +132,27 @@ describe("setIntensity", () => {
     expect(writes.at(-1)!.data).toBe("0");
   });
 
+  it("reports a refused sysfs write instead of claiming success", async () => {
+    // EACCES/EINVAL on the attribute is the most likely real runtime failure,
+    // and the branch was left untested when this moved out of its own plugin.
+    const harness = makeFs({
+      [`${DEV}/rumble_intensity`]: "5\n",
+      [`${DEV}/rumble_intensity_range`]: "0-5\n",
+    });
+    harness.fs.writeFile = async () => {
+      throw new Error("EACCES");
+    };
+    const control = new RumbleControl({
+      readStored: async () => undefined,
+      writeStored: async () => {},
+      fs: harness.fs,
+    });
+    await control.rescan();
+    const res = await control.setIntensity(2);
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("EACCES");
+  });
+
   it("fails cleanly with no device rather than throwing", async () => {
     const { control } = makeControl({ files: {}, entries: [] });
     const res = await control.setIntensity(3);
@@ -166,12 +187,92 @@ describe("setIntensity", () => {
   });
 });
 
+describe("detection edge cases", () => {
+  it("reports unavailable when there is no HID bus at all", async () => {
+    // Container, or an unusual kernel: readdir of /sys/bus/hid/devices throws.
+    const control = new RumbleControl({
+      readStored: async () => undefined,
+      writeStored: async () => {},
+      fs: {
+        readdir: async () => {
+          throw new Error("ENOENT");
+        },
+        readFile: async () => {
+          throw new Error("ENOENT");
+        },
+        writeFile: async () => {},
+      },
+    });
+    const info = await control.rescan();
+    expect(info.available).toBe(false);
+  });
+
+  it("stops reporting a device that has gone away", async () => {
+    const h = makeControl();
+    expect((await h.control.rescan()).available).toBe(true);
+    // Unplugged / driver unloaded.
+    delete h.files[`${DEV}/rumble_intensity`];
+    const after = await h.control.rescan();
+    expect(after.available).toBe(false);
+    expect(after.devicePath).toBeNull();
+  });
+
+  it("does not read an empty attribute as \"Off\"", async () => {
+    // Number("") is 0, which is finite — so a short read used to surface as a
+    // confident Off for a level we don't know.
+    const { control } = makeControl({
+      files: {
+        [`${DEV}/rumble_intensity`]: "   \n",
+        [`${DEV}/rumble_intensity_range`]: "0-5\n",
+      },
+    });
+    const info = await control.rescan();
+    expect(info.available).toBe(true);
+    expect(info.intensity).toBeNull();
+    expect(info.source).toBeNull();
+  });
+});
+
 describe("start", () => {
   it("re-applies a stored level, since the driver's cache resets on reload", async () => {
     const { control, writes } = makeControl({ stored: 2 });
     await control.start();
     control.stop();
     expect(writes).toContainEqual({ path: `${DEV}/rumble_intensity`, data: "2" });
+  });
+
+  it("stops the retry scan on unload", async () => {
+    // With no device present the scanner polls every 30s for the process
+    // lifetime; stop() has to actually end it.
+    let scans = 0;
+    const control = new RumbleControl({
+      readStored: async () => undefined,
+      writeStored: async () => {},
+      intervalMs: 5,
+      fs: {
+        readdir: async () => {
+          scans++;
+          return [];
+        },
+        readFile: async () => {
+          throw new Error("ENOENT");
+        },
+        writeFile: async () => {},
+      },
+    });
+    await control.start();
+    expect(scans).toBe(1);
+
+    // Confirm the retry is genuinely running before asserting it stops —
+    // otherwise this passes against a stop() that does nothing.
+    await new Promise((r) => setTimeout(r, 25));
+    const whileRunning = scans;
+    expect(whileRunning).toBeGreaterThan(1);
+
+    control.stop();
+    const afterStop = scans;
+    await new Promise((r) => setTimeout(r, 30));
+    expect(scans).toBe(afterStop);
   });
 
   it("writes nothing when the user has never chosen a level", async () => {

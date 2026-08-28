@@ -61,18 +61,34 @@ mock.module("./lib/xhci", () => ({
 // it, emits rumbleChanged during onLoad, and every exact-event assertion
 // below fails depending on what's plugged in. Its own logic is covered in
 // lib/rumble-control.test.ts.
+const rumbleGetInfoSpy = mock(async () => ({
+  available: false,
+  devicePath: null,
+  min: 0,
+  max: 5,
+  intensity: null,
+  source: null,
+}));
+const rumbleRescanSpy = mock(async () => ({
+  available: false,
+  devicePath: null,
+  min: 0,
+  max: 5,
+  intensity: null,
+  source: null,
+}));
 mock.module("./lib/rumble-control", () => ({
   RumbleControl: class {
     async start() {}
     stop() {}
     async getInfo() {
-      return { available: false, devicePath: null, min: 0, max: 5, intensity: null, source: null };
+      return rumbleGetInfoSpy();
     }
     async setIntensity() {
       return { success: false, error: "no hardware" };
     }
     async rescan() {
-      return { available: false, devicePath: null, min: 0, max: 5, intensity: null, source: null };
+      return rumbleRescanSpy();
     }
   },
 }));
@@ -362,5 +378,28 @@ describe("Apex backend", () => {
     expect(res.unsupported).toBe(true);
     expect(res.success).toBe(false);
     expect(startWakeListenerImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("rumble RPCs on non-OneXPlayer hardware", () => {
+  beforeEach(() => {
+    rumbleRescanSpy.mockClear();
+    rumbleGetInfoSpy.mockClear();
+  });
+
+  it("never touches the HID bus on a device this plugin is inert on", async () => {
+    // Without the guard, rescanRumble would readdir the real
+    // /sys/bus/hid/devices on a Steam Deck.
+    isOneXPlayerResult = false;
+    const { backend } = makeBackend();
+    await backend.onLoad();
+
+    const info = await backend.rescanRumble();
+    expect(info.available).toBe(false);
+    expect(rumbleRescanSpy).not.toHaveBeenCalled();
+
+    expect((await backend.getRumbleInfo()).available).toBe(false);
+    expect(rumbleGetInfoSpy).not.toHaveBeenCalled();
+    expect((await backend.setRumbleIntensity(3)).success).toBe(false);
   });
 });

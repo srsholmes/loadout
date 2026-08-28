@@ -164,7 +164,13 @@ export async function getStatus(
   //
   // The udev rule is our marker for "the block is meant to be on", which is
   // what separates that case from a revert still waiting on a reboot.
-  const kargLiveOnly = kargActive && !kargStaged;
+  // `kargStaged` can only ever be read on SteamOS — everywhere else we do not
+  // touch the bootloader, so it is hardcoded false. Without this gate, any
+  // Arch/Bazzite user who followed our own manual-karg hint and rebooted got
+  // kargLiveOnly forever, and an alert confidently describing a grub file
+  // they do not have. Saying nothing beats saying something false.
+  const bootloaderKnown = distro === "steamos";
+  const kargLiveOnly = bootloaderKnown && kargActive && !kargStaged;
   return {
     supported: controller !== null,
     controller,
@@ -267,6 +273,14 @@ async function addKargSteamos(deps: FingerprintDeps, steps: string[]): Promise<b
   return true;
 }
 
+/** Whether a bootloader config currently carries the karg. */
+async function readsKarg(deps: FingerprintDeps, path: string): Promise<boolean> {
+  return deps
+    .readFile(path)
+    .then((c) => c.includes(KARG))
+    .catch(() => false);
+}
+
 async function removeKargSteamos(deps: FingerprintDeps, steps: string[]): Promise<boolean> {
   const current = await deps.readFile(GRUB_STEAMOS).catch(() => "");
   if (!current.includes(KARG)) {
@@ -311,14 +325,27 @@ export async function apply(
   // never edit a bootloader we haven't validated.
   const distro = await deps.distroId();
   const alreadyActive = (await deps.readCmdline()).includes(KARG);
-  if (alreadyActive) {
+  const canStage = distro === "steamos" && autoKarg;
+  const alreadyStaged = canStage ? await readsKarg(deps, GRUB_STEAMOS) : false;
+
+  // Only skip the bootloader edit when the karg is live AND already staged —
+  // or when we would not be editing the bootloader anyway.
+  //
+  // Live-but-unstaged is the whole SteamOS-update case: the running kernel
+  // still carries the karg while grub has lost it. Returning early there made
+  // both remedies we offer for that state — "switch it off and on again" and
+  // the startup self-heal — silently unable to put the line back, while
+  // reporting success.
+  if (alreadyActive && (alreadyStaged || !canStage)) {
     steps.push("karg-already-active");
     return { success: true, rebootRequired: false, steps };
   }
-  if (distro === "steamos" && autoKarg) {
+  if (canStage) {
     try {
       await addKargSteamos(deps, steps);
-      return { success: true, rebootRequired: true, steps };
+      // Nothing to wait for when the running kernel already has it; this
+      // call only re-persisted it for the next boot.
+      return { success: true, rebootRequired: !alreadyActive, steps };
     } catch (e) {
       // Path 2 is still applied; surface the karg failure but don't pretend.
       return { success: false, rebootRequired: false, steps, error: `Path 1 (karg) failed: ${e}`, manualKarg: KARG };

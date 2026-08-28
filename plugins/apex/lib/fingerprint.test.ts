@@ -433,3 +433,102 @@ describe("rebootPending vs kargUnpersisted", () => {
     expect(s.kargUnpersisted).toBe(false);
   });
 });
+
+describe("re-staging a karg that is live but lost from the bootloader", () => {
+  /**
+   * The SteamOS-update state: the running kernel still has the karg, grub no
+   * longer does. apply() used to return early on "it's already on the
+   * cmdline" and never touch grub — so the remedy the UI offers ("switch it
+   * off and on again") and the startup self-heal both reported success while
+   * changing nothing, and the warning came straight back.
+   */
+  it("writes the karg back to grub", async () => {
+    const { deps, files, commands } = makeFpDeps({
+      files: {
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        "/etc/default/grub-steamos": GRUB_SAMPLE, // karg absent
+      },
+      cmdline: `BOOT_IMAGE=x quiet ${KARG}`, // but live
+      distro: "steamos",
+    });
+
+    const r = await apply(deps, { autoKarg: true });
+
+    expect(r.success).toBe(true);
+    expect(r.steps).toContain("karg-staged");
+    expect(files["/etc/default/grub-steamos"]).toContain(KARG);
+    expect(commands).toContain("update-grub");
+    // It is already live, so there is nothing for a reboot to achieve.
+    expect(r.rebootRequired).toBe(false);
+  });
+
+  it("clears the warning it was meant to clear", async () => {
+    const { deps } = makeFpDeps({
+      files: {
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        "/etc/default/grub-steamos": GRUB_SAMPLE,
+      },
+      cmdline: `BOOT_IMAGE=x quiet ${KARG}`,
+      distro: "steamos",
+    });
+
+    expect((await getStatus(deps, true)).kargUnpersisted).toBe(true);
+    await apply(deps, { autoKarg: true });
+    expect((await getStatus(deps, true)).kargUnpersisted).toBe(false);
+  });
+
+  it("still skips the bootloader when the karg is live and staged", async () => {
+    const { deps, commands } = makeFpDeps({
+      files: {
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        "/etc/default/grub-steamos": addKargToGrubSteamos(GRUB_SAMPLE),
+      },
+      cmdline: `BOOT_IMAGE=x quiet ${KARG}`,
+      distro: "steamos",
+    });
+
+    const r = await apply(deps, { autoKarg: true });
+    expect(r.steps).toContain("karg-already-active");
+    expect(commands).not.toContain("update-grub");
+  });
+});
+
+describe("distros whose bootloader we don't edit", () => {
+  /**
+   * kargStaged can only be read on SteamOS. Without gating on that, an
+   * Arch/Bazzite user who followed our own manual-karg hint and rebooted got
+   * a permanent alert describing a grub file they don't have.
+   */
+  const liveNotStaged = {
+    files: {
+      [UDEV_RULE_PATH]: "(rule)",
+      [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+    },
+    cmdline: `BOOT_IMAGE=x quiet ${KARG}`,
+  };
+
+  it("does not claim the karg is missing from a bootloader we never wrote", async () => {
+    const { deps } = makeFpDeps({ ...liveNotStaged, distro: "arch" });
+    const s = await getStatus(deps, true);
+    expect(s.kargActive).toBe(true);
+    expect(s.kargUnpersisted).toBe(false);
+    expect(s.rebootPending).toBe(false);
+  });
+
+  it("does not claim a reboot is pending after a revert there either", async () => {
+    const { deps } = makeFpDeps({
+      files: {},
+      cmdline: `BOOT_IMAGE=x quiet ${KARG}`,
+      distro: "bazzite",
+    });
+    expect((await getStatus(deps, true)).rebootPending).toBe(false);
+  });
+
+  it("still reports the SteamOS case", async () => {
+    const { deps } = makeFpDeps({ ...liveNotStaged, distro: "steamos" });
+    expect((await getStatus(deps, true)).kargUnpersisted).toBe(true);
+  });
+});
