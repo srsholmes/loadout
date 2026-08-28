@@ -135,7 +135,7 @@ function Vibration() {
 
           {/* flex-1 on each item, so the control spans the card rather than
               hugging six narrow labels on the left. */}
-          <div className="segmented flex">
+          <div className="segmented flex w-full">
             {levels(min, max).map((level) => (
               <SegmentedItem
                 key={level}
@@ -193,7 +193,7 @@ function VibrationWidget() {
         <div className="metric-value mono">{intensityLabel(current, { min, max })}</div>
         <div className="metric-unit">RUMBLE</div>
       </div>
-      <div className="segmented flex mt-3">
+      <div className="segmented flex w-full mt-3">
         {levels(min, max).map((level) => (
           <SegmentedItem
             key={level}

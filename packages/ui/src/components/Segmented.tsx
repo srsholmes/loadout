@@ -39,7 +39,7 @@ export function SegmentedItem({
   /** Extra classes in addition to the automatic `active` class. */
   className?: string;
 }) {
-  const { ref } = useFocusable({
+  const { ref, focused } = useFocusable({
     onEnterPress: () => {
       if (disabled) return;
       sounds()?.playSelect?.();
@@ -48,9 +48,24 @@ export function SegmentedItem({
     focusable: !disabled,
   });
 
-  const classes = [active ? "active" : "", className ?? ""]
+  // Focus was reachable by d-pad but invisible: this took `ref` and dropped
+  // `focused`, and there is no :focus rule for `.segmented > button` in the
+  // shell CSS. So a controller user could move through a segmented control
+  // with nothing on screen changing — indistinguishable from it not being
+  // navigable at all. Button/Slider/Toggle all already pulse-and-scale;
+  // this now matches them.
+  const classes = [
+    active ? "active" : "",
+    "transition-transform duration-100",
+    focused ? "scale-[1.02]" : "",
+    className ?? "",
+  ]
     .filter(Boolean)
     .join(" ");
+
+  const focusStyle: CSSProperties = focused
+    ? { ...style, animation: "focusPulse 2s ease-in-out infinite" }
+    : style ?? {};
 
   return (
     <button
@@ -59,7 +74,7 @@ export function SegmentedItem({
       onClick={onSelect}
       disabled={disabled}
       className={classes}
-      style={style}
+      style={focusStyle}
     >
       {children}
     </button>
