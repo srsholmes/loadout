@@ -51,8 +51,9 @@ interface FakeOpts {
   /** argv[0]s that should THROW — a missing binary or a denied command
    *  policy raises, it does not return a non-zero exit code. */
   throwCommands?: string[];
-  /** Let a test model a command's side effect on the fake filesystem —
-   *  e.g. grub-mkconfig propagating /etc/default/grub into grub.cfg. */
+  /** Make `command -v` report the tool as absent. */
+  noCommandV?: boolean;
+  /** Let a test model a command's side effect on the fake filesystem. */
   onCommand?: (cmd: string[], files: Record<string, string>) => void;
 }
 
@@ -65,6 +66,9 @@ function makeFpDeps(o: FakeOpts = {}): { deps: FingerprintDeps; files: Record<st
   const deps: FingerprintDeps = {
     run: async (cmd) => {
       commands.push(cmd.join(" "));
+      if (cmd[0] === "sh" && cmd[1] === "-c" && String(cmd[2]).startsWith("command -v")) {
+        return o.noCommandV ? fail() : ok("/usr/bin/rpm-ostree\n");
+      }
       if (cmd[0] === "lsusb") return fpPresent ? ok("Bus 003 Device 004: ID 2808:c652") : fail();
       if (cmd[0] === "sh") return fpPresent ? ok(`${controller}\n`) : ok("");
       if (cmd[0] === "tee") {
@@ -236,7 +240,9 @@ describe("getStatus", () => {
       },
       cmdline: `BOOT_IMAGE=x ${KARG} quiet`,
     });
-    const s = await getStatus(deps);
+    // kargApplicable: true, so this exercises the karg logic it is named for
+    // rather than passing via the !kargAutomatic shortcut.
+    const s = await getStatus(deps, true);
     expect(s.supported).toBe(true);
     expect(s.controllerWakeDisabled).toBe(true);
     expect(s.udevRuleInstalled).toBe(true);
@@ -639,10 +645,12 @@ describe("kargMode", () => {
     expect(kargMode("ubuntu", true)).toBe("manual");
   });
 
-  it("treats an unreadable /etc/os-release as unknown, not unmanaged", () => {
-    // "" fell into the manual case, silently downgrading a real SteamOS Apex
-    // to PME-only with nothing saying so.
-    expect(kargMode("", true)).toBe("none");
+  it("distinguishes an unidentifiable SYSTEM from an unmeasured BOARD", () => {
+    // "" fell into the manual case, silently downgrading a real SteamOS Apex.
+    // Collapsing it into "none" was also wrong: the UI then told that Apex
+    // owner we didn't know their model's pin, which is false.
+    expect(kargMode("", true)).toBe("unknown");
+    expect(kargMode("steamos", false)).toBe("none");
   });
 
   it("says nothing at all when the board's pin is unknown", () => {
@@ -777,5 +785,112 @@ describe("the SteamOS window between staging and rebooting", () => {
     const s = await getStatus(deps, false); // unmeasured board
     expect(s.kargMode).toBe("none");
     expect(s.rebootPending).toBe(false);
+  });
+});
+
+describe("a staged karg waiting on a reboot is pending, not lost", () => {
+  it("does not heal, and does not announce that an update removed it", async () => {
+    // The heal keys on !applied, and applied excludes a staged-not-live karg.
+    // So every backend restart before the reboot re-ran apply(), changed
+    // nothing, and toasted "a system update removed the wake block".
+    const { deps } = makeFpDeps({
+      files: {
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        "/etc/default/grub-steamos": addKargToGrubSteamos(GRUB_SAMPLE),
+      },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+    const status = await getStatus(deps, true);
+    expect(status.applied).toBe(false);
+    expect(status.kargStaged).toBe(true);
+    expect(status.rebootPending).toBe(true);
+    expect(shouldHeal({ wanted: true, status })).toBe(false);
+  });
+
+  it("still heals once the staged karg has genuinely gone", async () => {
+    const { deps } = makeFpDeps({
+      files: {
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        "/etc/default/grub-steamos": GRUB_SAMPLE,
+      },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+    expect(shouldHeal({ wanted: true, status: await getStatus(deps, true) })).toBe(true);
+  });
+});
+
+describe("an unreadable staged-state is not 'not staged'", () => {
+  const busy = (over: Record<string, string> = {}) =>
+    makeFpDeps({
+      files: {
+        "/run/ostree-booted": "",
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        ...over,
+      },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "bazzite",
+      failCommands: ["rpm-ostree"],
+    });
+
+  it("keeps the reboot prompt rather than silently dropping it", async () => {
+    // rebootPending used `kargStaged`, which folds undefined into false — so
+    // a machine with the karg genuinely staged lost its prompt and the karg
+    // would never be activated.
+    const { deps } = busy();
+    const s = await getStatus(deps, true);
+    expect(s.kargStagedUnknown).toBe(true);
+    expect(s.rebootPending).toBe(false);
+    // ...and the UI is told, rather than shown nothing.
+    expect(s.applied).toBe(false);
+  });
+});
+
+describe("ostree needs the tool, not just the marker", () => {
+  it("falls back to a workable instruction when rpm-ostree isn't there", async () => {
+    // /run/ostree-booted exists on bootc images where rpm-ostree may not.
+    // Claiming "automatic" there loops forever instead of telling the user
+    // what to add.
+    const { deps } = makeFpDeps({
+      files: { "/run/ostree-booted": "" },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "bazzite",
+      throwCommands: ["rpm-ostree"],
+      noCommandV: true,
+    });
+    const s = await getStatus(deps, true);
+    expect(s.kargMode).toBe("manual");
+    expect(s.kargAutomatic).toBe(false);
+  });
+});
+
+describe("a system we can't identify still gets the arg", () => {
+  it("hands over the karg instead of withholding it like an unknown board", async () => {
+    // "" meant we don't know the SYSTEM; withholding the pin there was wrong,
+    // because the pin is a board fact and the board is known.
+    const { deps } = makeFpDeps({ cmdline: "BOOT_IMAGE=x quiet", distro: "" });
+    const r = await apply(deps, { autoKarg: true });
+    expect(r.success).toBe(true);
+    expect(r.manualKarg).toBe(KARG);
+  });
+
+  it("tells them how to remove it again on revert", async () => {
+    // revert only offered manualKarg for mode === "manual", so on an
+    // unidentifiable system the user was told to add the arg and then never
+    // told how to take it out.
+    const { deps } = makeFpDeps({ cmdline: `BOOT_IMAGE=x quiet ${KARG}`, distro: "" });
+    const r = await revert(deps, { autoKarg: true });
+    expect(r.manualKarg).toBe(KARG);
+    expect(r.steps).toContain("karg-manual-removal-required");
+  });
+
+  it("still withholds it on a board we haven't measured", async () => {
+    const { deps } = makeFpDeps({ cmdline: `BOOT_IMAGE=x quiet ${KARG}`, distro: "" });
+    const r = await revert(deps, { autoKarg: false });
+    expect(r.manualKarg).toBeUndefined();
   });
 });

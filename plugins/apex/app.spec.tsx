@@ -715,6 +715,7 @@ describe("fingerprint block: what the UI claims", () => {
       kargUnpersisted: false,
       kargApplicable: true,
       kargAutomatic: false,
+      kargStagedUnknown: false,
       kargMode: "manual",
       kargActive: false,
       udevRuleInstalled: false,
@@ -739,9 +740,33 @@ describe("fingerprint block: what the UI claims", () => {
     // Binding `checked` to `applied` made the toggle spring back off whenever
     // the second wake path wasn't closed — and flipping it again called
     // revert(), undoing the path that had worked.
-    const container = await mountWith({ ...fp(), fingerprintBlockWanted: true });
-    const toggles = [...container.querySelectorAll('input[type="checkbox"]')];
-    expect(toggles.some((t) => (t as HTMLInputElement).checked)).toBe(true);
+    //
+    // autoRecoverOnWake is deliberately ON here: asserting "some checkbox is
+    // checked" passed via that one even with the fingerprint toggle bound
+    // back to `applied`.
+    const container = await mountWith({
+      ...fp(),
+      autoRecoverOnWake: true,
+      fingerprintBlockWanted: true,
+    });
+    const toggle = [...container.querySelectorAll('input[type="checkbox"]')].at(-1);
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("says so when the switch is on but nothing is in effect", async () => {
+    // The switch reflects intent, so it can sit ON after a failed apply —
+    // and no alert was keyed on that, leaving a control in the on position
+    // with nothing anywhere saying it wasn't working.
+    const container = await mountWith({
+      ...fp({ applied: false, rebootPending: false }),
+      fingerprintBlockWanted: true,
+    });
+    await waitFor(() => expect(container.textContent).toContain("Asked for, but not in effect"));
+  });
+
+  it("does not nag when the switch is off and nothing is applied", async () => {
+    const container = await mountWith({ ...fp({ applied: false }), fingerprintBlockWanted: false });
+    expect(container.textContent).not.toContain("Asked for, but not in effect");
   });
 
   it("does not claim the controller is blocked when the block is off", async () => {

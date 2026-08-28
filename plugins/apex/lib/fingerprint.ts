@@ -53,27 +53,42 @@ const GRUB_STEAMOS = "/etc/default/grub-steamos";
  *
  *   "steamos" — /etc/default/grub-steamos, behind steamos-readonly
  *   "ostree"  — rpm-ostree kargs (Bazzite and other rpm-ostree images)
- *   "grub"    — /etc/default/grub + grub-mkconfig (CachyOS/Arch/Fedora)
- *   "manual"  — we know the pin but not this bootloader; tell the user
+ *   "manual"  — we know the pin but not this bootloader (CachyOS, Arch, …);
+ *               print the arg and say the block is incomplete
+ *   "unknown" — we couldn't identify the system at all
  *   "none"    — unmeasured board: we don't know the pin, so say nothing
+ *
+ * There is deliberately no GRUB mode. Editing /etc/default/grub was tried and
+ * removed: the file is sourced, so a value that isn't double-quoted got a
+ * second assignment appended and the user's real cryptdevice=/resume= args
+ * were discarded — and none of it is verifiable before a reboot.
  */
-export type KargMode = "steamos" | "ostree" | "manual" | "none";
+export type KargMode = "steamos" | "ostree" | "manual" | "unknown" | "none";
 
 export function kargMode(
   distro: string,
   pinKnown: boolean,
-  /** `/run/ostree-booted` exists. Detected by mechanism rather than distro
-   *  name: Silverblue and Kinoite both report `ID=fedora`, so a name table
-   *  silently routed them to the wrong backend. */
+  /** `/run/ostree-booted` exists AND `rpm-ostree` is usable. Detected by
+   *  mechanism rather than distro name (Silverblue and Kinoite both report
+   *  `ID=fedora`), and the tool is required as well as the marker — the
+   *  marker is present on bootc images where rpm-ostree may be absent, and
+   *  claiming "automatic" there loops forever instead of falling back to a
+   *  workable instruction. */
   ostreeBooted = false,
 ): KargMode {
   if (!pinKnown) return "none";
-  // An unreadable /etc/os-release must not look like a distro we've decided
-  // we don't manage — that silently downgraded a SteamOS Apex to PME-only.
-  if (!distro) return "none";
+  // Distinct from "none": an unreadable /etc/os-release means we don't know
+  // the SYSTEM, not that we don't know the BOARD. Collapsing them made the UI
+  // tell a real Apex owner "we don't know this model's pin", which is false.
+  if (!distro) return "unknown";
   if (ostreeBooted) return "ostree";
   if (distro === "steamos") return "steamos";
   return "manual";
+}
+
+/** Modes where we know the pin but cannot stage it — the user can. */
+export function isKargManual(mode: KargMode): boolean {
+  return mode === "manual" || mode === "unknown";
 }
 
 /** Modes where we put the karg there ourselves. */
@@ -112,6 +127,9 @@ export interface FingerprintStatus {
   kargMode: KargMode;
   /** We stage the karg ourselves here — so it counts toward `applied`. */
   kargAutomatic: boolean;
+  /** We manage the bootloader here, but couldn't read what the next boot
+   *  will carry — distinct from knowing it isn't staged. */
+  kargStagedUnknown: boolean;
   /**
    * Whether the karg path is usable on this board at all. False when we
    * haven't confirmed the board's GPIO pin, in which case PME blocking is
@@ -191,14 +209,17 @@ export async function getStatus(
     controllerWakeDisabled = wake.trim() === "disabled";
   }
   const udevRuleInstalled = await deps.pathExists(UDEV_RULE_PATH);
-  const ostreeBooted = await deps.pathExists("/run/ostree-booted");
+  // Marker AND tool: /run/ostree-booted is present on bootc images where
+  // rpm-ostree may not be, and "automatic" without the tool is a heal loop.
+  const ostreeBooted =
+    (await deps.pathExists("/run/ostree-booted")) && (await ostreeUsable(deps));
   const mode = kargMode(distro, kargApplicable, ostreeBooted);
   const kargAutomatic = isKargAutomatic(mode);
-  // Read the bootloader this distro uses regardless of whether we would stage
-  // here: whether the karg is in the boot config is a fact about the machine,
-  // not a function of what we're willing to write. A user who added it by
-  // hand on an unmeasured board should still see it reported.
-  const stagedRead = await readKargStaged(deps, kargMode(distro, true, ostreeBooted));
+  // Only where we actually manage the bootloader. Forcing `pinKnown: true`
+  // here spent an rpm-ostree DBus round-trip on every status refresh for a
+  // value nothing reads: kargStaged isn't surfaced to the UI, and its one
+  // internal consumer (rebootPending) is gated on kargAutomatic anyway.
+  const stagedRead = controller === null ? undefined : await readKargStaged(deps, mode);
   const kargStaged = stagedRead === true;
 
   const path2Closed = controllerWakeDisabled && udevRuleInstalled;
@@ -242,8 +263,14 @@ export async function getStatus(
     // a karg in its boot config from anywhere rendered "Reboot to finish
     // applying" — with a reboot button — directly beneath the text saying we
     // don't know this model's pin. Pressing it activated that foreign pin.
+    // `stagedRead === true`, not `kargStaged`: an unknown read must not read
+    // as "not staged" here, or a machine with the karg genuinely staged loses
+    // its reboot prompt and the karg is never activated.
     rebootPending:
-      kargAutomatic && ((kargStaged && !kargActive) || (kargLiveOnly && !udevRuleInstalled)),
+      kargAutomatic &&
+      ((stagedRead === true && !kargActive) || (kargLiveOnly && !udevRuleInstalled)),
+    /** We manage the bootloader here but couldn't read what it will carry. */
+    kargStagedUnknown: kargAutomatic && stagedRead === undefined,
     kargUnpersisted: kargLiveOnly && udevRuleInstalled,
     distro,
   };
@@ -271,11 +298,19 @@ export async function getStatus(
 export function shouldHeal(input: {
   /** The user's stored choice. `undefined` = never chose. */
   wanted: boolean | undefined;
-  status: Pick<FingerprintStatus, "supported" | "applied" | "kargUnpersisted">;
+  status: Pick<
+    FingerprintStatus,
+    "supported" | "applied" | "kargUnpersisted" | "kargStaged" | "kargActive" | "kargAutomatic"
+  >;
 }): boolean {
   if (input.wanted !== true) return false;
   // No reader on this machine — nothing to re-apply, and apply() would fail.
   if (!input.status.supported) return false;
+  // Staged and waiting for a reboot is PENDING, not LOST. Healing here did
+  // nothing and then announced "a system update removed the wake block" —
+  // on every backend restart until the user rebooted.
+  const { kargAutomatic, kargStaged, kargActive } = input.status;
+  if (kargAutomatic && kargStaged && !kargActive) return false;
   return !input.status.applied || input.status.kargUnpersisted;
 }
 
@@ -343,20 +378,30 @@ async function addKargSteamos(deps: FingerprintDeps, steps: string[]): Promise<b
     return false;
   }
   await deps.run(["steamos-readonly", "disable"], { timeoutMs: 30_000 });
-  await deps.writeFile(`${GRUB_STEAMOS}.loadout.bak`, current);
-  await deps.writeFile(GRUB_STEAMOS, addKargToGrubSteamos(current));
-  const gen = await deps.run(["update-grub"], { timeoutMs: 120_000 });
-  await deps.run(["steamos-readonly", "enable"], { timeoutMs: 30_000 });
-  if (gen.exitCode !== 0) {
+  // try/finally, not an exit-code branch alone: `update-grub` can THROW
+  // (missing binary, denied command policy) rather than exit non-zero, and a
+  // throw used to escape between the write and `steamos-readonly enable` —
+  // leaving a modified grub source, no regeneration, and the rootfs writable.
+  let staged = false;
+  try {
+    await deps.writeFile(`${GRUB_STEAMOS}.loadout.bak`, current);
+    await deps.writeFile(GRUB_STEAMOS, addKargToGrubSteamos(current));
+    const gen = await deps.run(["update-grub"], { timeoutMs: 120_000 });
+    if (gen.exitCode !== 0) {
+      throw new Error(`update-grub failed: ${gen.stderr.trim() || gen.exitCode}`);
+    }
+    staged = true;
+  } catch (e) {
     // Roll back the source file so a bad generation can't strand boot config.
-    await deps.run(["steamos-readonly", "disable"], { timeoutMs: 30_000 });
-    await deps.writeFile(GRUB_STEAMOS, current);
-    await deps.run(["update-grub"], { timeoutMs: 120_000 });
-    await deps.run(["steamos-readonly", "enable"], { timeoutMs: 30_000 });
-    throw new Error(`update-grub failed: ${gen.stderr.trim() || gen.exitCode}`);
+    await deps.writeFile(GRUB_STEAMOS, current).catch(() => {});
+    await deps.run(["update-grub"], { timeoutMs: 120_000 }).catch(() => {});
+    throw e;
+  } finally {
+    // Always re-seal the rootfs, on every path out of here.
+    await deps.run(["steamos-readonly", "enable"], { timeoutMs: 30_000 }).catch(() => {});
   }
   steps.push("karg-staged");
-  return true;
+  return staged;
 }
 
 /** Whether a bootloader config currently carries the karg. */
@@ -416,8 +461,18 @@ async function removeKargOstree(deps: FingerprintDeps, steps: string[]): Promise
  * downstream decision, and an uncaught throw took the whole getStatus RPC
  * down with it — leaving the plugin page stuck loading.
  */
+/** Whether `rpm-ostree` can actually be run here. */
+async function ostreeUsable(deps: FingerprintDeps): Promise<boolean> {
+  const r = await deps.run(["sh", "-c", "command -v rpm-ostree"], { timeoutMs: 5_000 }).catch(
+    () => null,
+  );
+  return !!r && r.exitCode === 0 && r.stdout.trim() !== "";
+}
+
 async function ostreeKargStaged(deps: FingerprintDeps): Promise<boolean | undefined> {
-  const r = await deps.run(["rpm-ostree", "kargs"], { timeoutMs: 30_000 }).catch(() => null);
+  // Well under the overlay's 30s RPC cap: this runs inside getStatus, and a
+  // read that outlasts the cap leaves the plugin page spinning forever.
+  const r = await deps.run(["rpm-ostree", "kargs"], { timeoutMs: 8_000 }).catch(() => null);
   if (!r || r.exitCode !== 0) return undefined;
   return r.stdout.includes(KARG);
 }
@@ -578,7 +633,7 @@ export async function revert(
     } catch (e) {
       return { success: false, rebootRequired: false, steps, error: `Karg removal failed: ${e}` };
     }
-  } else if (mode === "manual" && (await deps.readCmdline()).includes(KARG)) {
+  } else if (isKargManual(mode) && (await deps.readCmdline()).includes(KARG)) {
     // Only where we know the pin: on an unmeasured board we never told them
     // to add it, so we don't tell them to remove it either.
     steps.push("karg-manual-removal-required");

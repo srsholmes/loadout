@@ -69,8 +69,10 @@ look.
 
 Uninstalling Loadout removes the udev rule and re-enables the controller, so
 the block doesn't outlive the app. The kernel arg is deliberately left alone —
-editing a bootloader during an uninstall is a worse failure than a stale arg,
-which is inert once the rule is gone.
+editing a bootloader during an uninstall is a worse failure than a stale arg.
+It is **not** inert, though: the two paths are independent, so the arg keeps
+the GPIO wake line disarmed on its own. The uninstaller prints it and how to
+remove it rather than pretending it doesn't matter.
 
 ## Vibration
 
