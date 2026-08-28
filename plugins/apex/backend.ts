@@ -279,6 +279,27 @@ export default class ApexBackend implements PluginBackend {
   /** In-flight heal, so getFingerprintHealNotice can await it rather than
    *  race it. */
   private healing: Promise<void> | null = null;
+  /**
+   * Serialises everything that edits the fingerprint block.
+   *
+   * apply/revert run `steamos-readonly disable` → write grub → `update-grub`
+   * (up to 120s) → `steamos-readonly enable`. A startup heal can still be
+   * mid-sequence when the user flips the switch, and interleaving the two
+   * lets one side's readonly-enable land while the other is writing, or two
+   * update-grub runs regenerate grub.cfg concurrently. recover() has had a
+   * guard for this reason; this path had none.
+   */
+  private fpLock: Promise<unknown> = Promise.resolve();
+
+  private serialiseFingerprint<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.fpLock.then(fn, fn);
+    // Keep the chain alive regardless of outcome.
+    this.fpLock = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
   /** One-shot: read once by the UI, then cleared, so the toast fires once
    *  per backend start rather than on every overlay restart. */
   private healNotice: FingerprintHealNotice | null = null;
@@ -302,22 +323,33 @@ export default class ApexBackend implements PluginBackend {
       // feature exists for would never be healed. A block that is currently
       // in effect is proof enough that they wanted it — and recording it now
       // is the only chance to, before an update erases the evidence.
-      if (settings.fingerprintBlock === undefined && status.applied) {
-        await mutatePluginStorage<ApexSettings>(PLUGIN_ID, (existing) => ({
-          ...existing,
-          fingerprintBlock: true,
-        }));
-        settings.fingerprintBlock = true;
-        this.log?.info("[apex] recorded the existing fingerprint wake block as wanted");
+      let wanted = settings.fingerprintBlock;
+      if (wanted === undefined && status.applied) {
+        // Decided INSIDE the lock, not from the snapshot above: reading
+        // status shells out to lsusb and a sh loop, so seconds can pass, and
+        // a user toggling the block off in that window would otherwise have
+        // their explicit "off" overwritten with true — then see the block
+        // re-applied on the next boot. Exactly what this design exists to
+        // prevent.
+        await mutatePluginStorage<ApexSettings>(PLUGIN_ID, (existing) => {
+          if (existing.fingerprintBlock !== undefined) return existing;
+          return { ...existing, fingerprintBlock: true };
+        });
+        wanted = (await readPluginStorage<ApexSettings>(PLUGIN_ID)).fingerprintBlock;
+        if (wanted) {
+          this.log?.info("[apex] recorded the existing fingerprint wake block as wanted");
+        }
       }
 
-      if (!shouldHeal({ wanted: settings.fingerprintBlock, status })) return;
+      if (!shouldHeal({ wanted, status })) return;
 
       this.log?.warn(
         "[apex] fingerprint wake block was enabled but is no longer in effect " +
           "(a system update usually causes this) — re-applying.",
       );
-      const res = await applyFingerprint(this.fpDeps, { autoKarg: this.isKnownBoard });
+      const res = await this.serialiseFingerprint(() =>
+        applyFingerprint(this.fpDeps, { autoKarg: this.isKnownBoard }),
+      );
       this.healNotice = {
         restored: res.success,
         rebootRequired: !!res.rebootRequired,
@@ -340,12 +372,21 @@ export default class ApexBackend implements PluginBackend {
    * The heal outcome, or null. Awaits an in-flight heal first — `emit` has no
    * replay, so a heal that finished before the overlay connected would
    * otherwise be missed entirely.
+   *
+   * Reading does NOT consume it. Clearing here meant the startup toast
+   * destroyed the notice before it had been shown: the plugin page's own
+   * fetch always got null, so its alert was unreachable, and a webview
+   * reload before the user opened the overlay discarded the message for
+   * good. The consumer acks once it has actually surfaced it.
    */
   async getFingerprintHealNotice(): Promise<FingerprintHealNotice | null> {
     await this.healing;
-    const notice = this.healNotice;
+    return this.healNotice;
+  }
+
+  /** Called once the notice has actually been shown to the user. */
+  async ackFingerprintHealNotice(): Promise<void> {
     this.healNotice = null;
-    return notice;
   }
 
   // ---------- RPC ----------
@@ -409,9 +450,11 @@ export default class ApexBackend implements PluginBackend {
       return { success: false, rebootRequired: false, steps: [], unsupported: true, error: "Not running on OneXPlayer hardware." };
     }
     // autoKarg only on the board whose GPIO pin we measured — see isKnownBoard.
-    const result = enabled
-      ? await applyFingerprint(this.fpDeps, { autoKarg: this.isKnownBoard })
-      : await revertFingerprint(this.fpDeps);
+    const result = await this.serialiseFingerprint(() =>
+      enabled
+        ? applyFingerprint(this.fpDeps, { autoKarg: this.isKnownBoard })
+        : revertFingerprint(this.fpDeps),
+    );
 
     // Record the intent even when the apply partly failed: the user asked for
     // it, and a later startup should try again rather than forget they did.
@@ -426,8 +469,16 @@ export default class ApexBackend implements PluginBackend {
 
   /** Reboot the device. Root already, so no polkit involved. */
   async rebootDevice(): Promise<{ success: boolean; error?: string }> {
+    // Gated like every sibling RPC: this is a root-privileged power-cycle and
+    // should not be reachable on hardware the rest of the plugin is inert on.
+    if (this.unsupported) {
+      return { success: false, error: "Not running on OneXPlayer hardware." };
+    }
     this.log?.info("[apex] rebooting at user request");
-    const r = await runFull(["systemctl", "reboot"], { timeoutMs: 10_000 });
+    // No timeout: shutdown can take longer than any sane limit, and a timeout
+    // returns exitCode -1 — flashing "exit -1" at a user whose device is in
+    // fact rebooting correctly.
+    const r = await runFull(["systemctl", "reboot"]);
     return r.exitCode === 0
       ? { success: true }
       : { success: false, error: r.stderr.trim() || `exit ${r.exitCode}` };

@@ -550,6 +550,39 @@ describe("startup self-heal toast", () => {
     expect(String(notifyMock.mock.calls[0]![0])).not.toContain("Reboot");
   });
 
+  it("shows a failed heal on the page too, not just as a toast", async () => {
+    // The page fetches the notice; dropping the !restored case meant a
+    // failed re-apply was fetched, stored and silently discarded.
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus")
+        return Promise.resolve({
+          ...healthyStatus,
+          fingerprint: {
+            supported: true,
+            applied: false,
+            rebootPending: false,
+            kargUnpersisted: false,
+            kargApplicable: true,
+            kargActive: false,
+            udevRuleInstalled: false,
+            distro: "steamos",
+            controller: "0000:67:00.0",
+          },
+        });
+      if (method === "getFingerprintHealNotice")
+        return Promise.resolve({ restored: false, rebootRequired: false, error: "EACCES" });
+      return Promise.resolve(null);
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Couldn't restore the wake block");
+      expect(container.textContent).toContain("EACCES");
+    });
+  });
+
   it("reports a failed restore as an error, not a success", async () => {
     const { init } = await import("./app");
     const done = init(makeApi({ restored: false, rebootRequired: false, error: "EACCES" }));
@@ -588,6 +621,7 @@ describe("reboot button", () => {
       kargUnpersisted: false,
       kargApplicable: true,
       kargActive: false,
+      udevRuleInstalled: true,
       distro: "steamos",
       controller: "0000:67:00.0",
       ...over,
@@ -615,14 +649,15 @@ describe("reboot button", () => {
     await waitFor(() => expect(findBtn(container, "Restart device")).toBeDefined());
   });
 
-  it("does not offer one when rebooting would lose the karg", async () => {
-    // kargUnpersisted: live but not staged. A reboot drops it.
+  it("does not offer one when no reboot is pending", async () => {
+    // Notably the kargUnpersisted state, where a reboot is what LOSES the
+    // karg — that the two states are mutually exclusive is pinned against
+    // getStatus in lib/fingerprint.test.ts, not here.
     const container = await mountWithFp({ rebootPending: false, kargUnpersisted: true });
     expect(findBtn(container, "Restart device")).toBeUndefined();
   });
 
-  it("requires a second press before rebooting", async () => {
-    // A stray d-pad press must not power-cycle the device mid-game.
+  it("needs a separate confirm control, not a second press", async () => {
     const container = await mountWithFp();
     const btn = await waitFor(() => {
       const b = findBtn(container, "Restart device");
@@ -630,10 +665,35 @@ describe("reboot button", () => {
       return b;
     });
     fireEvent.click(btn);
-    await waitFor(() => expect(findBtn(container, "Click again to confirm")).toBeDefined());
+    await waitFor(() => expect(findBtn(container, "Confirm restart")).toBeDefined());
     expect(callMock).not.toHaveBeenCalledWith("rebootDevice");
 
-    fireEvent.click(findBtn(container, "Click again to confirm")!);
+    fireEvent.click(findBtn(container, "Confirm restart")!);
     await waitFor(() => expect(callMock).toHaveBeenCalledWith("rebootDevice"));
+  });
+
+  it("survives a held A press without rebooting", async () => {
+    // `a` is a RepeatableAction: REPEAT_DELAY_MS 500 then REPEAT_RATE_MS 200,
+    // each repeat dispatching a synthetic Enter that Button turns into an
+    // onClick. A two-click-on-one-button confirm would power-cycle the
+    // device from a single held press.
+    const container = await mountWithFp();
+    const btn = await waitFor(() => {
+      const b = findBtn(container, "Restart device");
+      if (!b) throw new Error("not rendered yet");
+      return b;
+    });
+    // The whole repeat train lands on the button that is already focused.
+    for (let i = 0; i < 8; i++) fireEvent.click(btn);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(callMock).not.toHaveBeenCalledWith("rebootDevice");
+  });
+
+  it("says a reboot finishes REMOVING the block when that is what is pending", async () => {
+    // rebootPending covers both directions; the copy used to claim
+    // "applying" even for a user who had just switched it off.
+    const container = await mountWithFp({ udevRuleInstalled: false });
+    await waitFor(() => expect(container.textContent).toContain("finish removing"));
+    expect(container.textContent).not.toContain("finish applying");
   });
 });

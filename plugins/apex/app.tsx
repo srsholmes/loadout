@@ -53,6 +53,9 @@ interface FingerprintStatus {
   /** False when this board's GPIO pin is unconfirmed, so the karg path is
    *  unavailable and PME blocking is the whole of the fix. */
   kargApplicable: boolean;
+  /** Our udev rule is on disk — the marker for "the block is meant to be on",
+   *  which is what tells a pending apply from a pending revert. */
+  udevRuleInstalled: boolean;
   distro: string;
 }
 
@@ -83,12 +86,17 @@ interface RecoverResult {
 }
 
 /**
- * Reboot, behind a two-click confirm.
+ * Reboot, behind a confirm the user has to move focus to.
  *
- * The shell has this pattern in Settings (`MaintenanceActionRow`) but it
- * isn't exported to plugins, so it's reproduced here for the same reason it
- * exists there: a stray d-pad press must not power-cycle the device
- * mid-game. Arming reverts after 4s.
+ * NOT a two-click confirm on one button. `a` is a RepeatableAction in the
+ * nav controller (REPEAT_DELAY_MS 500, REPEAT_RATE_MS 200) and every repeat
+ * dispatches a synthetic Enter that Button turns into an onClick — so a
+ * single *held* A press would arm at t=0 and confirm at t=500ms and
+ * power-cycle the device mid-game. No time-based guard fixes that; the
+ * repeat train just keeps firing.
+ *
+ * Arming instead reveals a separate button. A held press keeps landing on
+ * the one already focused, so it can never reach the confirm.
  */
 function RebootButton({ call }: { call: (m: string, ...a: unknown[]) => Promise<unknown> }) {
   const [armed, setArmed] = useState(false);
@@ -96,15 +104,11 @@ function RebootButton({ call }: { call: (m: string, ...a: unknown[]) => Promise<
 
   useEffect(() => {
     if (!armed) return;
-    const t = setTimeout(() => setArmed(false), 4000);
+    const t = setTimeout(() => setArmed(false), 6000);
     return () => clearTimeout(t);
   }, [armed]);
 
-  const onClick = useCallback(async () => {
-    if (!armed) {
-      setArmed(true);
-      return;
-    }
+  const confirm = useCallback(async () => {
     setBusy(true);
     try {
       const res = (await call("rebootDevice")) as { success: boolean; error?: string } | null;
@@ -116,12 +120,22 @@ function RebootButton({ call }: { call: (m: string, ...a: unknown[]) => Promise<
       setBusy(false);
       setArmed(false);
     }
-  }, [armed, call]);
+  }, [call]);
 
   return (
-    <Button onClick={onClick} disabled={busy} variant={armed ? "danger" : undefined}>
-      {busy ? "Restarting…" : armed ? "Click again to confirm" : "Restart device"}
-    </Button>
+    <div className="flex gap-2 flex-wrap items-center">
+      <Button onClick={() => setArmed(true)} disabled={busy}>
+        Restart device
+      </Button>
+      {armed && (
+        <>
+          <Button onClick={() => void confirm()} disabled={busy} variant="danger">
+            {busy ? "Restarting…" : "Confirm restart"}
+          </Button>
+          <span className="text-xs text-base-content/55">Closes any running game.</span>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -155,7 +169,12 @@ function Apex() {
     // Only lands here when init() didn't already consume it — i.e. the user
     // opened the plugin before the toast fired, or the overlay restarted.
     call("getFingerprintHealNotice")
-      .then((d) => setHealed(d as FingerprintHealNotice | null))
+      .then((d) => {
+        const n = d as FingerprintHealNotice | null;
+        setHealed(n);
+        // Rendered it, so it has served its purpose.
+        if (n) void call("ackFingerprintHealNotice").catch(() => {});
+      })
       .catch(() => setHealed(null));
   }, [refresh, call]);
 
@@ -563,8 +582,14 @@ function Apex() {
                     icon={<FaTriangleExclamation size={14} />}
                     title="Reboot required"
                   >
-                    A kernel-parameter change is staged. Reboot to finish applying the fingerprint
-                    wake block.
+                    {/* rebootPending covers both directions — staged-not-live
+                        (a pending apply) and live-not-staged with the rule
+                        gone (a pending revert). The udev rule tells them
+                        apart; saying "applying" for a revert told a user who
+                        had just switched it OFF the opposite of the truth. */}
+                    {data.fingerprint.udevRuleInstalled
+                      ? "A kernel-parameter change is staged. Reboot to finish applying the fingerprint wake block."
+                      : "The wake block is off, but its kernel parameter is still live on this boot. Reboot to finish removing it."}
                   </Alert>
                   {/* Only here: this is the one state where a reboot actually
                       helps. Never for kargUnpersisted, where rebooting is
@@ -573,6 +598,18 @@ function Apex() {
                     <RebootButton call={call} />
                   </div>
                 </>
+              )}
+
+              {healed && !healed.restored && (
+                <Alert
+                  variant="warning"
+                  icon={<FaTriangleExclamation size={14} />}
+                  title="Couldn't restore the wake block"
+                >
+                  A system update removed the wake block and re-applying it failed
+                  {healed.error ? `: ${healed.error}` : "."} Switching it off and on again should
+                  put it back.
+                </Alert>
               )}
 
               {healed?.restored && (
@@ -673,24 +710,30 @@ export async function init(api: {
     return;
   }
 
-  // The window boots hidden and the overlay unit starts at login, so a toast
-  // fired now lands where nobody is looking and is gone before they open it.
-  await visible.promise;
-
-  if (notice.restored) {
-    notify(
-      notice.rebootRequired
-        ? "Fingerprint wake block was restored after a system update. Reboot to finish re-applying it."
-        : "Fingerprint wake block was restored after a system update.",
-      { kind: "success", id: "apex-fp-healed", duration: 8000 },
-    );
-  } else {
-    notify(`Couldn't restore the fingerprint wake block: ${notice.error ?? "unknown error"}`, {
-      kind: "error",
-      id: "apex-fp-healed",
-      duration: 10000,
-    });
-  }
+  // Detached, not awaited: the window boots hidden and the overlay unit
+  // starts at login, so this can wait hours. runStartupInits awaits every
+  // init() in a Promise.all, and blocking that on one plugin's user
+  // interaction would pin the whole startup chain.
+  const shown = notice;
+  void visible.promise.then(async () => {
+    if (shown.restored) {
+      notify(
+        shown.rebootRequired
+          ? "Fingerprint wake block was restored after a system update. Reboot to finish re-applying it."
+          : "Fingerprint wake block was restored after a system update.",
+        { kind: "success", id: "apex-fp-healed", duration: 8000 },
+      );
+    } else {
+      notify(`Couldn't restore the fingerprint wake block: ${shown.error ?? "unknown error"}`, {
+        kind: "error",
+        id: "apex-fp-healed",
+        duration: 10000,
+      });
+    }
+    // Only now: reading no longer consumes, so the plugin page can still
+    // render the same notice if the user got there first.
+    await api.call("ackFingerprintHealNotice").catch(() => {});
+  });
 }
 
 /**

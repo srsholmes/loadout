@@ -534,6 +534,33 @@ describe("distros whose bootloader we don't edit", () => {
   });
 });
 
+describe("rebootPending and kargUnpersisted are mutually exclusive", () => {
+  // The reboot button keys on rebootPending. If the two could ever be true
+  // together, it would offer a reboot in the one state where rebooting is
+  // what LOSES the karg.
+  const cases = [
+    { name: "staged, not live", cmdline: "quiet", grub: true, rule: true },
+    { name: "staged and live", cmdline: `quiet ${KARG}`, grub: true, rule: true },
+    { name: "live, not staged, block on", cmdline: `quiet ${KARG}`, grub: false, rule: true },
+    { name: "live, not staged, reverted", cmdline: `quiet ${KARG}`, grub: false, rule: false },
+    { name: "neither", cmdline: "quiet", grub: false, rule: false },
+  ];
+
+  it.each(cases.map((c) => [c.name, c] as const))("%s", async (_n, c) => {
+    const { deps } = makeFpDeps({
+      files: {
+        ...(c.rule ? { [UDEV_RULE_PATH]: "(rule)" } : {}),
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        "/etc/default/grub-steamos": c.grub ? addKargToGrubSteamos(GRUB_SAMPLE) : GRUB_SAMPLE,
+      },
+      cmdline: c.cmdline,
+      distro: "steamos",
+    });
+    const s = await getStatus(deps, true);
+    expect(s.rebootPending && s.kargUnpersisted).toBe(false);
+  });
+});
+
 describe("shouldHeal", () => {
   const ok = { supported: true, applied: true, kargUnpersisted: false };
 

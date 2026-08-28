@@ -535,13 +535,86 @@ describe("fingerprint self-heal", () => {
     expect(notice?.restored).toBe(true);
   });
 
-  it("hands the notice over exactly once", async () => {
-    // Otherwise every overlay restart re-toasts a heal that happened once.
+  it("keeps the notice readable until it has actually been shown", async () => {
+    // Reading used to consume it, so the startup toast destroyed the notice
+    // before the plugin page could ever render the same message — and a
+    // webview reload lost it for good.
     storage = { fingerprintBlock: true };
     const { backend } = makeBackend();
     await backend.onLoad();
     expect((await backend.getFingerprintHealNotice())?.restored).toBe(true);
+    expect((await backend.getFingerprintHealNotice())?.restored).toBe(true);
+
+    await backend.ackFingerprintHealNotice();
     expect(await backend.getFingerprintHealNotice()).toBeNull();
+  });
+
+  it("does not overwrite an off recorded WHILE the status read was running", async () => {
+    // The actual race: nothing stored when the heal starts, so the snapshot
+    // says "undefined". Reading status shells out to lsusb and a sh loop, and
+    // the user flips the block off in that window. Deciding from the snapshot
+    // writes true over their explicit off — and the next boot re-applies a
+    // block its owner turned off.
+    storage = {};
+    fingerprintStatusImpl.mockImplementation(async () => {
+      storage = { ...storage, fingerprintBlock: false };
+      return {
+        supported: true,
+        applied: true,
+        kargUnpersisted: false,
+        rebootPending: false,
+        kargActive: true,
+        distro: "steamos",
+      };
+    });
+    const { backend } = makeBackend();
+    await backend.onLoad();
+    await backend.getFingerprintHealNotice();
+    expect(storage.fingerprintBlock).toBe(false);
+    expect(applyFingerprintImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not overwrite an explicit off with the backfill", async () => {
+    // The window that matters: status says applied (read seconds ago, before
+    // the user flipped it off), storage now says false. Deciding from the
+    // snapshot would re-enable a block its owner just turned off.
+    storage = { fingerprintBlock: false };
+    fingerprintStatusImpl.mockImplementation(async () => ({
+      supported: true,
+      applied: true,
+      kargUnpersisted: false,
+      rebootPending: false,
+      kargActive: true,
+      distro: "steamos",
+    }));
+    const { backend } = makeBackend();
+    await backend.onLoad();
+    await backend.getFingerprintHealNotice();
+    expect(storage.fingerprintBlock).toBe(false);
+    expect(applyFingerprintImpl).not.toHaveBeenCalled();
+  });
+
+  it("serialises a heal against a concurrent toggle", async () => {
+    // apply/revert run steamos-readonly + update-grub; interleaving two of
+    // them can leave the bootloader inconsistent.
+    storage = { fingerprintBlock: true };
+    let inFlight = 0;
+    let overlapped = false;
+    const track = async () => {
+      inFlight++;
+      if (inFlight > 1) overlapped = true;
+      await new Promise((r) => setTimeout(r, 25));
+      inFlight--;
+      return { success: true, rebootRequired: false, steps: [] };
+    };
+    applyFingerprintImpl.mockImplementation(track);
+    revertFingerprintImpl.mockImplementation(track);
+
+    const { backend } = makeBackend();
+    await backend.onLoad(); // heal starts, fire-and-forget
+    await backend.setFingerprintBlock(false); // user toggles mid-heal
+    await backend.getFingerprintHealNotice();
+    expect(overlapped).toBe(false);
   });
 
   it("reports a failed re-apply instead of claiming success", async () => {
@@ -575,6 +648,7 @@ describe("rebootDevice", () => {
     isApexResult = true;
     isOneXPlayerResult = true;
     runFullImpl.mockClear();
+    runFullImpl.mockImplementation(async () => ({ exitCode: 0, stdout: "", stderr: "" }));
   });
 
   it("reboots via systemctl", async () => {
@@ -583,6 +657,17 @@ describe("rebootDevice", () => {
     expect(res.success).toBe(true);
     expect(runFullImpl).toHaveBeenCalled();
     expect(runFullImpl.mock.calls[0]![0]).toEqual(["systemctl", "reboot"]);
+  });
+
+  it("refuses on hardware the rest of the plugin is inert on", async () => {
+    // A root-privileged power-cycle should not be reachable where every
+    // sibling RPC short-circuits.
+    isOneXPlayerResult = false;
+    const { backend } = makeBackend();
+    await backend.onLoad();
+    const res = await backend.rebootDevice();
+    expect(res.success).toBe(false);
+    expect(runFullImpl).not.toHaveBeenCalled();
   });
 
   it("surfaces a refusal instead of pretending it worked", async () => {
