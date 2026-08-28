@@ -346,3 +346,97 @@ describe("unrecognised gamepad", () => {
     expect(toggle!.disabled).toBe(true);
   });
 });
+
+describe("vibration card", () => {
+  beforeEach(() => {
+    callMock.mockReset();
+    eventHandlers.clear();
+  });
+
+  const withRumble = (rumble: unknown) =>
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") return Promise.resolve(healthyStatus);
+      if (method === "getRumbleInfo") return Promise.resolve(rumble);
+      if (method === "setRumbleIntensity")
+        return Promise.resolve({ success: true, info: { ...(rumble as object), intensity: 2 } });
+      return Promise.resolve(null);
+    });
+
+  const available = {
+    available: true,
+    devicePath: "/sys/bus/hid/devices/0003:1A86:FE00.0003",
+    min: 0,
+    max: 5,
+    intensity: 5,
+    source: "stored" as const,
+  };
+
+  it("offers one cell per level the device reports", async () => {
+    withRumble(available);
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Rumble intensity");
+    });
+    const cells = [...container.querySelectorAll(".segmented > button")];
+    expect(cells.map((c) => c.textContent?.trim())).toEqual(["Off", "1", "2", "3", "4", "5"]);
+  });
+
+  it("derives the cells from the device, not a hardcoded 0-5", async () => {
+    withRumble({ ...available, min: 1, max: 10, intensity: 4 });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      const cells = [...container.querySelectorAll(".segmented > button")];
+      expect(cells.at(-1)?.textContent?.trim()).toBe("10");
+    });
+  });
+
+  it("sends the chosen level to the backend", async () => {
+    withRumble(available);
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    const cell = await waitFor(() => {
+      const el = [...container.querySelectorAll(".segmented > button")].find(
+        (b) => b.textContent?.trim() === "2",
+      );
+      if (!el) throw new Error("level 2 not rendered yet");
+      return el;
+    });
+    fireEvent.click(cell);
+    await waitFor(() => {
+      expect(callMock).toHaveBeenCalledWith("setRumbleIntensity", 2);
+    });
+  });
+
+  it("hides the card entirely when the device has no rumble control", async () => {
+    // Every OneXPlayer gets this plugin, but gen-1 boards expose RGB only —
+    // an empty control would read as broken.
+    withRumble({ ...available, available: false, intensity: null, source: null });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Controller healthy");
+    });
+    expect(container.textContent).not.toContain("Rumble intensity");
+  });
+
+  it("flags a driver-reported level as unreliable", async () => {
+    withRumble({ ...available, source: "driver" });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("resets to maximum");
+    });
+  });
+});

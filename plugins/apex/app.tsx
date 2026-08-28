@@ -1,8 +1,24 @@
 import { useState, useEffect, useCallback } from "react";
 import { FaGamepad, FaTriangleExclamation, FaCircleCheck, FaCircleInfo, FaRotate, FaMicrochip, FaFingerprint } from "react-icons/fa6";
-import { Alert, Button, Spinner, Toggle, mountComponent, notify, useBackend } from "@loadout/ui";
+import {
+  Alert,
+  Button,
+  SegmentedItem,
+  Spinner,
+  Toggle,
+  mountComponent,
+  notify,
+  useBackend,
+} from "@loadout/ui";
+import { intensityLabel } from "./lib/rumble";
+import type { RumbleInfo } from "./lib/rumble-control";
 
 export const icon = FaGamepad;
+
+/** The levels a device's range covers, inclusive. */
+function rumbleLevels(min: number, max: number): number[] {
+  return Array.from({ length: max - min + 1 }, (_, i) => min + i);
+}
 
 interface XhciStatus {
   pciDeviceExists: boolean;
@@ -65,16 +81,50 @@ function Apex() {
   const [autoWakeBusy, setAutoWakeBusy] = useState(false);
   const [blacklistBusy, setBlacklistBusy] = useState(false);
   const [fpBusy, setFpBusy] = useState(false);
+  const [rumble, setRumble] = useState<RumbleInfo | null>(null);
+  const [rumbleBusy, setRumbleBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     setData((await call("getStatus")) as StatusResult);
   }, [call]);
 
   useEvent({ event: "statusChanged", handler: () => refresh() });
+  useEvent({
+    event: "rumbleChanged",
+    handler: useCallback((d: unknown) => setRumble(d as RumbleInfo), []),
+  });
 
   useEffect(() => {
     refresh();
-  }, [refresh]);
+    call("getRumbleInfo")
+      .then((d) => setRumble(d as RumbleInfo))
+      .catch(() => setRumble(null));
+  }, [refresh, call]);
+
+  const handleSetRumble = useCallback(
+    async (level: number) => {
+      setRumbleBusy(true);
+      // Optimistic: the write is a single sysfs poke and the control
+      // shouldn't lag the press.
+      setRumble((prev) => (prev ? { ...prev, intensity: level, source: "stored" } : prev));
+      try {
+        const res = (await call("setRumbleIntensity", level)) as
+          | { success: boolean; error?: string; info?: RumbleInfo }
+          | null;
+        if (!res?.success) {
+          notify(res?.error ?? "Couldn't change the rumble intensity.", { kind: "error" });
+          setRumble((await call("getRumbleInfo")) as RumbleInfo);
+        } else if (res.info) {
+          setRumble(res.info);
+        }
+      } catch (e) {
+        notify(String(e), { kind: "error" });
+      } finally {
+        setRumbleBusy(false);
+      }
+    },
+    [call],
+  );
 
   const handleRecover = useCallback(async () => {
     setBusy(true);
@@ -290,6 +340,53 @@ function Apex() {
             </div>
           </div>
         </div>
+
+        {rumble?.available && (
+          <div className="card">
+            <div className="card-header flex items-center gap-2 py-3.5 px-4.5 border-b border-base-300">
+              <div className="card-title flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-base-content/50">
+                <FaGamepad className="w-3 h-3" /> Vibration
+              </div>
+            </div>
+            <div className="card-body p-6 flex flex-col gap-4">
+              <div className="flex items-baseline justify-between gap-3">
+                <div className="metric-label">Rumble intensity</div>
+                <div className="mono text-sm">
+                  {rumble.intensity === null
+                    ? "—"
+                    : intensityLabel(rumble.intensity, { min: rumble.min, max: rumble.max })}
+                </div>
+              </div>
+
+              <div className="segmented flex w-full">
+                {rumbleLevels(rumble.min, rumble.max).map((level) => (
+                  <SegmentedItem
+                    key={level}
+                    className="flex-1"
+                    disabled={rumbleBusy}
+                    active={rumble.intensity === level}
+                    onSelect={() => void handleSetRumble(level)}
+                  >
+                    {level === rumble.min ? "Off" : String(level)}
+                  </SegmentedItem>
+                ))}
+              </div>
+
+              <div className="text-xs text-base-content/55 leading-relaxed">
+                A master level for the built-in gamepad&apos;s motors, applied by the firmware.
+                Games and Steam Input still decide what rumbles and how strongly — this scales all
+                of it, including in titles that ignore Steam&apos;s own rumble setting.
+              </div>
+
+              {rumble.source === "driver" && (
+                <div className="text-xs text-base-content/45 leading-relaxed">
+                  Showing the driver&apos;s current value. It resets to maximum whenever the driver
+                  reloads, so it may not match what you last felt — pick a level to pin it.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {hidOxp?.blacklisted && (
           <div className="card">

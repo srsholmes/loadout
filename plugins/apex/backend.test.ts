@@ -56,6 +56,26 @@ mock.module("./lib/xhci", () => ({
   getStatus: getStatusImpl,
   recover: recoverImpl,
 }));
+// Rumble control reads real sysfs unless given an fs, and these tests run on
+// a machine that HAS OneXPlayer rumble hardware — so left unmocked it detects
+// it, emits rumbleChanged during onLoad, and every exact-event assertion
+// below fails depending on what's plugged in. Its own logic is covered in
+// lib/rumble-control.test.ts.
+mock.module("./lib/rumble-control", () => ({
+  RumbleControl: class {
+    async start() {}
+    stop() {}
+    async getInfo() {
+      return { available: false, devicePath: null, min: 0, max: 5, intensity: null, source: null };
+    }
+    async setIntensity() {
+      return { success: false, error: "no hardware" };
+    }
+    async rescan() {
+      return { available: false, devicePath: null, min: 0, max: 5, intensity: null, source: null };
+    }
+  },
+}));
 mock.module("./lib/hid-oxp", () => ({
   getHidOxpStatus: hidOxpStatusImpl,
   removeHidOxpBlacklist: removeHidOxpImpl,

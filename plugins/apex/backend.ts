@@ -1,7 +1,11 @@
 import { access, readFile, writeFile, rm } from "node:fs/promises";
 import type { PluginBackend, EmitPayload, PluginLogger, CallPlugin } from "@loadout/types";
 import { runFull, runStreaming } from "@loadout/exec";
-import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
+import {
+  readPluginStorage,
+  writePluginStorage,
+  mutatePluginStorage,
+} from "@loadout/plugin-storage";
 import { isApex, isOneXPlayer } from "@loadout/devices";
 import {
   getStatus as computeStatus,
@@ -10,6 +14,7 @@ import {
   type XhciStatus,
   type RecoverResult,
 } from "./lib/xhci";
+import { RumbleControl, type RumbleInfo } from "./lib/rumble-control";
 import {
   getHidOxpStatus,
   removeHidOxpBlacklist,
@@ -32,6 +37,9 @@ const PLUGIN_ID = "apex";
 interface ApexSettings {
   /** Run the gamepad recovery automatically whenever the device resumes. */
   autoRecoverOnWake?: boolean;
+  /** Global rumble level the user chose. Re-applied on load, because the
+   *  driver's own cache resets to maximum on every module load. */
+  rumbleIntensity?: number;
 }
 
 /**
@@ -184,6 +192,20 @@ export default class ApexBackend implements PluginBackend {
     };
   }
 
+  /** Global rumble intensity — a hid-oxp attribute, so OneXPlayer-only. */
+  private rumble = new RumbleControl({
+    readStored: async () =>
+      (await readPluginStorage<ApexSettings>(PLUGIN_ID)).rumbleIntensity,
+    writeStored: async (rumbleIntensity) => {
+      await mutatePluginStorage<ApexSettings>(PLUGIN_ID, (existing) => ({
+        ...existing,
+        rumbleIntensity,
+      }));
+    },
+    log: (m) => this.log?.info(`[apex] ${m}`),
+    onChange: (info) => this.emit?.({ event: "rumbleChanged", data: info }),
+  });
+
   async onLoad(): Promise<void> {
     // Family-level, not model-level. Every feature below probes for the
     // hardware it actually touches — the fingerprint reader by USB id, the
@@ -210,10 +232,15 @@ export default class ApexBackend implements PluginBackend {
     if (settings.autoRecoverOnWake) {
       this.startWake();
     }
+
+    // Independent of the fixes above: this is a setting, not a repair, and it
+    // has its own retry scan because hid-oxp can bind after we load.
+    await this.rumble.start();
   }
 
   async onUnload(): Promise<void> {
     this.stopWake();
+    this.rumble.stop();
   }
 
   // ---------- RPC ----------
@@ -249,6 +276,22 @@ export default class ApexBackend implements PluginBackend {
    * wake paths (controller PME at runtime + the GPIO kernel arg); the karg
    * change needs a reboot, signalled via `rebootRequired`.
    */
+  // ---------- Rumble ----------
+
+  async getRumbleInfo(): Promise<RumbleInfo> {
+    return this.rumble.getInfo();
+  }
+
+  async setRumbleIntensity(
+    value: number,
+  ): Promise<{ success: boolean; error?: string; info?: RumbleInfo }> {
+    return this.rumble.setIntensity(value);
+  }
+
+  async rescanRumble(): Promise<RumbleInfo> {
+    return this.rumble.rescan();
+  }
+
   async setFingerprintBlock(
     enabled: boolean,
   ): Promise<FingerprintResult & { unsupported?: boolean }> {
