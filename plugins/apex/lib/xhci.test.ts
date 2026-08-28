@@ -124,6 +124,108 @@ describe("pickController", () => {
   });
 });
 
+describe("getStatus — unrecognised gamepad", () => {
+  it("says so rather than offering a rebind that can't help", async () => {
+    // A OneXPlayer whose pad enumerates under ids we don't know: no known id
+    // on the bus, and nothing dead in the log. Before the plugin was
+    // un-gated this shape was unreachable; now it is the likely state on a
+    // sibling handheld, and treating it as "controller missing" would offer
+    // a rebind that never reports success.
+    const deps = makeDeps({
+      present: false,
+      dmesg: "",
+      paths: new Set([
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}`,
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}/driver`,
+      ]),
+    });
+
+    const status = await getStatus(deps);
+
+    expect(status.gamepadPresent).toBe(false);
+    expect(status.gamepadUnknown).toBe(true);
+    expect(status.summary).toContain("Couldn't identify");
+  });
+
+  it("does not claim ignorance when the log shows a dead controller", async () => {
+    // Same absent ids, but dmesg names a dead controller — that is a real
+    // recovery case, not an unfamiliar device.
+    const deps = makeDeps({
+      present: false,
+      dmesg: `xhci_hcd ${DEFAULT_XHCI_PCI}: HC died; cleaning up`,
+      paths: new Set([
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}`,
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}/driver`,
+      ]),
+    });
+
+    const status = await getStatus(deps);
+
+    expect(status.gamepadUnknown).toBe(false);
+    expect(status.summary).toContain("died on resume");
+  });
+
+  it("on a known board, absent ids mean missing even when dmesg has rolled", async () => {
+    // The Apex's own failure mode: the controller dies, both USB ids vanish,
+    // and by the time the user opens the plugin the kernel ring buffer has
+    // wrapped past the "HC died" line. Inferring "unrecognised gamepad" from
+    // that told an Apex owner we couldn't identify their pad and disabled the
+    // one button that fixes it.
+    const deps = makeDeps({
+      present: false,
+      dmesg: "",
+      paths: new Set([
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}`,
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}/driver`,
+      ]),
+    });
+
+    const status = await getStatus(deps, undefined, true);
+
+    expect(status.gamepadUnknown).toBe(false);
+    expect(status.summary).toContain("not enumerating");
+  });
+
+  it("refuses to rebind a guessed controller on an unmeasured board", async () => {
+    // DEFAULT_XHCI_PCI was measured on an Apex. 65:00.4 is a commonplace AMD
+    // xHCI address, so on another board it may exist and host something else
+    // entirely — unbinding it is destructive for no benefit, and this runs
+    // unattended on every wake when auto-recover is on.
+    const deps = makeDeps({
+      present: false,
+      dmesg: "",
+      paths: new Set([
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}`,
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}/driver`,
+      ]),
+    });
+
+    const res = await recover(deps, { knownBoard: false });
+
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("nothing safe to rebind");
+    // Nothing was touched.
+    expect(res.steps).toEqual([]);
+  });
+
+  it("still rebinds on an unmeasured board when the kernel names the dead controller", async () => {
+    // The address came from dmesg, not from our Apex-measured default, so
+    // there's no guessing involved.
+    const deps = makeDeps({
+      present: false,
+      dmesg: `xhci_hcd ${DEFAULT_XHCI_PCI}: HC died; cleaning up`,
+      paths: new Set([
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}`,
+        `/sys/bus/pci/devices/${DEFAULT_XHCI_PCI}/driver`,
+      ]),
+    });
+
+    const res = await recover(deps, { knownBoard: false });
+
+    expect(res.steps.length).toBeGreaterThan(0);
+  });
+});
+
 describe("getStatus", () => {
   it("reports healthy when the gamepad enumerates", async () => {
     const deps = makeDeps({
@@ -151,11 +253,33 @@ describe("getStatus", () => {
     expect(s.summary).toContain("died on resume");
   });
 
-  it("flags a missing PCI device", async () => {
+  it("flags a missing PCI device on a board we know", async () => {
+    // knownBoard, so `controller` is a real address for this hardware rather
+    // than a guess — its absence is genuinely worth reporting.
     const deps = makeDeps({ present: false, paths: new Set() });
-    const s = await getStatus(deps);
+    const s = await getStatus(deps, undefined, true);
     expect(s.pciDeviceExists).toBe(false);
     expect(s.summary).toContain("not present");
+  });
+
+  it("does not report a missing controller over a working gamepad", async () => {
+    // `controller` falls back to DEFAULT_XHCI_PCI, measured on an Apex, so on
+    // a sibling board that address usually doesn't exist. Leading with it
+    // told users of a perfectly healthy device that a PCI device was missing.
+    const deps = makeDeps({ present: true, paths: new Set() });
+    const s = await getStatus(deps);
+    expect(s.pciDeviceExists).toBe(false);
+    expect(s.gamepadPresent).toBe(true);
+    expect(s.summary).toContain("healthy");
+  });
+
+  it("still says which pad it can't identify when the guessed address is absent", async () => {
+    // The gamepadUnknown line was unreachable whenever the fallback address
+    // didn't resolve — i.e. on exactly the devices it was written for.
+    const deps = makeDeps({ present: false, dmesg: "", paths: new Set() });
+    const s = await getStatus(deps);
+    expect(s.gamepadUnknown).toBe(true);
+    expect(s.summary).toContain("Couldn't identify");
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { isApexDmi, isSteamDeckDmi } from "./dmi";
+import { isApexDmi, isOneXPlayerDmi, isSteamDeckDmi } from "./dmi";
 
 describe("isSteamDeckDmi", () => {
   it("matches the Deck LCD (Jupiter)", () => {
@@ -29,8 +29,83 @@ describe("isSteamDeckDmi", () => {
 });
 
 describe("isApexDmi", () => {
+  it("normalises case on both fields", () => {
+    // This drives isKnownBoard. Firmware reporting "One-Netbook" instead of
+    // "ONE-NETBOOK" would make a genuine Apex an *unknown* board: the GPIO
+    // karg stops auto-staging and recover() refuses whenever dmesg has
+    // wrapped — the regression on the one device we can test.
+    expect(isApexDmi({ sysVendor: "One-Netbook", productName: "ONEXPLAYER APEX" })).toBe(true);
+    expect(isApexDmi({ sysVendor: "ONE-NETBOOK", productName: "OneXPlayer Apex" })).toBe(true);
+    expect(
+      isApexDmi({ sysVendor: "one-netbook technology co., ltd.", productName: "onexplayer apex" }),
+    ).toBe(true);
+  });
+
   it("still matches the APEX and rejects the Deck", () => {
     expect(isApexDmi({ sysVendor: "ONE-NETBOOK", productName: "ONEXPLAYER APEX 1" })).toBe(true);
     expect(isApexDmi({ sysVendor: "Valve", productName: "Jupiter" })).toBe(false);
+  });
+});
+
+describe("isOneXPlayerDmi", () => {
+  it("matches the whole OneXPlayer family, not one model", () => {
+    // The X2 Mini Pro's DMI string, per HHD's device table. It shares the
+    // Apex's silicon but was locked out by a model-specific gate.
+    // Neutral vendor on purpose: with "ONE-NETBOOK" here the function
+    // short-circuits on the vendor branch and this list pins nothing —
+    // "Jupiter" would pass just as well. The product branch is what's under
+    // test.
+    for (const productName of [
+      "ONEXPLAYER APEX",
+      "ONEXPLAYER X2Mini PRO",
+      "ONEXPLAYER X1Mini Pro",
+      "ONEXPLAYER G1 A",
+      "ONEXPLAYER F1 Pro",
+    ]) {
+      expect(isOneXPlayerDmi({ sysVendor: "Default string", productName })).toBe(true);
+    }
+  });
+
+  it("normalises case on both fields, not just one", () => {
+    expect(isOneXPlayerDmi({ sysVendor: "One-Netbook", productName: "Default string" })).toBe(true);
+    expect(isOneXPlayerDmi({ sysVendor: "Default string", productName: "OneXPlayer X1" })).toBe(
+      true,
+    );
+  });
+
+  it("matches on either field, since firmware is inconsistent", () => {
+    // Vendor-only: some boards report a product name we've never seen.
+    expect(isOneXPlayerDmi({ sysVendor: "ONE-NETBOOK", productName: "Something New" })).toBe(true);
+    // Product-only: and some report a vendor we don't expect.
+    expect(isOneXPlayerDmi({ sysVendor: "Default string", productName: "ONEXPLAYER X9" })).toBe(
+      true,
+    );
+  });
+
+  it("rejects other vendors' handhelds", () => {
+    expect(isOneXPlayerDmi({ sysVendor: "Valve", productName: "Galileo" })).toBe(false);
+    expect(isOneXPlayerDmi({ sysVendor: "AYANEO", productName: "AYANEO 2" })).toBe(false);
+    expect(isOneXPlayerDmi({ sysVendor: "", productName: "" })).toBe(false);
+  });
+});
+
+describe("isApexDmi — vendor matching", () => {
+  it("accepts the longer vendor string some firmware reports", () => {
+    // battery-tracker already matches "ONE-NETBOOK Technology Co., Ltd.",
+    // so a strict equality here was wrong even for a genuine Apex.
+    expect(
+      isApexDmi({
+        sysVendor: "ONE-NETBOOK Technology Co., Ltd.",
+        productName: "ONEXPLAYER APEX",
+      }),
+    ).toBe(true);
+  });
+
+  it("still distinguishes the Apex from its siblings", () => {
+    // isApexDmi gates board-specific constants (the fingerprint GPIO pin),
+    // so it must stay narrow even as the family gate widens.
+    expect(isApexDmi({ sysVendor: "ONE-NETBOOK", productName: "ONEXPLAYER X2Mini PRO" })).toBe(
+      false,
+    );
   });
 });

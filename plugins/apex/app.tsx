@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { FaGamepad, FaTriangleExclamation, FaCircleCheck, FaRotate, FaMicrochip, FaFingerprint } from "react-icons/fa6";
+import { FaGamepad, FaTriangleExclamation, FaCircleCheck, FaCircleInfo, FaRotate, FaMicrochip, FaFingerprint } from "react-icons/fa6";
 import { Alert, Button, Spinner, Toggle, mountComponent, notify, useBackend } from "@loadout/ui";
 
 export const icon = FaGamepad;
@@ -8,6 +8,7 @@ interface XhciStatus {
   pciDeviceExists: boolean;
   driverBound: boolean;
   gamepadPresent: boolean;
+  gamepadUnknown?: boolean;
   controller: string;
   deadInLog: boolean;
   summary: string;
@@ -24,6 +25,9 @@ interface FingerprintStatus {
   applied: boolean;
   rebootPending: boolean;
   kargActive: boolean;
+  /** False when this board's GPIO pin is unconfirmed, so the karg path is
+   *  unavailable and PME blocking is the whole of the fix. */
+  kargApplicable: boolean;
   distro: string;
 }
 
@@ -178,11 +182,12 @@ function Apex() {
             <div className="card-body p-6">
               <div className="subsection-label mb-2 flex items-center gap-2">
                 <FaTriangleExclamation className="w-3 h-3" />
-                Not a OneXPlayer Apex
+                Not a OneXPlayer handheld
               </div>
               <div className="text-sm text-base-content/80 leading-relaxed">
-                This plugin only does anything on the OneXPlayer Apex. The gamepad-recovery fix
-                rebinds Apex-specific USB hardware, so it stays disabled on other devices.
+                These fixes target OneXPlayer hardware — the gamepad recovery rebinds the USB
+                controller its internal pad sits behind, and the fingerprint block targets the
+                reader on those boards. Neither applies here.
               </div>
             </div>
           </div>
@@ -193,6 +198,10 @@ function Apex() {
 
   const status = data.status!;
   const healthy = status.gamepadPresent;
+  // On a OneXPlayer we haven't measured, the pad may enumerate under ids we
+  // don't know. Say that rather than offering a rebind that can't report
+  // success — the recovery only works on the OneXPlayer HID MCU.
+  const gamepadUnknown = status.gamepadUnknown === true;
   const hidOxp = data.hidOxp;
 
   return (
@@ -201,7 +210,7 @@ function Apex() {
         <div className="card">
           <div className="card-body p-6">
             <div className="text-sm text-base-content/80 leading-relaxed">
-              On the OneXPlayer Apex the xHCI USB controller can die when the device wakes from
+              On OneXPlayer handhelds the xHCI USB controller can die when the device wakes from
               sleep, which drops the built-in gamepad off the bus — it looks dead and restarting
               InputPlumber doesn't help. This rebinds the controller so the pad re-enumerates.
             </div>
@@ -216,20 +225,35 @@ function Apex() {
           </div>
           <div className="card-body p-6 flex flex-col gap-4">
             <Alert
-              variant={healthy ? "success" : "warning"}
-              icon={healthy ? <FaCircleCheck size={14} /> : <FaTriangleExclamation size={14} />}
-              title={healthy ? "Controller healthy" : "Controller missing"}
+              variant={healthy ? "success" : gamepadUnknown ? "info" : "warning"}
+              icon={
+                healthy ? (
+                  <FaCircleCheck size={14} />
+                ) : gamepadUnknown ? (
+                  <FaCircleInfo size={14} />
+                ) : (
+                  <FaTriangleExclamation size={14} />
+                )
+              }
+              title={
+                healthy
+                  ? "Controller healthy"
+                  : gamepadUnknown
+                    ? "Gamepad not recognised"
+                    : "Controller missing"
+              }
             >
               {status.summary}
             </Alert>
 
             <div className="text-[11px] text-base-content/45 mono">
               controller {status.controller} · driver {status.driverBound ? "bound" : "unbound"} ·
-              gamepad {status.gamepadPresent ? "present" : "absent"}
+              gamepad{" "}
+              {status.gamepadPresent ? "present" : gamepadUnknown ? "unrecognised" : "absent"}
             </div>
 
             <div className="mt-2">
-              <Button onClick={handleRecover} disabled={busy}>
+              <Button onClick={handleRecover} disabled={busy || gamepadUnknown}>
                 <span className="flex items-center gap-2">
                   <FaRotate className={busy ? "animate-spin" : undefined} size={13} />
                   {busy ? "Recovering…" : "Recover gamepad"}
@@ -238,8 +262,9 @@ function Apex() {
             </div>
 
             <div className="text-xs text-base-content/55 leading-relaxed">
-              Safe to run any time — if the controller is already working it does nothing, so
-              there's no harm in pressing it.
+              {gamepadUnknown
+                ? "Unavailable on this device: recovery works by rebinding the USB controller the gamepad sits behind, and we can't tell which one that is here. Rebinding the wrong one would reset whatever else is attached to it."
+                : "Safe to run any time — if the controller is already working it does nothing, so there's no harm in pressing it."}
             </div>
 
             <div className="flex justify-between items-start gap-4 pt-4 mt-1 border-t border-base-300">
@@ -248,13 +273,18 @@ function Apex() {
                   Recover automatically on wake
                 </span>
                 <span className="text-xs text-base-content/55 leading-relaxed">
-                  Run this recovery whenever the device wakes from sleep, so you never have to
-                  press the button. Only rebinds if the gamepad is actually missing.
+                  {gamepadUnknown
+                    ? "Unavailable while the gamepad can't be identified — this would run the same unsafe rebind unattended, on every wake."
+                    : "Run this recovery whenever the device wakes from sleep, so you never have to press the button. Only rebinds if the gamepad is actually missing."}
                 </span>
               </div>
               <Toggle
                 checked={!!data.autoRecoverOnWake}
-                disabled={autoWakeBusy}
+                // Can't be armed on a device where recovery is unavailable —
+                // but if it's already on (ids were recognised, then the pad
+                // dropped), it must stay switchable OFF or the user is stuck
+                // with a listener they can see and can't stop.
+                disabled={autoWakeBusy || (gamepadUnknown && !data.autoRecoverOnWake)}
                 onChange={handleToggleAutoWake}
               />
             </div>
@@ -315,7 +345,7 @@ function Apex() {
             </div>
             <div className="card-body p-6 flex flex-col gap-4">
               <div className="text-sm text-base-content/80 leading-relaxed">
-                The power button's fingerprint sensor wakes the Apex from sleep on a light touch —
+                The power button's fingerprint sensor wakes the device from sleep on a light touch —
                 annoying in a bag. This blocks it as a wake source; a deliberate power-button{" "}
                 <span className="font-medium">press</span> still wakes the device.
               </div>
@@ -344,12 +374,23 @@ function Apex() {
                 </Alert>
               )}
 
-              {!data.fingerprint.kargActive && data.fingerprint.distro !== "steamos" && (
+              {!data.fingerprint.kargActive &&
+                data.fingerprint.kargApplicable &&
+                data.fingerprint.distro !== "steamos" && (
+                  <div className="text-xs text-base-content/55 leading-relaxed">
+                    On {data.fingerprint.distro || "this distro"} the GPIO kernel arg can&apos;t be
+                    applied automatically yet. Add{" "}
+                    <span className="mono">gpiolib_acpi.ignore_wake=AMDI0030:00@58</span> to your
+                    kernel command line and reboot to fully block the touch wake.
+                  </div>
+                )}
+
+              {!data.fingerprint.kargApplicable && (
                 <div className="text-xs text-base-content/55 leading-relaxed">
-                  On {data.fingerprint.distro || "this distro"} the GPIO kernel arg can't be applied
-                  automatically yet. Add{" "}
-                  <span className="mono">gpiolib_acpi.ignore_wake=AMDI0030:00@58</span> to your
-                  kernel command line and reboot to fully block the touch wake.
+                  Wake from the reader is blocked at its USB controller, which is derived from your
+                  hardware. There&apos;s a second, belt-and-braces kernel argument we apply on the
+                  Apex, but it names a specific GPIO pin on that board — we don&apos;t know this
+                  model&apos;s, and the wrong pin is worse than none.
                 </div>
               )}
             </div>
@@ -363,9 +404,9 @@ function Apex() {
 function Header() {
   return (
     <div className="flex flex-col gap-0.5 min-w-0">
-      <h1 className="text-xl font-semibold tracking-[-0.015em] m-0 leading-tight">Apex</h1>
+      <h1 className="text-xl font-semibold tracking-[-0.015em] m-0 leading-tight">OneXPlayer</h1>
       <span className="text-[11.5px] text-base-content/55 tracking-[0.02em] truncate leading-tight">
-        OneXPlayer Apex fixes
+        Gamepad + fingerprint fixes
       </span>
     </div>
   );

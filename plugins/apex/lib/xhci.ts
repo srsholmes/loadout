@@ -21,7 +21,15 @@
  *  firmware revisions; overridable when the caller knows better. */
 export const DEFAULT_XHCI_PCI = "0000:65:00.4";
 
-/** Internal gamepad USB IDs — both must enumerate for "healthy". */
+/**
+ * Internal gamepad USB IDs — both must enumerate for "healthy".
+ *
+ * `1a86:fe00` is the OneXPlayer HID MCU; `045e:028e` the X360-compatible pad
+ * it presents. Known good on the Apex. A sibling handheld may enumerate its
+ * pad under different ids, and this signal would then read "gamepad missing"
+ * forever — see {@link gamepadPresence}, whose `any` tells that apart from a
+ * genuinely dropped controller so we don't offer a rebind that cannot help.
+ */
 export const GAMEPAD_IDS = ["1a86:fe00", "045e:028e"] as const;
 
 const DRIVER_DIR = "/sys/bus/pci/drivers/xhci_hcd";
@@ -64,6 +72,9 @@ export interface XhciStatus {
   driverBound: boolean;
   /** Both internal gamepad USB IDs enumerate via lsusb. */
   gamepadPresent: boolean;
+  /** No known gamepad id on the bus and nothing dead in the log — we can't
+   *  tell whether this device's pad is missing or simply unfamiliar. */
+  gamepadUnknown: boolean;
   /** The controller we'd act on (detected-dead, else default). */
   controller: string;
   /** True if the kernel log shows this controller recently died. */
@@ -108,15 +119,41 @@ function driverLinkPath(pci: string): string {
   return `${PCI_DEVICES}/${pci}/driver`;
 }
 
+/** True when the given USB id enumerates via lsusb. */
+async function usbIdPresent(run: Run, id: string): Promise<boolean> {
+  const r = await run(["lsusb", "-d", id], { timeoutMs: 5_000 });
+  return r.exitCode === 0 && r.stdout.toLowerCase().includes(id.toLowerCase());
+}
+
 /** True when every internal-gamepad USB ID enumerates via lsusb. */
 export async function gamepadPresent(run: Run): Promise<boolean> {
   for (const id of GAMEPAD_IDS) {
-    const r = await run(["lsusb", "-d", id], { timeoutMs: 5_000 });
-    if (r.exitCode !== 0 || !r.stdout.toLowerCase().includes(id.toLowerCase())) {
-      return false;
-    }
+    if (!(await usbIdPresent(run, id))) return false;
   }
   return true;
+}
+
+/**
+ * Both answers from one pass over the ids.
+ *
+ * `all` is "the pad is healthy". `any` distinguishes the two readings of
+ * "no ids": a dead controller drops the whole bus, so zero ids is ambiguous
+ * between "the controller died" and "this device's pad isn't one we
+ * recognise" — {@link getStatus} resolves that with the board and the dmesg
+ * signal.
+ *
+ * One pass rather than two helpers: `getStatus` needs both answers, and
+ * asking separately spawned `lsusb` up to four times per poll over the same
+ * two ids, with the second pass redundant whenever the first said yes.
+ */
+async function gamepadPresence(run: Run): Promise<{ all: boolean; any: boolean }> {
+  let any = false;
+  let all = true;
+  for (const id of GAMEPAD_IDS) {
+    if (await usbIdPresent(run, id)) any = true;
+    else all = false;
+  }
+  return { all, any };
 }
 
 /** Decide which controller to act on: caller override → dead-in-log →
@@ -136,24 +173,57 @@ export async function pickController(
   return { controller: DEFAULT_XHCI_PCI, deadInLog: false };
 }
 
-export async function getStatus(deps: XhciDeps, override?: string): Promise<XhciStatus> {
+export async function getStatus(
+  deps: XhciDeps,
+  override?: string,
+  knownBoard = false,
+): Promise<XhciStatus> {
   const { controller, deadInLog } = await pickController(deps, override);
-  const [pciDeviceExists, driverBound, padPresent] = await Promise.all([
+  const [pciDeviceExists, driverBound, presence] = await Promise.all([
     deps.pathExists(pciDevicePath(controller)),
     deps.pathExists(driverLinkPath(controller)),
-    gamepadPresent(deps.run),
+    gamepadPresence(deps.run),
   ]);
+  const padPresent = presence.all;
+  const anyId = presence.any;
 
+  // Neither known id, on a board we haven't measured: this is a OneXPlayer
+  // whose pad we can't identify, not a dropped controller. Saying so beats
+  // offering a rebind that would never report success.
+  //
+  // `knownBoard` is the load-bearing term. When an Apex's controller dies
+  // both ids vanish, so `anyId` is false; if the kernel ring buffer has
+  // since wrapped, `deadInLog` is false too — and without `knownBoard` that
+  // combination told an Apex in its primary failure mode that we couldn't
+  // identify its gamepad, steering the user away from the rebind that fixes
+  // it. On a board we've measured, absent ids mean missing, full stop.
+  //
+  // `deadInLog` still counts: on an unmeasured board, a kernel line naming
+  // the dead controller is a real recovery case and gives us the address to
+  // rebind, so that is not "an unfamiliar device" either.
+  const gamepadUnknown = !padPresent && !anyId && !knownBoard && !deadInLog;
+
+  // Order matters. `controller` may be DEFAULT_XHCI_PCI — a guess measured on
+  // an Apex — so on a sibling board that address usually does NOT exist, and
+  // leading with `!pciDeviceExists` reported "PCI device 0000:65:00.4 not
+  // present" over a perfectly healthy gamepad, while making the
+  // gamepadUnknown line below unreachable on exactly the devices it was
+  // written for. What the pad is doing outranks whether our guessed address
+  // resolves.
   let summary: string;
-  if (!pciDeviceExists) summary = `PCI device ${controller} not present.`;
-  else if (padPresent) summary = "Controller healthy — nothing to do.";
+  if (padPresent) summary = "Controller healthy — nothing to do.";
   else if (deadInLog) summary = "Controller died on resume — rebind to recover the gamepad.";
+  else if (gamepadUnknown)
+    summary =
+      "Couldn't identify this device's internal gamepad — recovery is only known to work on hardware using the OneXPlayer HID MCU.";
+  else if (!pciDeviceExists) summary = `PCI device ${controller} not present.`;
   else summary = "Gamepad not enumerating — a rebind may recover it.";
 
   return {
     pciDeviceExists,
     driverBound,
     gamepadPresent: padPresent,
+    gamepadUnknown,
     controller,
     deadInLog,
     summary,
@@ -210,10 +280,10 @@ async function rebind(deps: XhciDeps, pci: string, steps: string[]): Promise<voi
  */
 export async function recover(
   deps: XhciDeps,
-  opts: { override?: string; force?: boolean } = {},
+  opts: { override?: string; force?: boolean; knownBoard?: boolean } = {},
 ): Promise<RecoverResult> {
   const steps: string[] = [];
-  const { controller } = await pickController(deps, opts.override);
+  const { controller, deadInLog } = await pickController(deps, opts.override);
 
   // Loop guard — nothing to do if the gamepad is already on the bus.
   if (!opts.force && (await gamepadPresent(deps.run))) {
@@ -223,6 +293,24 @@ export async function recover(
       steps,
       gamepadPresent: true,
       alreadyHealthy: true,
+    };
+  }
+
+  // Refuse to rebind a guessed controller. DEFAULT_XHCI_PCI was measured on
+  // an Apex; 65:00.4 is a commonplace xHCI address on AMD platforms, so on an
+  // un-measured board it may well exist and host something else entirely —
+  // external storage, a dock, a keyboard. Unbinding that is destructive for
+  // no possible benefit, and this runs unattended on every wake when
+  // auto-recover is on. Proceed only when the kernel named the dead
+  // controller, the caller supplied one, or we know this board.
+  if (!deadInLog && !opts.override && !opts.knownBoard) {
+    return {
+      success: false,
+      controller,
+      steps,
+      gamepadPresent: false,
+      error:
+        "Can't identify this device's gamepad or its USB controller, so there's nothing safe to rebind. Recovery is only known to work on hardware using the OneXPlayer HID MCU.",
     };
   }
 

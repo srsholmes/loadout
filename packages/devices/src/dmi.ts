@@ -1,13 +1,15 @@
 /**
- * DMI probe — the Apex plugin is a no-op on non-Apex hardware.
+ * DMI probe.
  *
- * The kernel exposes DMI strings under /sys/class/dmi/id/. The Apex
- * reports:
+ * The kernel exposes DMI strings under /sys/class/dmi/id/. An Apex reports:
  *   sys_vendor   = "ONE-NETBOOK"
  *   product_name = "ONEXPLAYER APEX"
  *
- * Future Apex revisions are expected to keep the "ONEXPLAYER APEX"
- * product_name prefix, hence `startsWith` rather than `===`.
+ * These predicates are for the handful of cases where a *board-specific*
+ * constant is involved — a GPIO pin number, a register map. Prefer detecting
+ * the capability you need: every other plugin in this repo asks "is the file
+ * I write present?" rather than "which device is this?", which is why they
+ * work on hardware nobody here has held.
  */
 
 import { readFile } from "node:fs/promises";
@@ -35,8 +37,52 @@ export async function readDmi(): Promise<DmiInfo> {
   return { sysVendor, productName };
 }
 
+/** OneXPlayer's vendor string. Matched loosely: firmware ships both
+ *  "ONE-NETBOOK" and "ONE-NETBOOK Technology Co., Ltd." across models —
+ *  battery-tracker already matches the longer one, so a strict equality here
+ *  was wrong even for some genuine Apexes. */
+const OXP_VENDOR = "ONE-NETBOOK";
+
 export function isApexDmi(info: DmiInfo): boolean {
-  return info.sysVendor === "ONE-NETBOOK" && info.productName.startsWith("ONEXPLAYER APEX");
+  // Case-normalised for the same reason isOneXPlayerDmi is, and it matters
+  // more here: this drives `isKnownBoard`, so firmware reporting
+  // "One-Netbook" would make a genuine Apex an *unknown* board — the karg
+  // would stop auto-staging and recover() would refuse whenever dmesg had
+  // wrapped. That is the regression on our one testable device.
+  const vendor = info.sysVendor.toUpperCase();
+  const product = info.productName.toUpperCase();
+  return vendor.includes(OXP_VENDOR) && product.startsWith("ONEXPLAYER APEX");
+}
+
+/**
+ * Any OneXPlayer-family handheld. Broader than {@link isApexDmi} — use it
+ * when something applies to the family (an EC quirk, a driver name) rather
+ * than to one board's wiring.
+ *
+ * Either field is enough, deliberately: firmware is inconsistent about both,
+ * and a new model whose product string we've never seen should still get the
+ * family's fixes rather than waiting on a release here.
+ *
+ * The cost of the vendor branch is that One-Netbook's non-handheld lines
+ * (OneMix, OneGx) report the same `sys_vendor` and will match too. That is
+ * accepted rather than overlooked: everything behind this gate is
+ * capability-detected — a machine with no OneXPlayer MCU finds no gamepad to
+ * recover and no reader to block, and `recover()` refuses outright on a board
+ * we haven't measured. An inert plugin entry on a OneMix is a better failure
+ * than a locked-out OneXPlayer, which is the bug this whole gate replaced.
+ */
+export function isOneXPlayerDmi(info: DmiInfo): boolean {
+  // Case-normalised on both fields. Matching one case-sensitively and the
+  // other not made the "firmware is inconsistent" argument apply to only
+  // half of it.
+  return (
+    info.sysVendor.toUpperCase().includes(OXP_VENDOR) ||
+    info.productName.toUpperCase().includes("ONEXPLAYER")
+  );
+}
+
+export async function isOneXPlayer(): Promise<boolean> {
+  return isOneXPlayerDmi(await readDmi());
 }
 
 export async function isApex(): Promise<boolean> {

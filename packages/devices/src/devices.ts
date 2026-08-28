@@ -28,7 +28,10 @@ export interface DeviceInfo {
   profiles: { Silent: number; Balanced: number; Performance: number };
 }
 
-const KNOWN_DEVICES: DeviceInfo[] = [
+/** The device table, ordered specific-first. Exported so tests can assert
+ *  ordering and invariants across every row rather than a hand-copied
+ *  sample that silently misses rows added later. */
+export const KNOWN_DEVICES: DeviceInfo[] = [
   // Steam Deck
   {
     match: "Galileo",
@@ -135,6 +138,27 @@ const KNOWN_DEVICES: DeviceInfo[] = [
     maxTdp: 90,
     batteryMaxTdp: 65,
     profiles: { Silent: 15, Balanced: 45, Performance: 75 },
+  },
+  {
+    // X2 Mini Pro. The DMI string has no space in "X2Mini" (per HHD's device
+    // table), so it does NOT contain "ONEXPLAYER Mini Pro" and fell through
+    // to the generic 35 W row below — badly wrong for a device users run at
+    // 80 W. Listed above that row so the substring match reaches it.
+    //
+    // TDP from HHD's own X2 Mini Pro entry, which sets the performance
+    // preset to 45 W. Unverified on hardware we hold.
+    //
+    // Matched with the " PRO" suffix on purpose. Substring matching on
+    // "ONEXPLAYER X2Mini" would also claim the non-Pro X2 Mini — different
+    // silicon — and hand it this ceiling under the Pro's name. A TDP ceiling
+    // is safety-relevant, so the non-Pro falls through to the conservative
+    // generic row until someone reports its real envelope.
+    match: "ONEXPLAYER X2Mini PRO",
+    name: "OneXPlayer X2 Mini Pro",
+    minTdp: 5,
+    maxTdp: 65,
+    batteryMaxTdp: 45,
+    profiles: { Silent: 15, Balanced: 30, Performance: 45 },
   },
   {
     match: "ONEXPLAYER Mini Pro",

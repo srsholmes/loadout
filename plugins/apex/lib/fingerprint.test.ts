@@ -8,9 +8,13 @@ import {
   removeKargFromGrubSteamos,
   KARG,
   UDEV_RULE_PATH,
+  FP_PRODUCTS,
   type FingerprintDeps,
 } from "./fingerprint";
 import type { RunResult } from "./xhci";
+import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /**
  * Fingerprint-wake-block tests. All hardware/OS access is injected, so these
@@ -110,6 +114,91 @@ describe("detectController", () => {
     const { deps } = makeFpDeps({ fpPresent: false });
     expect(await detectController(deps)).toBeNull();
   });
+
+  /**
+   * The cases above stub `sh` wholesale, so they never exercise the shell we
+   * actually ship — a dropped product id would pass every one of them. These
+   * run the emitted script for real against a fixture sysfs tree.
+   *
+   * The reader is not one part across the family: the Apex ships 2808:c652,
+   * the X2 Mini Pro ships 2808:5952.
+   */
+  describe("the emitted sysfs scan (executed for real)", () => {
+    async function runScanAgainst(
+      devices: { name: string; vendor: string; product: string; busnum: string }[],
+    ): Promise<string> {
+      const root = await mkdtemp(join(tmpdir(), "loadout-fp-"));
+      const devDir = join(root, "devices");
+      // The bus's root hub resolves through a symlink to its PCI parent,
+      // which is the whole point of the walk under test.
+      await mkdir(join(root, "pci", CTRL, "usb3"), { recursive: true });
+      await mkdir(devDir, { recursive: true });
+      for (const d of devices) {
+        await mkdir(join(devDir, d.name), { recursive: true });
+        await writeFile(join(devDir, d.name, "idVendor"), d.vendor);
+        await writeFile(join(devDir, d.name, "idProduct"), d.product);
+        await writeFile(join(devDir, d.name, "busnum"), d.busnum);
+      }
+      await symlink(join(root, "pci", CTRL, "usb3"), join(devDir, "usb3"));
+
+      // Capture the real command, then retarget it at the fixture.
+      let script = "";
+      const { deps } = makeFpDeps({});
+      const capturing: FingerprintDeps = {
+        ...deps,
+        run: async (cmd) => {
+          if (cmd[0] === "sh") {
+            script = cmd[2]!;
+            return { exitCode: 0, stdout: "", stderr: "" } as RunResult;
+          }
+          return deps.run(cmd);
+        },
+      };
+      await detectController(capturing);
+      expect(script).not.toBe("");
+
+      const proc = Bun.spawn(["sh", "-c", script.replaceAll("/sys/bus/usb/devices", devDir)], {
+        stdout: "pipe",
+      });
+      const out = await new Response(proc.stdout).text();
+      await rm(root, { recursive: true, force: true });
+      return out.trim();
+    }
+
+    it("pins the reader ids we've confirmed on real hardware", () => {
+      // The parameterised case below derives from FP_PRODUCTS, so on its own
+      // it would shrink silently if an id were dropped rather than fail.
+      // These two are each attested by a device: c652 the Apex, 5952 the
+      // X2 Mini Pro (doctor report, 2026-08-26).
+      expect(FP_PRODUCTS).toContain("c652");
+      expect(FP_PRODUCTS).toContain("5952");
+    });
+
+    it.each(FP_PRODUCTS.map((pid) => [pid]))("finds the reader with product id %s", async (pid) => {
+      const found = await runScanAgainst([
+        { name: "1-1", vendor: "1a86", product: "8091", busnum: "1" },
+        { name: "3-3", vendor: "2808", product: pid, busnum: "3" },
+      ]);
+      expect(found).toBe(CTRL);
+    });
+
+    it("ignores a FocalTech device that isn't a known reader", async () => {
+      // 2808 also covers FocalTech touch controllers. Disabling wakeup on one
+      // of those would be the wrong device entirely.
+      const found = await runScanAgainst([
+        { name: "3-2", vendor: "2808", product: "1234", busnum: "3" },
+      ]);
+      expect(found).toBe("");
+    });
+
+    it("skips past a non-reader to find the real one on the same vendor", async () => {
+      const found = await runScanAgainst([
+        { name: "3-2", vendor: "2808", product: "1234", busnum: "3" },
+        { name: "3-3", vendor: "2808", product: "5952", busnum: "3" },
+      ]);
+      expect(found).toBe(CTRL);
+    });
+  });
 });
 
 describe("getStatus", () => {
@@ -194,6 +283,76 @@ describe("apply / revert (SteamOS)", () => {
     expect(files[UDEV_RULE_PATH]).toBeUndefined();
     expect(files["/etc/default/grub-steamos"]).not.toContain(KARG);
     expect(commands).toContain("update-grub");
+  });
+});
+
+describe("apply — board whose GPIO pin we haven't measured", () => {
+  it("blocks the wake path it can derive, and won't stage a karg it can't verify", async () => {
+    // KARG names a specific GPIO pin (AMDI0030:00@58) — board wiring, not a
+    // family constant. On a sibling OneXPlayer that pin may be wrong, and
+    // staging it into grub is worse than leaving the second path open. The
+    // derived PME path still applies.
+    const { deps, files, commands } = makeFpDeps({
+      files: { "/etc/default/grub-steamos": GRUB_SAMPLE },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+
+    const r = await apply(deps, { autoKarg: false });
+
+    // Path 2 — derived from the reader's own PCI parent — still applied.
+    expect(r.steps).toContain("controller-wake-disabled");
+    expect(r.steps).toContain("udev-rule-installed");
+    // Path 1 — not staged, and the bootloader untouched.
+    expect(r.steps).not.toContain("karg-staged");
+    expect(files["/etc/default/grub-steamos"]).not.toContain(KARG);
+    expect(commands).not.toContain("update-grub");
+    // ...and we don't hand the pin over as an instruction either. Printing
+    // "add gpiolib_acpi.ignore_wake=AMDI0030:00@58" to a user on a board we
+    // haven't measured is the same act as staging it, with extra steps — and
+    // the UI renders it as a flat instruction, not as a caveated example.
+    expect(r.manualKarg).toBeUndefined();
+    expect(r.steps).toContain("karg-not-applicable");
+    // The operation still succeeded: PME blocking is the whole fix here, so
+    // it must not report a half-failure the user would try to "fix".
+    expect(r.success).toBe(true);
+    expect(r.rebootRequired).toBe(false);
+  });
+
+  it("reports itself applied, rather than springing the switch back to off", async () => {
+    // getStatus required kargActive for `applied`, but the karg is never
+    // staged on this board — so the switch went on, PME *was* blocked, and
+    // the next refresh flipped it back to off. Flipping again calls revert()
+    // and undoes the one path that worked.
+    const { deps } = makeFpDeps({
+      files: {
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+      },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+
+    const unmeasured = await getStatus(deps, false);
+    expect(unmeasured.kargActive).toBe(false);
+    expect(unmeasured.applied).toBe(true);
+
+    // On a board we HAVE measured the karg is still genuinely required.
+    const measured = await getStatus(deps, true);
+    expect(measured.applied).toBe(false);
+  });
+
+  it("still stages the karg on the board we did measure", async () => {
+    const { deps, files } = makeFpDeps({
+      files: { "/etc/default/grub-steamos": GRUB_SAMPLE },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+
+    const r = await apply(deps, { autoKarg: true });
+
+    expect(r.steps).toContain("karg-staged");
+    expect(files["/etc/default/grub-steamos"]).toContain(KARG);
   });
 });
 
