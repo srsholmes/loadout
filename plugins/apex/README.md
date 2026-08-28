@@ -5,37 +5,74 @@
 ## Fingerprint wake block, and why it heals itself
 
 The power button's fingerprint reader wakes the device from sleep on a light
-touch. The block closes two paths:
+touch. The touch reaches the SoC by **two independent paths, and both must
+close** — closing one leaves the device wakeable:
 
 - **Controller PME** — `power/wakeup=disabled` on the xHCI controller hosting
-  the reader, plus a udev rule to persist it. This is the layer that actually
-  stops the wake, it's derived from your hardware at runtime, and it takes
-  effect immediately.
-- **GPIO kernel arg** — `gpiolib_acpi.ignore_wake=...`, belt-and-braces, and
-  only live after a reboot. It names a specific pin, which is board wiring,
-  so it is only staged on boards we have measured.
+  the reader, plus a udev rule to persist it. Derived from your hardware at
+  runtime; takes effect immediately, no reboot.
+- **GPIO wake line** — disarmed only by a kernel argument,
+  `gpiolib_acpi.ignore_wake=AMDI0030:00@58`. Boot-time, so it needs a reboot,
+  and it names a pin that is board wiring rather than a family constant.
 
-Both live in `/etc`, and a SteamOS A/B update regenerates that tree — so an
-update silently removes the block and the device quietly starts waking on a
+Because the karg is the only way to close path 1, whether we can deliver a
+complete block depends on the boot mechanism:
+
+| System | Kernel arg | Result |
+| --- | --- | --- |
+| SteamOS | `/etc/default/grub-steamos`, behind `steamos-readonly` | automatic |
+| Bazzite and other rpm-ostree images | `rpm-ostree kargs` | automatic |
+| **Everything else, CachyOS and Arch included** | — | we print the arg; you add it |
+| A board whose pin we haven't measured | — | withheld: the wrong pin is worse than none |
+
+**We do not edit GRUB.** An earlier attempt did, and it was wrong in ways that
+could leave a machine unbootable: `/etc/default/grub` is *sourced*, so a value
+that isn't double-quoted (common on encrypted or hibernating systems) got a
+second assignment appended and the user's real `cryptdevice=`/`resume=` args
+were discarded. Fedora needs `grub2-mkconfig` and BLS entries rather than that
+file at all, and CachyOS may boot via systemd-boot or limine, where the file
+exists and nothing reads it. None of that is verifiable before a reboot, so
+GRUB systems get an instruction instead of an edit.
+
+Detection is by mechanism, not distro name — `/run/ostree-booted` rather than
+a list of IDs, because Silverblue and Kinoite both report `ID=fedora`.
+
+Where we can't stage it, the UI says one wake path is still open and names the
+systems we do automate, so it's clear why the step is manual. It never claims
+the block is complete.
+
+### Healing itself
+
+Both paths live in `/etc`, and a SteamOS A/B update regenerates that tree — so
+an update silently removes the block and the device quietly starts waking on a
 touch again, with nothing to tell you.
 
 So the plugin checks at startup and puts it back. The user's choice is stored
 in plugin storage under `$HOME` (`fingerprintBlock`), not inferred from
 `/etc`: every signal in the live status is derived from the files an update
-deletes, so after one they cannot distinguish "never wanted it" from "wanted
+deletes, so afterwards they cannot distinguish "never wanted it" from "wanted
 it and the OS ate it". Healing off those would enable the block on machines
 whose owner deliberately never turned it on.
 
-The re-apply runs fire-and-forget from `onLoad`. The loader awaits each
-plugin's `onLoad` in turn with no timeout and the HTTP server does not start
-until that loop finishes, so blocking on `update-grub` here would stall the
-whole backend boot.
+The re-apply runs fire-and-forget from `onLoad` — the loader awaits each
+plugin's `onLoad` in turn with no timeout and the HTTP server doesn't start
+until that loop finishes, so blocking on `update-grub` would stall the whole
+backend boot.
 
 You are told it happened via a toast at overlay startup — the plugin declares
 `loadOnStartup` and exports `init()`, which pulls the outcome and waits for
 the window to actually be on screen before notifying (the overlay boots
 hidden, so a toast fired at boot is consumed by nobody). The same notice
-renders as an alert on the plugin page if you get there first.
+renders as an alert on the plugin page — reading it doesn't consume it, so
+both surfaces can show it and it isn't lost if the webview reloads before you
+look.
+
+Uninstalling Loadout removes the udev rule and re-enables the controller, so
+the block doesn't outlive the app. The kernel arg is deliberately left alone —
+editing a bootloader during an uninstall is a worse failure than a stale arg.
+It is **not** inert, though: the two paths are independent, so the arg keeps
+the GPIO wake line disarmed on its own. The uninstaller prints it and how to
+remove it rather than pretending it doesn't matter.
 
 ## Vibration
 

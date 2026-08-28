@@ -46,6 +46,17 @@ IP_ETC_DIR="/etc/loadout/inputplumber"
 IP_ETC_PARENT="/etc/loadout"
 IP_UACCESS_RULE="/etc/udev/rules.d/71-loadout-inputplumber-uaccess.rules"
 IP_DECK_HIDRAW_RULE="/etc/udev/rules.d/72-loadout-deck-hidraw.rules"
+# The apex plugin's fingerprint wake block. Left behind, this udev rule keeps
+# re-disabling the reader's controller wakeup on every boot with no Loadout
+# installed to undo it — the user's fingerprint wake stays blocked forever and
+# nothing on the system explains why. The kernel arg is deliberately NOT
+# stripped (editing a bootloader during an uninstall is a worse failure than a
+# stale arg) — but it is NOT inert either: the two wake paths are independent,
+# so the arg keeps the GPIO line disarmed on its own. We print it instead.
+FP_WAKE_RULE="/etc/udev/rules.d/90-loadout-fingerprint-no-wake.rules"
+# The exact arg the plugin adds. Matched literally so a user's own
+# gpiolib_acpi.ignore_wake for a different device is never attributed to us.
+FP_KARG="gpiolib_acpi.ignore_wake=AMDI0030:00@58"
 # Written only by Loadout versions predating #87 (when the Deck moved to a
 # native hidraw watcher). Left in place it keeps InputPlumber claiming the
 # Deck's built-in controller away from Steam Input, so it's worth removing —
@@ -152,6 +163,82 @@ remove_tree() {
     fi
     return 0
 }
+
+# Undo the fingerprint wake block. Its own function called from main(), NOT
+# part of revert_inputplumber(): that returns early for anyone with no
+# InputPlumber artefacts on disk, which is most people who used this feature —
+# so the removal never ran for exactly the users it was written for.
+revert_fingerprint_block() {
+    # NOT gated on the rule existing: a system update that regenerated /etc
+    # removes the rule but leaves the karg staged, which is precisely the
+    # state this feature exists for — and the state where the user most needs
+    # telling that something is still disarming their power button.
+    if [ ! -f "$FP_WAKE_RULE" ]; then
+        warn_leftover_karg
+        return 0
+    fi
+
+    info "Reverting the fingerprint wake block..."
+    # The rule names the controller it disables; re-enable it now rather than
+    # leaving wake off until the next boot.
+    fp_ctrl="$(sed -n 's/.*KERNEL=="\([0-9a-f:.]*\)".*/\1/p' "$FP_WAKE_RULE" 2>/dev/null | head -1)"
+    if as_root rm -f "$FP_WAKE_RULE"; then
+        as_root udevadm control --reload 2>/dev/null || true
+        fp_restored=0
+        if [ -n "$fp_ctrl" ] && [ -e "/sys/bus/pci/devices/$fp_ctrl/power/wakeup" ]; then
+            if printf 'enabled' | as_root tee "/sys/bus/pci/devices/$fp_ctrl/power/wakeup" >/dev/null 2>&1; then
+                fp_restored=1
+            fi
+        fi
+        # Only claim what actually happened: the sysfs write is skipped when
+        # the rule was hand-edited (no parsable controller) or the PCI device
+        # is gone, and in those cases wake returns at the next boot, not now.
+        if [ "$fp_restored" -eq 1 ]; then
+            success "Fingerprint wake restored."
+        else
+            success "Fingerprint wake block removed — wake returns after a reboot."
+        fi
+    else
+        warn "Could not remove $FP_WAKE_RULE — fingerprint wake will stay blocked."
+    fi
+
+    # The kernel arg is deliberately left alone: editing a bootloader during an
+    # uninstall is a worse failure than a stale arg. But it is NOT inert — it
+    # independently suppresses the GPIO wake line — so say so rather than
+    # leaving the user to wonder why a touch still doesn't wake the device.
+    warn_leftover_karg
+}
+
+# The kernel arg is deliberately not stripped — editing a bootloader during an
+# uninstall is a worse failure than a stale arg. But it is NOT inert: the two
+# wake paths are independent, so it keeps the GPIO line disarmed on its own.
+# Say so, and say it for a staged-but-not-yet-live arg too.
+warn_leftover_karg() {
+    _fp_live="$(tr ' ' '\n' < /proc/cmdline 2>/dev/null | grep -F "$FP_KARG" | head -1)"
+    _fp_staged=""
+    if [ -z "$_fp_live" ]; then
+        # Applied but not yet rebooted: still on its way in.
+        if grep -qF "$FP_KARG" /etc/default/grub-steamos 2>/dev/null; then
+            _fp_staged="/etc/default/grub-steamos"
+        elif command -v rpm-ostree >/dev/null 2>&1 && rpm-ostree kargs 2>/dev/null | grep -qF "$FP_KARG"; then
+            _fp_staged="your rpm-ostree deployment"
+        fi
+    fi
+    [ -n "$_fp_live" ] || [ -n "$_fp_staged" ] || return 0
+
+    # Match the exact arg we add, not any ignore_wake — a user's own entry for
+    # some other device must not be attributed to us.
+    warn "Loadout's kernel argument is still ${_fp_live:+on your command line}${_fp_staged:+staged in $_fp_staged}:"
+    warn "  $FP_KARG"
+    warn "  It disarms the power button's GPIO wake line independently of the"
+    warn "  udev rule, so wake stays partly blocked until you remove it."
+    if command -v rpm-ostree >/dev/null 2>&1; then
+        warn "  Remove it with:  sudo rpm-ostree kargs --delete-if-present='$FP_KARG'"
+    else
+        warn "  Remove it from your bootloader config and reboot."
+    fi
+}
+
 
 # Reverse the input-plumber plugin's system-level changes: remove the wake
 # profile and udev rules we wrote, then restart InputPlumber so the button
@@ -350,6 +437,7 @@ main() {
     # After the services are stopped, so the backend can't re-apply the
     # profile between our delete and the InputPlumber restart.
     revert_inputplumber
+    revert_fingerprint_block
 
     # --- Remove .desktop file ---
     if [ -f "$DESKTOP_FILE" ]; then

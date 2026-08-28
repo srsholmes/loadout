@@ -25,6 +25,7 @@ function rumbleLevels(min: number, max: number): number[] {
 interface FingerprintHealNotice {
   restored: boolean;
   rebootRequired: boolean;
+  manualKarg?: string;
   error?: string;
 }
 
@@ -52,7 +53,11 @@ interface FingerprintStatus {
   kargActive: boolean;
   /** False when this board's GPIO pin is unconfirmed, so the karg path is
    *  unavailable and PME blocking is the whole of the fix. */
-  kargApplicable: boolean;
+  /** How the kernel arg gets staged here: steamos | ostree | manual | unknown | none. */
+  kargMode: string;
+  /** We stage the kernel arg ourselves on this machine. */
+  kargAutomatic: boolean;
+  kargStagedUnknown: boolean;
   /** Our udev rule is on disk — the marker for "the block is meant to be on",
    *  which is what tells a pending apply from a pending revert. */
   udevRuleInstalled: boolean;
@@ -66,6 +71,7 @@ interface StatusResult {
   fingerprint?: FingerprintStatus;
   autoRecoverOnWake?: boolean;
   listenerRunning?: boolean;
+  fingerprintBlockWanted?: boolean;
 }
 
 interface FingerprintResult {
@@ -152,7 +158,14 @@ function Apex() {
   const [healed, setHealed] = useState<FingerprintHealNotice | null>(null);
 
   const refresh = useCallback(async () => {
-    setData((await call("getStatus")) as StatusResult);
+    // A rejected getStatus (RPC timeout while rpm-ostree is busy, backend
+    // restarting) used to leave `data` null forever with the page on its
+    // spinner, plus an unhandled rejection.
+    try {
+      setData((await call("getStatus")) as StatusResult);
+    } catch (e) {
+      notify(`Couldn't read device status: ${e}`, { kind: "error", id: "apex-status" });
+    }
   }, [call]);
 
   useEvent({ event: "statusChanged", handler: () => refresh() });
@@ -286,7 +299,9 @@ function Apex() {
           notify(res.error ?? "Couldn't update the fingerprint setting.", { kind: "error" });
         } else if (res.manualKarg) {
           notify(
-            `Controller wake ${next ? "blocked" : "restored"}. Your distro needs a manual kernel arg — see the panel.`,
+            next
+              ? "Controller wake blocked. One wake path still needs a kernel argument — see the panel."
+              : "Controller wake restored. The kernel argument is still live — see the panel.",
             { kind: "success" },
           );
         } else if (res.rebootRequired) {
@@ -296,6 +311,10 @@ function Apex() {
         } else {
           notify(next ? "Fingerprint wake blocked." : "Fingerprint wake restored.", { kind: "success" });
         }
+      } catch (e) {
+        // setFingerprintBlock can outlive the RPC cap (rpm-ostree staging a
+        // deployment). Without this the user got no feedback at all.
+        notify(String(e), { kind: "error" });
       } finally {
         setFpBusy(false);
         await refresh();
@@ -564,16 +583,40 @@ function Apex() {
                     Block fingerprint wake
                   </span>
                   <span className="text-xs text-base-content/55 leading-relaxed">
-                    Disables the sensor's USB-controller wake and adds a kernel parameter for the
-                    GPIO wake line.
+                    Disables the sensor&apos;s USB-controller wake
+                    {data.fingerprint.kargAutomatic
+                      ? " and adds a kernel parameter for the GPIO wake line."
+                      : data.fingerprint.kargMode === "none"
+                        ? "; the GPIO wake line needs a kernel parameter naming a pin we haven't measured on this model."
+                        : "; the GPIO wake line needs a kernel parameter we can't add automatically on this system."}
                   </span>
                 </div>
                 <Toggle
-                  checked={!!data.fingerprint.applied}
+                  checked={!!data.fingerprintBlockWanted}
                   disabled={fpBusy}
                   onChange={handleToggleFingerprint}
                 />
               </div>
+
+              {/* The switch reflects the user's choice, so it can sit ON while
+                  nothing is in effect — a failed apply, or a staged read we
+                  couldn't make. Without this the panel showed a control in
+                  the on position and no indication anywhere that it wasn't. */}
+              {data.fingerprintBlockWanted &&
+                !data.fingerprint.applied &&
+                !data.fingerprint.rebootPending && (
+                  <Alert
+                    variant="warning"
+                    icon={<FaTriangleExclamation size={14} />}
+                    title="Asked for, but not in effect"
+                  >
+                    The wake block is switched on but isn&apos;t currently applied. Switch it off
+                    and on again to retry
+                    {data.fingerprint.kargStagedUnknown
+                      ? " — we also couldn't read what your next boot will carry."
+                      : "."}
+                  </Alert>
+                )}
 
               {data.fingerprint.rebootPending && (
                 <>
@@ -607,8 +650,11 @@ function Apex() {
                   title="Couldn't restore the wake block"
                 >
                   A system update removed the wake block and re-applying it failed
-                  {healed.error ? `: ${healed.error}` : "."} Switching it off and on again should
-                  put it back.
+                  {healed.error ? `: ${healed.error}` : "."}{" "}
+                  {healed.manualKarg
+                    ? "Add this to your kernel command line and reboot instead: "
+                    : "Switching it off and on again should put it back."}
+                  {healed.manualKarg && <span className="mono">{healed.manualKarg}</span>}
                 </Alert>
               )}
 
@@ -620,9 +666,11 @@ function Apex() {
                 >
                   The wake block had been removed — system updates regenerate the files it lives
                   in. It has been re-applied automatically
-                  {healed.rebootRequired
-                    ? ", though the kernel-argument layer needs a reboot to come back."
-                    : ", and is in effect now."}
+                  {healed.manualKarg
+                    ? ", but the GPIO layer still needs a kernel argument this distro won't let us add — see below."
+                    : healed.rebootRequired
+                      ? ", though the kernel-argument layer needs a reboot to come back."
+                      : ", and is in effect now."}
                 </Alert>
               )}
 
@@ -632,30 +680,67 @@ function Apex() {
                   icon={<FaCircleInfo size={14} />}
                   title="Active, but not saved to your bootloader"
                 >
-                  The kernel argument is live on this boot but missing from the bootloader config —
-                  a SteamOS update regenerates that file and drops it. The block still works right
+                  The kernel argument is live on this boot but missing from the boot configuration
+                  — a system update can regenerate that and drop it. The block still works right
                   now; switch it off and on again to write it back, so it survives the next reboot.
                 </Alert>
               )}
 
-              {!data.fingerprint.kargActive &&
-                data.fingerprint.kargApplicable &&
-                data.fingerprint.distro !== "steamos" && (
-                  <div className="text-xs text-base-content/55 leading-relaxed">
-                    On {data.fingerprint.distro || "this distro"} the GPIO kernel arg can&apos;t be
-                    applied automatically yet. Add{" "}
-                    <span className="mono">gpiolib_acpi.ignore_wake=AMDI0030:00@58</span> to your
-                    kernel command line and reboot to fully block the touch wake.
+              {/* The touch has two independent wake paths and this one closes
+                  only with a kernel arg, so these are genuinely incomplete
+                  blocks — not niceties. */}
+              {data.fingerprint.applied &&
+                !data.fingerprint.kargActive &&
+                data.fingerprint.kargMode === "manual" && (
+                <Alert
+                  variant="warning"
+                  icon={<FaTriangleExclamation size={14} />}
+                  title="One wake path is still open"
+                >
+                  <div className="flex flex-col gap-2">
+                    <div className="leading-relaxed">
+                      The reader&apos;s USB controller is blocked, but the GPIO wake line needs a
+                      kernel argument and {data.fingerprint.distro || "this distro"}&apos;s
+                      bootloader isn&apos;t one we manage. Until you add it, a touch can still wake
+                      the device. Add:
+                    </div>
+                    <div className="mono text-[11px]">
+                      gpiolib_acpi.ignore_wake=AMDI0030:00@58
+                    </div>
+                    <div className="leading-relaxed">to your kernel command line, then reboot.</div>
+                    <div className="leading-relaxed text-base-content/45">
+                      We do this automatically on SteamOS and on Bazzite (and other rpm-ostree
+                      images). Elsewhere — CachyOS and Arch included — the bootloader isn&apos;t one
+                      we edit, so this step is yours.
+                    </div>
                   </div>
-                )}
+                </Alert>
+              )}
 
-              {!data.fingerprint.kargApplicable && (
-                <div className="text-xs text-base-content/55 leading-relaxed">
+              {data.fingerprint.applied && data.fingerprint.kargMode === "unknown" && (
+                <Alert
+                  variant="warning"
+                  icon={<FaTriangleExclamation size={14} />}
+                  title="One wake path is still open"
+                >
+                  The reader&apos;s USB controller is blocked, but we couldn&apos;t identify this
+                  system well enough to add the kernel argument the GPIO wake line needs. Add{" "}
+                  <span className="mono">gpiolib_acpi.ignore_wake=AMDI0030:00@58</span> to your
+                  kernel command line and reboot.
+                </Alert>
+              )}
+
+              {data.fingerprint.applied && data.fingerprint.kargMode === "none" && (
+                <Alert
+                  variant="warning"
+                  icon={<FaTriangleExclamation size={14} />}
+                  title="One wake path is still open"
+                >
                   Wake from the reader is blocked at its USB controller, which is derived from your
-                  hardware. There&apos;s a second, belt-and-braces kernel argument we apply on the
-                  Apex, but it names a specific GPIO pin on that board — we don&apos;t know this
-                  model&apos;s, and the wrong pin is worse than none.
-                </div>
+                  hardware. The second path needs a kernel argument naming a specific GPIO pin — we
+                  know the Apex&apos;s, but not this model&apos;s, and the wrong pin is worse than
+                  none. A touch may still wake the device.
+                </Alert>
               )}
             </div>
           </div>
@@ -718,9 +803,11 @@ export async function init(api: {
   void visible.promise.then(async () => {
     if (shown.restored) {
       notify(
-        shown.rebootRequired
-          ? "Fingerprint wake block was restored after a system update. Reboot to finish re-applying it."
-          : "Fingerprint wake block was restored after a system update.",
+        shown.manualKarg
+          ? "Fingerprint wake block was partly restored after a system update — open the plugin to finish it."
+          : shown.rebootRequired
+            ? "Fingerprint wake block was restored after a system update. Reboot to finish re-applying it."
+            : "Fingerprint wake block was restored after a system update.",
         { kind: "success", id: "apex-fp-healed", duration: 8000 },
       );
     } else {

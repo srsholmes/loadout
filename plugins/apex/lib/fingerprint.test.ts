@@ -7,6 +7,7 @@ import {
   addKargToGrubSteamos,
   removeKargFromGrubSteamos,
   KARG,
+  kargMode,
   shouldHeal,
   UDEV_RULE_PATH,
   FP_PRODUCTS,
@@ -45,6 +46,15 @@ interface FakeOpts {
   commands?: string[];
   /** Force update-grub to fail, to exercise the rollback path. */
   updateGrubFails?: boolean;
+  /** argv[0]s that should exit non-zero. */
+  failCommands?: string[];
+  /** argv[0]s that should THROW — a missing binary or a denied command
+   *  policy raises, it does not return a non-zero exit code. */
+  throwCommands?: string[];
+  /** Make `command -v` report the tool as absent. */
+  noCommandV?: boolean;
+  /** Let a test model a command's side effect on the fake filesystem. */
+  onCommand?: (cmd: string[], files: Record<string, string>) => void;
 }
 
 function makeFpDeps(o: FakeOpts = {}): { deps: FingerprintDeps; files: Record<string, string>; commands: string[] } {
@@ -56,6 +66,9 @@ function makeFpDeps(o: FakeOpts = {}): { deps: FingerprintDeps; files: Record<st
   const deps: FingerprintDeps = {
     run: async (cmd) => {
       commands.push(cmd.join(" "));
+      if (cmd[0] === "sh" && cmd[1] === "-c" && String(cmd[2]).startsWith("command -v")) {
+        return o.noCommandV ? fail() : ok("/usr/bin/rpm-ostree\n");
+      }
       if (cmd[0] === "lsusb") return fpPresent ? ok("Bus 003 Device 004: ID 2808:c652") : fail();
       if (cmd[0] === "sh") return fpPresent ? ok(`${controller}\n`) : ok("");
       if (cmd[0] === "tee") {
@@ -64,6 +77,20 @@ function makeFpDeps(o: FakeOpts = {}): { deps: FingerprintDeps; files: Record<st
         return ok();
       }
       if (cmd[0] === "update-grub") return o.updateGrubFails ? fail() : ok();
+      if (o.throwCommands?.includes(cmd[0]!)) throw new Error(`spawn ${cmd[0]}: ENOENT`);
+      if (o.failCommands?.includes(cmd[0]!)) return fail();
+      // `tee` above writes a literal, so it never models stdin; this hook is
+      // how a test says what a command does to the fake filesystem.
+      o.onCommand?.(cmd, files);
+      if (cmd[0] === "rpm-ostree" && cmd[1] === "kargs" && cmd.length === 2) {
+        // Bare `rpm-ostree kargs` reports the current set.
+        return ok(files["__ostree_kargs__"] ?? "");
+      }
+      if (cmd[0] === "rpm-ostree" && cmd[1] === "kargs") {
+        const arg = cmd[2] ?? "";
+        if (arg.startsWith("--append-if-missing=")) files["__ostree_kargs__"] = arg.split("=").slice(1).join("=");
+        if (arg.startsWith("--delete-if-present=")) delete files["__ostree_kargs__"];
+      }
       return ok();
     },
     pathExists: async (p) => p in files,
@@ -213,7 +240,9 @@ describe("getStatus", () => {
       },
       cmdline: `BOOT_IMAGE=x ${KARG} quiet`,
     });
-    const s = await getStatus(deps);
+    // kargApplicable: true, so this exercises the karg logic it is named for
+    // rather than passing via the !kargAutomatic shortcut.
+    const s = await getStatus(deps, true);
     expect(s.supported).toBe(true);
     expect(s.controllerWakeDisabled).toBe(true);
     expect(s.udevRuleInstalled).toBe(true);
@@ -227,7 +256,9 @@ describe("getStatus", () => {
       files: { "/etc/default/grub-steamos": addKargToGrubSteamos(GRUB_SAMPLE) },
       cmdline: "BOOT_IMAGE=x quiet", // karg not active yet
     });
-    const s = await getStatus(deps);
+    // kargApplicable: true — on an unmeasured board there is no reboot to
+    // offer, which the sibling test below pins.
+    const s = await getStatus(deps, true);
     expect(s.kargStaged).toBe(true);
     expect(s.kargActive).toBe(false);
     expect(s.rebootPending).toBe(true);
@@ -357,16 +388,18 @@ describe("apply — board whose GPIO pin we haven't measured", () => {
   });
 });
 
-describe("apply (non-SteamOS)", () => {
+describe("apply (a distro we don't know the bootloader for)", () => {
   it("closes path 2 but surfaces a manual karg for the GPIO path", async () => {
     const { deps, files } = makeFpDeps({
       cmdline: "BOOT_IMAGE=x quiet",
-      distro: "cachyos",
+      distro: "ubuntu",
     });
     const r = await apply(deps);
     expect(r.success).toBe(true);
     expect(r.manualKarg).toBe(KARG);
-    expect(r.rebootRequired).toBe(true);
+    // Nothing was staged, so a reboot achieves nothing — claiming otherwise
+    // sent the user to reboot and threw away the one thing they can act on.
+    expect(r.rebootRequired).toBe(false);
     expect(files[UDEV_RULE_PATH]).toContain(CTRL); // path 2 still applied
   });
 });
@@ -497,7 +530,7 @@ describe("re-staging a karg that is live but lost from the bootloader", () => {
   });
 });
 
-describe("distros whose bootloader we don't edit", () => {
+describe("distros we don't know the bootloader for", () => {
   /**
    * kargStaged can only be read on SteamOS. Without gating on that, an
    * Arch/Bazzite user who followed our own manual-karg hint and rebooted got
@@ -512,7 +545,7 @@ describe("distros whose bootloader we don't edit", () => {
   };
 
   it("does not claim the karg is missing from a bootloader we never wrote", async () => {
-    const { deps } = makeFpDeps({ ...liveNotStaged, distro: "arch" });
+    const { deps } = makeFpDeps({ ...liveNotStaged, distro: "ubuntu" });
     const s = await getStatus(deps, true);
     expect(s.kargActive).toBe(true);
     expect(s.kargUnpersisted).toBe(false);
@@ -523,7 +556,7 @@ describe("distros whose bootloader we don't edit", () => {
     const { deps } = makeFpDeps({
       files: {},
       cmdline: `BOOT_IMAGE=x quiet ${KARG}`,
-      distro: "bazzite",
+      distro: "opensuse",
     });
     expect((await getStatus(deps, true)).rebootPending).toBe(false);
   });
@@ -595,5 +628,269 @@ describe("shouldHeal", () => {
     expect(shouldHeal({ wanted: true, status: { ...ok, supported: false, applied: false } })).toBe(
       false,
     );
+  });
+});
+
+describe("kargMode", () => {
+  // "we know the pin" and "we can put it there" are different questions;
+  // conflating them is what had the UI reporting a half-applied block as on.
+  it("routes by mechanism, not distro name", () => {
+    // Silverblue and Kinoite both report ID=fedora, so a name table routed
+    // them to the wrong backend entirely. /run/ostree-booted is the fact.
+    expect(kargMode("steamos", true)).toBe("steamos");
+    expect(kargMode("bazzite", true, true)).toBe("ostree");
+    expect(kargMode("fedora", true, true)).toBe("ostree");
+    expect(kargMode("cachyos", true)).toBe("manual");
+    expect(kargMode("arch", true)).toBe("manual");
+    expect(kargMode("ubuntu", true)).toBe("manual");
+  });
+
+  it("distinguishes an unidentifiable SYSTEM from an unmeasured BOARD", () => {
+    // "" fell into the manual case, silently downgrading a real SteamOS Apex.
+    // Collapsing it into "none" was also wrong: the UI then told that Apex
+    // owner we didn't know their model's pin, which is false.
+    expect(kargMode("", true)).toBe("unknown");
+    expect(kargMode("steamos", false)).toBe("none");
+  });
+
+  it("says nothing at all when the board's pin is unknown", () => {
+    // We never hand over the Apex's wiring for a board we haven't measured,
+    // on any distro — printing it is the same act as staging it.
+    for (const distro of ["steamos", "bazzite", "cachyos", "ubuntu"]) {
+      expect(kargMode(distro, false)).toBe("none");
+    }
+  });
+});
+
+describe("Bazzite (rpm-ostree)", () => {
+  const bazzite = (over: { files?: Record<string, string>; failCommands?: string[] } = {}) =>
+    makeFpDeps({
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "bazzite",
+      ...over,
+      // Detection is by mechanism: this marker is what makes it ostree.
+      files: { "/run/ostree-booted": "", ...(over.files ?? {}) },
+    });
+
+  it("stages the karg with rpm-ostree rather than editing a file", async () => {
+    const { deps, commands, files } = bazzite();
+    const r = await apply(deps, { autoKarg: true });
+    expect(r.success).toBe(true);
+    expect(r.steps).toContain("karg-staged");
+    expect(commands.some((c) => c.includes("rpm-ostree kargs --append-if-missing"))).toBe(true);
+    expect(r.rebootRequired).toBe(true);
+    // No bootloader file touched — the deployment is the record.
+    expect(Object.keys(files)).not.toContain("/etc/default/grub");
+  });
+
+  it("removes it again on revert, and says a reboot is needed", async () => {
+    const { deps, commands } = bazzite({ files: { __ostree_kargs__: KARG } });
+    const r = await revert(deps, { autoKarg: true });
+    expect(commands.some((c) => c.includes("rpm-ostree kargs --delete-if-present"))).toBe(true);
+    expect(r.rebootRequired).toBe(true);
+    expect(r.steps).toContain("karg-unstaged");
+  });
+
+  it("does not send the user to reboot when there was nothing staged", async () => {
+    // These helpers returned true unconditionally, so toggling the block off
+    // when it was never on produced "Reboot required" — contradicting the
+    // panel, which correctly showed nothing pending.
+    const { deps, commands } = bazzite();
+    const r = await revert(deps, { autoKarg: true });
+    expect(r.rebootRequired).toBe(false);
+    expect(r.steps).toContain("karg-not-present");
+    expect(commands.some((c) => c.includes("--delete-if-present"))).toBe(false);
+  });
+
+  it("treats an unreadable rpm-ostree as unknown, not as drift", async () => {
+    // rpm-ostree exits non-zero mid-transaction, and Bazzite's auto-update
+    // timer fires around boot — exactly when the heal runs. Reading that as
+    // "not staged" produced a false alert and a heal loop.
+    // A fully protected machine: both paths closed, karg live from the last
+    // boot. Only the read of what the NEXT boot carries is failing.
+    const { deps } = makeFpDeps({
+      files: {
+        "/run/ostree-booted": "",
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+      },
+      cmdline: `BOOT_IMAGE=x quiet ${KARG}`,
+      distro: "bazzite",
+      failCommands: ["rpm-ostree"],
+    });
+    const s = await getStatus(deps, true);
+    expect(s.applied).toBe(true);
+    // Reading `false` here would have called it drift, alerted, and re-run
+    // the heal on every boot.
+    expect(s.kargUnpersisted).toBe(false);
+    expect(shouldHeal({ wanted: true, status: s })).toBe(false);
+  });
+
+  it("keeps getStatus alive when rpm-ostree can't be run at all", async () => {
+    // An uncaught throw here rejected the whole getStatus RPC, so the entire
+    // OneXPlayer page never left its loading state on Bazzite.
+    const { deps } = makeFpDeps({
+      files: { "/run/ostree-booted": "" },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "bazzite",
+      throwCommands: ["rpm-ostree"],
+    });
+    const s = await getStatus(deps, true);
+    expect(s.kargStaged).toBe(false);
+    expect(s.supported).toBe(true);
+  });
+
+  it("surfaces a failure instead of reporting a block it didn't apply", async () => {
+    const { deps } = bazzite({ failCommands: ["rpm-ostree"] });
+    const r = await apply(deps, { autoKarg: true });
+    expect(r.success).toBe(false);
+    expect(r.error).toContain("Path 1");
+  });
+});
+
+describe("the SteamOS window between staging and rebooting", () => {
+  it("is NOT applied yet — the GPIO path is open until the reboot", async () => {
+    // Counting a staged karg as applied was unbounded: where staging succeeds
+    // but can never take effect, `applied` stayed true forever with path 1
+    // open. The toggle no longer keys on this, so being strict costs nothing.
+    const { deps } = makeFpDeps({
+      files: {
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        "/etc/default/grub-steamos": addKargToGrubSteamos(GRUB_SAMPLE),
+      },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+    const s = await getStatus(deps, true);
+    expect(s.kargStaged).toBe(true);
+    expect(s.kargActive).toBe(false);
+    expect(s.applied).toBe(false);
+    expect(s.rebootPending).toBe(true);
+  });
+
+  it("does not offer a reboot on a board whose pin we don't know", async () => {
+    // rebootPending ungated by kargAutomatic put a reboot button under the
+    // text saying we don't know this model's pin — and pressing it would
+    // activate that foreign pin.
+    const { deps } = makeFpDeps({
+      files: {
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        "/etc/default/grub-steamos": addKargToGrubSteamos(GRUB_SAMPLE),
+      },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+    const s = await getStatus(deps, false); // unmeasured board
+    expect(s.kargMode).toBe("none");
+    expect(s.rebootPending).toBe(false);
+  });
+});
+
+describe("a staged karg waiting on a reboot is pending, not lost", () => {
+  it("does not heal, and does not announce that an update removed it", async () => {
+    // The heal keys on !applied, and applied excludes a staged-not-live karg.
+    // So every backend restart before the reboot re-ran apply(), changed
+    // nothing, and toasted "a system update removed the wake block".
+    const { deps } = makeFpDeps({
+      files: {
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        "/etc/default/grub-steamos": addKargToGrubSteamos(GRUB_SAMPLE),
+      },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+    const status = await getStatus(deps, true);
+    expect(status.applied).toBe(false);
+    expect(status.kargStaged).toBe(true);
+    expect(status.rebootPending).toBe(true);
+    expect(shouldHeal({ wanted: true, status })).toBe(false);
+  });
+
+  it("still heals once the staged karg has genuinely gone", async () => {
+    const { deps } = makeFpDeps({
+      files: {
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        "/etc/default/grub-steamos": GRUB_SAMPLE,
+      },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+    expect(shouldHeal({ wanted: true, status: await getStatus(deps, true) })).toBe(true);
+  });
+});
+
+describe("an unreadable staged-state is not 'not staged'", () => {
+  const busy = (over: Record<string, string> = {}) =>
+    makeFpDeps({
+      files: {
+        "/run/ostree-booted": "",
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        ...over,
+      },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "bazzite",
+      failCommands: ["rpm-ostree"],
+    });
+
+  it("keeps the reboot prompt rather than silently dropping it", async () => {
+    // rebootPending used `kargStaged`, which folds undefined into false — so
+    // a machine with the karg genuinely staged lost its prompt and the karg
+    // would never be activated.
+    const { deps } = busy();
+    const s = await getStatus(deps, true);
+    expect(s.kargStagedUnknown).toBe(true);
+    expect(s.rebootPending).toBe(false);
+    // ...and the UI is told, rather than shown nothing.
+    expect(s.applied).toBe(false);
+  });
+});
+
+describe("ostree needs the tool, not just the marker", () => {
+  it("falls back to a workable instruction when rpm-ostree isn't there", async () => {
+    // /run/ostree-booted exists on bootc images where rpm-ostree may not.
+    // Claiming "automatic" there loops forever instead of telling the user
+    // what to add.
+    const { deps } = makeFpDeps({
+      files: { "/run/ostree-booted": "" },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "bazzite",
+      throwCommands: ["rpm-ostree"],
+      noCommandV: true,
+    });
+    const s = await getStatus(deps, true);
+    expect(s.kargMode).toBe("manual");
+    expect(s.kargAutomatic).toBe(false);
+  });
+});
+
+describe("a system we can't identify still gets the arg", () => {
+  it("hands over the karg instead of withholding it like an unknown board", async () => {
+    // "" meant we don't know the SYSTEM; withholding the pin there was wrong,
+    // because the pin is a board fact and the board is known.
+    const { deps } = makeFpDeps({ cmdline: "BOOT_IMAGE=x quiet", distro: "" });
+    const r = await apply(deps, { autoKarg: true });
+    expect(r.success).toBe(true);
+    expect(r.manualKarg).toBe(KARG);
+  });
+
+  it("tells them how to remove it again on revert", async () => {
+    // revert only offered manualKarg for mode === "manual", so on an
+    // unidentifiable system the user was told to add the arg and then never
+    // told how to take it out.
+    const { deps } = makeFpDeps({ cmdline: `BOOT_IMAGE=x quiet ${KARG}`, distro: "" });
+    const r = await revert(deps, { autoKarg: true });
+    expect(r.manualKarg).toBe(KARG);
+    expect(r.steps).toContain("karg-manual-removal-required");
+  });
+
+  it("still withholds it on a board we haven't measured", async () => {
+    const { deps } = makeFpDeps({ cmdline: `BOOT_IMAGE=x quiet ${KARG}`, distro: "" });
+    const r = await revert(deps, { autoKarg: false });
+    expect(r.manualKarg).toBeUndefined();
   });
 });
