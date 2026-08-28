@@ -46,6 +46,13 @@ IP_ETC_DIR="/etc/loadout/inputplumber"
 IP_ETC_PARENT="/etc/loadout"
 IP_UACCESS_RULE="/etc/udev/rules.d/71-loadout-inputplumber-uaccess.rules"
 IP_DECK_HIDRAW_RULE="/etc/udev/rules.d/72-loadout-deck-hidraw.rules"
+# The apex plugin's fingerprint wake block. Left behind, this udev rule keeps
+# re-disabling the reader's controller wakeup on every boot with no Loadout
+# installed to undo it — the user's fingerprint wake stays blocked forever and
+# nothing on the system explains why. The kernel arg is deliberately NOT
+# stripped here: editing a bootloader during an uninstall is a worse failure
+# mode than a stale arg, and it is inert once the udev rule is gone.
+FP_WAKE_RULE="/etc/udev/rules.d/90-loadout-fingerprint-no-wake.rules"
 # Written only by Loadout versions predating #87 (when the Deck moved to a
 # native hidraw watcher). Left in place it keeps InputPlumber claiming the
 # Deck's built-in controller away from Steam Input, so it's worth removing —
@@ -253,6 +260,20 @@ revert_inputplumber() {
     fi
     if [ "$ip_removed_input_rule" -eq 1 ] || [ "$ip_removed_hidraw_rule" -eq 1 ]; then
         as_root udevadm control --reload 2>/dev/null || true
+    fi
+    # Undo the fingerprint wake block, and re-enable the controller now rather
+    # than leaving it disabled until the next boot.
+    if [ -f "$FP_WAKE_RULE" ]; then
+        fp_ctrl="$(sed -n 's/.*KERNEL=="\([0-9a-f:.]*\)".*/\1/p' "$FP_WAKE_RULE" 2>/dev/null | head -1)"
+        if as_root rm -f "$FP_WAKE_RULE"; then
+            info "Removed the fingerprint wake block ($FP_WAKE_RULE)"
+            as_root udevadm control --reload 2>/dev/null || true
+            if [ -n "$fp_ctrl" ] && [ -e "/sys/bus/pci/devices/$fp_ctrl/power/wakeup" ]; then
+                printf 'enabled' | as_root tee "/sys/bus/pci/devices/$fp_ctrl/power/wakeup" >/dev/null 2>&1 || true
+            fi
+        else
+            warn "Could not remove $FP_WAKE_RULE — fingerprint wake will stay blocked"
+        fi
     fi
     if [ "$ip_removed_input_rule" -eq 1 ]; then
         as_root udevadm trigger --subsystem-match=input 2>/dev/null || true

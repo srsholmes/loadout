@@ -25,6 +25,7 @@ function rumbleLevels(min: number, max: number): number[] {
 interface FingerprintHealNotice {
   restored: boolean;
   rebootRequired: boolean;
+  manualKarg?: string;
   error?: string;
 }
 
@@ -53,6 +54,10 @@ interface FingerprintStatus {
   /** False when this board's GPIO pin is unconfirmed, so the karg path is
    *  unavailable and PME blocking is the whole of the fix. */
   kargApplicable: boolean;
+  /** How the kernel arg gets staged here: steamos | ostree | grub | manual | none. */
+  kargMode: string;
+  /** We stage the kernel arg ourselves on this machine. */
+  kargAutomatic: boolean;
   /** Our udev rule is on disk — the marker for "the block is meant to be on",
    *  which is what tells a pending apply from a pending revert. */
   udevRuleInstalled: boolean;
@@ -564,8 +569,10 @@ function Apex() {
                     Block fingerprint wake
                   </span>
                   <span className="text-xs text-base-content/55 leading-relaxed">
-                    Disables the sensor's USB-controller wake and adds a kernel parameter for the
-                    GPIO wake line.
+                    Disables the sensor&apos;s USB-controller wake
+                    {data.fingerprint.kargAutomatic
+                      ? " and adds a kernel parameter for the GPIO wake line."
+                      : "; the GPIO wake line needs a kernel parameter we can't add here."}
                   </span>
                 </div>
                 <Toggle
@@ -620,9 +627,11 @@ function Apex() {
                 >
                   The wake block had been removed — system updates regenerate the files it lives
                   in. It has been re-applied automatically
-                  {healed.rebootRequired
-                    ? ", though the kernel-argument layer needs a reboot to come back."
-                    : ", and is in effect now."}
+                  {healed.manualKarg
+                    ? ", but the GPIO layer needs a kernel argument this distro's bootloader isn't one we manage — see below."
+                    : healed.rebootRequired
+                      ? ", though the kernel-argument layer needs a reboot to come back."
+                      : ", and is in effect now."}
                 </Alert>
               )}
 
@@ -638,24 +647,41 @@ function Apex() {
                 </Alert>
               )}
 
-              {!data.fingerprint.kargActive &&
-                data.fingerprint.kargApplicable &&
-                data.fingerprint.distro !== "steamos" && (
-                  <div className="text-xs text-base-content/55 leading-relaxed">
-                    On {data.fingerprint.distro || "this distro"} the GPIO kernel arg can&apos;t be
-                    applied automatically yet. Add{" "}
-                    <span className="mono">gpiolib_acpi.ignore_wake=AMDI0030:00@58</span> to your
-                    kernel command line and reboot to fully block the touch wake.
+              {/* The touch has two independent wake paths and this one closes
+                  only with a kernel arg, so these are genuinely incomplete
+                  blocks — not niceties. */}
+              {!data.fingerprint.kargActive && data.fingerprint.kargMode === "manual" && (
+                <Alert
+                  variant="warning"
+                  icon={<FaTriangleExclamation size={14} />}
+                  title="One wake path is still open"
+                >
+                  <div className="flex flex-col gap-2">
+                    <div className="leading-relaxed">
+                      The reader&apos;s USB controller is blocked, but the GPIO wake line needs a
+                      kernel argument and {data.fingerprint.distro || "this distro"}&apos;s
+                      bootloader isn&apos;t one we manage. Until you add it, a touch can still wake
+                      the device. Add:
+                    </div>
+                    <div className="mono text-[11px]">
+                      gpiolib_acpi.ignore_wake=AMDI0030:00@58
+                    </div>
+                    <div className="leading-relaxed">to your kernel command line, then reboot.</div>
                   </div>
-                )}
+                </Alert>
+              )}
 
-              {!data.fingerprint.kargApplicable && (
-                <div className="text-xs text-base-content/55 leading-relaxed">
+              {data.fingerprint.kargMode === "none" && (
+                <Alert
+                  variant="warning"
+                  icon={<FaTriangleExclamation size={14} />}
+                  title="One wake path is still open"
+                >
                   Wake from the reader is blocked at its USB controller, which is derived from your
-                  hardware. There&apos;s a second, belt-and-braces kernel argument we apply on the
-                  Apex, but it names a specific GPIO pin on that board — we don&apos;t know this
-                  model&apos;s, and the wrong pin is worse than none.
-                </div>
+                  hardware. The second path needs a kernel argument naming a specific GPIO pin — we
+                  know the Apex&apos;s, but not this model&apos;s, and the wrong pin is worse than
+                  none. A touch may still wake the device.
+                </Alert>
               )}
             </div>
           </div>
@@ -718,9 +744,11 @@ export async function init(api: {
   void visible.promise.then(async () => {
     if (shown.restored) {
       notify(
-        shown.rebootRequired
-          ? "Fingerprint wake block was restored after a system update. Reboot to finish re-applying it."
-          : "Fingerprint wake block was restored after a system update.",
+        shown.manualKarg
+          ? "Fingerprint wake block was partly restored after a system update — open the plugin to finish it."
+          : shown.rebootRequired
+            ? "Fingerprint wake block was restored after a system update. Reboot to finish re-applying it."
+            : "Fingerprint wake block was restored after a system update.",
         { kind: "success", id: "apex-fp-healed", duration: 8000 },
       );
     } else {

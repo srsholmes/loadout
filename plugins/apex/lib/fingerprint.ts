@@ -41,6 +41,60 @@ export const FP_PRODUCTS: readonly string[] = ["c652", "5952"];
 
 export const UDEV_RULE_PATH = "/etc/udev/rules.d/90-loadout-fingerprint-no-wake.rules";
 const GRUB_STEAMOS = "/etc/default/grub-steamos";
+/** Arch/CachyOS/Fedora GRUB. Assumed on those — CachyOS also offers
+ *  systemd-boot and limine, where this file exists but nothing reads it. */
+const GRUB_DEFAULT = "/etc/default/grub";
+const GRUB_CFG = "/boot/grub/grub.cfg";
+
+/**
+ * How the GPIO kernel arg gets onto the command line here.
+ *
+ * The touch has TWO independent wake paths and both must close (see the file
+ * header); path 1 is disarmed *only* by this karg, so a distro we can't stage
+ * on is a distro where the block is genuinely incomplete. That is why this
+ * returns a mode rather than a boolean — "we know the pin" and "we can put it
+ * there" are different questions, and conflating them is what previously had
+ * the UI reporting a half-applied block as fully on.
+ *
+ *   "steamos" — /etc/default/grub-steamos, behind steamos-readonly
+ *   "ostree"  — rpm-ostree kargs (Bazzite and other rpm-ostree images)
+ *   "grub"    — /etc/default/grub + grub-mkconfig (CachyOS/Arch/Fedora)
+ *   "manual"  — we know the pin but not this bootloader; tell the user
+ *   "none"    — unmeasured board: we don't know the pin, so say nothing
+ */
+export type KargMode = "steamos" | "ostree" | "grub" | "manual" | "none";
+
+export function kargMode(distro: string, pinKnown: boolean): KargMode {
+  if (!pinKnown) return "none";
+  switch (distro) {
+    case "steamos":
+      return "steamos";
+    // Bazzite and friends. rpm-ostree kargs is idempotent, reversible and the
+    // supported API — no file editing, no bootloader guessing.
+    case "bazzite":
+    case "silverblue":
+    case "kinoite":
+    case "bluefin":
+    case "aurora":
+      return "ostree";
+    // GRUB is assumed on these. CachyOS also ships systemd-boot and limine,
+    // where /etc/default/grub exists but nothing reads it — we verify the
+    // generated grub.cfg afterwards rather than trusting the write.
+    case "cachyos":
+    case "arch":
+    case "endeavouros":
+    case "fedora":
+    case "nobara":
+      return "grub";
+    default:
+      return "manual";
+  }
+}
+
+/** Modes where we put the karg there ourselves. */
+export function isKargAutomatic(mode: KargMode): boolean {
+  return mode === "steamos" || mode === "ostree" || mode === "grub";
+}
 
 export interface FingerprintDeps {
   /** Run a subprocess (wired to `@loadout/exec` runFull in prod). */
@@ -69,6 +123,10 @@ export interface FingerprintStatus {
   kargActive: boolean;
   /** Karg staged in the bootloader config but not yet booted. */
   kargStaged: boolean;
+  /** How (or whether) the karg gets staged on this machine. */
+  kargMode: KargMode;
+  /** We stage the karg ourselves here — so it counts toward `applied`. */
+  kargAutomatic: boolean;
   /**
    * Whether the karg path is usable on this board at all. False when we
    * haven't confirmed the board's GPIO pin, in which case PME blocking is
@@ -148,9 +206,13 @@ export async function getStatus(
     controllerWakeDisabled = wake.trim() === "disabled";
   }
   const udevRuleInstalled = await deps.pathExists(UDEV_RULE_PATH);
-  const kargStaged = distro === "steamos"
-    ? await deps.readFile(GRUB_STEAMOS).then((c) => c.includes(KARG)).catch(() => false)
-    : false;
+  const mode = kargMode(distro, kargApplicable);
+  const kargAutomatic = isKargAutomatic(mode);
+  // Read the bootloader this distro uses regardless of whether we would stage
+  // here: whether the karg is in the boot config is a fact about the machine,
+  // not a function of what we're willing to write. A user who added it by
+  // hand on an unmeasured board should still see it reported.
+  const kargStaged = await readKargStaged(deps, kargMode(distro, true));
 
   const path2Closed = controllerWakeDisabled && udevRuleInstalled;
 
@@ -164,13 +226,11 @@ export async function getStatus(
   //
   // The udev rule is our marker for "the block is meant to be on", which is
   // what separates that case from a revert still waiting on a reboot.
-  // `kargStaged` can only ever be read on SteamOS — everywhere else we do not
-  // touch the bootloader, so it is hardcoded false. Without this gate, any
-  // Arch/Bazzite user who followed our own manual-karg hint and rebooted got
-  // kargLiveOnly forever, and an alert confidently describing a grub file
-  // they do not have. Saying nothing beats saying something false.
-  const bootloaderKnown = distro === "steamos";
-  const kargLiveOnly = bootloaderKnown && kargActive && !kargStaged;
+  // Only meaningful where we stage the karg ourselves. Where the user added
+  // it by hand, "live but not staged" is simply how that looks — reporting it
+  // as drift gave them an alert describing a bootloader file they may not
+  // even have, and a remedy that could never run.
+  const kargLiveOnly = kargAutomatic && kargActive && !kargStaged;
   return {
     supported: controller !== null,
     controller,
@@ -179,12 +239,20 @@ export async function getStatus(
     kargActive,
     kargStaged,
     kargApplicable,
-    // On a board whose pin we haven't confirmed the karg is never staged, so
-    // requiring kargActive left `applied` permanently false: the user flipped
-    // the switch on, PME *was* blocked, and the control sprang back to off.
-    // The natural response is to flip it again — which calls revert() and
-    // undoes the one path that had worked.
-    applied: path2Closed && (kargActive || !kargApplicable),
+    kargMode: mode,
+    kargAutomatic,
+    // Both wake paths must close, so where we CAN stage the karg it is
+    // required. `kargStaged` counts alongside `kargActive`: between enabling
+    // the block and rebooting, the karg is staged but not yet live, and
+    // treating that as "not applied" made the toggle spring back OFF right
+    // beside the alert saying a change was staged — and made the startup heal
+    // fire on every restart in that window. rebootPending is what tells the
+    // user it is not live yet.
+    //
+    // Where we cannot stage it (unmeasured board), PME is all we can offer
+    // and `applied` reflects that; the UI says so rather than claiming the
+    // GPIO path is closed.
+    applied: path2Closed && (kargActive || kargStaged || !kargAutomatic),
     // Staged but not yet live → a reboot applies it. Live but not staged
     // *and* the block was reverted → a reboot finishes removing it.
     rebootPending: (kargStaged && !kargActive) || (kargLiveOnly && !udevRuleInstalled),
@@ -311,6 +379,111 @@ async function readsKarg(deps: FingerprintDeps, path: string): Promise<boolean> 
     .catch(() => false);
 }
 
+// --- karg backends: rpm-ostree (Bazzite) ------------------------------------
+
+/**
+ * `rpm-ostree kargs` is idempotent both ways, so these are plain calls with
+ * no read-modify-write and no backup file — the deployment itself is the
+ * rollback.
+ */
+async function addKargOstree(deps: FingerprintDeps, steps: string[]): Promise<boolean> {
+  const r = await deps.run(["rpm-ostree", "kargs", `--append-if-missing=${KARG}`], {
+    timeoutMs: 180_000,
+  });
+  if (r.exitCode !== 0) {
+    throw new Error(`rpm-ostree kargs failed: ${r.stderr.trim() || r.exitCode}`);
+  }
+  steps.push("karg-staged");
+  return true;
+}
+
+async function removeKargOstree(deps: FingerprintDeps, steps: string[]): Promise<boolean> {
+  const r = await deps.run(["rpm-ostree", "kargs", `--delete-if-present=${KARG}`], {
+    timeoutMs: 180_000,
+  });
+  if (r.exitCode !== 0) {
+    throw new Error(`rpm-ostree kargs failed: ${r.stderr.trim() || r.exitCode}`);
+  }
+  steps.push("karg-unstaged");
+  return true;
+}
+
+/** What the next boot will use, per rpm-ostree itself. */
+async function ostreeKargStaged(deps: FingerprintDeps): Promise<boolean> {
+  const r = await deps.run(["rpm-ostree", "kargs"], { timeoutMs: 30_000 });
+  return r.exitCode === 0 && r.stdout.includes(KARG);
+}
+
+// --- karg backends: GRUB (CachyOS / Arch / Fedora) ---------------------------
+
+/**
+ * Assumes GRUB, per an explicit product decision. CachyOS also offers
+ * systemd-boot and limine, where /etc/default/grub exists but nothing reads
+ * it — so rather than trust the write, we check the karg actually landed in
+ * the generated grub.cfg and report failure if it didn't. That turns a silent
+ * "protected but isn't" into a visible error.
+ */
+async function addKargGrub(deps: FingerprintDeps, steps: string[]): Promise<boolean> {
+  const current = await deps.readFile(GRUB_DEFAULT).catch(() => "");
+  if (!current) throw new Error(`${GRUB_DEFAULT} not readable — is this a GRUB system?`);
+  if (current.includes(KARG)) {
+    steps.push("karg-already-staged");
+    return false;
+  }
+  await deps.writeFile(`${GRUB_DEFAULT}.loadout.bak`, current);
+  await deps.writeFile(GRUB_DEFAULT, addKargToGrubDefault(current));
+
+  const gen = await deps.run(["grub-mkconfig", "-o", GRUB_CFG], { timeoutMs: 180_000 });
+  if (gen.exitCode !== 0) {
+    await deps.writeFile(GRUB_DEFAULT, current);
+    throw new Error(`grub-mkconfig failed: ${gen.stderr.trim() || gen.exitCode}`);
+  }
+  if (!(await readsKarg(deps, GRUB_CFG))) {
+    // The file was written and grub-mkconfig succeeded, but the karg is not
+    // in the generated config — this bootloader isn't the one in use.
+    await deps.writeFile(GRUB_DEFAULT, current);
+    await deps.run(["grub-mkconfig", "-o", GRUB_CFG], { timeoutMs: 180_000 });
+    throw new Error("The kernel arg didn't reach grub.cfg — this system may not boot with GRUB.");
+  }
+  steps.push("karg-staged");
+  return true;
+}
+
+async function removeKargGrub(deps: FingerprintDeps, steps: string[]): Promise<boolean> {
+  const current = await deps.readFile(GRUB_DEFAULT).catch(() => "");
+  if (!current.includes(KARG)) {
+    steps.push("karg-not-present");
+    return false;
+  }
+  await deps.writeFile(`${GRUB_DEFAULT}.loadout.bak`, current);
+  await deps.writeFile(GRUB_DEFAULT, removeKargFromGrubDefault(current));
+  await deps.run(["grub-mkconfig", "-o", GRUB_CFG], { timeoutMs: 180_000 });
+  steps.push("karg-unstaged");
+  return true;
+}
+
+/** Append the karg to GRUB_CMDLINE_LINUX_DEFAULT="…". */
+export function addKargToGrubDefault(content: string): string {
+  if (content.includes(KARG)) return content;
+  const re = /^(GRUB_CMDLINE_LINUX_DEFAULT=")([^"]*)(")/m;
+  if (!re.test(content)) {
+    // No such line — append one rather than silently doing nothing.
+    return `${content.replace(/\n*$/, "")}\nGRUB_CMDLINE_LINUX_DEFAULT="${KARG}"\n`;
+  }
+  return content.replace(re, (_m, open: string, inner: string, close: string) => {
+    const next = inner.trim() ? `${inner.trim()} ${KARG}` : KARG;
+    return `${open}${next}${close}`;
+  });
+}
+
+export function removeKargFromGrubDefault(content: string): string {
+  return content.replace(
+    /^(GRUB_CMDLINE_LINUX_DEFAULT=")([^"]*)(")/m,
+    (_m, open: string, inner: string, close: string) =>
+      `${open}${inner.split(/\s+/).filter((t) => t && t !== KARG).join(" ")}${close}`,
+  );
+}
+
 async function removeKargSteamos(deps: FingerprintDeps, steps: string[]): Promise<boolean> {
   const current = await deps.readFile(GRUB_STEAMOS).catch(() => "");
   if (!current.includes(KARG)) {
@@ -324,6 +497,53 @@ async function removeKargSteamos(deps: FingerprintDeps, steps: string[]): Promis
   await deps.run(["steamos-readonly", "enable"], { timeoutMs: 30_000 });
   steps.push("karg-unstaged");
   return true;
+}
+
+// --- karg dispatch -----------------------------------------------------------
+
+/** What the NEXT boot will carry, per whichever bootloader we manage here. */
+async function readKargStaged(deps: FingerprintDeps, mode: KargMode): Promise<boolean> {
+  switch (mode) {
+    case "steamos":
+      return readsKarg(deps, GRUB_STEAMOS);
+    case "ostree":
+      return ostreeKargStaged(deps);
+    case "grub":
+      return readsKarg(deps, GRUB_DEFAULT);
+    default:
+      // Not ours to read; a hand-added karg shows up as kargActive instead.
+      return false;
+  }
+}
+
+async function stageKarg(deps: FingerprintDeps, mode: KargMode, steps: string[]): Promise<boolean> {
+  switch (mode) {
+    case "steamos":
+      return addKargSteamos(deps, steps);
+    case "ostree":
+      return addKargOstree(deps, steps);
+    case "grub":
+      return addKargGrub(deps, steps);
+    default:
+      return false;
+  }
+}
+
+async function unstageKarg(
+  deps: FingerprintDeps,
+  mode: KargMode,
+  steps: string[],
+): Promise<boolean> {
+  switch (mode) {
+    case "steamos":
+      return removeKargSteamos(deps, steps);
+    case "ostree":
+      return removeKargOstree(deps, steps);
+    case "grub":
+      return removeKargGrub(deps, steps);
+    default:
+      return false;
+  }
 }
 
 // --- apply / revert ----------------------------------------------------------
@@ -354,9 +574,10 @@ export async function apply(
   // Path 1 — karg. SteamOS automated; other distros get a manual hint so we
   // never edit a bootloader we haven't validated.
   const distro = await deps.distroId();
+  const mode = kargMode(distro, autoKarg);
+  const canStage = isKargAutomatic(mode);
   const alreadyActive = (await deps.readCmdline()).includes(KARG);
-  const canStage = distro === "steamos" && autoKarg;
-  const alreadyStaged = canStage ? await readsKarg(deps, GRUB_STEAMOS) : false;
+  const alreadyStaged = canStage ? await readKargStaged(deps, mode) : false;
 
   // Only skip the bootloader edit when the karg is live AND already staged —
   // or when we would not be editing the bootloader anyway.
@@ -372,7 +593,7 @@ export async function apply(
   }
   if (canStage) {
     try {
-      await addKargSteamos(deps, steps);
+      await stageKarg(deps, mode, steps);
       // Nothing to wait for when the running kernel already has it; this
       // call only re-persisted it for the next boot.
       return { success: true, rebootRequired: !alreadyActive, steps };
@@ -385,31 +606,41 @@ export async function apply(
   // the whole fix we can offer here — and we deliberately do NOT hand over
   // KARG, because AMDI0030:00@58 is the Apex's wiring. Printing it as an
   // instruction is the same act as staging it, just with extra steps.
-  if (!autoKarg) {
+  if (mode === "none") {
     steps.push("karg-not-applicable");
     return { success: true, rebootRequired: false, steps };
   }
 
   // Known board, distro whose bootloader we don't edit: we know the right
   // pin, so offer it as text for the user to apply.
+  // Nothing was staged, so a reboot changes nothing — saying otherwise sent
+  // the user to reboot and discarded the one actionable thing we have.
   steps.push("karg-manual-required");
-  return { success: true, rebootRequired: true, steps, manualKarg: KARG };
+  return { success: true, rebootRequired: false, steps, manualKarg: KARG };
 }
 
-export async function revert(deps: FingerprintDeps): Promise<FingerprintResult> {
+export async function revert(
+  deps: FingerprintDeps,
+  /** Symmetric with {@link apply}. Without it, revert handed the Apex's GPIO
+   *  pin to unmeasured boards that apply() deliberately withholds it from. */
+  { autoKarg = true }: { autoKarg?: boolean } = {},
+): Promise<FingerprintResult> {
   const steps: string[] = [];
   const controller = await detectController(deps);
   await enablePme(deps, controller, steps);
 
   const distro = await deps.distroId();
+  const mode = kargMode(distro, autoKarg);
   let rebootRequired = false;
-  if (distro === "steamos") {
+  if (isKargAutomatic(mode)) {
     try {
-      rebootRequired = await removeKargSteamos(deps, steps);
+      rebootRequired = await unstageKarg(deps, mode, steps);
     } catch (e) {
       return { success: false, rebootRequired: false, steps, error: `Karg removal failed: ${e}` };
     }
-  } else if ((await deps.readCmdline()).includes(KARG)) {
+  } else if (mode === "manual" && (await deps.readCmdline()).includes(KARG)) {
+    // Only where we know the pin: on an unmeasured board we never told them
+    // to add it, so we don't tell them to remove it either.
     steps.push("karg-manual-removal-required");
     return { success: true, rebootRequired: true, steps, manualKarg: KARG };
   }

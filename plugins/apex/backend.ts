@@ -55,6 +55,13 @@ export interface FingerprintHealNotice {
   restored: boolean;
   /** A reboot is still needed to bring the GPIO karg layer up. */
   rebootRequired: boolean;
+  /**
+   * The kernel arg the user has to add by hand, on a distro whose bootloader
+   * we don't manage. Previously dropped on the floor — the notice reported
+   * "reboot to finish re-applying it" when nothing had been staged and a
+   * reboot could never help, discarding the one actionable thing we had.
+   */
+  manualKarg?: string;
   /** Set when the re-apply itself failed. */
   error?: string;
 }
@@ -353,6 +360,7 @@ export default class ApexBackend implements PluginBackend {
       this.healNotice = {
         restored: res.success,
         rebootRequired: !!res.rebootRequired,
+        manualKarg: res.manualKarg,
         error: res.success ? undefined : (res.error ?? "Re-applying the block failed."),
       };
       this.log?.info(
@@ -453,7 +461,7 @@ export default class ApexBackend implements PluginBackend {
     const result = await this.serialiseFingerprint(() =>
       enabled
         ? applyFingerprint(this.fpDeps, { autoKarg: this.isKnownBoard })
-        : revertFingerprint(this.fpDeps),
+        : revertFingerprint(this.fpDeps, { autoKarg: this.isKnownBoard }),
     );
 
     // Record the intent even when the apply partly failed: the user asked for

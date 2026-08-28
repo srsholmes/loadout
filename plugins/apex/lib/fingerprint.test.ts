@@ -7,6 +7,9 @@ import {
   addKargToGrubSteamos,
   removeKargFromGrubSteamos,
   KARG,
+  kargMode,
+  addKargToGrubDefault,
+  removeKargFromGrubDefault,
   shouldHeal,
   UDEV_RULE_PATH,
   FP_PRODUCTS,
@@ -45,6 +48,11 @@ interface FakeOpts {
   commands?: string[];
   /** Force update-grub to fail, to exercise the rollback path. */
   updateGrubFails?: boolean;
+  /** argv[0]s that should exit non-zero. */
+  failCommands?: string[];
+  /** Let a test model a command's side effect on the fake filesystem —
+   *  e.g. grub-mkconfig propagating /etc/default/grub into grub.cfg. */
+  onCommand?: (cmd: string[], files: Record<string, string>) => void;
 }
 
 function makeFpDeps(o: FakeOpts = {}): { deps: FingerprintDeps; files: Record<string, string>; commands: string[] } {
@@ -64,6 +72,19 @@ function makeFpDeps(o: FakeOpts = {}): { deps: FingerprintDeps; files: Record<st
         return ok();
       }
       if (cmd[0] === "update-grub") return o.updateGrubFails ? fail() : ok();
+      if (o.failCommands?.includes(cmd[0]!)) return fail();
+      // `tee` above writes a literal, so it never models stdin; this hook is
+      // how a test says what a command does to the fake filesystem.
+      o.onCommand?.(cmd, files);
+      if (cmd[0] === "rpm-ostree" && cmd[1] === "kargs" && cmd.length === 2) {
+        // Bare `rpm-ostree kargs` reports the current set.
+        return ok(files["__ostree_kargs__"] ?? "");
+      }
+      if (cmd[0] === "rpm-ostree" && cmd[1] === "kargs") {
+        const arg = cmd[2] ?? "";
+        if (arg.startsWith("--append-if-missing=")) files["__ostree_kargs__"] = arg.split("=").slice(1).join("=");
+        if (arg.startsWith("--delete-if-present=")) delete files["__ostree_kargs__"];
+      }
       return ok();
     },
     pathExists: async (p) => p in files,
@@ -357,16 +378,18 @@ describe("apply — board whose GPIO pin we haven't measured", () => {
   });
 });
 
-describe("apply (non-SteamOS)", () => {
+describe("apply (a distro we don't know the bootloader for)", () => {
   it("closes path 2 but surfaces a manual karg for the GPIO path", async () => {
     const { deps, files } = makeFpDeps({
       cmdline: "BOOT_IMAGE=x quiet",
-      distro: "cachyos",
+      distro: "ubuntu",
     });
     const r = await apply(deps);
     expect(r.success).toBe(true);
     expect(r.manualKarg).toBe(KARG);
-    expect(r.rebootRequired).toBe(true);
+    // Nothing was staged, so a reboot achieves nothing — claiming otherwise
+    // sent the user to reboot and threw away the one thing they can act on.
+    expect(r.rebootRequired).toBe(false);
     expect(files[UDEV_RULE_PATH]).toContain(CTRL); // path 2 still applied
   });
 });
@@ -497,7 +520,7 @@ describe("re-staging a karg that is live but lost from the bootloader", () => {
   });
 });
 
-describe("distros whose bootloader we don't edit", () => {
+describe("distros we don't know the bootloader for", () => {
   /**
    * kargStaged can only be read on SteamOS. Without gating on that, an
    * Arch/Bazzite user who followed our own manual-karg hint and rebooted got
@@ -512,7 +535,7 @@ describe("distros whose bootloader we don't edit", () => {
   };
 
   it("does not claim the karg is missing from a bootloader we never wrote", async () => {
-    const { deps } = makeFpDeps({ ...liveNotStaged, distro: "arch" });
+    const { deps } = makeFpDeps({ ...liveNotStaged, distro: "ubuntu" });
     const s = await getStatus(deps, true);
     expect(s.kargActive).toBe(true);
     expect(s.kargUnpersisted).toBe(false);
@@ -523,7 +546,7 @@ describe("distros whose bootloader we don't edit", () => {
     const { deps } = makeFpDeps({
       files: {},
       cmdline: `BOOT_IMAGE=x quiet ${KARG}`,
-      distro: "bazzite",
+      distro: "opensuse",
     });
     expect((await getStatus(deps, true)).rebootPending).toBe(false);
   });
@@ -595,5 +618,156 @@ describe("shouldHeal", () => {
     expect(shouldHeal({ wanted: true, status: { ...ok, supported: false, applied: false } })).toBe(
       false,
     );
+  });
+});
+
+describe("kargMode", () => {
+  // "we know the pin" and "we can put it there" are different questions;
+  // conflating them is what had the UI reporting a half-applied block as on.
+  it("routes each distro to the mechanism it actually uses", () => {
+    expect(kargMode("steamos", true)).toBe("steamos");
+    expect(kargMode("bazzite", true)).toBe("ostree");
+    expect(kargMode("cachyos", true)).toBe("grub");
+    expect(kargMode("arch", true)).toBe("grub");
+    expect(kargMode("ubuntu", true)).toBe("manual");
+  });
+
+  it("says nothing at all when the board's pin is unknown", () => {
+    // We never hand over the Apex's wiring for a board we haven't measured,
+    // on any distro — printing it is the same act as staging it.
+    for (const distro of ["steamos", "bazzite", "cachyos", "ubuntu"]) {
+      expect(kargMode(distro, false)).toBe("none");
+    }
+  });
+});
+
+describe("Bazzite (rpm-ostree)", () => {
+  const bazzite = (over: Record<string, unknown> = {}) =>
+    makeFpDeps({ cmdline: "BOOT_IMAGE=x quiet", distro: "bazzite", ...over });
+
+  it("stages the karg with rpm-ostree rather than editing a file", async () => {
+    const { deps, commands, files } = bazzite();
+    const r = await apply(deps, { autoKarg: true });
+    expect(r.success).toBe(true);
+    expect(r.steps).toContain("karg-staged");
+    expect(commands.some((c) => c.includes("rpm-ostree kargs --append-if-missing"))).toBe(true);
+    expect(r.rebootRequired).toBe(true);
+    // No bootloader file touched — the deployment is the record.
+    expect(Object.keys(files)).not.toContain("/etc/default/grub");
+  });
+
+  it("removes it again on revert", async () => {
+    const { deps, commands } = bazzite();
+    await revert(deps, { autoKarg: true });
+    expect(commands.some((c) => c.includes("rpm-ostree kargs --delete-if-present"))).toBe(true);
+  });
+
+  it("surfaces a failure instead of reporting a block it didn't apply", async () => {
+    const { deps } = bazzite({ failCommands: ["rpm-ostree"] });
+    const r = await apply(deps, { autoKarg: true });
+    expect(r.success).toBe(false);
+    expect(r.error).toContain("Path 1");
+  });
+});
+
+describe("CachyOS / Arch (GRUB)", () => {
+  const GRUB = 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"\n';
+
+  it("edits /etc/default/grub and regenerates the config", async () => {
+    const { deps, files, commands } = makeFpDeps({
+      files: { "/etc/default/grub": GRUB, "/boot/grub/grub.cfg": "" },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "cachyos",
+      // grub-mkconfig writes the karg through to the generated config.
+      onCommand: (cmd: string[], f: Record<string, string>) => {
+        if (cmd[0] === "grub-mkconfig") f["/boot/grub/grub.cfg"] = f["/etc/default/grub"] ?? "";
+      },
+    });
+    const r = await apply(deps, { autoKarg: true });
+    expect(r.success).toBe(true);
+    expect(files["/etc/default/grub"]).toContain(KARG);
+    expect(commands.some((c) => c.startsWith("grub-mkconfig"))).toBe(true);
+    expect(files["/etc/default/grub.loadout.bak"]).toBe(GRUB);
+  });
+
+  it("rolls back and reports when the karg never reaches grub.cfg", async () => {
+    // systemd-boot or limine: the file is written, grub-mkconfig "succeeds",
+    // and nothing that boots the machine ever reads it. Silently reporting
+    // success there would claim protection the device does not have.
+    const { deps, files } = makeFpDeps({
+      files: { "/etc/default/grub": GRUB, "/boot/grub/grub.cfg": "" },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "cachyos",
+    });
+    const r = await apply(deps, { autoKarg: true });
+    expect(r.success).toBe(false);
+    expect(r.error).toContain("may not boot with GRUB");
+    expect(files["/etc/default/grub"]).toBe(GRUB); // restored
+  });
+});
+
+describe("GRUB_CMDLINE_LINUX_DEFAULT editing", () => {
+  it("appends to an existing line without disturbing it", () => {
+    const out = addKargToGrubDefault('GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"\n');
+    expect(out).toContain(`quiet splash ${KARG}`);
+  });
+
+  it("is idempotent", () => {
+    const once = addKargToGrubDefault('GRUB_CMDLINE_LINUX_DEFAULT="quiet"\n');
+    expect(addKargToGrubDefault(once)).toBe(once);
+  });
+
+  it("handles an empty cmdline", () => {
+    expect(addKargToGrubDefault('GRUB_CMDLINE_LINUX_DEFAULT=""\n')).toContain(
+      `GRUB_CMDLINE_LINUX_DEFAULT="${KARG}"`,
+    );
+  });
+
+  it("adds the line when the file has none, rather than doing nothing", () => {
+    expect(addKargToGrubDefault("GRUB_TIMEOUT=5\n")).toContain(
+      `GRUB_CMDLINE_LINUX_DEFAULT="${KARG}"`,
+    );
+  });
+
+  it("round-trips", () => {
+    const before = 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"\n';
+    expect(removeKargFromGrubDefault(addKargToGrubDefault(before)).trim()).toBe(before.trim());
+  });
+});
+
+describe("the SteamOS window between staging and rebooting", () => {
+  it("counts a staged karg as applied, so the toggle doesn't fight the user", async () => {
+    // Staged, not yet live. Treating this as not-applied made the toggle
+    // spring back OFF right beside the alert saying a change was staged —
+    // and made the startup heal fire on every restart until the reboot.
+    const { deps } = makeFpDeps({
+      files: {
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        "/etc/default/grub-steamos": addKargToGrubSteamos(GRUB_SAMPLE),
+      },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+    const s = await getStatus(deps, true);
+    expect(s.kargStaged).toBe(true);
+    expect(s.kargActive).toBe(false);
+    expect(s.applied).toBe(true);
+    // ...while still telling them it isn't live yet.
+    expect(s.rebootPending).toBe(true);
+    expect(shouldHeal({ wanted: true, status: s })).toBe(false);
+  });
+
+  it("is still not applied when the karg is neither staged nor live", async () => {
+    const { deps } = makeFpDeps({
+      files: {
+        [UDEV_RULE_PATH]: "(rule)",
+        [`/sys/bus/pci/devices/${CTRL}/power/wakeup`]: "disabled",
+        "/etc/default/grub-steamos": GRUB_SAMPLE,
+      },
+      cmdline: "BOOT_IMAGE=x quiet",
+      distro: "steamos",
+    });
+    expect((await getStatus(deps, true)).applied).toBe(false);
   });
 });
