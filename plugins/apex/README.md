@@ -2,6 +2,41 @@
 
 > OneXPlayer device fixes: recover the internal gamepad when its xHCI controller dies on resume, and block the fingerprint reader from waking the device on a light touch.
 
+## Fingerprint wake block, and why it heals itself
+
+The power button's fingerprint reader wakes the device from sleep on a light
+touch. The block closes two paths:
+
+- **Controller PME** — `power/wakeup=disabled` on the xHCI controller hosting
+  the reader, plus a udev rule to persist it. This is the layer that actually
+  stops the wake, it's derived from your hardware at runtime, and it takes
+  effect immediately.
+- **GPIO kernel arg** — `gpiolib_acpi.ignore_wake=...`, belt-and-braces, and
+  only live after a reboot. It names a specific pin, which is board wiring,
+  so it is only staged on boards we have measured.
+
+Both live in `/etc`, and a SteamOS A/B update regenerates that tree — so an
+update silently removes the block and the device quietly starts waking on a
+touch again, with nothing to tell you.
+
+So the plugin checks at startup and puts it back. The user's choice is stored
+in plugin storage under `$HOME` (`fingerprintBlock`), not inferred from
+`/etc`: every signal in the live status is derived from the files an update
+deletes, so after one they cannot distinguish "never wanted it" from "wanted
+it and the OS ate it". Healing off those would enable the block on machines
+whose owner deliberately never turned it on.
+
+The re-apply runs fire-and-forget from `onLoad`. The loader awaits each
+plugin's `onLoad` in turn with no timeout and the HTTP server does not start
+until that loop finishes, so blocking on `update-grub` here would stall the
+whole backend boot.
+
+You are told it happened via a toast at overlay startup — the plugin declares
+`loadOnStartup` and exports `init()`, which pulls the outcome and waits for
+the window to actually be on screen before notifying (the overlay boots
+hidden, so a toast fired at boot is consumed by nobody). The same notice
+renders as an alert on the plugin page if you get there first.
+
 ## Vibration
 
 Sets the gamepad's global rumble level (`rumble_intensity`, 0-5), a single

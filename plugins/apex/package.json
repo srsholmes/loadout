@@ -36,6 +36,7 @@
     "subtitle": "Gamepad, vibration + fingerprint",
     "target": {
       "type": "overlay"
-    }
+    },
+    "loadOnStartup": true
   }
 }

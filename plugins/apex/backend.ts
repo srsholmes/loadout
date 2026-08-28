@@ -21,6 +21,7 @@ import {
   getStatus as fingerprintStatus,
   apply as applyFingerprint,
   revert as revertFingerprint,
+  shouldHeal,
   type FingerprintDeps,
   type FingerprintStatus,
   type FingerprintResult,
@@ -36,6 +37,26 @@ interface ApexSettings {
   /** Global rumble level the user chose. Re-applied on load, because the
    *  driver's own cache resets to maximum on every module load. */
   rumbleIntensity?: number;
+  /**
+   * Whether the user wants the fingerprint wake block on.
+   *
+   * Deliberately stored here rather than inferred from `/etc`: a SteamOS A/B
+   * update regenerates that tree and deletes both the udev rule and the grub
+   * line, which is precisely the evidence the old code used to decide the
+   * block was wanted. `$HOME` survives those updates, so this is the only
+   * record that can outlive one. Absent = never chose.
+   */
+  fingerprintBlock?: boolean;
+}
+
+/** What a startup self-heal did, surfaced once so the UI can say so. */
+export interface FingerprintHealNotice {
+  /** The block was re-applied. */
+  restored: boolean;
+  /** A reboot is still needed to bring the GPIO karg layer up. */
+  rebootRequired: boolean;
+  /** Set when the re-apply itself failed. */
+  error?: string;
 }
 
 /** Shape returned when this isn't OneXPlayer hardware at all. */
@@ -242,11 +263,75 @@ export default class ApexBackend implements PluginBackend {
     // Independent of the fixes above: this is a setting, not a repair, and it
     // has its own retry scan because hid-oxp can bind after we load.
     await this.rumble.start();
+
+    // Fire-and-forget — see healFingerprintBlock for why this must not be
+    // awaited. The promise is kept only so the UI can await it on demand.
+    this.healing = this.healFingerprintBlock();
   }
 
   async onUnload(): Promise<void> {
     this.stopWake();
     this.rumble.stop();
+  }
+
+  // ---------- Fingerprint self-heal ----------
+
+  /** In-flight heal, so getFingerprintHealNotice can await it rather than
+   *  race it. */
+  private healing: Promise<void> | null = null;
+  /** One-shot: read once by the UI, then cleared, so the toast fires once
+   *  per backend start rather than on every overlay restart. */
+  private healNotice: FingerprintHealNotice | null = null;
+
+  /**
+   * Put the wake block back if the user had it on and something removed it.
+   *
+   * Never awaited by onLoad. `loadPlugins()` walks plugins sequentially with
+   * no timeout and the HTTP server does not start until that loop finishes,
+   * so blocking here on `lsusb` + `udevadm` + `update-grub` would delay the
+   * whole backend boot — and update-grub alone is seconds.
+   */
+  private async healFingerprintBlock(): Promise<void> {
+    try {
+      const [settings, status] = await Promise.all([
+        readPluginStorage<ApexSettings>(PLUGIN_ID),
+        fingerprintStatus(this.fpDeps, this.isKnownBoard),
+      ]);
+      if (!shouldHeal({ wanted: settings.fingerprintBlock, status })) return;
+
+      this.log?.warn(
+        "[apex] fingerprint wake block was enabled but is no longer in effect " +
+          "(a system update usually causes this) — re-applying.",
+      );
+      const res = await applyFingerprint(this.fpDeps, { autoKarg: this.isKnownBoard });
+      this.healNotice = {
+        restored: res.success,
+        rebootRequired: !!res.rebootRequired,
+        error: res.success ? undefined : (res.error ?? "Re-applying the block failed."),
+      };
+      this.log?.info(
+        res.success
+          ? `[apex] fingerprint wake block restored${res.rebootRequired ? " (reboot needed for the kernel-arg layer)" : ""}`
+          : `[apex] could not restore the fingerprint wake block: ${res.error}`,
+      );
+      this.emit?.({ event: "statusChanged", data: undefined });
+    } catch (e) {
+      // Never let a heal failure escape: onLoad ignores throws, but an
+      // unhandled rejection here would be invisible.
+      this.log?.warn(`[apex] fingerprint self-heal failed: ${e}`);
+    }
+  }
+
+  /**
+   * The heal outcome, or null. Awaits an in-flight heal first — `emit` has no
+   * replay, so a heal that finished before the overlay connected would
+   * otherwise be missed entirely.
+   */
+  async getFingerprintHealNotice(): Promise<FingerprintHealNotice | null> {
+    await this.healing;
+    const notice = this.healNotice;
+    this.healNotice = null;
+    return notice;
   }
 
   // ---------- RPC ----------
@@ -313,8 +398,25 @@ export default class ApexBackend implements PluginBackend {
     const result = enabled
       ? await applyFingerprint(this.fpDeps, { autoKarg: this.isKnownBoard })
       : await revertFingerprint(this.fpDeps);
+
+    // Record the intent even when the apply partly failed: the user asked for
+    // it, and a later startup should try again rather than forget they did.
+    await mutatePluginStorage<ApexSettings>(PLUGIN_ID, (existing) => ({
+      ...existing,
+      fingerprintBlock: enabled,
+    }));
+
     this.emit?.({ event: "statusChanged", data: undefined });
     return result;
+  }
+
+  /** Reboot the device. Root already, so no polkit involved. */
+  async rebootDevice(): Promise<{ success: boolean; error?: string }> {
+    this.log?.info("[apex] rebooting at user request");
+    const r = await runFull(["systemctl", "reboot"], { timeoutMs: 10_000 });
+    return r.exitCode === 0
+      ? { success: true }
+      : { success: false, error: r.stderr.trim() || `exit ${r.exitCode}` };
   }
 
   /**

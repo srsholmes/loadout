@@ -20,6 +20,14 @@ function rumbleLevels(min: number, max: number): number[] {
   return Array.from({ length: max - min + 1 }, (_, i) => min + i);
 }
 
+/** Mirrors the backend's shape — declared here rather than imported, so the
+ *  frontend bundle never pulls in backend.ts. */
+interface FingerprintHealNotice {
+  restored: boolean;
+  rebootRequired: boolean;
+  error?: string;
+}
+
 interface XhciStatus {
   pciDeviceExists: boolean;
   driverBound: boolean;
@@ -74,6 +82,49 @@ interface RecoverResult {
   error?: string;
 }
 
+/**
+ * Reboot, behind a two-click confirm.
+ *
+ * The shell has this pattern in Settings (`MaintenanceActionRow`) but it
+ * isn't exported to plugins, so it's reproduced here for the same reason it
+ * exists there: a stray d-pad press must not power-cycle the device
+ * mid-game. Arming reverts after 4s.
+ */
+function RebootButton({ call }: { call: (m: string, ...a: unknown[]) => Promise<unknown> }) {
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [armed]);
+
+  const onClick = useCallback(async () => {
+    if (!armed) {
+      setArmed(true);
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = (await call("rebootDevice")) as { success: boolean; error?: string } | null;
+      // Success normally never renders — the device is going down.
+      if (!res?.success) notify(res?.error ?? "Couldn't reboot.", { kind: "error" });
+    } catch (e) {
+      notify(String(e), { kind: "error" });
+    } finally {
+      setBusy(false);
+      setArmed(false);
+    }
+  }, [armed, call]);
+
+  return (
+    <Button onClick={onClick} disabled={busy} variant={armed ? "danger" : undefined}>
+      {busy ? "Restarting…" : armed ? "Click again to confirm" : "Restart device"}
+    </Button>
+  );
+}
+
 function Apex() {
   const { call, useEvent } = useBackend("apex");
 
@@ -84,6 +135,7 @@ function Apex() {
   const [fpBusy, setFpBusy] = useState(false);
   const [rumble, setRumble] = useState<RumbleInfo | null>(null);
   const [rumbleBusy, setRumbleBusy] = useState(false);
+  const [healed, setHealed] = useState<FingerprintHealNotice | null>(null);
 
   const refresh = useCallback(async () => {
     setData((await call("getStatus")) as StatusResult);
@@ -100,6 +152,11 @@ function Apex() {
     call("getRumbleInfo")
       .then((d) => setRumble(d as RumbleInfo))
       .catch(() => setRumble(null));
+    // Only lands here when init() didn't already consume it — i.e. the user
+    // opened the plugin before the toast fired, or the overlay restarted.
+    call("getFingerprintHealNotice")
+      .then((d) => setHealed(d as FingerprintHealNotice | null))
+      .catch(() => setHealed(null));
   }, [refresh, call]);
 
   const handleRescanRumble = useCallback(async () => {
@@ -500,9 +557,35 @@ function Apex() {
               </div>
 
               {data.fingerprint.rebootPending && (
-                <Alert variant="warning" icon={<FaTriangleExclamation size={14} />} title="Reboot required">
-                  A kernel-parameter change is staged. Reboot to finish applying the fingerprint
-                  wake block.
+                <>
+                  <Alert
+                    variant="warning"
+                    icon={<FaTriangleExclamation size={14} />}
+                    title="Reboot required"
+                  >
+                    A kernel-parameter change is staged. Reboot to finish applying the fingerprint
+                    wake block.
+                  </Alert>
+                  {/* Only here: this is the one state where a reboot actually
+                      helps. Never for kargUnpersisted, where rebooting is
+                      what LOSES the karg. */}
+                  <div>
+                    <RebootButton call={call} />
+                  </div>
+                </>
+              )}
+
+              {healed?.restored && (
+                <Alert
+                  variant="success"
+                  icon={<FaCircleCheck size={14} />}
+                  title="Restored after a system update"
+                >
+                  The wake block had been removed — system updates regenerate the files it lives
+                  in. It has been re-applied automatically
+                  {healed.rebootRequired
+                    ? ", though the kernel-argument layer needs a reboot to come back."
+                    : ", and is in effect now."}
                 </Alert>
               )}
 
@@ -554,6 +637,82 @@ function Header() {
       </span>
     </div>
   );
+}
+
+/**
+ * Runs at overlay boot for every `loadOnStartup` plugin, before the user has
+ * opened anything — so the self-heal can be reported without them going
+ * looking for it.
+ *
+ * Pulls rather than subscribes: `emit` is fire-and-forget with no replay, and
+ * the backend starts before the overlay connects, so a heal that already
+ * finished would never be seen. `getFingerprintHealNotice` awaits any
+ * in-flight heal and clears the notice, so this toasts once per backend
+ * start.
+ */
+export async function init(api: {
+  call: (method: string, ...args: unknown[]) => Promise<unknown>;
+  subscribe: (event: string, handler: (data: unknown) => void) => () => void;
+}): Promise<void> {
+  // Start listening BEFORE the first await. The event fires once, on the
+  // transition, so attaching it after the RPC round-trip can miss the window
+  // opening in between and then wait forever. The shell registers its own
+  // update-toast listener synchronously for the same reason.
+  const visible = whenOverlayVisible();
+
+  let notice: FingerprintHealNotice | null = null;
+  try {
+    notice = (await api.call("getFingerprintHealNotice")) as FingerprintHealNotice | null;
+  } catch {
+    // A backend that isn't up yet, or a device this plugin is inert on.
+    visible.cancel();
+    return;
+  }
+  if (!notice) {
+    visible.cancel();
+    return;
+  }
+
+  // The window boots hidden and the overlay unit starts at login, so a toast
+  // fired now lands where nobody is looking and is gone before they open it.
+  await visible.promise;
+
+  if (notice.restored) {
+    notify(
+      notice.rebootRequired
+        ? "Fingerprint wake block was restored after a system update. Reboot to finish re-applying it."
+        : "Fingerprint wake block was restored after a system update.",
+      { kind: "success", id: "apex-fp-healed", duration: 8000 },
+    );
+  } else {
+    notify(`Couldn't restore the fingerprint wake block: ${notice.error ?? "unknown error"}`, {
+      kind: "error",
+      id: "apex-fp-healed",
+      duration: 10000,
+    });
+  }
+}
+
+/**
+ * Resolve once the overlay window is actually on screen. The listener is
+ * attached synchronously by the caller; `cancel` detaches it on paths that
+ * end up with nothing to say.
+ */
+function whenOverlayVisible(): { promise: Promise<void>; cancel: () => void } {
+  let onVisible: ((e: Event) => void) | null = null;
+  const promise = new Promise<void>((resolve) => {
+    onVisible = (e: Event) => {
+      if ((e as CustomEvent<{ isOpen: boolean }>).detail?.isOpen) {
+        window.removeEventListener("loadout:overlay-visibility", onVisible as EventListener);
+        resolve();
+      }
+    };
+    window.addEventListener("loadout:overlay-visibility", onVisible as EventListener);
+  });
+  return {
+    promise,
+    cancel: () => window.removeEventListener("loadout:overlay-visibility", onVisible as EventListener),
+  };
 }
 
 export const mount = mountComponent(Apex);

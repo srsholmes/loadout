@@ -193,6 +193,36 @@ export async function getStatus(
   };
 }
 
+/**
+ * Should the block be silently re-applied at startup?
+ *
+ * A SteamOS A/B update regenerates `/etc` and takes the udev rule and the
+ * grub line with it, so the device quietly goes back to waking on a light
+ * touch of the power button with nothing to tell the user.
+ *
+ * `wanted` must come from plugin storage under `$HOME`, NOT from any of the
+ * status fields below. Every signal in {@link FingerprintStatus} is derived
+ * from `/etc` or the live kernel — exactly what the update wipes — so after
+ * one they cannot tell "the user never enabled it" from "the user enabled it
+ * and the OS ate it". Healing off those would re-apply the block on machines
+ * whose owner deliberately never turned it on.
+ *
+ * `kargUnpersisted` counts as needing a heal even though `applied` is true
+ * in that state: the karg is live on this boot but missing from the
+ * bootloader, so the protection silently expires at the next grub
+ * regeneration. Re-applying re-stages it.
+ */
+export function shouldHeal(input: {
+  /** The user's stored choice. `undefined` = never chose. */
+  wanted: boolean | undefined;
+  status: Pick<FingerprintStatus, "supported" | "applied" | "kargUnpersisted">;
+}): boolean {
+  if (input.wanted !== true) return false;
+  // No reader on this machine — nothing to re-apply, and apply() would fail.
+  if (!input.status.supported) return false;
+  return !input.status.applied || input.status.kargUnpersisted;
+}
+
 // --- path 2: controller PME (runtime + udev) ---------------------------------
 
 const udevRuleBody = (controller: string) =>

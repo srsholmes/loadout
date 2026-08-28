@@ -479,3 +479,161 @@ describe("vibration card", () => {
     });
   });
 });
+
+describe("startup self-heal toast", () => {
+  beforeEach(() => {
+    callMock.mockReset();
+    notifyMock.mockReset();
+    eventHandlers.clear();
+  });
+
+  function makeApi(notice: unknown) {
+    return {
+      call: mock(async (method: string) =>
+        method === "getFingerprintHealNotice" ? notice : null,
+      ),
+      subscribe: mock(() => () => {}),
+    };
+  }
+
+  /** The shell dispatches this once the window is actually on screen. */
+  function showOverlay() {
+    window.dispatchEvent(
+      new CustomEvent("loadout:overlay-visibility", { detail: { isOpen: true } }),
+    );
+  }
+
+  it("says nothing when no heal happened", async () => {
+    const { init } = await import("./app");
+    await init(makeApi(null));
+    showOverlay();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("waits for the window to be visible before toasting", async () => {
+    // The overlay boots hidden and starts at login, so a toast fired at boot
+    // is consumed while nobody is looking.
+    const { init } = await import("./app");
+    const done = init(makeApi({ restored: true, rebootRequired: false }));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(notifyMock).not.toHaveBeenCalled(); // still hidden
+
+    showOverlay();
+    await done;
+    expect(notifyMock).toHaveBeenCalled();
+    expect(String(notifyMock.mock.calls[0]![0])).toContain("restored");
+  });
+
+  it("catches the window opening while the RPC is still in flight", async () => {
+    // The listener has to be attached before the first await: the event fires
+    // once, on the transition, so a listener registered after the round-trip
+    // misses it and the toast never appears.
+    const { init } = await import("./app");
+    const done = init(makeApi({ restored: true, rebootRequired: false }));
+    showOverlay(); // fires immediately, before api.call resolves
+    await done;
+    expect(notifyMock).toHaveBeenCalled();
+  });
+
+  it("mentions the reboot only when the karg layer still needs one", async () => {
+    const { init } = await import("./app");
+    const done = init(makeApi({ restored: true, rebootRequired: true }));
+    showOverlay();
+    await done;
+    expect(String(notifyMock.mock.calls[0]![0])).toContain("Reboot");
+
+    notifyMock.mockReset();
+    const done2 = init(makeApi({ restored: true, rebootRequired: false }));
+    showOverlay();
+    await done2;
+    expect(String(notifyMock.mock.calls[0]![0])).not.toContain("Reboot");
+  });
+
+  it("reports a failed restore as an error, not a success", async () => {
+    const { init } = await import("./app");
+    const done = init(makeApi({ restored: false, rebootRequired: false, error: "EACCES" }));
+    showOverlay();
+    await done;
+    expect(String(notifyMock.mock.calls[0]![0])).toContain("EACCES");
+    expect((notifyMock.mock.calls[0]![1] as { kind?: string })?.kind).toBe("error");
+  });
+
+  it("stays quiet when the backend isn't reachable", async () => {
+    const { init } = await import("./app");
+    await init({
+      call: mock(async () => {
+        throw new Error("not up");
+      }),
+      subscribe: mock(() => () => {}),
+    });
+    showOverlay();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("reboot button", () => {
+  beforeEach(() => {
+    callMock.mockReset();
+    eventHandlers.clear();
+  });
+
+  const fpStatus = (over: Record<string, unknown> = {}) => ({
+    ...healthyStatus,
+    fingerprint: {
+      supported: true,
+      applied: true,
+      rebootPending: true,
+      kargUnpersisted: false,
+      kargApplicable: true,
+      kargActive: false,
+      distro: "steamos",
+      controller: "0000:67:00.0",
+      ...over,
+    },
+  });
+
+  async function mountWithFp(over: Record<string, unknown> = {}) {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") return Promise.resolve(fpStatus(over));
+      if (method === "rebootDevice") return Promise.resolve({ success: true });
+      return Promise.resolve(null);
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+    await waitFor(() => expect(container.textContent).toContain("Fingerprint"));
+    return container;
+  }
+
+  const findBtn = (c: HTMLElement, text: string) =>
+    [...c.querySelectorAll("button")].find((b) => b.textContent?.includes(text));
+
+  it("offers a reboot when one would actually help", async () => {
+    const container = await mountWithFp();
+    await waitFor(() => expect(findBtn(container, "Restart device")).toBeDefined());
+  });
+
+  it("does not offer one when rebooting would lose the karg", async () => {
+    // kargUnpersisted: live but not staged. A reboot drops it.
+    const container = await mountWithFp({ rebootPending: false, kargUnpersisted: true });
+    expect(findBtn(container, "Restart device")).toBeUndefined();
+  });
+
+  it("requires a second press before rebooting", async () => {
+    // A stray d-pad press must not power-cycle the device mid-game.
+    const container = await mountWithFp();
+    const btn = await waitFor(() => {
+      const b = findBtn(container, "Restart device");
+      if (!b) throw new Error("not rendered yet");
+      return b;
+    });
+    fireEvent.click(btn);
+    await waitFor(() => expect(findBtn(container, "Click again to confirm")).toBeDefined());
+    expect(callMock).not.toHaveBeenCalledWith("rebootDevice");
+
+    fireEvent.click(findBtn(container, "Click again to confirm")!);
+    await waitFor(() => expect(callMock).toHaveBeenCalledWith("rebootDevice"));
+  });
+});

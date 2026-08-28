@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, mock } from "bun:test";
 import type { EmitPayload } from "@loadout/types";
+// Captured before the mock.module below replaces the module, so the heal
+// decision under test is the real one rather than a stub that agrees with us.
+import { shouldHeal as realShouldHeal } from "./lib/fingerprint";
 
 /**
  * Apex backend tests.
@@ -100,6 +103,7 @@ mock.module("./lib/fingerprint", () => ({
   getStatus: fingerprintStatusImpl,
   apply: applyFingerprintImpl,
   revert: revertFingerprintImpl,
+  shouldHeal: realShouldHeal,
 }));
 
 // In-memory plugin storage so settings persist within a test without touching
@@ -110,6 +114,19 @@ mock.module("@loadout/plugin-storage", () => ({
   writePluginStorage: async (_id: string, next: Record<string, unknown>) => {
     storage = { ...next };
   },
+  mutatePluginStorage: async (
+    _id: string,
+    fn: (existing: Record<string, unknown>) => Record<string, unknown>,
+  ) => {
+    storage = fn({ ...storage });
+  },
+}));
+
+// systemctl reboot goes through @loadout/exec.
+const runFullImpl = mock(async (_cmd: string[]) => ({ exitCode: 0, stdout: "", stderr: "" }));
+mock.module("@loadout/exec", () => ({
+  runFull: runFullImpl,
+  runStreaming: mock(async () => ({ exitCode: 0 })),
 }));
 
 // Capture the resume callback and hand back a stop spy so we can assert the
@@ -401,5 +418,151 @@ describe("rumble RPCs on non-OneXPlayer hardware", () => {
     expect((await backend.getRumbleInfo()).available).toBe(false);
     expect(rumbleGetInfoSpy).not.toHaveBeenCalled();
     expect((await backend.setRumbleIntensity(3)).success).toBe(false);
+
+describe("fingerprint self-heal", () => {
+  beforeEach(() => {
+    isApexResult = true;
+    isOneXPlayerResult = true;
+    storage = {};
+    fingerprintStatusImpl.mockClear();
+    applyFingerprintImpl.mockClear();
+    revertFingerprintImpl.mockClear();
+    runFullImpl.mockClear();
+    // mockClear keeps implementations, so restore the defaults or a hanging
+    // stub from one test silently times out the next.
+    applyFingerprintImpl.mockImplementation(async () => ({
+      success: true,
+      rebootRequired: true,
+      steps: [],
+    }));
+    runFullImpl.mockImplementation(async () => ({ exitCode: 0, stdout: "", stderr: "" }));
+    // Default: drifted — enabled by the user, no longer in effect.
+    fingerprintStatusImpl.mockImplementation(async () => ({
+      supported: true,
+      applied: false,
+      kargUnpersisted: false,
+      rebootPending: false,
+      kargActive: false,
+      distro: "steamos",
+    }));
+  });
+
+  it("records the user's choice somewhere an OS update can't reach", async () => {
+    // /etc is wiped by A/B updates, so the intent has to live in plugin
+    // storage or the plugin can't tell "never wanted" from "update ate it".
+    const { backend } = makeBackend();
+    await backend.setFingerprintBlock(true);
+    expect(storage.fingerprintBlock).toBe(true);
+    await backend.setFingerprintBlock(false);
+    expect(storage.fingerprintBlock).toBe(false);
+  });
+
+  it("re-applies the block at startup when it went missing", async () => {
+    storage = { fingerprintBlock: true };
+    const { backend } = makeBackend();
+    await backend.onLoad();
+    const notice = await backend.getFingerprintHealNotice();
+    expect(applyFingerprintImpl).toHaveBeenCalledTimes(1);
+    expect(notice?.restored).toBe(true);
+  });
+
+  it("leaves a device alone whose owner never enabled it", async () => {
+    storage = {};
+    const { backend } = makeBackend();
+    await backend.onLoad();
+    await backend.getFingerprintHealNotice();
+    expect(applyFingerprintImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not block backend boot on the heal", async () => {
+    // loadPlugins() awaits each onLoad in turn with no timeout and the HTTP
+    // server doesn't start until that loop ends, so awaiting update-grub here
+    // would stall the whole backend.
+    storage = { fingerprintBlock: true };
+    let release: (() => void) | null = null;
+    let applyFinished = false;
+    applyFingerprintImpl.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () => {
+            applyFinished = true;
+            resolve({ success: true, rebootRequired: false, steps: [] });
+          };
+        }),
+    );
+    const { backend } = makeBackend();
+    await backend.onLoad();
+
+    // onLoad has already returned. Let the heal run on far enough to call
+    // apply, and confirm apply is still pending — i.e. boot never waited.
+    await new Promise((r) => setTimeout(r, 40));
+    expect(applyFingerprintImpl).toHaveBeenCalledTimes(1);
+    expect(applyFinished).toBe(false);
+
+    release!();
+    const notice = await backend.getFingerprintHealNotice();
+    expect(notice?.restored).toBe(true);
+  });
+
+  it("hands the notice over exactly once", async () => {
+    // Otherwise every overlay restart re-toasts a heal that happened once.
+    storage = { fingerprintBlock: true };
+    const { backend } = makeBackend();
+    await backend.onLoad();
+    expect((await backend.getFingerprintHealNotice())?.restored).toBe(true);
+    expect(await backend.getFingerprintHealNotice()).toBeNull();
+  });
+
+  it("reports a failed re-apply instead of claiming success", async () => {
+    storage = { fingerprintBlock: true };
+    applyFingerprintImpl.mockImplementation(async () => ({
+      success: false,
+      rebootRequired: false,
+      steps: [],
+      error: "EACCES",
+    }));
+    const { backend } = makeBackend();
+    await backend.onLoad();
+    const notice = await backend.getFingerprintHealNotice();
+    expect(notice?.restored).toBe(false);
+    expect(notice?.error).toContain("EACCES");
+  });
+
+  it("survives a heal that throws, rather than losing the rest of onLoad", async () => {
+    storage = { fingerprintBlock: true };
+    fingerprintStatusImpl.mockImplementation(async () => {
+      throw new Error("sysfs gone");
+    });
+    const { backend } = makeBackend();
+    await backend.onLoad();
+    expect(await backend.getFingerprintHealNotice()).toBeNull();
+  });
+});
+
+describe("rebootDevice", () => {
+  beforeEach(() => {
+    isApexResult = true;
+    isOneXPlayerResult = true;
+    runFullImpl.mockClear();
+  });
+
+  it("reboots via systemctl", async () => {
+    const { backend } = makeBackend();
+    const res = await backend.rebootDevice();
+    expect(res.success).toBe(true);
+    expect(runFullImpl).toHaveBeenCalled();
+    expect(runFullImpl.mock.calls[0]![0]).toEqual(["systemctl", "reboot"]);
+  });
+
+  it("surfaces a refusal instead of pretending it worked", async () => {
+    runFullImpl.mockImplementation(async () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "Interactive authentication required",
+    }));
+    const { backend } = makeBackend();
+    const res = await backend.rebootDevice();
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("Interactive authentication");
   });
 });

@@ -7,6 +7,7 @@ import {
   addKargToGrubSteamos,
   removeKargFromGrubSteamos,
   KARG,
+  shouldHeal,
   UDEV_RULE_PATH,
   FP_PRODUCTS,
   type FingerprintDeps,
@@ -530,5 +531,40 @@ describe("distros whose bootloader we don't edit", () => {
   it("still reports the SteamOS case", async () => {
     const { deps } = makeFpDeps({ ...liveNotStaged, distro: "steamos" });
     expect((await getStatus(deps, true)).kargUnpersisted).toBe(true);
+
+describe("shouldHeal", () => {
+  const ok = { supported: true, applied: true, kargUnpersisted: false };
+
+  it("heals when the user wanted it and it is no longer applied", () => {
+    // The case this exists for: a SteamOS A/B update regenerated /etc and
+    // took the udev rule with it.
+    expect(shouldHeal({ wanted: true, status: { ...ok, applied: false } })).toBe(true);
+  });
+
+  it("heals when the karg is live but no longer staged", () => {
+    // `applied` is true here, but the karg is missing from the bootloader,
+    // so the protection silently expires at the next grub regeneration.
+    expect(shouldHeal({ wanted: true, status: { ...ok, kargUnpersisted: true } })).toBe(true);
+  });
+
+  it("does nothing when everything is already in effect", () => {
+    expect(shouldHeal({ wanted: true, status: ok })).toBe(false);
+  });
+
+  it("never heals on a machine whose owner didn't ask for it", () => {
+    // The important one. Every field in FingerprintStatus is derived from
+    // /etc or the live kernel — exactly what an update wipes — so healing off
+    // those would silently enable the block on devices that never had it.
+    for (const wanted of [undefined, false]) {
+      expect(shouldHeal({ wanted, status: { ...ok, applied: false } })).toBe(false);
+      expect(shouldHeal({ wanted, status: { ...ok, kargUnpersisted: true } })).toBe(false);
+    }
+  });
+
+  it("does not try on hardware with no reader", () => {
+    // apply() would fail; there is nothing to re-apply.
+    expect(shouldHeal({ wanted: true, status: { ...ok, supported: false, applied: false } })).toBe(
+      false,
+    );
   });
 });
