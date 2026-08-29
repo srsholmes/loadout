@@ -1,5 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
-import { FaHardDrive, FaRotate, FaCircleCheck } from "react-icons/fa6";
+import {
+  FaHardDrive,
+  FaRotate,
+  FaCircleCheck,
+  FaTriangleExclamation,
+  FaWandMagicSparkles,
+} from "react-icons/fa6";
 import { Button, Spinner, Toggle, mountComponent, notify, useBackend } from "@loadout/ui";
 
 export const icon = FaHardDrive;
@@ -15,10 +21,72 @@ interface StorageDrive {
   suggestedMountpoint: string;
   steamLibraryFound: boolean;
   inFstab: boolean;
+  /** The user's stored choice. Undefined on a backend older than this field. */
+  autoMountWanted?: boolean;
 }
 
 interface StorageStatus {
   drives: StorageDrive[];
+}
+
+/** What the backend's boot reconcile did, if anything. */
+export interface StorageHealNotice {
+  repinned: string[];
+  remounted: string[];
+  unpinned: string[];
+  failed: { name: string; error: string }[];
+}
+
+/** Join drive names for a sentence: "Games", "Games and SD", "A, B and C". */
+function listNames(names: string[]): string {
+  const quoted = names.map((n) => `“${n}”`);
+  if (quoted.length <= 1) return quoted[0] ?? "";
+  return `${quoted.slice(0, -1).join(", ")} and ${quoted[quoted.length - 1]}`;
+}
+
+/**
+ * One sentence for what the reconcile did, shared by the startup toast and
+ * the page banner so they can never drift apart.
+ *
+ * Failures win over successes: a drive we couldn't bring back is the only
+ * part of this the user has to act on, and burying it under "restored 1 of 2"
+ * is how a silent failure stays silent.
+ */
+export function healSummary(
+  notice: StorageHealNotice,
+): { kind: "success" | "error"; message: string } | null {
+  const { repinned = [], remounted = [], unpinned = [], failed = [] } = notice;
+  if (failed.length) {
+    return {
+      kind: "error",
+      message: `Couldn't restore the boot mount for ${listNames(failed.map((f) => f.name))}: ${failed[0]!.error}`,
+    };
+  }
+  if (repinned.length) {
+    const also = remounted.length ? " and mounted the drive" : "";
+    // Hedged, not asserted: an /etc that regenerates on update is the usual
+    // cause but not the only one, and this plugin runs on every distro —
+    // including ones where nothing regenerates /etc at all.
+    return {
+      kind: "success",
+      message:
+        `The boot mount for ${listNames(repinned)} had gone missing ` +
+        `(a system update usually does this) — Loadout put it back${also}.`,
+    };
+  }
+  if (remounted.length) {
+    return {
+      kind: "success",
+      message: `${listNames(remounted)} didn't mount on boot — Loadout mounted it.`,
+    };
+  }
+  if (unpinned.length) {
+    return {
+      kind: "success",
+      message: `${listNames(unpinned)} was still set to mount on boot — Loadout removed it.`,
+    };
+  }
+  return null;
 }
 
 interface MountResult {
@@ -43,9 +111,31 @@ function Storage() {
   const [detectBusy, setDetectBusy] = useState(false);
   const [mountBusyUuid, setMountBusyUuid] = useState<string | null>(null);
   const [bootBusyUuid, setBootBusyUuid] = useState<string | null>(null);
+  const [heal, setHeal] = useState<StorageHealNotice | null>(null);
 
   const refresh = useCallback(async () => {
     setData((await call("getStatus")) as StorageStatus);
+  }, [call]);
+
+  // The page shows the reconcile result too, not just the startup toast: a
+  // user who opens the plugin later — because their games went missing —
+  // should still find out what happened. It reads the "page" surface, which
+  // the toast doesn't consume; sharing one flag meant the toast (which fires
+  // on the first overlay open, before any navigation) always got there first
+  // and this banner was unreachable. Acked on display so it shows once.
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      const notice = (await call("getHealNotice", "page").catch(
+        () => null,
+      )) as StorageHealNotice | null;
+      if (!live || !notice || !healSummary(notice)) return;
+      setHeal(notice);
+      await call("ackHealNotice", "page").catch(() => {});
+    })();
+    return () => {
+      live = false;
+    };
   }, [call]);
 
   useEvent({ event: "statusChanged", handler: () => refresh() });
@@ -126,16 +216,32 @@ function Storage() {
   }
 
   const drives = data.drives ?? [];
+  const healed = heal ? healSummary(heal) : null;
 
   return (
     <div className="p-7 h-full overflow-y-auto">
       <div className="page-content">
+        {healed && (
+          <div
+            className={`card border ${healed.kind === "error" ? "border-error/40" : "border-success/40"}`}
+          >
+            <div className="card-body p-5 flex flex-row items-start gap-3">
+              {healed.kind === "error" ? (
+                <FaTriangleExclamation className="text-error shrink-0 mt-0.5" size={14} />
+              ) : (
+                <FaWandMagicSparkles className="text-success shrink-0 mt-0.5" size={14} />
+              )}
+              <div className="text-sm text-base-content/80 leading-relaxed">{healed.message}</div>
+            </div>
+          </div>
+        )}
+
         <div className="card">
           <div className="card-body p-6">
             <div className="text-sm text-base-content/80 leading-relaxed">
               If a second internal SSD holding a Steam library stops showing up after a system or
-              Steam update, it's usually just no longer mounted. This finds unmounted data drives and
-              mounts them where Steam looks — and can pin the mount in{" "}
+              Steam update, it's usually just no longer mounted. This finds unmounted data drives
+              and mounts them where Steam looks — and can pin the mount in{" "}
               <span className="mono">/etc/fstab</span> so an update can't quietly drop it again. It
               only ever mounts an existing filesystem; it never formats or repairs anything.
             </div>
@@ -211,7 +317,7 @@ function Storage() {
                       <div className="flex items-center gap-2 whitespace-nowrap">
                         <span className="text-xs text-base-content/55">Mount on boot</span>
                         <Toggle
-                          checked={d.inFstab}
+                          checked={d.autoMountWanted ?? d.inFstab}
                           disabled={bootBusyUuid === d.uuid}
                           onChange={(next) => handleToggleAutoMount(d.uuid, next)}
                         />
@@ -237,6 +343,78 @@ function Header() {
       </span>
     </div>
   );
+}
+
+/**
+ * Runs at overlay boot for every `loadOnStartup` plugin, before the user has
+ * opened anything — so a drive we quietly put back can be reported without
+ * them going looking for it.
+ *
+ * Pulls rather than subscribes: `emit` is fire-and-forget with no replay, and
+ * the backend starts before the overlay connects, so a reconcile that already
+ * finished would never be seen. `getHealNotice` awaits an in-flight reconcile
+ * and leaves the notice in place until we ack it, so it survives a webview
+ * reload. Acking the "toast" surface does not hide it from the plugin page,
+ * which consumes its own.
+ */
+export async function init(api: {
+  call: (method: string, ...args: unknown[]) => Promise<unknown>;
+  subscribe: (event: string, handler: (data: unknown) => void) => () => void;
+}): Promise<void> {
+  // Start listening BEFORE the first await. The event fires once, on the
+  // transition, so attaching it after the RPC round-trip can miss the window
+  // opening in between and then wait forever.
+  const visible = whenOverlayVisible();
+
+  let notice: StorageHealNotice | null = null;
+  try {
+    notice = (await api.call("getHealNotice", "toast")) as StorageHealNotice | null;
+  } catch {
+    // A backend that isn't up yet.
+    visible.cancel();
+    return;
+  }
+  const summary = notice ? healSummary(notice) : null;
+  if (!summary) {
+    visible.cancel();
+    return;
+  }
+
+  // Detached, not awaited: the window boots hidden and the overlay unit
+  // starts at login, so this can wait hours. runStartupInits awaits every
+  // init() in a Promise.all, and blocking that on one plugin's user
+  // interaction would pin the whole startup chain.
+  void visible.promise.then(async () => {
+    notify(summary.message, {
+      kind: summary.kind,
+      id: "storage-boot-heal",
+      duration: summary.kind === "error" ? 10000 : 8000,
+    });
+    await api.call("ackHealNotice", "toast").catch(() => {});
+  });
+}
+
+/**
+ * Resolve once the overlay window is actually on screen. The listener is
+ * attached synchronously by the caller; `cancel` detaches it on paths that
+ * end up with nothing to say.
+ */
+function whenOverlayVisible(): { promise: Promise<void>; cancel: () => void } {
+  let onVisible: ((e: Event) => void) | null = null;
+  const promise = new Promise<void>((resolve) => {
+    onVisible = (e: Event) => {
+      if ((e as CustomEvent<{ isOpen: boolean }>).detail?.isOpen) {
+        window.removeEventListener("loadout:overlay-visibility", onVisible as EventListener);
+        resolve();
+      }
+    };
+    window.addEventListener("loadout:overlay-visibility", onVisible as EventListener);
+  });
+  return {
+    promise,
+    cancel: () =>
+      window.removeEventListener("loadout:overlay-visibility", onVisible as EventListener),
+  };
 }
 
 export const mount = mountComponent(Storage);

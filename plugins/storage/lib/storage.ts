@@ -23,7 +23,7 @@
  *   - must be at least MIN_SIZE_BYTES (skip tiny helper partitions)
  *
  * The fstab persistence is idempotent (keyed on UUID), uses `nofail` +
- * `x-systemd.device-timeout=5s` so a missing drive can never block boot, and
+ * `x-systemd.device-timeout` so a missing drive can never block boot, and
  * backs /etc/fstab up to /etc/fstab.loadout.bak before writing — mirroring the
  * `.loadout.bak` pattern in ./fingerprint.ts.
  *
@@ -142,6 +142,20 @@ export interface StorageDrive {
   steamLibraryFound: boolean;
   /** A persistent /etc/fstab entry for this UUID exists. */
   inFstab: boolean;
+  /**
+   * That entry, verbatim, or null. Carried on the status so callers don't
+   * re-read /etc/fstab — and so the line can be stored exactly as the user
+   * wrote it, options and all, rather than regenerated from a template.
+   */
+  fstabLine: string | null;
+  /**
+   * The user's stored "mount on boot" choice, filled in by the backend from
+   * plugin storage. The UI binds the toggle to THIS, not to `inFstab`: after
+   * an A/B update wipes /etc the entry is gone while the intent isn't, and a
+   * toggle bound to the derived state would show off and quietly agree that
+   * the user never wanted it. Undefined = never chose.
+   */
+  autoMountWanted?: boolean;
 }
 
 export interface StorageStatus {
@@ -263,6 +277,19 @@ export function mountPointFor({
   return `/run/media/${user}/${name}`;
 }
 
+/**
+ * How long systemd waits for the device node before giving up on the mount.
+ *
+ * Was 5s, which is thin: on a Steam Deck cold boot the SD controller only
+ * publishes `mmcblk0` around two seconds in, and an internal NVMe behind a
+ * slower controller can be later still. Combined with `nofail` a miss is
+ * SILENT — no failed unit, no journal error, just an unmounted drive and a
+ * Steam library full of "missing" games. 10s costs nothing when the device
+ * is present (systemd proceeds the moment udev announces it) and only ever
+ * delays a boot where the drive genuinely isn't there.
+ */
+export const DEVICE_TIMEOUT = "10s";
+
 /** The canonical fstab line for a managed mount. */
 export function fstabEntryLine({
   uuid,
@@ -273,7 +300,101 @@ export function fstabEntryLine({
   mountpoint: string;
   fstype: string;
 }): string {
-  return `UUID=${uuid} ${mountpoint} ${fstype} defaults,nofail,x-systemd.device-timeout=5s 0 2`;
+  return `UUID=${uuid} ${mountpoint} ${fstype} defaults,nofail,x-systemd.device-timeout=${DEVICE_TIMEOUT} 0 2`;
+}
+
+/**
+ * Every option string Loadout has ever written for a managed mount, newest
+ * first.
+ *
+ * This is the ONLY thing that identifies an entry as ours. Keying on
+ * `UUID=<uuid>` alone does not: the user may have written that line by hand,
+ * long before installing Loadout, with options that matter enormously —
+ * `subvol=@games` on btrfs, `uid=`/`umask=` on ntfs/exfat. Rewriting one of
+ * those to our canonical form silently boots them into the wrong subvolume,
+ * or makes the mount root-only so Steam can't write to it.
+ *
+ * So: an entry whose options are not in this list is the USER'S. We restore
+ * it verbatim if it goes missing and otherwise never touch it.
+ */
+export const MANAGED_OPTIONS = [
+  `defaults,nofail,x-systemd.device-timeout=${DEVICE_TIMEOUT}`,
+  "defaults,nofail,x-systemd.device-timeout=5s", // pre-0.9 — upgraded on sight
+] as const;
+
+/** Split a non-comment fstab line into fields, or null if it isn't one. */
+function fstabFields(line: string): string[] | null {
+  const t = line.trim();
+  if (!t || t.startsWith("#")) return null;
+  return t.split(/\s+/);
+}
+
+/**
+ * Decode systemd's octal escaping (`\040` for a space, `\011` tab, `\134`
+ * backslash) in an fstab path field.
+ *
+ * Loadout's own mount points can't contain a space — SAFE_LABEL excludes one,
+ * and we fall back to the UUID — but an adopted third-party entry can:
+ * `/mnt/Game\040Drive` is a legal fstab target. Passing that through raw would
+ * have us mkdir and mount a literal `/mnt/Game\040Drive`, i.e. a second mount
+ * point neither fstab nor Steam is looking at.
+ */
+export function unescapeFstabField(field: string): string {
+  return field.replace(/\\([0-7]{3})/g, (_m, oct: string) => String.fromCharCode(parseInt(oct, 8)));
+}
+
+/** The verbatim fstab line that mounts this UUID, or null. */
+export function fstabLineFor(content: string, uuid: string): string | null {
+  const marker = `uuid=${uuid.toLowerCase()}`;
+  for (const line of content.replace(/\r\n/g, "\n").split("\n")) {
+    const fields = fstabFields(line);
+    if (!fields) continue;
+    if ((fields[0] ?? "").toLowerCase() === marker) return line.trim();
+  }
+  return null;
+}
+
+/**
+ * The mount point an fstab line targets, unescaped.
+ *
+ * The heal mounts a drive at the path fstab already pins rather than the one
+ * we would pick today: a drive whose label changed since it was pinned would
+ * otherwise get mounted at a second, different path while the fstab entry
+ * still points at the first — two mount points for one drive, and Steam
+ * looking at whichever it recorded.
+ */
+export function fstabTargetOf(line: string | null): string | null {
+  if (!line) return null;
+  const target = fstabFields(line)?.[1];
+  return target ? unescapeFstabField(target) : null;
+}
+
+/** The mount point an existing fstab entry uses for this UUID, or null. */
+export function fstabMountpointFor(content: string, uuid: string): string | null {
+  return fstabTargetOf(fstabLineFor(content, uuid));
+}
+
+/**
+ * Did Loadout write this line? See {@link MANAGED_OPTIONS} — the options
+ * field is the whole discriminator; mount point and fstype are deliberately
+ * not checked, so a drive relabelled or reformatted since we pinned it is
+ * still recognised as ours.
+ */
+export function isManagedFstabLine(line: string | null, uuid: string): boolean {
+  if (!line) return false;
+  const fields = fstabFields(line);
+  if (!fields || fields.length < 6) return false;
+  if ((fields[0] ?? "").toLowerCase() !== `uuid=${uuid.toLowerCase()}`) return false;
+  if (!(MANAGED_OPTIONS as readonly string[]).includes(fields[3] ?? "")) return false;
+  return fields[4] === "0" && fields[5] === "2";
+}
+
+/** True if this UUID's fstab entry is byte-for-byte the line we'd write today. */
+export function fstabLineIsCurrent(
+  content: string,
+  opts: { uuid: string; mountpoint: string; fstype: string },
+): boolean {
+  return fstabLineFor(content, opts.uuid) === fstabEntryLine(opts);
 }
 
 /** True if a non-comment fstab line already mounts this UUID. */
@@ -325,7 +446,13 @@ export function addFstabEntry(
 
 // --- impure orchestration ----------------------------------------------------
 
-const LSBLK_ARGS = ["lsblk", "-J", "-b", "-o", "NAME,PATH,FSTYPE,LABEL,UUID,MOUNTPOINT,TYPE,SIZE,RO"];
+const LSBLK_ARGS = [
+  "lsblk",
+  "-J",
+  "-b",
+  "-o",
+  "NAME,PATH,FSTYPE,LABEL,UUID,MOUNTPOINT,TYPE,SIZE,RO",
+];
 
 /** Enumerate unmounted, mountable data partitions. */
 export async function detectCandidates(deps: StorageDeps): Promise<Candidate[]> {
@@ -362,7 +489,7 @@ async function steamLibraryAt(deps: StorageDeps, mountpoint: string): Promise<bo
  */
 export async function mountCandidate(
   deps: StorageDeps,
-  { uuid }: { uuid: string },
+  { uuid, mountpoint: requested }: { uuid: string; mountpoint?: string },
 ): Promise<MountResult> {
   // Already mounted — report where, and whether Steam content is there.
   const existing = await mountedTarget(deps, uuid);
@@ -384,11 +511,16 @@ export async function mountCandidate(
     };
   }
 
-  const mountpoint = mountPointFor({
-    user: deps.currentUser(),
-    label: candidate.label,
-    uuid: candidate.uuid,
-  });
+  // An explicit target wins: the boot heal passes the path fstab already
+  // pins, so a drive relabelled since it was pinned doesn't end up mounted
+  // somewhere the fstab entry (and Steam) isn't looking.
+  const mountpoint =
+    requested ??
+    mountPointFor({
+      user: deps.currentUser(),
+      label: candidate.label,
+      uuid: candidate.uuid,
+    });
   try {
     await deps.mkdirp(mountpoint);
   } catch (e) {
@@ -422,7 +554,9 @@ export async function mountCandidate(
   }
 
   const steamLibraryFound = await steamLibraryAt(deps, verified);
-  deps.log?.(`mounted ${candidate.uuid} (${candidate.fstype}) at ${verified}; steamLibrary=${steamLibraryFound}`);
+  deps.log?.(
+    `mounted ${candidate.uuid} (${candidate.fstype}) at ${verified}; steamLibrary=${steamLibraryFound}`,
+  );
   return { success: true, mountpoint: verified, steamLibraryFound };
 }
 
@@ -451,6 +585,32 @@ export async function persistFstab(
   }
 }
 
+/**
+ * Restore a verbatim fstab line for this UUID (backed up, idempotent).
+ *
+ * Used to put back an entry that has gone missing, EXACTLY as it was — which
+ * for an entry we adopted rather than wrote means the user's own options
+ * survive. Regenerating a canonical line here instead would quietly drop a
+ * `subvol=`, `uid=` or `compress=` the drive depends on.
+ */
+export async function persistFstabLine(
+  deps: StorageDeps,
+  { uuid, line }: { uuid: string; line: string },
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const current = await deps.readFile(FSTAB_PATH).catch(() => "");
+    if (fstabLineFor(current, uuid) === line.trim()) return { success: true };
+    const without = removeFstabEntry(current, uuid).replace(/\s*$/, "");
+    const next = without.length ? `${without}\n${line.trim()}\n` : `${line.trim()}\n`;
+    await deps.writeFile(FSTAB_BACKUP, current);
+    await deps.writeFile(FSTAB_PATH, next);
+    deps.log?.(`fstab: restored entry for UUID=${uuid}`);
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: String(e) };
+  }
+}
+
 /** Remove the persistent /etc/fstab entry for this UUID (idempotent, backed up). */
 export async function unpersistFstab(
   deps: StorageDeps,
@@ -470,6 +630,127 @@ export async function unpersistFstab(
   } catch (e) {
     return { success: false, error: String(e) };
   }
+}
+
+/** What {@link reconcileAutoMount} had to do for one drive. */
+export interface ReconcileResult {
+  /** The fstab entry had gone missing and has been put back. */
+  repinned: boolean;
+  /** The drive wasn't mounted this boot, and now is. */
+  remounted: boolean;
+  /** A managed entry was removed because the user had switched the drive off. */
+  unpinned: boolean;
+  /** Set when we couldn't bring the drive back. */
+  error?: string;
+}
+
+const NOTHING_TO_DO: ReconcileResult = { repinned: false, remounted: false, unpinned: false };
+
+/**
+ * Bring one drive back into line with what the user asked for.
+ *
+ * Device- and distro-agnostic: nothing here knows about a particular machine,
+ * filesystem or mount point. Three failures land here, and the first two look
+ * identical to the user ("my games are gone"):
+ *
+ *   1. The fstab entry is missing. Any OS that regenerates `/etc` on update
+ *      does this — SteamOS A/B (where `/etc` is an overlay on the per-slot
+ *      `/var`) and rpm-ostree images both. We put the entry back VERBATIM and
+ *      mount now, so the current boot is fixed too, not just the next one.
+ *   2. The entry is there but the drive didn't mount — `nofail` plus a device
+ *      timeout means a slow-to-enumerate drive fails silently, on any distro.
+ *      We mount it now.
+ *   3. The user switched the drive off but the write failed, so it is still
+ *      pinned and still mounting every boot while the toggle reads off.
+ *      We remove the entry.
+ *
+ * What it will NOT do is edit an entry it didn't write. See
+ * {@link MANAGED_OPTIONS}: an entry with the user's own options is restored
+ * as-is if it vanishes and otherwise left completely alone. Only a line we
+ * recognise as ours gets its options refreshed (the 5s→10s timeout bump), and
+ * only a line we recognise as ours is ever removed.
+ *
+ * `wanted` must come from plugin storage, never from the fstab state: the
+ * entry is exactly what an update deletes, so afterwards the fstab cannot
+ * distinguish "never wanted it" from "wanted it and the OS ate it".
+ */
+export async function reconcileAutoMount(
+  deps: StorageDeps,
+  { drive, wanted, storedLine }: { drive: StorageDrive; wanted: boolean; storedLine?: string },
+): Promise<ReconcileResult> {
+  const name = drive.label || drive.path;
+  const fstab = await deps.readFile(FSTAB_PATH).catch(() => "");
+  const existing = fstabLineFor(fstab, drive.uuid);
+  const ours = isManagedFstabLine(existing, drive.uuid);
+
+  if (!wanted) {
+    // Only ever retract our own line. A user who switched the toggle off did
+    // not thereby ask us to delete an entry they wrote by hand.
+    if (!existing || !ours) return NOTHING_TO_DO;
+    deps.log?.(`"${name}" is switched off but still pinned — removing our entry`);
+    const res = await unpersistFstab(deps, { uuid: drive.uuid });
+    return res.success
+      ? { ...NOTHING_TO_DO, unpinned: true }
+      : { ...NOTHING_TO_DO, error: res.error ?? "Removing the boot mount failed." };
+  }
+
+  let repinned = false;
+  if (!existing) {
+    // Prefer the exact line last seen for this drive — for an adopted entry
+    // that is the user's own, options and all.
+    const line =
+      storedLine ??
+      fstabEntryLine({
+        uuid: drive.uuid,
+        mountpoint:
+          drive.mounted && drive.mountpoint ? drive.mountpoint : drive.suggestedMountpoint,
+        fstype: drive.fstype,
+      });
+    deps.log?.(
+      `"${name}" is set to mount on boot but its /etc/fstab entry is gone ` +
+        "(a system update usually causes this) — restoring it",
+    );
+    const res = await persistFstabLine(deps, { uuid: drive.uuid, line });
+    if (!res.success) {
+      return { ...NOTHING_TO_DO, error: res.error ?? "Restoring the boot mount failed." };
+    }
+    repinned = true;
+  } else if (
+    ours &&
+    !fstabLineIsCurrent(fstab, {
+      uuid: drive.uuid,
+      mountpoint: fstabTargetOf(existing) ?? drive.suggestedMountpoint,
+      fstype: drive.fstype,
+    })
+  ) {
+    // Ours, but an older shape — the 5s timeout is what lost the boot race.
+    // Upkeep, not news: reporting it would fire "your boot mount went missing"
+    // at every user still carrying an old entry.
+    deps.log?.(`refreshing our stale boot-mount entry for "${name}"`);
+    const res = await persistFstab(deps, {
+      uuid: drive.uuid,
+      mountpoint: fstabTargetOf(existing) ?? drive.suggestedMountpoint,
+      fstype: drive.fstype,
+    });
+    if (!res.success) {
+      return { ...NOTHING_TO_DO, error: res.error ?? "Refreshing the boot mount failed." };
+    }
+  }
+
+  if (drive.mounted) return { ...NOTHING_TO_DO, repinned };
+
+  // Mount where fstab pins it (unescaped), so a drive relabelled since it was
+  // pinned doesn't get a second mount point the entry doesn't know about.
+  const after = await deps.readFile(FSTAB_PATH).catch(() => "");
+  const mountpoint =
+    fstabMountpointFor(after, drive.uuid) ??
+    (drive.mounted && drive.mountpoint ? drive.mountpoint : drive.suggestedMountpoint);
+  const mounted = await mountCandidate(deps, { uuid: drive.uuid, mountpoint });
+  if (!mounted.success) {
+    return { ...NOTHING_TO_DO, repinned, error: mounted.error ?? "Mounting the drive failed." };
+  }
+  deps.log?.(`mounted "${name}" at ${mounted.mountpoint} during the boot reconcile`);
+  return { ...NOTHING_TO_DO, repinned, remounted: true };
 }
 
 /** Full storage view for the UI: every managed data drive + its mount/fstab state. */
@@ -497,6 +778,7 @@ export async function getStorageStatus(deps: StorageDeps): Promise<StorageStatus
         suggestedMountpoint: mountPointFor({ user, label: p.label, uuid: p.uuid }),
         steamLibraryFound: p.mountpoint ? await steamLibraryAt(deps, p.mountpoint) : false,
         inFstab: fstabHasUuid(fstab, p.uuid),
+        fstabLine: fstabLineFor(fstab, p.uuid),
       };
     }),
   );
