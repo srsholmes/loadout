@@ -412,7 +412,7 @@ export function fstabEntryLine({
  */
 export const MANAGED_OPTIONS = [
   `defaults,nofail,x-systemd.device-timeout=${DEVICE_TIMEOUT}`,
-  "defaults,nofail,x-systemd.device-timeout=5s", // pre-0.10 — refreshed on sight
+  "defaults,nofail,x-systemd.device-timeout=5s", // written by 0.8.x — refreshed on sight
 ] as const;
 
 /** Split a non-comment fstab line into fields, or null if it isn't one. */

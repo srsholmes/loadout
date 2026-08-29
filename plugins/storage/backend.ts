@@ -72,13 +72,14 @@ export interface StorageSettings {
   /**
    * Lowercased UUID -> the user's boot-mount record. Absent = never chose.
    *
-   * `boolean` is the pre-0.9 shape, still read so an upgrade doesn't lose
-   * everyone's stored intent the moment it lands.
+   * `boolean` is an earlier shape of this record. No released version ever
+   * wrote it — it existed only on pre-release builds — but it is still read,
+   * and migrated on sight, so anyone who ran one doesn't lose their intent.
    */
   autoMount?: Record<string, AutoMountEntry | boolean>;
 }
 
-/** Normalise the stored map, coercing the pre-0.9 boolean shape. */
+/** Normalise the stored map, coercing the earlier boolean shape. */
 export function readAutoMount(settings: {
   autoMount?: Record<string, AutoMountEntry | boolean>;
 }): Record<string, AutoMountEntry> {
@@ -363,7 +364,7 @@ export default class StorageBackend implements PluginBackend {
           continue;
         }
         if (!prior.enabled) {
-          // Never resurrect an explicit "off" — but do migrate the pre-0.9
+          // Never resurrect an explicit "off" — but do migrate the earlier
           // boolean shape, which changes how it's stored, not what it says.
           if (typeof autoMount[key] === "boolean") autoMount[key] = prior;
           continue;
