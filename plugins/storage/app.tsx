@@ -15,6 +15,8 @@ interface StorageDrive {
   suggestedMountpoint: string;
   steamLibraryFound: boolean;
   inFstab: boolean;
+  /** Pinned by an /etc/fstab entry Loadout didn't write — read-only to us. */
+  externallyPinned?: boolean;
 }
 
 interface StorageStatus {
@@ -134,8 +136,8 @@ function Storage() {
           <div className="card-body p-6">
             <div className="text-sm text-base-content/80 leading-relaxed">
               If a second internal SSD holding a Steam library stops showing up after a system or
-              Steam update, it's usually just no longer mounted. This finds unmounted data drives and
-              mounts them where Steam looks — and can pin the mount in{" "}
+              Steam update, it's usually just no longer mounted. This finds unmounted data drives
+              and mounts them where Steam looks — and can pin the mount in{" "}
               <span className="mono">/etc/fstab</span> so an update can't quietly drop it again. It
               only ever mounts an existing filesystem; it never formats or repairs anything.
             </div>
@@ -209,10 +211,15 @@ function Storage() {
                       )}
 
                       <div className="flex items-center gap-2 whitespace-nowrap">
-                        <span className="text-xs text-base-content/55">Mount on boot</span>
+                        <span className="text-xs text-base-content/55">
+                          {d.externallyPinned ? "Pinned in /etc/fstab" : "Mount on boot"}
+                        </span>
                         <Toggle
                           checked={d.inFstab}
-                          disabled={bootBusyUuid === d.uuid}
+                          // Its fstab entry is the user's, with options we
+                          // can't reason about. Showing a switch we would
+                          // refuse to honour is worse than showing none.
+                          disabled={bootBusyUuid === d.uuid || !!d.externallyPinned}
                           onChange={(next) => handleToggleAutoMount(d.uuid, next)}
                         />
                       </div>

@@ -103,7 +103,11 @@ describe("storage plugin", () => {
     callMock.mockImplementation((method: string) => {
       if (method === "getStatus") return Promise.resolve({ drives: [unmountedDrive] });
       if (method === "mountDrive")
-        return Promise.resolve({ success: true, mountpoint: "/run/media/deck/Games", steamLibraryFound: true });
+        return Promise.resolve({
+          success: true,
+          mountpoint: "/run/media/deck/Games",
+          steamLibraryFound: true,
+        });
       return Promise.resolve({ success: true });
     });
     const container = document.createElement("div");
@@ -113,7 +117,9 @@ describe("storage plugin", () => {
     let mountBtn: HTMLButtonElement | undefined;
     await waitFor(() => {
       expect(container.textContent).toContain("Games");
-      const btn = [...container.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Mount");
+      const btn = [...container.querySelectorAll("button")].find(
+        (b) => b.textContent?.trim() === "Mount",
+      );
       expect(btn).toBeTruthy();
       mountBtn = btn as HTMLButtonElement;
     });
@@ -154,5 +160,40 @@ describe("storage plugin", () => {
     await waitFor(() => {
       expect(callMock).toHaveBeenCalledWith("setDriveAutoMount", "GAME-1", false);
     });
+  });
+
+  it("disables the boot toggle for a drive pinned by someone else's fstab entry", async () => {
+    // Its entry carries options we can't reason about (subvol=, uid=), and
+    // switching the toggle off would mean deleting a line the user wrote.
+    // Offering a switch we would refuse to honour is worse than none.
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus")
+        return Promise.resolve({
+          drives: [
+            {
+              ...unmountedDrive,
+              mounted: true,
+              mountpoint: "/mnt/games",
+              inFstab: true,
+              externallyPinned: true,
+            },
+          ],
+        });
+      return Promise.resolve({ success: true });
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Pinned in /etc/fstab");
+    });
+    const toggles = [...container.querySelectorAll('input[type="checkbox"]')];
+    const bootToggle = toggles[toggles.length - 1] as HTMLInputElement;
+    expect(bootToggle.disabled).toBe(true);
+
+    fireEvent.click(bootToggle);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(callMock).not.toHaveBeenCalledWith("setDriveAutoMount", "GAME-1", false);
   });
 });
