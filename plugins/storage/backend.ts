@@ -10,6 +10,7 @@ import {
   unpersistFstab,
   reconcileAutoMount,
   fstabEntryLine,
+  isManagedFstabLine,
   type StorageDeps,
   type StorageDrive,
   type StorageStatus,
@@ -46,6 +47,14 @@ export interface AutoMountEntry {
    * make an ntfs mount root-only so Steam can't write to it.
    */
   line?: string;
+  /**
+   * Whether `line` is the user's rather than ours.
+   *
+   * An adopted line is protected: our own canonical line never overwrites it,
+   * and it is re-read from disk each boot so a later hand-edit is picked up
+   * instead of being reverted at the next /etc regeneration.
+   */
+  adopted?: boolean;
 }
 
 /**
@@ -236,66 +245,110 @@ export default class StorageBackend implements PluginBackend {
    */
   private async healAutoMounts(): Promise<void> {
     const notice: StorageHealNotice = { repinned: [], remounted: [], unpinned: [], failed: [] };
-    const handled = new Set<string>();
-    try {
-      for (let attempt = 0; ; attempt++) {
-        const { drives } = await getStorageStatus(this.storageDeps);
-        if (attempt === 0) await this.adoptExistingPins(drives);
+    const done = new Set<string>();
+    const seen = new Set<string>();
 
-        for (const drive of drives) {
-          const uuid = drive.uuid.toLowerCase();
-          if (handled.has(uuid)) continue;
-          handled.add(uuid);
-          await this.serialiseFstab(() => this.healOneDrive(drive, notice));
-        }
+    const pass = async (attempt: number): Promise<boolean> => {
+      const { drives } = await getStorageStatus(this.storageDeps);
+      // Did this pass turn up anything new? A drive that has never been
+      // adopted has no stored intent, so "a wanted drive is missing" cannot
+      // see it — and a pinned drive that enumerates late is precisely the one
+      // that most needs adopting before the next update wipes it.
+      const grew = drives.some((d) => !seen.has(d.uuid.toLowerCase()));
+      for (const d of drives) seen.add(d.uuid.toLowerCase());
 
-        // Keep looking only while a drive the user actually wants is still
-        // absent — a drive left at home must not cost us the full window.
-        const stored = readAutoMount(await readPluginStorage<StorageSettings>(PLUGIN_ID));
-        const missing = Object.entries(stored).some(
-          ([uuid, entry]) => entry.enabled && !handled.has(uuid),
-        );
-        const delay = this.rescanDelays[attempt];
-        if (!missing || delay === undefined || this.stopped) break;
-        await new Promise((r) => setTimeout(r, delay));
-        if (this.stopped) break;
+      // Adoption runs on EVERY pass, not just the first: gating it on attempt
+      // 0 meant a slow-enumerating pinned drive was never adopted, so
+      // healOneDrive read "never chose" and skipped it, it stayed
+      // pinned-but-unmounted all boot, and with no stored intent the next
+      // update wiped it beyond healing. Isolated, too — adoption is an
+      // optimisation, and a full or read-only $HOME must not cancel the
+      // healing that every fstab operation would have managed.
+      try {
+        await this.adoptExistingPins(drives);
+      } catch (e) {
+        this.log?.warn(`[storage] could not record existing boot mounts: ${e}`);
       }
-    } catch (e) {
-      // Never let this escape: onLoad ignores throws, but an unhandled
-      // rejection here would be invisible. Whatever the reconcile managed
-      // before the failure is still worth reporting, so fall through.
-      this.log?.warn(`[storage] boot reconcile failed: ${e}`);
-    }
 
-    if (noticeIsEmpty(notice)) return;
-    this.healNotice = notice;
-    this.emit?.({ event: "statusChanged", data: undefined });
+      for (const drive of drives) {
+        const uuid = drive.uuid.toLowerCase();
+        if (done.has(uuid)) continue;
+        // Marked done only when the reconcile actually SETTLED it. Marking
+        // before the attempt meant a drive that failed transiently ("device
+        // busy" while udev settles — precisely what the window exists for)
+        // was never retried and its failure was published as final.
+        if (await this.serialiseFstab(() => this.healOneDrive(drive, notice))) done.add(uuid);
+      }
+
+      const stored = readAutoMount(await readPluginStorage<StorageSettings>(PLUGIN_ID));
+      const pending = Object.entries(stored).some(
+        ([uuid, entry]) => entry.enabled && !done.has(uuid),
+      );
+      // Keep looking while a wanted drive is unsettled, while the drive set is
+      // still growing, or while we have seen nothing at all — the last being
+      // the clearest sign we started before the disks did.
+      return pending || (grew && attempt > 0) || drives.length === 0;
+    };
+
+    const publish = (): void => {
+      if (noticeIsEmpty(notice)) return;
+      this.healNotice = notice;
+      this.emit?.({ event: "statusChanged", data: undefined });
+    };
+
+    let more: boolean;
+    try {
+      more = await pass(0);
+    } catch (e) {
+      this.log?.warn(`[storage] boot reconcile failed: ${e}`);
+      publish();
+      return;
+    }
+    publish();
+
+    // The remaining passes run DETACHED. `getHealNotice` awaits `healing`, and
+    // making it wait out the whole window (~a minute of sleeps) meant a
+    // WebSocket drop in that window rejected the call — init() catches, gives
+    // up, and never asks again — so a successful heal was never reported.
+    if (!more) return;
+    void (async () => {
+      try {
+        for (let attempt = 1; ; attempt++) {
+          const delay = this.rescanDelays[attempt - 1];
+          if (delay === undefined || this.stopped) return;
+          await new Promise((r) => setTimeout(r, delay));
+          if (this.stopped) return;
+          const keepGoing = await pass(attempt);
+          publish();
+          if (!keepGoing) return;
+        }
+      } catch (e) {
+        this.log?.warn(`[storage] boot re-scan failed: ${e}`);
+      }
+    })();
   }
 
   /**
-   * Record a pinned drive that has no stored choice, and backfill the line
-   * for one whose record predates us storing it.
+   * Record a pinned drive that has no stored choice, and keep the stored line
+   * in step with the one actually on disk.
    *
    * Without adoption the users the feature exists for — who turned the toggle
    * on months ago — have no stored intent, so the first update to wipe their
-   * fstab is the one we can't heal. A pin that is in effect right now is proof
-   * enough that they wanted it.
+   * fstab is the one we can't heal. A pin in effect right now is proof enough
+   * that they wanted it.
    *
-   * The line is stored VERBATIM, because adoption is not authorship: most
-   * pinned entries on a given machine were written by its owner, and the line
-   * is the only record of the options they chose. Backfilling matters for the
-   * same reason — anyone who enabled a drive before this shipped has intent
-   * stored but no line, so an update would have us "restore" a canonical entry
-   * over their own. Recording it now is the only chance to, while the evidence
-   * is still on disk.
+   * The line is stored VERBATIM and marked `adopted`, because adoption is not
+   * authorship: most pinned entries on a given machine were written by its
+   * owner, and the line is the only record of the options they chose.
    */
   private async adoptExistingPins(drives: StorageDrive[]): Promise<void> {
     const pinned = drives.filter((d) => d.inFstab);
     if (pinned.length === 0) return;
     let adopted = 0;
-    let backfilled = 0;
+    let refreshed = 0;
     await mutatePluginStorage<StorageSettings>(PLUGIN_ID, (existing) => {
       const autoMount = { ...(existing.autoMount ?? {}) };
+      const stored = readAutoMount(existing);
       // Decided INSIDE the lock, not from a snapshot: reading status shells
       // out to lsblk, so seconds can pass, and a user switching a drive off
       // in that window would otherwise have their explicit "off" overwritten
@@ -303,25 +356,35 @@ export default class StorageBackend implements PluginBackend {
       // what this design exists to prevent.
       for (const drive of pinned) {
         const key = drive.uuid.toLowerCase();
-        const prior = autoMount[key];
+        const prior = stored[key];
         if (prior === undefined) {
-          autoMount[key] = { enabled: true, line: drive.fstabLine ?? undefined };
+          autoMount[key] = { enabled: true, line: drive.fstabLine ?? undefined, adopted: true };
           adopted++;
           continue;
         }
-        // Never resurrect an explicit "off" — only fill in a missing line.
-        const record = typeof prior === "boolean" ? { enabled: prior } : prior;
-        if (record.enabled && !record.line && drive.fstabLine) {
-          autoMount[key] = { ...record, line: drive.fstabLine };
-          backfilled++;
-        } else if (typeof prior === "boolean") {
-          autoMount[key] = record;
+        if (!prior.enabled) {
+          // Never resurrect an explicit "off" — but do migrate the pre-0.9
+          // boolean shape, which changes how it's stored, not what it says.
+          if (typeof autoMount[key] === "boolean") autoMount[key] = prior;
+          continue;
+        }
+        // Re-read the user's own line every boot. Freezing it on first sight
+        // meant a later hand-edit (adding `compress=zstd`, say) was silently
+        // reverted the next time /etc was regenerated, because we restored
+        // the stale copy. Only adopted lines are refreshed — one of ours is
+        // regenerated from the template anyway.
+        const isAdopted = prior.adopted ?? !isManagedFstabLine(drive.fstabLine, drive.uuid);
+        if (isAdopted && drive.fstabLine && drive.fstabLine !== prior.line) {
+          autoMount[key] = { ...prior, line: drive.fstabLine, adopted: true };
+          refreshed++;
+        } else if (prior.adopted === undefined) {
+          autoMount[key] = { ...prior, adopted: isAdopted };
         }
       }
       return { ...existing, autoMount };
     });
     if (adopted) this.log?.info(`[storage] adopted ${adopted} existing boot mount(s) as wanted`);
-    if (backfilled) this.log?.info(`[storage] recorded ${backfilled} existing fstab line(s)`);
+    if (refreshed) this.log?.info(`[storage] refreshed ${refreshed} stored fstab line(s)`);
   }
 
   /**
@@ -333,28 +396,41 @@ export default class StorageBackend implements PluginBackend {
    * re-pin it afterwards — leaving stored intent `false` against a pinned
    * fstab, a state that never self-corrects.
    */
-  private async healOneDrive(drive: StorageDrive, notice: StorageHealNotice): Promise<void> {
+  private async healOneDrive(drive: StorageDrive, notice: StorageHealNotice): Promise<boolean> {
     const name = drive.label || drive.path;
     try {
       const stored = readAutoMount(await readPluginStorage<StorageSettings>(PLUGIN_ID));
       const entry = stored[drive.uuid.toLowerCase()];
-      if (entry === undefined) return; // never chose — leave it alone
+      if (entry === undefined) return true; // never chose — settled, leave it
 
       const res = await reconcileAutoMount(this.storageDeps, {
         drive,
         wanted: entry.enabled,
         storedLine: entry.line,
       });
+      // A later attempt succeeding must retract the earlier failure, or the
+      // toast reports "couldn't restore" for a drive that is now mounted.
+      notice.failed = notice.failed.filter((f) => f.name !== name);
       if (res.repinned) notice.repinned.push(name);
       if (res.remounted) notice.remounted.push(name);
       if (res.unpinned) notice.unpinned.push(name);
-      if (res.error) notice.failed.push({ name, error: res.error });
+      if (res.error) {
+        // Not settled: a "device busy" while udev finishes is exactly what the
+        // retry window is for. Only the last attempt's failure is reported.
+        this.log?.warn(`[storage] "${name}" not ready yet: ${res.error}`);
+        notice.failed = notice.failed.filter((f) => f.name !== name);
+        notice.failed.push({ name, error: res.error });
+        return false;
+      }
+      return true;
     } catch (e) {
       // One drive must not take the others down with it: mountCandidate runs
       // a subprocess, and a spawn failure rejecting here would abort the loop
       // and discard every notice already accumulated.
       this.log?.warn(`[storage] reconciling "${name}" failed: ${e}`);
+      notice.failed = notice.failed.filter((f) => f.name !== name);
       notice.failed.push({ name, error: String(e) });
+      return false;
     }
   }
 
@@ -386,14 +462,22 @@ export default class StorageBackend implements PluginBackend {
   /** Merge one drive's boot-mount record into plugin storage. */
   private async storeIntent(uuid: string, entry: AutoMountEntry): Promise<void> {
     await mutatePluginStorage<StorageSettings>(PLUGIN_ID, (existing) => {
-      const autoMount = { ...(existing.autoMount ?? {}) };
-      const prior = autoMount[uuid.toLowerCase()];
-      const priorLine = typeof prior === "object" ? prior.line : undefined;
-      // Keep the last known line when the caller doesn't supply one, so
-      // switching a drive off and on again doesn't discard an adopted entry's
-      // custom options.
-      autoMount[uuid.toLowerCase()] = { ...entry, line: entry.line ?? priorLine };
-      return { ...existing, autoMount };
+      const key = uuid.toLowerCase();
+      const prior = readAutoMount(existing)[key];
+      // An ADOPTED line is the user's, and it is the only record of the
+      // options they chose. Our canonical line must never evict it: the old
+      // `line: entry.line ?? priorLine` looked like it preserved one, but the
+      // toggle ALWAYS supplies a line, so one off/on round-trip replaced
+      // `subvol=@games` with our ext4 default and destroyed the last copy.
+      const keepAdopted = prior?.adopted === true && entry.adopted !== false;
+      const line = keepAdopted ? (prior.line ?? entry.line) : (entry.line ?? prior?.line);
+      return {
+        ...existing,
+        autoMount: {
+          ...(existing.autoMount ?? {}),
+          [key]: { ...entry, line, adopted: entry.adopted ?? prior?.adopted },
+        },
+      };
     });
   }
 
@@ -454,16 +538,38 @@ export default class StorageBackend implements PluginBackend {
   ): Promise<{ success: boolean; error?: string }> {
     if (!uuid) return { success: false, error: "No drive selected." };
     try {
-      // Record the choice BEFORE touching /etc/fstab, and keep it even if the
-      // write fails: the intent is the user's, not a side effect of a
-      // successful write, and storing it means the next boot's reconcile
-      // retries instead of silently agreeing the drive was never wanted.
-      await this.storeIntent(uuid, { enabled });
-
+      // The WHOLE method runs inside the lock, intent writes included.
+      //
+      // Storing intent outside it and again inside was a lost update: call A
+      // (switch on) records `true`, parks on lsblk for seconds, and while it
+      // is parked call B (switch off) records `false` — a different lock — and
+      // queues behind A. A then finishes and re-records `true`, B's
+      // unpersistFstab runs, and the machine settles with NO fstab entry but
+      // stored intent `true`. The toggle springs back on, and the next boot's
+      // reconcile re-pins the drive the user just switched off and reports it
+      // as a repair. Reachable in the UI because `bootBusyUuid` holds one uuid:
+      // switch X on, switch Y, switch X off.
       const result = await this.serialiseFstab(async () => {
-        if (!enabled) return unpersistFstab(this.storageDeps, { uuid });
         const { drives } = await getStorageStatus(this.storageDeps);
         const drive = drives.find((d) => d.uuid.toLowerCase() === uuid.toLowerCase());
+        // The UI disables this toggle, but the RPC is reachable on its own and
+        // must not be the softer path. Turning it OFF would try to delete a
+        // line the user wrote; turning it ON would append ours ALONGSIDE
+        // theirs, leaving one filesystem with two entries and two mount
+        // points. Nothing is written, and the stored intent is left alone.
+        if (drive?.externallyPinned) {
+          return {
+            success: false,
+            error:
+              "That drive is pinned by an /etc/fstab entry Loadout didn't write, so it was left alone. Edit /etc/fstab by hand to change it.",
+          };
+        }
+        // Recorded first, and kept even if the write fails: the intent is the
+        // user's, not a side effect of a successful write, and storing it
+        // means the next boot's reconcile retries rather than silently
+        // agreeing the drive was never wanted.
+        await this.storeIntent(uuid, { enabled });
+        if (!enabled) return unpersistFstab(this.storageDeps, { uuid });
         if (!drive) return { success: false, error: `Drive ${uuid} not found.` };
         // Persist the live mount point if it's mounted, else the path we'd
         // mount it at — systemd's fstab generator creates the directory.
@@ -476,10 +582,13 @@ export default class StorageBackend implements PluginBackend {
         });
         // Remember the line we wrote, so a later reconcile restores exactly
         // that rather than re-deriving one from a label that may have changed.
+        // `adopted` stays false: this line is ours, so it may be overwritten
+        // by a future one of ours — unlike an adopted entry.
         if (res.success) {
           await this.storeIntent(uuid, {
             enabled: true,
             line: fstabEntryLine({ uuid, mountpoint, fstype: drive.fstype }),
+            adopted: false,
           });
         }
         return res;

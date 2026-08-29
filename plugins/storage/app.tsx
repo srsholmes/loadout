@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   FaHardDrive,
   FaRotate,
@@ -41,54 +41,69 @@ export interface StorageHealNotice {
 
 /** Join drive names for a sentence: "Games", "Games and SD", "A, B and C". */
 function listNames(names: string[]): string {
-  const quoted = names.map((n) => `“${n}”`);
+  const quoted = names.map((n) => `\u201c${n}\u201d`);
   if (quoted.length <= 1) return quoted[0] ?? "";
   return `${quoted.slice(0, -1).join(", ")} and ${quoted[quoted.length - 1]}`;
 }
+
+/** "was"/"were", "it"/"them" — for a list whose length we only know at runtime. */
+const was = (n: number) => (n === 1 ? "was" : "were");
+const it = (n: number) => (n === 1 ? "it" : "them");
 
 /**
  * One sentence for what the reconcile did, shared by the startup toast and
  * the page banner so they can never drift apart.
  *
- * Failures win over successes: a drive we couldn't bring back is the only
- * part of this the user has to act on, and burying it under "restored 1 of 2"
- * is how a silent failure stays silent.
+ * Every clause names the drives it applies to. An earlier version said
+ * "…put it back and mounted the drive", which on a machine where one entry
+ * vanished and a DIFFERENT drive lost the boot race named only the first and
+ * credited the second's mount to it.
+ *
+ * Failures win over successes and are listed with their own causes: a drive
+ * we couldn't bring back is the only part the user has to act on, and
+ * reporting one cause for several drives sends them after the wrong
+ * diagnosis for all but the first.
  */
 export function healSummary(
   notice: StorageHealNotice,
 ): { kind: "success" | "error"; message: string } | null {
   const { repinned = [], remounted = [], unpinned = [], failed = [] } = notice;
   if (failed.length) {
-    return {
-      kind: "error",
-      message: `Couldn't restore the boot mount for ${listNames(failed.map((f) => f.name))}: ${failed[0]!.error}`,
-    };
+    // "restore" is wrong for two of the three sources — a failed unpin and a
+    // failed mount both land here — so the wording stays neutral about which.
+    const causes = failed.map((f) => `${listNames([f.name])}: ${f.error}`).join("; ");
+    const noun = `boot mount${failed.length === 1 ? "" : "s"}`;
+    return { kind: "error", message: `Loadout couldn't fix the ${noun} for ${causes}` };
   }
+  const clauses: string[] = [];
   if (repinned.length) {
-    const also = remounted.length ? " and mounted the drive" : "";
     // Hedged, not asserted: an /etc that regenerates on update is the usual
-    // cause but not the only one, and this plugin runs on every distro —
-    // including ones where nothing regenerates /etc at all.
-    return {
-      kind: "success",
-      message:
-        `The boot mount for ${listNames(repinned)} had gone missing ` +
-        `(a system update usually does this) — Loadout put it back${also}.`,
-    };
+    // cause but not the only one, and this plugin runs on every distro.
+    clauses.push(
+      `the boot mount${repinned.length === 1 ? "" : "s"} for ${listNames(repinned)} ` +
+        `${was(repinned.length)} missing ` +
+        `(a system update usually does this), so Loadout put ${it(repinned.length)} back`,
+    );
   }
-  if (remounted.length) {
-    return {
-      kind: "success",
-      message: `${listNames(remounted)} didn't mount on boot — Loadout mounted it.`,
-    };
+  // Named separately: these are not necessarily the same drives as above.
+  const mountedOnly = remounted.filter((n) => !repinned.includes(n));
+  if (mountedOnly.length) {
+    clauses.push(
+      `${listNames(mountedOnly)} ${was(mountedOnly.length)} pinned but not mounted, ` +
+        `so Loadout mounted ${it(mountedOnly.length)}`,
+    );
+  } else if (remounted.length) {
+    clauses.push(`and mounted ${it(remounted.length)}`);
   }
   if (unpinned.length) {
-    return {
-      kind: "success",
-      message: `${listNames(unpinned)} was still set to mount on boot — Loadout removed it.`,
-    };
+    clauses.push(
+      `${listNames(unpinned)} ${was(unpinned.length)} still set to mount on boot, ` +
+        `so Loadout removed ${it(unpinned.length)}`,
+    );
   }
-  return null;
+  if (!clauses.length) return null;
+  const joined = clauses.join(clauses.length === 2 && clauses[1]?.startsWith("and ") ? " " : "; ");
+  return { kind: "success", message: `${joined.charAt(0).toUpperCase()}${joined.slice(1)}.` };
 }
 
 interface MountResult {
@@ -114,6 +129,7 @@ function Storage() {
   const [mountBusyUuid, setMountBusyUuid] = useState<string | null>(null);
   const [bootBusyUuid, setBootBusyUuid] = useState<string | null>(null);
   const [heal, setHeal] = useState<StorageHealNotice | null>(null);
+  const ackedRef = useRef(false);
 
   const refresh = useCallback(async () => {
     setData((await call("getStatus")) as StorageStatus);
@@ -133,7 +149,6 @@ function Storage() {
       )) as StorageHealNotice | null;
       if (!live || !notice || !healSummary(notice)) return;
       setHeal(notice);
-      await call("ackHealNotice", "page").catch(() => {});
     })();
     return () => {
       live = false;
@@ -143,7 +158,9 @@ function Storage() {
   useEvent({ event: "statusChanged", handler: () => refresh() });
 
   useEffect(() => {
-    refresh();
+    // Unhandled otherwise: a rejecting getStatus left the page on its spinner
+    // forever AND produced an unhandled rejection.
+    void refresh().catch(() => setData({ drives: [] }));
   }, [refresh]);
 
   const handleDetectDrives = useCallback(async () => {
@@ -219,6 +236,14 @@ function Storage() {
 
   const drives = data.drives ?? [];
   const healed = heal ? healSummary(heal) : null;
+  // Acked only once the banner is actually on screen. Acking when the RPC
+  // returned consumed the notice while the page was still behind its spinner,
+  // so a slow or failing getStatus swallowed it and nothing ever showed it —
+  // including a failed heal the user has to act on.
+  if (healed && !ackedRef.current) {
+    ackedRef.current = true;
+    void call("ackHealNotice", "page").catch(() => {});
+  }
 
   return (
     <div className="p-7 h-full overflow-y-auto">

@@ -1130,3 +1130,99 @@ describe("/etc/fstab writes are safe to interrupt", () => {
     expect(files[FSTAB_BACKUP]).toBe(line);
   });
 });
+
+/**
+ * Behaviours a mutation pass proved nothing was pinning: each of these failed
+ * to fail when the code under it was removed.
+ */
+describe("guarantees that were previously untested", () => {
+  const currentLine =
+    "UUID=GAME-1 /run/media/deck/Games ext4 defaults,nofail,x-systemd.device-timeout=10s 0 2";
+
+  it("persistFstabLine backs /etc/fstab up before rewriting it", async () => {
+    // Deleting the backup write left 53/53 green. This is a remove-then-append
+    // rewrite reached on every heal-repin, and the backup is the only recovery.
+    const original = "UUID=ROOT / ext4 defaults 0 1\n";
+    const { deps, files } = makeDeps({ files: { [FSTAB_PATH]: original } });
+
+    const res = await persistFstabLine(deps, { uuid: "GAME-1", line: currentLine });
+    expect(res.success).toBe(true);
+    expect(files[FSTAB_BACKUP]).toBe(original);
+    expect(files[FSTAB_PATH]).toContain(currentLine);
+    expect(files[FSTAB_PATH]).toContain("UUID=ROOT / ext4 defaults 0 1");
+  });
+
+  it("persistFstabLine swaps atomically, never truncating in place", async () => {
+    const renames: [string, string][] = [];
+    const { deps } = makeDeps({ files: { [FSTAB_PATH]: "UUID=ROOT / ext4 defaults 0 1\n" } });
+    const realRename = deps.renameFile;
+    deps.renameFile = async (from, to) => {
+      renames.push([from, to]);
+      await realRename(from, to);
+    };
+    await persistFstabLine(deps, { uuid: "GAME-1", line: currentLine });
+    expect(renames).toEqual([["/etc/fstab.loadout.tmp", FSTAB_PATH]]);
+  });
+
+  it("persistFstabLine refuses when /etc/fstab can't be read", async () => {
+    const { deps, files } = makeDeps({
+      files: { [FSTAB_PATH]: "UUID=ROOT / ext4 defaults 0 1\n" },
+    });
+    deps.readFile = async () => {
+      throw Object.assign(new Error("EIO"), { code: "EIO" });
+    };
+    const res = await persistFstabLine(deps, { uuid: "GAME-1", line: currentLine });
+    expect(res.success).toBe(false);
+    expect(files[FSTAB_BACKUP]).toBeUndefined();
+  });
+
+  it("reports a mount that exits 0 but doesn't actually stick", async () => {
+    // The fake always registered the mount, so this branch was unreachable and
+    // replacing it with `const verified = mountpoint` left 53/53 green.
+    const { deps } = makeDeps({ lsblk: LSBLK });
+    const realRun = deps.run;
+    deps.run = async (cmd, opts) => {
+      // mount succeeds, findmnt keeps saying the drive isn't mounted.
+      if (cmd[0] === "mount") return { stdout: "", stderr: "", exitCode: 0 };
+      return realRun(cmd, opts);
+    };
+    const res = await mountCandidate(deps, { uuid: "GAME-1" });
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("isn't showing as mounted");
+  });
+
+  it("mount(8) gets ONE argument when fstab pins the drive", async () => {
+    // Passing device AND directory makes mount ignore fstab entirely, which
+    // silently discards subvol=, uid= and ro from the user's own entry.
+    const theirs = "UUID=GAME-1 /mnt/games btrfs defaults,noatime,subvol=@games 0 0";
+    const { deps, commands } = makeDeps({ lsblk: LSBLK, files: { [FSTAB_PATH]: `${theirs}\n` } });
+    await mountCandidate(deps, { uuid: "GAME-1", mountpoint: "/mnt/games", viaFstab: true });
+    expect(commands).toContain("mount /mnt/games");
+    expect(commands.some((c) => c.startsWith("mount UUID="))).toBe(false);
+  });
+
+  it("leaves a noauto entry unmounted", async () => {
+    // That flag is how a dual-booter keeps a Windows partition alone.
+    const noauto = "UUID=GAME-1 /mnt/windows ntfs defaults,noauto,uid=1000 0 0";
+    const { deps, mounted } = makeDeps({ lsblk: LSBLK, files: { [FSTAB_PATH]: `${noauto}\n` } });
+    const res = await reconcileAutoMount(deps, {
+      drive: {
+        path: "/dev/nvme1n1p1",
+        label: "Games",
+        uuid: "GAME-1",
+        fstype: "ext4",
+        size: 1000 * GiB,
+        mounted: false,
+        mountpoint: null,
+        suggestedMountpoint: "/run/media/deck/Games",
+        steamLibraryFound: false,
+        inFstab: true,
+        externallyPinned: true,
+        fstabLine: noauto,
+      },
+      wanted: true,
+    });
+    expect(res.remounted).toBe(false);
+    expect(mounted["GAME-1"]).toBeUndefined();
+  });
+});

@@ -206,6 +206,60 @@ describe("healSummary", () => {
     expect(healSummary(empty)).toBeNull();
   });
 
+  it("names each drive in its own clause when the sets differ", async () => {
+    // One entry vanished and a DIFFERENT drive lost the boot race. The old
+    // wording said "…put it back and mounted the drive" — SD unnamed, and its
+    // mount credited to Games.
+    const { healSummary } = await import("./app");
+    const res = healSummary({ ...empty, repinned: ["Games"], remounted: ["SD"] });
+    expect(res?.message).toContain("\u201cGames\u201d");
+    expect(res?.message).toContain("\u201cSD\u201d was pinned but not mounted");
+  });
+
+  it("agrees in number for several drives", async () => {
+    const { healSummary } = await import("./app");
+    expect(healSummary({ ...empty, remounted: ["Games", "SD"] })?.message).toContain(
+      "were pinned but not mounted, so Loadout mounted them",
+    );
+    expect(healSummary({ ...empty, unpinned: ["Games", "SD"] })?.message).toContain(
+      "were still set to mount on boot, so Loadout removed them",
+    );
+    expect(healSummary({ ...empty, repinned: ["Games", "SD"] })?.message).toContain(
+      "The boot mounts for",
+    );
+    // …and still reads correctly for one.
+    expect(healSummary({ ...empty, remounted: ["Games"] })?.message).toContain(
+      "was pinned but not mounted, so Loadout mounted it",
+    );
+  });
+
+  it("gives every failure its own cause", async () => {
+    // Showing failed[0].error for all of them pointed the user at the wrong
+    // diagnosis for every drive but the first.
+    const { healSummary } = await import("./app");
+    const res = healSummary({
+      ...empty,
+      failed: [
+        { name: "Games", error: "read-only file system" },
+        { name: "SD", error: "mount: wrong fs type" },
+      ],
+    });
+    expect(res?.kind).toBe("error");
+    expect(res?.message).toContain("read-only file system");
+    expect(res?.message).toContain("mount: wrong fs type");
+  });
+
+  it("doesn't say \"restore\" for a failure that wasn't a restore", async () => {
+    // A failed unpin and a failed mount land in the same bucket; telling the
+    // user their pin couldn't be restored sends them to look at fstab.
+    const { healSummary } = await import("./app");
+    const res = healSummary({
+      ...empty,
+      failed: [{ name: "Games", error: "Removing the boot mount failed." }],
+    });
+    expect(res?.message).not.toContain("restore");
+  });
+
   it("names the missing pin without asserting a cause it can't know", async () => {
     // This plugin runs on every distro, including ones where nothing
     // regenerates /etc — so an update is offered as the usual cause, not
@@ -213,10 +267,10 @@ describe("healSummary", () => {
     const { healSummary } = await import("./app");
     const res = healSummary({ ...empty, repinned: ["Games"], remounted: ["Games"] });
     expect(res?.kind).toBe("success");
-    expect(res?.message).toContain("had gone missing");
+    expect(res?.message).toContain("was missing");
     expect(res?.message).toContain("usually");
     expect(res?.message).toContain("“Games”");
-    expect(res?.message).toContain("mounted the drive");
+    expect(res?.message).toContain("mounted it");
   });
 
   it("reports a leftover entry it removed", async () => {
@@ -232,7 +286,7 @@ describe("healSummary", () => {
     const { healSummary } = await import("./app");
     const res = healSummary({ ...empty, remounted: ["Games"] });
     expect(res?.message).not.toContain("system update");
-    expect(res?.message).toContain("didn't mount on boot");
+    expect(res?.message).toContain("pinned but not mounted");
   });
 
   it("leads with a failure even when something else succeeded", async () => {
@@ -308,7 +362,7 @@ describe("boot-reconcile UI", () => {
 
     showOverlay();
     await new Promise((r) => setTimeout(r, 20));
-    expect(String(notifyMock.mock.calls[0]![0])).toContain("had gone missing");
+    expect(String(notifyMock.mock.calls[0]![0])).toContain("was missing");
     expect(api.call).toHaveBeenCalledWith("ackHealNotice", "toast");
   });
 
@@ -350,9 +404,46 @@ describe("boot-reconcile UI", () => {
     mount(container);
 
     await waitFor(() => {
-      expect(container.textContent).toContain("had gone missing");
+      expect(container.textContent).toContain("was missing");
     });
     expect(callMock).toHaveBeenCalledWith("ackHealNotice", "page");
+  });
+
+  it("doesn't ack the notice until the banner is actually on screen", async () => {
+    // The banner sits behind `if (!data) return <Spinner/>`. Acking when the
+    // RPC returned consumed the notice while the page was still spinning, so
+    // a slow getStatus swallowed it and nothing ever showed it.
+    let releaseStatus: ((v: unknown) => void) | null = null;
+    callMock.mockImplementation((method: string, surface?: unknown) => {
+      if (method === "getStatus") return new Promise((r) => (releaseStatus = r));
+      if (method === "getHealNotice" && surface === "page") return Promise.resolve(healed);
+      return Promise.resolve({ success: true });
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(callMock).not.toHaveBeenCalledWith("ackHealNotice", "page");
+    releaseStatus!(emptyStatus);
+    await waitFor(() => {
+      expect(container.textContent).toContain("was missing");
+    });
+    expect(callMock).toHaveBeenCalledWith("ackHealNotice", "page");
+  });
+
+  it("survives a getStatus that rejects instead of spinning forever", async () => {
+    callMock.mockImplementation((method: string) => {
+      if (method === "getStatus") return Promise.reject(new Error("backend hiccup"));
+      return Promise.resolve(null);
+    });
+    const container = document.createElement("div");
+    const { mount } = await import("./app");
+    mount(container);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("No data drives detected yet");
+    });
   });
 
   it("shows a failed reconcile on the page rather than dropping it", async () => {
