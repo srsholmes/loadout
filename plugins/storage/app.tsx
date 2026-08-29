@@ -23,6 +23,8 @@ interface StorageDrive {
   inFstab: boolean;
   /** The user's stored choice. Undefined on a backend older than this field. */
   autoMountWanted?: boolean;
+  /** Pinned by an /etc/fstab entry Loadout didn't write — read-only to us. */
+  externallyPinned?: boolean;
 }
 
 interface StorageStatus {
@@ -315,10 +317,18 @@ function Storage() {
                       )}
 
                       <div className="flex items-center gap-2 whitespace-nowrap">
-                        <span className="text-xs text-base-content/55">Mount on boot</span>
+                        <span className="text-xs text-base-content/55">
+                          {d.externallyPinned ? "Pinned in /etc/fstab" : "Mount on boot"}
+                        </span>
                         <Toggle
+                          // Stored intent, not the derived /etc state: after an
+                          // update eats the entry the intent survives, and a
+                          // toggle fed from inFstab would spring back to off.
                           checked={d.autoMountWanted ?? d.inFstab}
-                          disabled={bootBusyUuid === d.uuid}
+                          // …but an entry the user wrote is theirs. Its options
+                          // are ones we can't reason about, and showing a switch
+                          // we would refuse to honour is worse than showing none.
+                          disabled={bootBusyUuid === d.uuid || !!d.externallyPinned}
                           onChange={(next) => handleToggleAutoMount(d.uuid, next)}
                         />
                       </div>

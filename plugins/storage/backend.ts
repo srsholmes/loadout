@@ -1,4 +1,4 @@
-import { access, readFile, writeFile, mkdir } from "node:fs/promises";
+import { access, readFile, writeFile, mkdir, rename } from "node:fs/promises";
 import { userInfo, homedir } from "node:os";
 import type { PluginBackend, EmitPayload, PluginLogger } from "@loadout/types";
 import { runFull } from "@loadout/exec";
@@ -158,6 +158,7 @@ export default class StorageBackend implements PluginBackend {
       run: (cmd, opts) => runFull(cmd, opts),
       readFile: (path) => readFile(path, "utf-8"),
       writeFile: (path, content) => writeFile(path, content),
+      renameFile: (from, to) => rename(from, to),
       pathExists: async (path) => {
         try {
           await access(path);

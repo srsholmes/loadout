@@ -6,6 +6,12 @@ import {
   isWhitelistedFs,
   isDataPartition,
   mountPointFor,
+  isSafeLabel,
+  isSystemMountpoint,
+  escapeFstabField,
+  unescapeFstabField,
+  isManagedFstabLine,
+  hasUnmanagedEntry,
   fstabEntryLine,
   fstabHasUuid,
   addFstabEntry,
@@ -185,10 +191,24 @@ function makeDeps(o: FakeOpts = {}): {
         return target ? ok(`${target}\n`) : fail();
       }
       if (cmd[0] === "mount") {
-        const uuid = (cmd[1] ?? "").replace(/^UUID=/, "");
-        const mp = cmd[2];
+        // Two forms. `mount UUID=X <dir>` ignores fstab; `mount <dir>` alone
+        // makes mount(8) read the entry and apply the user's own options,
+        // which is what the reconcile uses when fstab already pins the drive.
+        let uuid: string;
+        let mp: string | undefined;
+        if (cmd.length === 2) {
+          mp = cmd[1];
+          // The target we're handed is real, the fstab field is escaped.
+          const line = (files[FSTAB_PATH] ?? "")
+            .split("\n")
+            .find((l) => unescapeFstabField(l.trim().split(/\s+/)[1] ?? "") === mp);
+          uuid = (line?.trim().split(/\s+/)[0] ?? "").replace(/^UUID=/, "");
+        } else {
+          uuid = (cmd[1] ?? "").replace(/^UUID=/, "");
+          mp = cmd[2];
+        }
         if ((o.mountExit ?? 0) === 0) {
-          mounted[uuid] = mp;
+          mounted[uuid] = mp as string;
           return ok();
         }
         return fail("mount: wrong fs type, bad option, bad superblock");
@@ -201,6 +221,11 @@ function makeDeps(o: FakeOpts = {}): {
     },
     writeFile: async (p, c) => {
       files[p] = c;
+    },
+    renameFile: async (from, to) => {
+      if (!(from in files)) throw new Error("ENOENT");
+      files[to] = files[from]!;
+      delete files[from];
     },
     pathExists: async (p) => p in files,
     mkdirp: async (p) => {
@@ -636,6 +661,7 @@ describe("reconcileAutoMount", () => {
     suggestedMountpoint: "/run/media/deck/Games",
     steamLibraryFound: false,
     inFstab: false,
+    externallyPinned: false,
     fstabLine: null,
     ...over,
   });
@@ -828,5 +854,279 @@ describe("reconcileAutoMount", () => {
     const res = await reconcileAutoMount(deps, { drive: drive(), wanted: true });
     expect(res.repinned).toBe(true);
     expect(files[FSTAB_PATH]).toContain(currentLine);
+  });
+});
+
+/**
+ * These pin the guarantees that keep the plugin off a machine's system
+ * partitions. Every one of them is a scenario that was live on a non-SteamOS
+ * distro: the developer's Deck is the only layout where labelling alone is
+ * enough, because SteamOS both labels its system partitions AND refers to
+ * them in fstab as /dev/disk/by-partsets/… rather than UUID=.
+ */
+describe("never touch the operating system's partitions", () => {
+  const GiB2 = 1024 ** 3;
+
+  // Stock Fedora / Bazzite / Nobara: btrfs root labelled `fedora`, and a
+  // /boot with NO label at exactly the 1 GiB size floor.
+  const FEDORA = JSON.stringify({
+    blockdevices: [
+      {
+        name: "nvme0n1",
+        type: "disk",
+        children: [
+          {
+            name: "nvme0n1p1",
+            path: "/dev/nvme0n1p1",
+            fstype: "vfat",
+            label: null,
+            uuid: "EFI-1",
+            mountpoint: "/boot/efi",
+            type: "part",
+            size: 600 * 1024 * 1024,
+            ro: false,
+          },
+          {
+            name: "nvme0n1p2",
+            path: "/dev/nvme0n1p2",
+            fstype: "ext4",
+            label: null,
+            uuid: "BOOT-1",
+            mountpoint: "/boot",
+            type: "part",
+            size: GiB2,
+            ro: false,
+          },
+          {
+            name: "nvme0n1p3",
+            path: "/dev/nvme0n1p3",
+            fstype: "btrfs",
+            label: "fedora",
+            uuid: "ROOT-1",
+            mountpoint: "/",
+            type: "part",
+            size: 460 * GiB2,
+            ro: false,
+          },
+          {
+            name: "nvme0n1p4",
+            path: "/dev/nvme0n1p4",
+            fstype: "ext4",
+            label: "Games",
+            uuid: "GAME-1",
+            mountpoint: "/run/media/deck/Games",
+            type: "part",
+            size: 900 * GiB2,
+            ro: false,
+          },
+        ],
+      },
+    ],
+  });
+
+  const FEDORA_FSTAB =
+    [
+      "UUID=ROOT-1 / btrfs subvol=root,compress=zstd:1 0 0",
+      "UUID=ROOT-1 /home btrfs subvol=home,compress=zstd:1 0 0",
+      "UUID=BOOT-1 /boot ext4 defaults 1 2",
+      "UUID=EFI-1 /boot/efi vfat umask=0077,shortname=winnt 0 2",
+    ].join("\n") + "\n";
+
+  it("classifies by mount point, not by whether someone labelled it", () => {
+    expect(isSystemMountpoint("/")).toBe(true);
+    expect(isSystemMountpoint("/boot")).toBe(true);
+    expect(isSystemMountpoint("/home")).toBe(true);
+    expect(isSystemMountpoint("/var")).toBe(true);
+    expect(isSystemMountpoint("[SWAP]")).toBe(true);
+    expect(isSystemMountpoint("/run/media/deck/Games")).toBe(false);
+    expect(isSystemMountpoint("/mnt/games")).toBe(false);
+    expect(isSystemMountpoint("/media/usb")).toBe(false);
+    // Unmounted is judged by the label and fstab rules instead.
+    expect(isSystemMountpoint(null)).toBe(false);
+  });
+
+  it("keeps a Fedora root and /boot out of the drive list entirely", async () => {
+    const { deps } = makeDeps({ lsblk: FEDORA, files: { [FSTAB_PATH]: FEDORA_FSTAB } });
+    const { drives } = await getStorageStatus(deps);
+    expect(drives.map((d) => d.uuid)).toEqual(["GAME-1"]);
+  });
+
+  it("excludes an UNMOUNTED system partition using its fstab target", async () => {
+    // A dual-boot install's /boot, or a root that simply isn't mounted right
+    // now: no label, no mount point, nothing but the fstab entry to go on.
+    const unmounted = JSON.stringify({
+      blockdevices: [
+        {
+          name: "sda1",
+          path: "/dev/sda1",
+          fstype: "ext4",
+          label: null,
+          uuid: "BOOT-1",
+          mountpoint: null,
+          type: "part",
+          size: 2 * GiB2,
+          ro: false,
+        },
+      ],
+    });
+    const { deps } = makeDeps({ lsblk: unmounted, files: { [FSTAB_PATH]: FEDORA_FSTAB } });
+    expect((await getStorageStatus(deps)).drives).toEqual([]);
+  });
+
+  it("refuses to delete the user's fstab lines when a drive is switched off", async () => {
+    // The catastrophic path: one tap took out /, /home and /var, because a
+    // btrfs UUID legitimately has one entry per subvolume.
+    const { deps, files } = makeDeps({ lsblk: FEDORA, files: { [FSTAB_PATH]: FEDORA_FSTAB } });
+    const res = await unpersistFstab(deps, { uuid: "ROOT-1" });
+    expect(res.success).toBe(false);
+    expect(files[FSTAB_PATH]).toBe(FEDORA_FSTAB); // byte-for-byte
+  });
+
+  it("removes only our own line when a UUID has several entries", async () => {
+    const ours = fstabEntryLine({
+      uuid: "GAME-1",
+      mountpoint: "/run/media/deck/Games",
+      fstype: "ext4",
+    });
+    const theirs = "UUID=GAME-1 /snapshots btrfs subvol=@snap 0 0";
+    const { deps, files } = makeDeps({
+      lsblk: FEDORA,
+      files: { [FSTAB_PATH]: `UUID=ROOT-1 / btrfs subvol=root 0 0\n${ours}\n${theirs}\n` },
+    });
+    const res = await unpersistFstab(deps, { uuid: "GAME-1" });
+    expect(res.success).toBe(true);
+    expect(files[FSTAB_PATH]).toContain(theirs);
+    expect(files[FSTAB_PATH]).not.toContain("device-timeout");
+  });
+
+  it("flags a hand-pinned drive so the UI can refuse to touch it", async () => {
+    const { deps } = makeDeps({
+      lsblk: FEDORA,
+      files: { [FSTAB_PATH]: `${FEDORA_FSTAB}UUID=GAME-1 /mnt/games btrfs subvol=@games 0 0\n` },
+    });
+    const games = (await getStorageStatus(deps)).drives.find((d) => d.uuid === "GAME-1");
+    expect(games?.inFstab).toBe(true);
+    expect(games?.externallyPinned).toBe(true);
+  });
+
+  it("does not flag a drive we pinned ourselves", async () => {
+    const ours = fstabEntryLine({
+      uuid: "GAME-1",
+      mountpoint: "/run/media/deck/Games",
+      fstype: "ext4",
+    });
+    const { deps } = makeDeps({
+      lsblk: FEDORA,
+      files: { [FSTAB_PATH]: `${FEDORA_FSTAB}${ours}\n` },
+    });
+    const games = (await getStorageStatus(deps)).drives.find((d) => d.uuid === "GAME-1");
+    expect(games?.externallyPinned).toBe(false);
+  });
+});
+
+describe("fstab field escaping", () => {
+  it("escapes a space, so the line keeps its six fields", () => {
+    // udisks mounts at /run/media/<user>/<label> verbatim, and drives ship
+    // labelled "My Passport". Seven fields means systemd reads the fstype as
+    // "Passport" and the options as "exfat" — nofail gone, boot to emergency.
+    const line = fstabEntryLine({
+      uuid: "1111-2222",
+      mountpoint: "/run/media/deck/My Passport",
+      fstype: "exfat",
+    });
+    expect(line.split(/\s+/)).toHaveLength(6);
+    expect(line).toContain("/run/media/deck/My\\040Passport");
+    expect(isManagedFstabLine(line, "1111-2222")).toBe(true);
+  });
+
+  it("escapes tabs and backslashes too", () => {
+    expect(escapeFstabField("/mnt/a\tb")).toBe("/mnt/a\\011b");
+    expect(escapeFstabField("/mnt/a\\b")).toBe("/mnt/a\\134b");
+  });
+
+  it("round-trips through unescape", () => {
+    for (const path of ["/mnt/Game Drive", "/mnt/plain", "/mnt/a\tb", "/mnt/a\\b"]) {
+      expect(unescapeFstabField(escapeFstabField(path))).toBe(path);
+    }
+  });
+});
+
+describe("label safety", () => {
+  it("rejects a label that would escape the mount root", () => {
+    // `..` is a legal ext4/exFAT/NTFS label, and produced /run/media/<user>/..
+    // — i.e. /run/media itself, mounted over as root from any USB stick.
+    expect(isSafeLabel("..")).toBe(false);
+    expect(isSafeLabel(".")).toBe(false);
+    expect(isSafeLabel("...")).toBe(false);
+    expect(mountPointFor({ user: "deck", label: "..", uuid: "U1" })).toBe("/run/media/deck/U1");
+    expect(mountPointFor({ user: "deck", label: ".", uuid: "U1" })).toBe("/run/media/deck/U1");
+  });
+
+  it("still accepts ordinary labels, dots included", () => {
+    expect(isSafeLabel("Games")).toBe(true);
+    expect(isSafeLabel("my.games")).toBe(true);
+    expect(mountPointFor({ user: "deck", label: "my.games", uuid: "U1" })).toBe(
+      "/run/media/deck/my.games",
+    );
+  });
+});
+
+describe("/etc/fstab writes are safe to interrupt", () => {
+  const line = "UUID=ROOT / ext4 defaults 0 1\n";
+
+  it("never rebuilds fstab from a FAILED read", async () => {
+    // ENOENT and EIO both used to collapse to "", and the writer then
+    // replaced /etc/fstab with a single line — root, swap and /home gone.
+    const { deps, files } = makeDeps({ files: { [FSTAB_PATH]: line } });
+    deps.readFile = async () => {
+      throw Object.assign(new Error("EIO: i/o error"), { code: "EIO" });
+    };
+    const res = await persistFstab(deps, {
+      uuid: "GAME-1",
+      mountpoint: "/run/media/deck/Games",
+      fstype: "ext4",
+    });
+    expect(res.success).toBe(false);
+    expect(files[FSTAB_PATH]).toBe(line); // untouched
+    expect(files[FSTAB_BACKUP]).toBeUndefined(); // and not clobbered
+  });
+
+  it("still treats a genuinely missing fstab as empty", async () => {
+    const { deps, files } = makeDeps({});
+    const res = await persistFstab(deps, {
+      uuid: "GAME-1",
+      mountpoint: "/run/media/deck/Games",
+      fstype: "ext4",
+    });
+    expect(res.success).toBe(true);
+    expect(files[FSTAB_PATH]).toContain("UUID=GAME-1");
+  });
+
+  it("swaps the file in atomically via rename, never truncate-in-place", async () => {
+    const renames: [string, string][] = [];
+    const { deps } = makeDeps({ files: { [FSTAB_PATH]: line } });
+    const realRename = deps.renameFile;
+    deps.renameFile = async (from, to) => {
+      renames.push([from, to]);
+      await realRename(from, to);
+    };
+    await persistFstab(deps, {
+      uuid: "GAME-1",
+      mountpoint: "/run/media/deck/Games",
+      fstype: "ext4",
+    });
+    expect(renames).toEqual([["/etc/fstab.loadout.tmp", FSTAB_PATH]]);
+  });
+
+  it("never overwrites the backup with nothing", async () => {
+    // The backup is the only recovery path; clobbering it with "" in exactly
+    // the case it is needed is worse than not having one.
+    const { deps, files } = makeDeps({ files: { [FSTAB_BACKUP]: line } });
+    await persistFstab(deps, {
+      uuid: "GAME-1",
+      mountpoint: "/run/media/deck/Games",
+      fstype: "ext4",
+    });
+    expect(files[FSTAB_BACKUP]).toBe(line);
   });
 });
