@@ -49,6 +49,8 @@ export interface StorageDeps {
   readFile: (path: string) => Promise<string>;
   /** Write a file (UTF-8), creating it if absent. */
   writeFile: (path: string, content: string) => Promise<void>;
+  /** Rename a file. Must be same-filesystem, so the swap is atomic. */
+  renameFile: (from: string, to: string) => Promise<void>;
   pathExists: (path: string) => Promise<boolean>;
   /** Create a directory and any missing parents (mkdir -p). */
   mkdirp: (path: string) => Promise<void>;
@@ -81,11 +83,69 @@ export const SYSTEM_LABEL_TOKENS = [
   "boot",
 ] as const;
 
+/**
+ * Where a removable or secondary data drive legitimately lives.
+ *
+ * Everything else is the operating system's. This is the primary system-
+ * partition guard; {@link SYSTEM_LABEL_TOKENS} is a fallback for the
+ * unmounted case, and on its own it is nowhere near enough — see
+ * {@link isSystemMountpoint}.
+ */
+export const DATA_MOUNT_ROOTS = ["/run/media/", "/media/", "/mnt/"] as const;
+
+/**
+ * Is this partition mounted somewhere that belongs to the OS?
+ *
+ * Judging "is this a system partition" by LABEL alone is safe on exactly one
+ * distro. SteamOS labels its system partitions `rootfs-A`/`var`/`home`/`esp`
+ * and refers to them in fstab as `/dev/disk/by-partsets/…` rather than
+ * `UUID=`, so neither the label filter nor the fstab matcher can be fooled
+ * there. Nowhere else is like that:
+ *
+ *   - Fedora, Bazzite and Nobara label the btrfs root `fedora`, and leave
+ *     `/boot` with NO LABEL AT ALL. Both are `part`, both carry a UUID, both
+ *     use a whitelisted filesystem, and `/boot` is exactly 1 GiB — the size
+ *     floor is `>=`, so it passes that too.
+ *   - Arch, Ubuntu and most manual installs label nothing.
+ *
+ * So on every non-SteamOS machine `/` and `/boot` were being offered in the
+ * UI as game drives with a "Mount on boot" toggle. Turning one off deleted
+ * every fstab line carrying that UUID — on btrfs, where one filesystem UUID
+ * legitimately has many subvolume entries, that is `/`, `/home` and `/var` in
+ * a single click, and an emergency shell on the next boot.
+ *
+ * An unmounted partition returns false here and is judged by the label and
+ * fstab-target rules instead; there is no way to tell an unmounted data drive
+ * from an unmounted system partition by inspection alone.
+ */
+export function isSystemMountpoint(mountpoint: string | null | undefined): boolean {
+  if (!mountpoint) return false; // unmounted — other rules decide
+  const m = mountpoint.trim();
+  if (!m) return false;
+  if (m === "[SWAP]") return true;
+  return !DATA_MOUNT_ROOTS.some((root) => m.startsWith(root));
+}
+
 /** Skip anything smaller than this — real game libraries are never this small. */
 export const MIN_SIZE_BYTES = 1024 ** 3; // 1 GiB
 
-/** Mount-point name must be a single clean path segment to be Steam-visible. */
+/**
+ * Mount-point name must be a single clean path segment to be Steam-visible.
+ *
+ * `.` and `..` are explicitly excluded despite matching the character class:
+ * a partition labelled `..` (legal on ext4, exFAT and NTFS) produced the
+ * mount point `/run/media/<user>/..`, i.e. `/run/media` itself — mounted over
+ * as root, hiding every other mounted drive, and written into /etc/fstab so
+ * it recurred every boot. Reachable from any attached USB stick.
+ */
 const SAFE_LABEL = /^[A-Za-z0-9._-]+$/;
+const DOTS_ONLY = /^\.+$/;
+
+/** True if a label is safe to use as a single mount-point path segment. */
+export function isSafeLabel(label: string | null | undefined): label is string {
+  if (!label) return false;
+  return SAFE_LABEL.test(label) && !DOTS_ONLY.test(label);
+}
 
 // --- types -------------------------------------------------------------------
 
@@ -142,6 +202,14 @@ export interface StorageDrive {
   steamLibraryFound: boolean;
   /** A persistent /etc/fstab entry for this UUID exists. */
   inFstab: boolean;
+  /**
+   * That entry (or one of them) is not one Loadout wrote.
+   *
+   * The UI disables the boot-mount toggle in this state: the drive shows as
+   * pinned, but switching it off would mean deleting a line the user wrote
+   * with options we can't reason about, and we won't do that.
+   */
+  externallyPinned: boolean;
 }
 
 export interface StorageStatus {
@@ -202,6 +270,9 @@ export function isDataPartition(node: LsblkNode): boolean {
   if (!node.uuid) return false;
   if (!isWhitelistedFs(node.fstype)) return false;
   if (isSystemLabel(node.label)) return false;
+  // Where it is mounted beats what it is called: a label filter alone cannot
+  // see an unlabelled /boot or a root labelled `fedora`.
+  if (isSystemMountpoint(nodeMountpoint(node))) return false;
   return true;
 }
 
@@ -259,8 +330,34 @@ export function mountPointFor({
   label: string | null;
   uuid: string;
 }): string {
-  const name = label && SAFE_LABEL.test(label) ? label : uuid;
+  const name = isSafeLabel(label) ? label : uuid;
   return `/run/media/${user}/${name}`;
+}
+
+/**
+ * Escape a path for an fstab field, the way systemd expects.
+ *
+ * fstab is whitespace-delimited, so an unescaped space splits one field into
+ * two and shifts every field after it. udisks — which mounts removable drives
+ * on KDE and GNOME, and SD cards on SteamOS — mounts at
+ * `/run/media/<user>/<label>` with the label VERBATIM, and drives ship
+ * labelled `My Passport`, `New Volume`, `Seagate Expansion Drive`. Persisting
+ * that live mount point produced a seven-field line:
+ *
+ *   UUID=… /run/media/deck/My Passport exfat defaults,nofail,… 0 2
+ *
+ * which systemd reads as target `/run/media/deck/My`, fstype `Passport`,
+ * options `exfat` — `nofail` GONE, so the generated unit became a hard
+ * requirement of local-fs.target, failed, and dropped the machine to an
+ * emergency shell.
+ */
+export function escapeFstabField(field: string): string {
+  return field.replace(/[\\\s]/g, (c) => `\\${c.charCodeAt(0).toString(8).padStart(3, "0")}`);
+}
+
+/** Decode systemd's octal escaping (`\040` space, `\011` tab, `\134` backslash). */
+export function unescapeFstabField(field: string): string {
+  return field.replace(/\\([0-7]{3})/g, (_m, oct: string) => String.fromCharCode(parseInt(oct, 8)));
 }
 
 /** The canonical fstab line for a managed mount. */
@@ -273,7 +370,53 @@ export function fstabEntryLine({
   mountpoint: string;
   fstype: string;
 }): string {
-  return `UUID=${uuid} ${mountpoint} ${fstype} defaults,nofail,x-systemd.device-timeout=5s 0 2`;
+  return `UUID=${uuid} ${escapeFstabField(mountpoint)} ${fstype} defaults,nofail,x-systemd.device-timeout=5s 0 2`;
+}
+
+/**
+ * Every option string Loadout has written for a managed mount.
+ *
+ * This is the ONLY thing that identifies an entry as ours. Keying on
+ * `UUID=<uuid>` alone does not: the user may have written that line by hand,
+ * long before installing Loadout, with options that matter enormously —
+ * `subvol=@games` on btrfs, `uid=`/`umask=` on ntfs and exfat, `noauto` on a
+ * dual-booter's Windows partition. Deleting or rewriting one of those is not
+ * ours to do.
+ */
+export const MANAGED_OPTIONS = ["defaults,nofail,x-systemd.device-timeout=5s"] as const;
+
+/** Split a non-comment fstab line into fields, or null if it isn't one. */
+function fstabFields(line: string): string[] | null {
+  const t = line.trim();
+  if (!t || t.startsWith("#")) return null;
+  return t.split(/\s+/);
+}
+
+/**
+ * Did Loadout write this line? The options field is the whole discriminator;
+ * mount point and fstype are deliberately not checked, so a drive relabelled
+ * or reformatted since we pinned it is still recognised as ours.
+ */
+export function isManagedFstabLine(line: string | null | undefined, uuid: string): boolean {
+  if (!line) return false;
+  const fields = fstabFields(line);
+  if (!fields || fields.length < 6) return false;
+  if ((fields[0] ?? "").toLowerCase() !== `uuid=${uuid.toLowerCase()}`) return false;
+  if (!(MANAGED_OPTIONS as readonly string[]).includes(fields[3] ?? "")) return false;
+  return fields[4] === "0" && fields[5] === "2";
+}
+
+/** The mount point an existing fstab entry uses for this UUID, unescaped. */
+export function fstabMountpointFor(content: string, uuid: string): string | null {
+  const marker = `uuid=${uuid.toLowerCase()}`;
+  for (const line of content.replace(/\r\n/g, "\n").split("\n")) {
+    const fields = fstabFields(line);
+    if (!fields) continue;
+    if ((fields[0] ?? "").toLowerCase() !== marker) continue;
+    const target = fields[1];
+    if (target) return unescapeFstabField(target);
+  }
+  return null;
 }
 
 /** True if a non-comment fstab line already mounts this UUID. */
@@ -294,7 +437,11 @@ export function fstabHasUuid(content: string, uuid: string): boolean {
  * the fs_spec field so it only ever drops our own `UUID=…` line, never a
  * device-path or label entry that happens to mention the UUID in a comment.
  */
-export function removeFstabEntry(content: string, uuid: string): string {
+export function removeFstabEntry(
+  content: string,
+  uuid: string,
+  { onlyManaged = true }: { onlyManaged?: boolean } = {},
+): string {
   const marker = `uuid=${uuid.toLowerCase()}`;
   return content
     .replace(/\r\n/g, "\n")
@@ -302,9 +449,29 @@ export function removeFstabEntry(content: string, uuid: string): string {
     .filter((line) => {
       const t = line.trim();
       if (!t || t.startsWith("#")) return true;
-      return (t.split(/\s+/)[0] ?? "").toLowerCase() !== marker; // t non-empty ⇒ [0] present
+      if ((t.split(/\s+/)[0] ?? "").toLowerCase() !== marker) return true; // t non-empty ⇒ [0] present
+      // One filesystem UUID legitimately has MANY fstab entries — that is how
+      // btrfs subvolumes are mounted (`subvol=@games`, `subvol=@snapshots`).
+      // Dropping every line for a UUID therefore deletes mounts we never
+      // wrote and were never asked to remove; on a root filesystem that is
+      // `/`, `/home` and `/var` at once. Keep anything that isn't ours.
+      return onlyManaged && !isManagedFstabLine(t, uuid);
     })
     .join("\n");
+}
+
+/** True if any entry for this UUID is one the user wrote rather than us. */
+export function hasUnmanagedEntry(content: string, uuid: string): boolean {
+  const marker = `uuid=${uuid.toLowerCase()}`;
+  return content
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .some((line) => {
+      const t = line.trim();
+      if (!t || t.startsWith("#")) return false;
+      if ((t.split(/\s+/)[0] ?? "").toLowerCase() !== marker) return false;
+      return !isManagedFstabLine(t, uuid);
+    });
 }
 
 /**
@@ -319,13 +486,21 @@ export function addFstabEntry(
   const line = fstabEntryLine(opts);
   const normalized = content.replace(/\r\n/g, "\n");
   if (normalized.split("\n").some((l) => l.trim() === line)) return content;
+  // Replaces a stale line of OURS; a user-written entry for the same UUID is
+  // preserved (see removeFstabEntry) rather than silently swapped out.
   const without = removeFstabEntry(content, opts.uuid).replace(/\s*$/, "");
   return without.length ? `${without}\n${line}\n` : `${line}\n`;
 }
 
 // --- impure orchestration ----------------------------------------------------
 
-const LSBLK_ARGS = ["lsblk", "-J", "-b", "-o", "NAME,PATH,FSTYPE,LABEL,UUID,MOUNTPOINT,TYPE,SIZE,RO"];
+const LSBLK_ARGS = [
+  "lsblk",
+  "-J",
+  "-b",
+  "-o",
+  "NAME,PATH,FSTYPE,LABEL,UUID,MOUNTPOINT,TYPE,SIZE,RO",
+];
 
 /** Enumerate unmounted, mountable data partitions. */
 export async function detectCandidates(deps: StorageDeps): Promise<Candidate[]> {
@@ -422,8 +597,59 @@ export async function mountCandidate(
   }
 
   const steamLibraryFound = await steamLibraryAt(deps, verified);
-  deps.log?.(`mounted ${candidate.uuid} (${candidate.fstype}) at ${verified}; steamLibrary=${steamLibraryFound}`);
+  deps.log?.(
+    `mounted ${candidate.uuid} (${candidate.fstype}) at ${verified}; steamLibrary=${steamLibraryFound}`,
+  );
   return { success: true, mountpoint: verified, steamLibraryFound };
+}
+
+/** Temp file for the atomic /etc/fstab swap. Same directory, so rename works. */
+const FSTAB_TMP = "/etc/fstab.loadout.tmp";
+
+/** True if a thrown error means "no such file" rather than "couldn't read it". */
+function isNotFound(e: unknown): boolean {
+  const code = (e as { code?: unknown } | null)?.code;
+  if (typeof code === "string") return code === "ENOENT";
+  return /ENOENT|no such file/i.test(String(e));
+}
+
+/**
+ * Read /etc/fstab, distinguishing "the file isn't there" from "the read
+ * failed" — `null` means the latter.
+ *
+ * Collapsing both to `""` meant an EIO or a transient failure looked exactly
+ * like an empty fstab, and the writers then built a whole new file from that
+ * assumption: /etc/fstab replaced by a single line, with root, ESP, swap and
+ * /home gone. Callers MUST abort on null rather than write.
+ */
+async function readFstab(deps: StorageDeps): Promise<string | null> {
+  try {
+    return await deps.readFile(FSTAB_PATH);
+  } catch (e) {
+    if (isNotFound(e)) return "";
+    deps.log?.(`refusing to touch /etc/fstab — could not read it: ${e}`);
+    return null;
+  }
+}
+
+const UNREADABLE = "Couldn't read /etc/fstab, so it was left untouched.";
+
+/**
+ * Replace /etc/fstab, atomically, keeping a backup of what was there.
+ *
+ * Write-to-temp then rename: an in-place truncate-then-write leaves a
+ * zero-length or half-written /etc/fstab if the machine loses power in
+ * between, and these are battery-powered handhelds where a hard power-off is
+ * routine. A truncated fstab costs /home, /boot and swap on the next boot.
+ *
+ * The backup is only taken from content we actually read, and never
+ * overwritten with nothing — it is the one recovery path, and clobbering it
+ * with `""` in exactly the case it is needed is worse than not having it.
+ */
+async function writeFstab(deps: StorageDeps, current: string, next: string): Promise<void> {
+  if (current.trim()) await deps.writeFile(FSTAB_BACKUP, current);
+  await deps.writeFile(FSTAB_TMP, next);
+  await deps.renameFile(FSTAB_TMP, FSTAB_PATH);
 }
 
 /**
@@ -436,14 +662,14 @@ export async function persistFstab(
   { uuid, mountpoint, fstype }: { uuid: string; mountpoint: string; fstype: string },
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const current = await deps.readFile(FSTAB_PATH).catch(() => "");
+    const current = await readFstab(deps);
+    if (current === null) return { success: false, error: UNREADABLE };
     const next = addFstabEntry(current, { uuid, mountpoint, fstype });
     if (next === current) {
       deps.log?.(`fstab already persists UUID=${uuid}`);
       return { success: true };
     }
-    await deps.writeFile(FSTAB_BACKUP, current);
-    await deps.writeFile(FSTAB_PATH, next);
+    await writeFstab(deps, current, next);
     deps.log?.(`fstab: persisted UUID=${uuid} -> ${mountpoint}`);
     return { success: true };
   } catch (e) {
@@ -457,15 +683,26 @@ export async function unpersistFstab(
   { uuid }: { uuid: string },
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const current = await deps.readFile(FSTAB_PATH).catch(() => "");
+    const current = await readFstab(deps);
+    if (current === null) return { success: false, error: UNREADABLE };
     if (!fstabHasUuid(current, uuid)) {
       deps.log?.(`fstab has no entry for UUID=${uuid}`);
       return { success: true };
     }
+    // Switching OUR toggle off is not permission to delete a line the user
+    // wrote. `removeFstabEntry` keeps unmanaged entries; say so rather than
+    // reporting a clean removal that didn't happen.
     const next = removeFstabEntry(current, uuid);
-    await deps.writeFile(FSTAB_BACKUP, current);
-    await deps.writeFile(FSTAB_PATH, next);
-    deps.log?.(`fstab: removed persistent mount for UUID=${uuid}`);
+    if (next === current) {
+      deps.log?.(`fstab entry for UUID=${uuid} isn't one of ours — leaving it alone`);
+      return {
+        success: false,
+        error:
+          "That drive is pinned by an /etc/fstab entry Loadout didn't write, so it was left alone. Edit /etc/fstab by hand to change it.",
+      };
+    }
+    await writeFstab(deps, current, next);
+    deps.log?.(`fstab: removed our persistent mount for UUID=${uuid}`);
     return { success: true };
   } catch (e) {
     return { success: false, error: String(e) };
@@ -479,9 +716,16 @@ export async function getStorageStatus(deps: StorageDeps): Promise<StorageStatus
     deps.log?.(`lsblk failed (${r.exitCode}): ${r.stderr.trim()}`);
     return { drives: [] };
   }
-  const parts = parseDataPartitions(r.stdout).filter((p) => p.size >= MIN_SIZE_BYTES);
-  const fstab = await deps.readFile(FSTAB_PATH).catch(() => "");
+  const fstab = (await readFstab(deps)) ?? "";
   const user = deps.currentUser();
+  const parts = parseDataPartitions(r.stdout)
+    .filter((p) => p.size >= MIN_SIZE_BYTES)
+    // An UNMOUNTED system partition can't be spotted by mount point, and on
+    // most distros it has no label either — but if fstab pins it somewhere
+    // that isn't a data mount root, it's the OS's. This is what keeps a
+    // dual-boot install's /boot, or a root that simply isn't mounted right
+    // now, out of the drive list.
+    .filter((p) => !isSystemMountpoint(fstabMountpointFor(fstab, p.uuid)));
 
   const drives = await Promise.all(
     parts.map(async (p): Promise<StorageDrive> => {
@@ -497,6 +741,7 @@ export async function getStorageStatus(deps: StorageDeps): Promise<StorageStatus
         suggestedMountpoint: mountPointFor({ user, label: p.label, uuid: p.uuid }),
         steamLibraryFound: p.mountpoint ? await steamLibraryAt(deps, p.mountpoint) : false,
         inFstab: fstabHasUuid(fstab, p.uuid),
+        externallyPinned: hasUnmanagedEntry(fstab, p.uuid),
       };
     }),
   );
