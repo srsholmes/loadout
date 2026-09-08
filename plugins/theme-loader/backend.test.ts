@@ -5,6 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ThemeLoaderBackend from "./backend";
 import { _resetForTests as resetThemesCache } from "./lib/themes-cache";
+import {
+  _resetForTests as resetTranslations,
+  ensureTranslations,
+  getTranslationsStatus,
+} from "./lib/translations-cache";
 
 /**
  * Backend tests.
@@ -51,9 +56,20 @@ const FIXTURE_THEMES = [
   },
 ];
 
+/** Minimal shape of the class-translation feed (`stable.json`). */
+const FIXTURE_TRANSLATIONS = {
+  quickaccessmenu_Title: ["_1n2bl", "_3xQ7p"],
+};
+
 function mockDeckthemesFetch() {
   globalThis.fetch = mock(async (input: unknown) => {
     const url = typeof input === "string" ? input : (input as { url: string }).url;
+    if (url.includes("api.deckthemes.com/stable.json")) {
+      return new Response(JSON.stringify(FIXTURE_TRANSLATIONS), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
     if (url.includes("api.deckthemes.com/themes")) {
       return new Response(
         JSON.stringify({ total: FIXTURE_THEMES.length, items: FIXTURE_THEMES }),
@@ -72,6 +88,7 @@ describe("ThemeLoaderBackend", () => {
   beforeEach(async () => {
     cacheDir = await mkdtemp(join(tmpdir(), "theme-loader-spec-"));
     resetThemesCache({ cacheDir });
+    resetTranslations({ cacheDir });
     mockDeckthemesFetch();
     backend = new ThemeLoaderBackend();
     emittedEvents = [];
@@ -83,6 +100,7 @@ describe("ThemeLoaderBackend", () => {
   afterEach(async () => {
     globalThis.fetch = originalFetch;
     resetThemesCache();
+    resetTranslations();
     await rm(cacheDir, { recursive: true, force: true }).catch(() => {});
   });
 
@@ -221,6 +239,346 @@ describe("ThemeLoaderBackend", () => {
       );
       expect(result.success).toBe(false);
       expect(result.error).toContain("not installed");
+    });
+  });
+
+  // ── Tab discovery / injection healing ─────────────────────────────
+  //
+  // The boot race these cover: Steam builds its CEF tabs progressively
+  // and reloads the documents it hosts while starting up, so a tab can
+  // appear after our first discovery pass, or lose its <style> while the
+  // CDP socket stays perfectly healthy. Either way the user saw an
+  // unthemed Steam until they hit "Reapply themes" by hand.
+
+  interface FakeTab {
+    id: string;
+    title: string;
+    url?: string;
+  }
+
+  /** Serve `/json` with the given tabs; everything else stays mocked. */
+  function mockCefTabs(tabs: FakeTab[]) {
+    const deckthemes = globalThis.fetch;
+    globalThis.fetch = mock(async (input: unknown, init?: unknown) => {
+      const url = typeof input === "string" ? input : (input as { url: string }).url;
+      if (url.includes("localhost:8080/json")) {
+        return new Response(
+          JSON.stringify(
+            tabs.map((t) => ({
+              id: t.id,
+              title: t.title,
+              url: t.url ?? "about:blank",
+              webSocketDebuggerUrl: `ws://localhost:8080/devtools/page/${t.id}`,
+              type: "page",
+            })),
+          ),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return deckthemes(input as string, init as RequestInit);
+    }) as unknown as typeof fetch;
+  }
+
+  interface FakeConn {
+    id: string;
+    title: string;
+    client: { connected: boolean; close: () => void };
+  }
+
+  /**
+   * Replace the two methods that need a real CEF: opening a socket and
+   * evaluating JS in a tab. `evaluated` records every expression per tab
+   * so tests can assert who was probed and who was re-injected.
+   */
+  function stubCdp(
+    target: ThemeLoaderBackend,
+    missingPerTab: Record<string, string[]> = {},
+  ) {
+    const evaluated: { tab: string; expression: string }[] = [];
+    const inner = target as unknown as {
+      openCDP: (o: { id: string; title: string; wsUrl: string }) => Promise<FakeConn>;
+      cdpEvaluate: (conn: FakeConn, expression: string) => Promise<unknown>;
+      connections: FakeConn[];
+    };
+    inner.openCDP = async ({ id, title }) => ({
+      id,
+      title,
+      client: { connected: true, close: () => {} },
+    });
+    inner.cdpEvaluate = async (conn, expression) => {
+      evaluated.push({ tab: conn.id, expression });
+      // Only the probe expression returns a value; injection does not.
+      if (expression.includes("missing.push")) return missingPerTab[conn.id] ?? [];
+      return undefined;
+    };
+    return { evaluated, inner };
+  }
+
+  /** Mark a theme active without needing an installed pack on disk. */
+  function activateTheme(target: ThemeLoaderBackend, id: string) {
+    const inner = target as unknown as {
+      activeThemes: Map<string, { styleId: string }>;
+      loadThemeCss: (id: string) => Promise<string | null>;
+    };
+    inner.activeThemes.set(id, { styleId: `theme-loader-${id}` });
+    inner.loadThemeCss = async () => "body { --themed: 1; }";
+  }
+
+  describe("tab discovery", () => {
+    it("adopts a tab that appears after the first discovery pass", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      const { inner } = stubCdp(backend);
+
+      await (backend as unknown as { tryConnect: () => Promise<boolean> }).tryConnect();
+      expect(inner.connections.map((c) => c.id)).toEqual(["shared"]);
+
+      // Big Picture opens: its window and the QuickAccess popup show up.
+      mockCefTabs([
+        { id: "shared", title: "SharedJSContext" },
+        { id: "bpm", title: "Режим Big Picture", url: "about:blank?browserType=4" },
+        { id: "qa", title: "QuickAccess_uid2" },
+      ]);
+      await (backend as unknown as { tryConnect: () => Promise<boolean> }).tryConnect();
+
+      expect(inner.connections.map((c) => c.id).sort()).toEqual(["bpm", "qa", "shared"]);
+    });
+
+    it("keeps the existing connection rather than reopening it", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      const { inner } = stubCdp(backend);
+      await (backend as unknown as { tryConnect: () => Promise<boolean> }).tryConnect();
+      const first = inner.connections[0];
+      let closed = false;
+      first!.client.close = () => { closed = true; };
+
+      mockCefTabs([
+        { id: "shared", title: "SharedJSContext" },
+        { id: "qa", title: "QuickAccess" },
+      ]);
+      await (backend as unknown as { tryConnect: () => Promise<boolean> }).tryConnect();
+
+      expect(closed).toBe(false);
+      expect(inner.connections.find((c) => c.id === "shared")).toBe(first!);
+    });
+
+    it("drops a connection whose tab Steam no longer advertises", async () => {
+      mockCefTabs([
+        { id: "shared", title: "SharedJSContext" },
+        { id: "qa", title: "QuickAccess" },
+      ]);
+      const { inner } = stubCdp(backend);
+      await (backend as unknown as { tryConnect: () => Promise<boolean> }).tryConnect();
+      expect(inner.connections).toHaveLength(2);
+
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      await (backend as unknown as { tryConnect: () => Promise<boolean> }).tryConnect();
+
+      expect(inner.connections.map((c) => c.id)).toEqual(["shared"]);
+    });
+  });
+
+  describe("verifyAndHealInjection", () => {
+    const verify = (target: ThemeLoaderBackend) =>
+      (target as unknown as { verifyAndHealInjection: () => Promise<void> })
+        .verifyAndHealInjection();
+
+    it("does nothing at all when no theme is active", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      const { evaluated } = stubCdp(backend);
+      await verify(backend);
+      expect(evaluated).toEqual([]);
+    });
+
+    it("re-injects only into the tab that lost its style", async () => {
+      mockCefTabs([
+        { id: "shared", title: "SharedJSContext" },
+        { id: "qa", title: "QuickAccess" },
+      ]);
+      activateTheme(backend, "alpha");
+      // "qa" reloaded and dropped the style; "shared" is fine.
+      const { evaluated } = stubCdp(backend, { qa: ["theme-loader-alpha"] });
+
+      await verify(backend);
+
+      const injections = evaluated.filter((e) => e.expression.includes("createElement"));
+      expect(injections.map((e) => e.tab)).toEqual(["qa"]);
+      expect(injections[0]!.expression).toContain("theme-loader-alpha");
+    });
+
+    it("injects into a tab discovered during the pass", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      activateTheme(backend, "alpha");
+      const { evaluated, inner } = stubCdp(backend, { qa: ["theme-loader-alpha"] });
+      await (backend as unknown as { tryConnect: () => Promise<boolean> }).tryConnect();
+
+      // The QuickAccess popup is created after that first pass.
+      mockCefTabs([
+        { id: "shared", title: "SharedJSContext" },
+        { id: "qa", title: "QuickAccess" },
+      ]);
+      evaluated.length = 0;
+      await verify(backend);
+
+      expect(inner.connections.map((c) => c.id).sort()).toEqual(["qa", "shared"]);
+      const injections = evaluated.filter((e) => e.expression.includes("createElement"));
+      expect(injections.map((e) => e.tab)).toEqual(["qa"]);
+    });
+
+    it("leaves a healthy tab untouched, so themed tabs never flash", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      activateTheme(backend, "alpha");
+      const { evaluated } = stubCdp(backend, {});
+
+      await verify(backend);
+
+      expect(evaluated.filter((e) => e.expression.includes("createElement"))).toEqual([]);
+      expect(evaluated.filter((e) => e.expression.includes("missing.push"))).toHaveLength(1);
+    });
+
+    it("skips a tab whose probe throws instead of re-injecting blind", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      activateTheme(backend, "alpha");
+      const { evaluated, inner } = stubCdp(backend, {});
+      const stubbed = inner.cdpEvaluate;
+      inner.cdpEvaluate = async (conn, expression) => {
+        if (expression.includes("missing.push")) throw new Error("target closed");
+        return stubbed(conn, expression);
+      };
+
+      await verify(backend);
+
+      expect(evaluated.filter((e) => e.expression.includes("createElement"))).toEqual([]);
+    });
+
+    it("does not resurrect a theme disabled while the probe was in flight", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      activateTheme(backend, "alpha");
+      const { evaluated, inner } = stubCdp(backend, { shared: ["theme-loader-alpha"] });
+      const stubbed = inner.cdpEvaluate;
+      const active = (backend as unknown as { activeThemes: Map<string, unknown> }).activeThemes;
+      inner.cdpEvaluate = async (conn, expression) => {
+        const result = await stubbed(conn, expression);
+        if (expression.includes("missing.push")) active.delete("alpha");
+        return result;
+      };
+
+      await verify(backend);
+
+      expect(evaluated.filter((e) => e.expression.includes("createElement"))).toEqual([]);
+    });
+  });
+
+  describe("class translations", () => {
+    const verify = (target: ThemeLoaderBackend) =>
+      (target as unknown as { verifyAndHealInjection: () => Promise<void> })
+        .verifyAndHealInjection();
+
+    const loadCss = (target: ThemeLoaderBackend, id: string) =>
+      (target as unknown as { loadThemeCss: (id: string) => Promise<string | null> })
+        .loadThemeCss(id);
+
+    /**
+     * Pack CSS carries the obfuscated class names of the Steam build it
+     * was authored against, and `assemblePackCss` silently leaves them
+     * alone when the map isn't loaded. Injecting in that window puts a
+     * well-formed <style> in the page that matches nothing — which looks
+     * exactly like a theme that never loaded, and which the DOM probe
+     * would go on reporting as healthy.
+     */
+    it("refuses to assemble CSS before the map has landed", async () => {
+      const dir = join(cacheDir, "packs");
+      const inner = backend as unknown as {
+        installedPacks: Map<string, unknown>;
+      };
+      inner.installedPacks.set("alpha", {
+        id: "alpha",
+        dir,
+        manifest: { name: "Alpha" },
+      });
+
+      expect(getTranslationsStatus().state).toBe("pending");
+      expect(await loadCss(backend, "alpha")).toBeNull();
+
+      await ensureTranslations();
+      expect(getTranslationsStatus().state).toBe("ready");
+      expect(await loadCss(backend, "alpha")).not.toBeNull();
+    });
+
+    it("retries a sync that had not landed, then heals", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      activateTheme(backend, "alpha");
+      // Booted before wifi associated: nothing cached, nothing fetched.
+      expect(getTranslationsStatus().state).toBe("pending");
+      const { evaluated } = stubCdp(backend, { shared: ["theme-loader-alpha"] });
+
+      await verify(backend);
+
+      expect(getTranslationsStatus().state).toBe("ready");
+      const injections = evaluated.filter((e) => e.expression.includes("createElement"));
+      expect(injections.map((e) => e.tab)).toEqual(["shared"]);
+    });
+
+    it("skips the CDP round-trips entirely while the map is unavailable", async () => {
+      globalThis.fetch = mock(async (input: unknown) => {
+        const url = typeof input === "string" ? input : (input as { url: string }).url;
+        if (url.includes("localhost:8080/json")) {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "shared",
+                title: "SharedJSContext",
+                url: "about:blank",
+                webSocketDebuggerUrl: "ws://localhost:8080/devtools/page/shared",
+                type: "page",
+              },
+            ]),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        // Offline: the translation feed is unreachable.
+        return Promise.reject(new Error("Network unreachable"));
+      }) as unknown as typeof fetch;
+
+      activateTheme(backend, "alpha");
+      const { evaluated } = stubCdp(backend, { shared: ["theme-loader-alpha"] });
+
+      await verify(backend);
+
+      expect(getTranslationsStatus().state).toBe("error");
+      expect(evaluated).toEqual([]);
+    });
+  });
+
+  describe("checkHealth verification cadence", () => {
+    /** Run N health ticks, counting verification passes. */
+    async function tick(target: ThemeLoaderBackend, times: number) {
+      const inner = target as unknown as {
+        checkHealth: () => Promise<void>;
+        verifyAndHealInjection: () => Promise<void>;
+        loadedAt: number;
+      };
+      let verifications = 0;
+      inner.verifyAndHealInjection = async () => { verifications++; };
+      for (let i = 0; i < times; i++) await inner.checkHealth();
+      return verifications;
+    }
+
+    it("verifies on every tick while Steam is still starting up", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      stubCdp(backend);
+      await (backend as unknown as { tryConnect: () => Promise<boolean> }).tryConnect();
+
+      expect(await tick(backend, 4)).toBe(4);
+    });
+
+    it("backs off to one pass every 6 ticks once the startup window closes", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      stubCdp(backend);
+      await (backend as unknown as { tryConnect: () => Promise<boolean> }).tryConnect();
+      // Pretend the plugin loaded an hour ago.
+      (backend as unknown as { loadedAt: number }).loadedAt = Date.now() - 3_600_000;
+
+      expect(await tick(backend, 12)).toBe(2);
     });
   });
 
