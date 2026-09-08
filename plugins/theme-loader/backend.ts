@@ -216,8 +216,11 @@ export default class ThemeLoaderBackend implements PluginBackend {
    * A disable may have left CSS behind in a tab we couldn't reach, so the
    * next verification pass must sweep for orphans. Cleared once a pass
    * completes having found none.
+   *
+   * Starts true: a fresh instance has never swept, and cannot know what a
+   * previous one left in those tabs.
    */
-  private sweepPending = false;
+  private sweepPending = true;
   /** Wall-clock budget for one verification pass. Overridable in tests. */
   private verifyPassBudgetMs = VERIFY_PASS_BUDGET_MS;
 
@@ -226,6 +229,13 @@ export default class ThemeLoaderBackend implements PluginBackend {
     this.disposed = false;
     this.startupWindowFrom = null;
     this.healthTicks = 0;
+    // A fresh instance has no idea what is already in those tabs. The
+    // previous one may have been killed before it could remove anything,
+    // or — as when the style-id scheme changed — may have written ids
+    // this build no longer recognises, which would then sit in the page
+    // unreferenced and un-removable for as long as Steam ran. Sweep once
+    // on load and let the first clean pass clear the flag.
+    this.sweepPending = true;
     await mkdir(THEME_PACKS_DIR, { recursive: true });
     await this.rescanPacks();
     await this.loadStateFromDisk();

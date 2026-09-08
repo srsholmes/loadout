@@ -401,9 +401,18 @@ describe("ThemeLoaderBackend", () => {
       (target as unknown as { verifyAndHealInjection: () => Promise<void> })
         .verifyAndHealInjection();
 
-    it("does nothing at all when no theme is active", async () => {
+    it("does nothing but the one load-time sweep when no theme is active", async () => {
       mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
       const { evaluated } = stubCdp(backend);
+
+      // A fresh instance sweeps once — it cannot know what a previous one
+      // left behind, and "all themes disabled while disconnected" is
+      // exactly the case where an orphan exists with nothing active.
+      await verify(backend);
+      expect(evaluated.map((e) => e.kind)).toEqual(["sweep"]);
+
+      // Thereafter there is genuinely nothing to do, and no CDP traffic.
+      evaluated.length = 0;
       await verify(backend);
       expect(evaluated).toEqual([]);
     });
@@ -853,10 +862,35 @@ describe("ThemeLoaderBackend", () => {
       expect(sweeps[0]!.expression).toContain("[]");
     });
 
-    it("does not sweep when no disable has happened", async () => {
+    /**
+     * Regression: changing the style-id scheme orphaned every element the
+     * previous build had written — they were live in the page, matched no
+     * id this build knew, and nothing would ever remove them. Observed on
+     * hardware as 26 styles where there should have been 13.
+     */
+    it("sweeps on load, so a previous build's styles cannot linger", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      const { evaluated, inner } = stubCdp(backend);
+      inner.loadThemeCss = async () => "body{}";
+      (backend as unknown as { activeThemes: Map<string, { styleId: string }> })
+        .activeThemes.set("alpha", { styleId: "theme-loader-alpha-x1" });
+
+      await (backend as unknown as { verifyAndHealInjection: () => Promise<void> })
+        .verifyAndHealInjection();
+
+      const sweeps = evaluated.filter((e) => e.kind === "sweep");
+      expect(sweeps).toHaveLength(1);
+      // Keeps what this build knows about, removes anything else.
+      expect(sweeps[0]!.expression).toContain("theme-loader-alpha-x1");
+    });
+
+    it("does not sweep again once a pass has come back clean", async () => {
       mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
       activateTheme(backend, "alpha");
       const { evaluated } = stubCdp(backend, {});
+      // Spend the load-time sweep.
+      await verify(backend);
+      evaluated.length = 0;
 
       await verify(backend);
 
