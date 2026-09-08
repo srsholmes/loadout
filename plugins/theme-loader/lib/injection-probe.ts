@@ -13,6 +13,18 @@
  */
 
 /**
+ * Marker written into a `<style>` whose theme assembled to no CSS at all.
+ *
+ * `assemblePackCss` legitimately returns `""` — a manifest with an empty
+ * `inject` map, or a pack whose CSS files are all missing after an
+ * interrupted install. An empty `<style>` would read as "missing" to
+ * {@link buildMissingStylesExpression} forever, so the pass would rebuild
+ * that theme on every tick for the life of the session. Writing a comment
+ * instead keeps the element non-empty and inert.
+ */
+export const EMPTY_CSS_MARKER = "/* theme-loader: no css */";
+
+/**
  * Build the expression `Runtime.evaluate` runs in a tab to report which
  * of `styleIds` are not actually applying CSS right now.
  *
@@ -32,6 +44,48 @@ export function buildMissingStylesExpression(styleIds: string[]): string {
         if (!el || !el.isConnected || !el.textContent) missing.push(ids[i]);
       }
       return missing;
+    })()
+  `;
+}
+
+/**
+ * Build the expression that injects (or replaces) one `<style>`.
+ *
+ * Lives here, beside the probe it is verified by, so both the escaping
+ * and the mid-load `document.head` fallback are testable without a CEF
+ * to talk to.
+ */
+export function buildInjectStyleExpression(
+  { styleId, css }: { styleId: string; css: string },
+): string {
+  const body = css.length > 0 ? css : EMPTY_CSS_MARKER;
+  const escapedCSS = body
+    .replace(/\\/g, "\\\\")
+    .replace(/`/g, "\\`")
+    .replace(/\$/g, "\\$");
+  return `
+    (function() {
+      let existing = document.getElementById(${JSON.stringify(styleId)});
+      if (existing) existing.remove();
+
+      let style = document.createElement("style");
+      style.id = ${JSON.stringify(styleId)};
+      style.classList.add("theme-loader-style");
+      style.dataset.loadoutPlugin = "theme-loader";
+      // <head> can still be null on a tab caught mid-load during boot;
+      // documentElement always exists, and a <style> works from there.
+      (document.head || document.documentElement).appendChild(style);
+      style.textContent = \`${escapedCSS}\`;
+    })()
+  `;
+}
+
+/** Build the expression that removes one injected `<style>`. */
+export function buildRemoveStyleExpression(styleId: string): string {
+  return `
+    (function() {
+      let el = document.getElementById(${JSON.stringify(styleId)});
+      if (el && el.parentNode) el.parentNode.removeChild(el);
     })()
   `;
 }

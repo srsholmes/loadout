@@ -1,6 +1,6 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test";
 import type { EmitPayload } from "@loadout/types";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ThemeLoaderBackend from "./backend";
@@ -477,65 +477,87 @@ describe("ThemeLoaderBackend", () => {
       (target as unknown as { loadThemeCss: (id: string) => Promise<string | null> })
         .loadThemeCss(id);
 
+    const staleFlag = (target: ThemeLoaderBackend) =>
+      (target as unknown as { cssBuiltWithoutTranslations: boolean })
+        .cssBuiltWithoutTranslations;
+
+    /** Write a real pack to disk and register it, so assemblePackCss runs. */
+    async function installPack(target: ThemeLoaderBackend, id: string) {
+      const dir = join(cacheDir, "packs", id);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "theme.css"), ".someclass { color: red; }");
+      const manifest = { name: id, inject: { "theme.css": ["SharedJSContext"] } };
+      await writeFile(join(dir, "theme.json"), JSON.stringify(manifest));
+      (target as unknown as { installedPacks: Map<string, unknown> })
+        .installedPacks.set(id, { id, dir, manifest });
+      return dir;
+    }
+
     /**
-     * Pack CSS carries the obfuscated class names of the Steam build it
-     * was authored against, and `assemblePackCss` silently leaves them
-     * alone when the map isn't loaded. Injecting in that window puts a
-     * well-formed <style> in the page that matches nothing — which looks
-     * exactly like a theme that never loaded, and which the DOM probe
-     * would go on reporting as healthy.
+     * The map records only names that actually CHANGED between Steam
+     * builds — `buildMap` skips `variant === current`. So a theme
+     * authored against the current build needs no translation at all, and
+     * refusing to inject without the map would break themes that work
+     * perfectly offline. Degraded beats absent.
      */
-    it("refuses to assemble CSS before the map has landed", async () => {
-      const dir = join(cacheDir, "packs");
-      const inner = backend as unknown as {
-        installedPacks: Map<string, unknown>;
-      };
-      inner.installedPacks.set("alpha", {
-        id: "alpha",
-        dir,
-        manifest: { name: "Alpha" },
-      });
-
+    it("still assembles CSS without the map, and records that it did", async () => {
+      await installPack(backend, "alpha");
       expect(getTranslationsStatus().state).toBe("pending");
-      expect(await loadCss(backend, "alpha")).toBeNull();
 
-      await ensureTranslations();
-      expect(getTranslationsStatus().state).toBe("ready");
-      expect(await loadCss(backend, "alpha")).not.toBeNull();
+      const css = await loadCss(backend, "alpha");
+
+      expect(css).toContain(".someclass");
+      expect(staleFlag(backend)).toBe(true);
     });
 
-    it("retries a sync that had not landed, then heals", async () => {
-      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+    it("does not flag CSS assembled with the map", async () => {
+      await installPack(backend, "alpha");
+      await ensureTranslations();
+      expect(getTranslationsStatus().state).toBe("ready");
+
+      const css = await loadCss(backend, "alpha");
+
+      expect(css).toContain(".someclass");
+      expect(staleFlag(backend)).toBe(false);
+    });
+
+    it("rebuilds every active theme once the map arrives after injection", async () => {
+      mockCefTabs([
+        { id: "shared", title: "SharedJSContext" },
+        { id: "qa", title: "QuickAccess" },
+      ]);
       activateTheme(backend, "alpha");
-      // Booted before wifi associated: nothing cached, nothing fetched.
-      expect(getTranslationsStatus().state).toBe("pending");
-      const { evaluated } = stubCdp(backend, { shared: ["theme-loader-alpha"] });
+      const { evaluated } = stubCdp(backend, {});
+      // Injected during boot, before the map landed.
+      (backend as unknown as { cssBuiltWithoutTranslations: boolean })
+        .cssBuiltWithoutTranslations = true;
+      await ensureTranslations();
 
       await verify(backend);
 
-      expect(getTranslationsStatus().state).toBe("ready");
+      // Every tab is rebuilt, not just the ones failing a DOM probe —
+      // the probe cannot see that the CSS carries the wrong selectors.
       const injections = evaluated.filter((e) => e.expression.includes("createElement"));
-      expect(injections.map((e) => e.tab)).toEqual(["shared"]);
+      expect(injections.map((e) => e.tab).sort()).toEqual(["qa", "shared"]);
+      expect(staleFlag(backend)).toBe(false);
+      expect(evaluated.filter((e) => e.expression.includes("missing.push"))).toEqual([]);
     });
 
-    it("skips the CDP round-trips entirely while the map is unavailable", async () => {
+    it("still heals while offline rather than leaving the user unthemed", async () => {
       globalThis.fetch = mock(async (input: unknown) => {
         const url = typeof input === "string" ? input : (input as { url: string }).url;
         if (url.includes("localhost:8080/json")) {
           return new Response(
-            JSON.stringify([
-              {
-                id: "shared",
-                title: "SharedJSContext",
-                url: "about:blank",
-                webSocketDebuggerUrl: "ws://localhost:8080/devtools/page/shared",
-                type: "page",
-              },
-            ]),
+            JSON.stringify([{
+              id: "shared",
+              title: "SharedJSContext",
+              url: "about:blank",
+              webSocketDebuggerUrl: "ws://localhost:8080/devtools/page/shared",
+              type: "page",
+            }]),
             { status: 200, headers: { "content-type": "application/json" } },
           );
         }
-        // Offline: the translation feed is unreachable.
         return Promise.reject(new Error("Network unreachable"));
       }) as unknown as typeof fetch;
 
@@ -544,8 +566,52 @@ describe("ThemeLoaderBackend", () => {
 
       await verify(backend);
 
-      expect(getTranslationsStatus().state).toBe("error");
-      expect(evaluated).toEqual([]);
+      expect(getTranslationsStatus().state).not.toBe("ready");
+      expect(
+        evaluated.filter((e) => e.expression.includes("createElement")).map((e) => e.tab),
+      ).toEqual(["shared"]);
+    });
+
+    it("retries a sync that had not landed, in the background", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      activateTheme(backend, "alpha");
+      stubCdp(backend, {});
+      expect(getTranslationsStatus().state).toBe("pending");
+
+      await verify(backend);
+      // Deliberately not awaited inside the health pass — see
+      // retryTranslationsInBackground.
+      await Bun.sleep(20);
+
+      expect(getTranslationsStatus().state).toBe("ready");
+    });
+
+    it("backs off after a failed sync instead of hammering the API", async () => {
+      let translationFetches = 0;
+      globalThis.fetch = mock(async (input: unknown) => {
+        const url = typeof input === "string" ? input : (input as { url: string }).url;
+        if (url.includes("localhost:8080/json")) {
+          return new Response(JSON.stringify([]), {
+            status: 200, headers: { "content-type": "application/json" },
+          });
+        }
+        translationFetches++;
+        return Promise.reject(new Error("Network unreachable"));
+      }) as unknown as typeof fetch;
+
+      activateTheme(backend, "alpha");
+      stubCdp(backend, {});
+
+      for (let i = 0; i < 5; i++) {
+        await verify(backend);
+        await Bun.sleep(10);
+      }
+
+      // One attempt, then a backoff window that has not elapsed.
+      expect(translationFetches).toBe(1);
+      expect(
+        (backend as unknown as { translationRetryAt: number }).translationRetryAt,
+      ).toBeGreaterThan(Date.now());
     });
   });
 
@@ -575,10 +641,167 @@ describe("ThemeLoaderBackend", () => {
       mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
       stubCdp(backend);
       await (backend as unknown as { tryConnect: () => Promise<boolean> }).tryConnect();
-      // Pretend the plugin loaded an hour ago.
-      (backend as unknown as { loadedAt: number }).loadedAt = Date.now() - 3_600_000;
+      // Pretend Steam came up an hour ago, closing the startup window.
+      (backend as unknown as { startupWindowFrom: number }).startupWindowFrom =
+        Date.now() - 3_600_000;
 
       expect(await tick(backend, 12)).toBe(2);
+    });
+  });
+
+  describe("lifecycle", () => {
+    /**
+     * The behaviour this plugin's boot fix is named after, and the one
+     * thing a passing suite used to prove nothing about: themes must not
+     * be injected before the class-translation map has landed, because
+     * CSS assembled without it may carry the wrong build's selectors.
+     */
+    it("onLoad injects only after the translation map has settled", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      const { evaluated } = stubCdp(backend);
+      const order: string[] = [];
+      const inner = backend as unknown as {
+        loadStateFromDisk: () => Promise<void>;
+        activeThemes: Map<string, { styleId: string }>;
+        loadThemeCss: (id: string) => Promise<string | null>;
+      };
+      // Stand in for restored-from-disk state.
+      inner.loadStateFromDisk = async () => {
+        inner.activeThemes.set("alpha", { styleId: "theme-loader-alpha" });
+      };
+      inner.loadThemeCss = async () => {
+        order.push("inject");
+        return "body{}";
+      };
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = mock(async (input: unknown, init?: unknown) => {
+        const url = typeof input === "string" ? input : (input as { url: string }).url;
+        if (url.includes("stable.json")) {
+          // Lose the race the way a cold boot does.
+          await Bun.sleep(30);
+          order.push("translations");
+        }
+        return realFetch(input as string, init as RequestInit);
+      }) as unknown as typeof fetch;
+
+      await backend.onLoad();
+      await Bun.sleep(80);
+      await backend.onUnload();
+
+      expect(order).toEqual(["translations", "inject"]);
+      expect(evaluated.some((e) => e.expression.includes("createElement"))).toBe(true);
+    });
+
+    it("onUnload stops a verify pass already in flight from re-injecting", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      activateTheme(backend, "alpha");
+      const { evaluated, inner } = stubCdp(backend, { shared: ["theme-loader-alpha"] });
+      // Unload lands while the pass is reading the pack off disk.
+      const innerAny = backend as unknown as {
+        loadThemeCss: (id: string) => Promise<string | null>;
+        verifyAndHealInjection: () => Promise<void>;
+      };
+      innerAny.loadThemeCss = async () => {
+        await backend.onUnload();
+        return "body{}";
+      };
+
+      await innerAny.verifyAndHealInjection();
+
+      expect(evaluated.filter((e) => e.expression.includes("createElement"))).toEqual([]);
+      expect(inner.connections).toHaveLength(0);
+    });
+
+    it("checkHealth will not run two passes at once", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      stubCdp(backend);
+      const innerAny = backend as unknown as {
+        checkHealth: () => Promise<void>;
+        verifyAndHealInjection: () => Promise<void>;
+        tryConnect: () => Promise<boolean>;
+        startupWindowFrom: number;
+      };
+      await innerAny.tryConnect();
+      let concurrent = 0;
+      let maxConcurrent = 0;
+      innerAny.verifyAndHealInjection = async () => {
+        concurrent++;
+        maxConcurrent = Math.max(maxConcurrent, concurrent);
+        await Bun.sleep(20);
+        concurrent--;
+      };
+
+      // Fire overlapping ticks the way setInterval would.
+      await Promise.all([innerAny.checkHealth(), innerAny.checkHealth(), innerAny.checkHealth()]);
+
+      expect(maxConcurrent).toBe(1);
+    });
+
+    it("does not open a second socket per tab when discovery runs concurrently", async () => {
+      mockCefTabs([
+        { id: "shared", title: "SharedJSContext" },
+        { id: "qa", title: "QuickAccess" },
+      ]);
+      const { inner } = stubCdp(backend);
+      let opened = 0;
+      const openCDP = inner.openCDP;
+      inner.openCDP = async (o) => {
+        opened++;
+        await Bun.sleep(10);
+        return openCDP(o);
+      };
+      const tryConnect = (backend as unknown as { tryConnect: () => Promise<boolean> })
+        .tryConnect.bind(backend);
+
+      await Promise.all([tryConnect(), tryConnect(), tryConnect()]);
+
+      expect(opened).toBe(2);
+      expect(inner.connections.map((c) => c.id).sort()).toEqual(["qa", "shared"]);
+    });
+  });
+
+  describe("injectToAllTabs", () => {
+    it("keeps a tab adopted while it was awaiting", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      const { inner } = stubCdp(backend);
+      await (backend as unknown as { tryConnect: () => Promise<boolean> }).tryConnect();
+
+      // A discovery pass adopts a new tab mid-injection.
+      const innerAny = backend as unknown as {
+        cdpEvaluate: (c: FakeConn, e: string) => Promise<unknown>;
+        injectToAllTabs: (styleId: string, css: string) => Promise<void>;
+      };
+      const evaluate = innerAny.cdpEvaluate;
+      innerAny.cdpEvaluate = async (conn, expression) => {
+        inner.connections = [
+          ...inner.connections,
+          { id: "qa", title: "QuickAccess", client: { connected: true, close: () => {} } },
+        ];
+        innerAny.cdpEvaluate = evaluate;
+        return evaluate(conn, expression);
+      };
+
+      await innerAny.injectToAllTabs("theme-loader-alpha", "body{}");
+
+      expect(inner.connections.map((c) => c.id).sort()).toEqual(["qa", "shared"]);
+    });
+
+    it("closes a connection it drops, so the socket cannot leak", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      const { inner } = stubCdp(backend);
+      await (backend as unknown as { tryConnect: () => Promise<boolean> }).tryConnect();
+      let closed = false;
+      inner.connections[0]!.client.close = () => { closed = true; };
+      const innerAny = backend as unknown as {
+        cdpEvaluate: () => Promise<unknown>;
+        injectToAllTabs: (styleId: string, css: string) => Promise<void>;
+      };
+      innerAny.cdpEvaluate = async () => { throw new Error("CDP timeout"); };
+
+      await innerAny.injectToAllTabs("theme-loader-alpha", "body{}");
+
+      expect(closed).toBe(true);
+      expect(inner.connections).toHaveLength(0);
     });
   });
 
