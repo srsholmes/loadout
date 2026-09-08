@@ -290,11 +290,25 @@ describe("ThemeLoaderBackend", () => {
    * evaluating JS in a tab. `evaluated` records every expression per tab
    * so tests can assert who was probed and who was re-injected.
    */
+  /**
+   * Classify an expression by what it does, so tests assert on intent
+   * rather than on a substring of generated JavaScript. Rewriting a
+   * builder in a behaviour-preserving way then can't fail these tests
+   * with a misleading message pointing at the backend.
+   */
+  function kindOf(expression: string): "probe" | "sweep" | "inject" | "remove" | "other" {
+    if (expression.includes("missing.push")) return "probe";
+    if (expression.includes("querySelectorAll")) return "sweep";
+    if (expression.includes("createElement")) return "inject";
+    if (expression.includes("removeChild")) return "remove";
+    return "other";
+  }
+
   function stubCdp(
     target: ThemeLoaderBackend,
     missingPerTab: Record<string, string[]> = {},
   ) {
-    const evaluated: { tab: string; expression: string }[] = [];
+    const evaluated: { tab: string; expression: string; kind: string }[] = [];
     const inner = target as unknown as {
       openCDP: (o: { id: string; title: string; wsUrl: string }) => Promise<FakeConn>;
       cdpEvaluate: (conn: FakeConn, expression: string) => Promise<unknown>;
@@ -306,9 +320,14 @@ describe("ThemeLoaderBackend", () => {
       client: { connected: true, close: () => {} },
     });
     inner.cdpEvaluate = async (conn, expression) => {
-      evaluated.push({ tab: conn.id, expression });
-      // Only the probe expression returns a value; injection does not.
-      if (expression.includes("missing.push")) return missingPerTab[conn.id] ?? [];
+      const kind = kindOf(expression);
+      evaluated.push({ tab: conn.id, expression, kind });
+      // A stub that silently returns undefined for an expression it does
+      // not recognise would make a renamed builder look like "nothing was
+      // missing" rather than like a broken stub.
+      if (kind === "other") throw new Error(`stubCdp: unrecognised expression: ${expression}`);
+      if (kind === "probe") return missingPerTab[conn.id] ?? [];
+      if (kind === "sweep") return [];
       return undefined;
     };
     return { evaluated, inner };
@@ -400,7 +419,7 @@ describe("ThemeLoaderBackend", () => {
 
       await verify(backend);
 
-      const injections = evaluated.filter((e) => e.expression.includes("createElement"));
+      const injections = evaluated.filter((e) => e.kind === "inject");
       expect(injections.map((e) => e.tab)).toEqual(["qa"]);
       expect(injections[0]!.expression).toContain("theme-loader-alpha");
     });
@@ -420,7 +439,7 @@ describe("ThemeLoaderBackend", () => {
       await verify(backend);
 
       expect(inner.connections.map((c) => c.id).sort()).toEqual(["qa", "shared"]);
-      const injections = evaluated.filter((e) => e.expression.includes("createElement"));
+      const injections = evaluated.filter((e) => e.kind === "inject");
       expect(injections.map((e) => e.tab)).toEqual(["qa"]);
     });
 
@@ -431,8 +450,8 @@ describe("ThemeLoaderBackend", () => {
 
       await verify(backend);
 
-      expect(evaluated.filter((e) => e.expression.includes("createElement"))).toEqual([]);
-      expect(evaluated.filter((e) => e.expression.includes("missing.push"))).toHaveLength(1);
+      expect(evaluated.filter((e) => e.kind === "inject")).toEqual([]);
+      expect(evaluated.filter((e) => e.kind === "probe")).toHaveLength(1);
     });
 
     it("skips a tab whose probe throws instead of re-injecting blind", async () => {
@@ -447,7 +466,7 @@ describe("ThemeLoaderBackend", () => {
 
       await verify(backend);
 
-      expect(evaluated.filter((e) => e.expression.includes("createElement"))).toEqual([]);
+      expect(evaluated.filter((e) => e.kind === "inject")).toEqual([]);
     });
 
     it("does not resurrect a theme disabled while the probe was in flight", async () => {
@@ -464,7 +483,7 @@ describe("ThemeLoaderBackend", () => {
 
       await verify(backend);
 
-      expect(evaluated.filter((e) => e.expression.includes("createElement"))).toEqual([]);
+      expect(evaluated.filter((e) => e.kind === "inject")).toEqual([]);
     });
   });
 
@@ -537,10 +556,10 @@ describe("ThemeLoaderBackend", () => {
 
       // Every tab is rebuilt, not just the ones failing a DOM probe —
       // the probe cannot see that the CSS carries the wrong selectors.
-      const injections = evaluated.filter((e) => e.expression.includes("createElement"));
+      const injections = evaluated.filter((e) => e.kind === "inject");
       expect(injections.map((e) => e.tab).sort()).toEqual(["qa", "shared"]);
       expect(staleFlag(backend)).toBe(false);
-      expect(evaluated.filter((e) => e.expression.includes("missing.push"))).toEqual([]);
+      expect(evaluated.filter((e) => e.kind === "probe")).toEqual([]);
     });
 
     it("still heals while offline rather than leaving the user unthemed", async () => {
@@ -568,7 +587,7 @@ describe("ThemeLoaderBackend", () => {
 
       expect(getTranslationsStatus().state).not.toBe("ready");
       expect(
-        evaluated.filter((e) => e.expression.includes("createElement")).map((e) => e.tab),
+        evaluated.filter((e) => e.kind === "inject").map((e) => e.tab),
       ).toEqual(["shared"]);
     });
 
@@ -689,7 +708,7 @@ describe("ThemeLoaderBackend", () => {
       await backend.onUnload();
 
       expect(order).toEqual(["translations", "inject"]);
-      expect(evaluated.some((e) => e.expression.includes("createElement"))).toBe(true);
+      expect(evaluated.some((e) => e.kind === "inject")).toBe(true);
     });
 
     it("onUnload stops a verify pass already in flight from re-injecting", async () => {
@@ -708,7 +727,7 @@ describe("ThemeLoaderBackend", () => {
 
       await innerAny.verifyAndHealInjection();
 
-      expect(evaluated.filter((e) => e.expression.includes("createElement"))).toEqual([]);
+      expect(evaluated.filter((e) => e.kind === "inject")).toEqual([]);
       expect(inner.connections).toHaveLength(0);
     });
 
@@ -802,6 +821,195 @@ describe("ThemeLoaderBackend", () => {
 
       expect(closed).toBe(true);
       expect(inner.connections).toHaveLength(0);
+    });
+  });
+
+  describe("orphan sweep", () => {
+    const verify = (target: ThemeLoaderBackend) =>
+      (target as unknown as { verifyAndHealInjection: () => Promise<void> })
+        .verifyAndHealInjection();
+
+    /**
+     * `disableTheme` removes the style from the tabs it is connected to
+     * and then deletes the entry regardless. If the connection list was
+     * empty at that moment, the CSS stays in a tab that is about to be
+     * re-adopted and nothing ever looks at it again — the theme reads as
+     * off everywhere and is still on screen, and Reapply won't clear it
+     * because that only re-injects what is active.
+     */
+    it("removes CSS left behind by a disable that reached no tabs", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      activateTheme(backend, "alpha");
+      const { evaluated } = stubCdp(backend, {});
+      // Disabled while disconnected: nothing to remove from, entry gone.
+      await backend.disableTheme("alpha");
+      expect(await backend.getActiveThemes()).toEqual([]);
+
+      await verify(backend);
+
+      const sweeps = evaluated.filter((e) => e.kind === "sweep");
+      expect(sweeps).toHaveLength(1);
+      // Nothing is active, so the sweep keeps nothing.
+      expect(sweeps[0]!.expression).toContain("[]");
+    });
+
+    it("does not sweep when no disable has happened", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      activateTheme(backend, "alpha");
+      const { evaluated } = stubCdp(backend, {});
+
+      await verify(backend);
+
+      expect(evaluated.filter((e) => e.kind === "sweep")).toEqual([]);
+    });
+
+    it("stops sweeping once a pass completes cleanly", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      activateTheme(backend, "alpha");
+      const { evaluated } = stubCdp(backend, {});
+      await backend.disableTheme("alpha");
+      activateTheme(backend, "beta");
+
+      await verify(backend);
+      const afterFirst = evaluated.filter((e) => e.kind === "sweep").length;
+      await verify(backend);
+      const afterSecond = evaluated.filter((e) => e.kind === "sweep").length;
+
+      expect(afterFirst).toBe(1);
+      expect(afterSecond).toBe(1);
+    });
+
+    it("keeps sweeping if a tab could not be swept", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      activateTheme(backend, "alpha");
+      const { evaluated, inner } = stubCdp(backend, {});
+      await backend.disableTheme("alpha");
+      activateTheme(backend, "beta");
+      const stubbed = inner.cdpEvaluate;
+      let sweepAttempts = 0;
+      inner.cdpEvaluate = async (conn, expression) => {
+        if (expression.includes("querySelectorAll")) {
+          sweepAttempts++;
+          throw new Error("target closed");
+        }
+        return stubbed(conn, expression);
+      };
+
+      await verify(backend);
+      await verify(backend);
+
+      expect(sweepAttempts).toBe(2);
+      expect(evaluated.filter((e) => e.kind === "sweep")).toEqual([]);
+    });
+  });
+
+  describe("emit", () => {
+    /**
+     * Discovery runs on a timer now, so an unconditional emit would
+     * re-render the UI every tick for a status that never moved.
+     */
+    it("does not re-emit when discovery finds nothing new", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      stubCdp(backend);
+      const tryConnect = (backend as unknown as { tryConnect: () => Promise<boolean> })
+        .tryConnect.bind(backend);
+
+      await tryConnect();
+      const afterFirst = emittedEvents.length;
+      await tryConnect();
+      await tryConnect();
+
+      expect(afterFirst).toBeGreaterThan(0);
+      expect(emittedEvents.length).toBe(afterFirst);
+    });
+
+    it("emits when a tab is adopted", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      stubCdp(backend);
+      const tryConnect = (backend as unknown as { tryConnect: () => Promise<boolean> })
+        .tryConnect.bind(backend);
+      await tryConnect();
+      // Connectedness is already true and stays true, so this only emits
+      // if the payload itself is compared.
+      backend.emit = () => { throw new Error("should not emit for an unchanged payload"); };
+      mockCefTabs([
+        { id: "shared", title: "SharedJSContext" },
+        { id: "qa", title: "QuickAccess" },
+      ]);
+
+      await expect(tryConnect()).resolves.toBe(true);
+    });
+  });
+
+  describe("verification budget", () => {
+    it("stands down while a full re-inject is already in flight", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      activateTheme(backend, "alpha");
+      const { evaluated } = stubCdp(backend, { shared: ["theme-loader-alpha"] });
+      const innerAny = backend as unknown as {
+        inflightReinject: Promise<void> | null;
+        verifyAndHealInjection: () => Promise<void>;
+      };
+      innerAny.inflightReinject = new Promise<void>(() => { /* still running */ });
+
+      await innerAny.verifyAndHealInjection();
+
+      expect(evaluated).toEqual([]);
+    });
+
+
+    /**
+     * CDPClient.evaluate queues behind every other evaluate against the
+     * same CEF target — a chain shared with the badge and loader
+     * injectors — and its own timeout only starts once it reaches the
+     * front. Without a cap here, one hung evaluate elsewhere holds the
+     * health guard open, and with it dead-connection pruning.
+     */
+    it("stops mid-pass when the budget is spent, resuming next tick", async () => {
+      mockCefTabs([
+        { id: "shared", title: "SharedJSContext" },
+        { id: "qa", title: "QuickAccess" },
+        { id: "mm", title: "MainMenu_uid2" },
+      ]);
+      activateTheme(backend, "alpha");
+      const { evaluated, inner } = stubCdp(backend, {});
+      const innerAny = backend as unknown as {
+        verifyPassBudgetMs: number;
+        verifyAndHealInjection: () => Promise<void>;
+      };
+      innerAny.verifyPassBudgetMs = 5;
+      const stubbed = inner.cdpEvaluate;
+      inner.cdpEvaluate = async (conn, expression) => {
+        await Bun.sleep(10);
+        return stubbed(conn, expression);
+      };
+
+      await innerAny.verifyAndHealInjection();
+
+      // Budget spent after the first tab, so the rest wait for next tick
+      // rather than holding the health guard open.
+      expect(evaluated.filter((e) => e.kind === "probe")).toHaveLength(1);
+    });
+
+    it("gives up on an evaluate that never settles", async () => {
+      mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
+      activateTheme(backend, "alpha");
+      const { evaluated, inner } = stubCdp(backend, { shared: ["theme-loader-alpha"] });
+      inner.cdpEvaluate = async () => new Promise(() => { /* never settles */ });
+
+      const innerAny = backend as unknown as {
+        boundedEvaluate: (o: { conn: FakeConn; expression: string; timeoutMs?: number })
+          => Promise<unknown>;
+        connections: FakeConn[];
+      };
+      await expect(
+        innerAny.boundedEvaluate({
+          conn: innerAny.connections[0]!,
+          expression: "1",
+          timeoutMs: 20,
+        }),
+      ).rejects.toThrow(/did not settle/);
+      expect(evaluated).toEqual([]);
     });
   });
 

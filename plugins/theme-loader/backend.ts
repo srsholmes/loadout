@@ -9,9 +9,11 @@ import { isTargetTab } from "./lib/tab-matching";
 import {
   buildInjectStyleExpression,
   buildMissingStylesExpression,
+  buildOrphanSweepExpression,
   buildRemoveStyleExpression,
   parseMissingStyles,
-} from "./lib/injection-probe";
+  styleIdFor,
+} from "./lib/style-injection";
 import type {
   CommunityThemeEntry,
   ThemeListEntry,
@@ -100,6 +102,32 @@ const STEADY_VERIFY_EVERY_TICKS = 6;
  */
 const TRANSLATION_RETRY_BASE_MS = 15_000;
 const TRANSLATION_RETRY_MAX_MS = 15 * 60_000;
+/**
+ * Wall-clock budget for one verification pass, and for a single CDP
+ * evaluate within it.
+ *
+ * `CDP_TIMEOUT_MS` does not actually bound a probe: `CDPClient.evaluate`
+ * applies its timeout to `send()`, which runs only AFTER an unbounded
+ * wait on that target's shared evaluate chain — and other subsystems hold
+ * long-lived connections to SharedJSContext with a 30 s default. Without
+ * a deadline here, one slow evaluate elsewhere stalls the whole pass, and
+ * the `healthChecking` guard silently drops every tick meanwhile.
+ */
+const VERIFY_PASS_BUDGET_MS = 20_000;
+const VERIFY_STEP_BUDGET_MS = 8_000;
+/**
+ * How long `onLoad` waits for the class-translation map before injecting
+ * restored themes anyway.
+ *
+ * Waiting is right — CSS built with the map is the CSS the user wants —
+ * but `ensureTranslations` is bounded only by its own 30 s fetch timeout,
+ * and a captive portal or black-holing network would leave Steam unthemed
+ * for that whole time with nothing on screen to explain it. A cached map
+ * resolves instantly, so this only bites first-run and cache-cleared
+ * boots; past the cap we inject degraded and the verify pass rebuilds
+ * once the map lands.
+ */
+const TRANSLATIONS_BOOT_WAIT_MS = 8_000;
 
 interface InjectedStyle {
   /** Unique ID for the injected <style> element */
@@ -121,10 +149,6 @@ interface ThemeLoaderStorage {
 
 /** Strict ID pattern to prevent path traversal when installing community themes. */
 const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
-
-function safeStyleId(themeId: string): string {
-  return `theme-loader-${themeId.replace(/[^a-zA-Z0-9-_]/g, "_")}`;
-}
 
 export default class ThemeLoaderBackend implements PluginBackend {
   emit?: (payload: EmitPayload) => void;
@@ -188,6 +212,14 @@ export default class ThemeLoaderBackend implements PluginBackend {
   private translationRetryInflight = false;
   /** Last payload handed to `emit`, for change detection. */
   private lastEmitted: string | null = null;
+  /**
+   * A disable may have left CSS behind in a tab we couldn't reach, so the
+   * next verification pass must sweep for orphans. Cleared once a pass
+   * completes having found none.
+   */
+  private sweepPending = false;
+  /** Wall-clock budget for one verification pass. Overridable in tests. */
+  private verifyPassBudgetMs = VERIFY_PASS_BUDGET_MS;
 
   async onLoad(): Promise<void> {
     console.log("[theme-loader] Plugin loaded");
@@ -216,7 +248,13 @@ export default class ThemeLoaderBackend implements PluginBackend {
     // Try initial connection, but don't block if Steam isn't running.
     // Re-injection folds into `reinjectAllActiveThemes` so a parallel
     // health-check tick can't double-inject the same CSS.
-    Promise.all([this.tryConnect(), translationsSettled]).then(async ([connected]) => {
+    // Capped: past the cap we inject degraded rather than leave Steam
+    // unthemed behind a hung fetch — see TRANSLATIONS_BOOT_WAIT_MS.
+    const translationsOrTimeout = Promise.race([
+      translationsSettled,
+      Bun.sleep(TRANSLATIONS_BOOT_WAIT_MS),
+    ]);
+    Promise.all([this.tryConnect(), translationsOrTimeout]).then(async ([connected]) => {
       if (connected) {
         await this.reinjectAllActiveThemes();
         if (this.activeThemes.size > 0) {
@@ -323,7 +361,7 @@ export default class ThemeLoaderBackend implements PluginBackend {
       }
     }
 
-    const styleId = safeStyleId(id);
+    const styleId = styleIdFor(id);
     try {
       await this.injectToAllTabs(styleId, css);
       this.activeThemes.set(id, { styleId });
@@ -345,6 +383,10 @@ export default class ThemeLoaderBackend implements PluginBackend {
     try {
       await this.removeFromAllTabs(injected.styleId);
       this.activeThemes.delete(id);
+      // Removal only reached the tabs we happened to be connected to, and
+      // the entry is now gone — so nothing else will ever look for this
+      // style again. Ask the next verification pass to sweep for it.
+      this.sweepPending = true;
       await this.saveStateToDisk();
       this.emitState();
       return { success: true };
@@ -966,12 +1008,13 @@ export default class ThemeLoaderBackend implements PluginBackend {
         this.connected = false;
         if (wasConnected) this.emitState();
         const didReconnect = await this.tryConnect();
-        if (didReconnect) {
-          // Everything is freshly connected, so a full re-inject already
-          // does what verification would have asked for.
-          await this.reinjectAllActiveThemes();
-        }
-        return;
+        if (!didReconnect) return;
+        // `reinjectAllActiveThemes` coalesces, so this may adopt a pass
+        // that started against the connection list we just replaced —
+        // themes it had already walked past would never reach the new
+        // tabs. Fall through to verification rather than returning, so
+        // the tick that reconnected is also the tick that checks.
+        await this.reinjectAllActiveThemes();
       }
 
       // Connected is not the same as themed — see
@@ -1012,7 +1055,11 @@ export default class ThemeLoaderBackend implements PluginBackend {
    * "Reapply themes" button users have been pressing by hand.
    */
   private async verifyAndHealInjection(): Promise<void> {
-    if (this.disposed || this.activeThemes.size === 0) return;
+    if (this.disposed) return;
+    // With nothing active there is normally nothing to check — but a
+    // disable that couldn't reach every tab leaves CSS behind precisely
+    // when the map goes empty, so a pending sweep still runs.
+    if (this.activeThemes.size === 0 && !this.sweepPending) return;
     // A full re-inject is in flight and covers everything below.
     if (this.inflightReinject) return;
 
@@ -1040,15 +1087,42 @@ export default class ThemeLoaderBackend implements PluginBackend {
       byStyleId.set(injected.styleId, themeId);
     }
     const styleIds = Array.from(byStyleId.keys());
+    const deadline = Date.now() + this.verifyPassBudgetMs;
+    let sweptClean = true;
 
     for (const conn of [...this.connections]) {
       if (this.disposed) return;
       if (!conn.client.connected) continue;
+      if (Date.now() > deadline) {
+        // Out of budget. The remaining tabs are checked next tick rather
+        // than holding the health guard — and with it dead-connection
+        // pruning — open indefinitely.
+        console.warn("[theme-loader] Verification pass out of time; resuming next tick");
+        sweptClean = false;
+        break;
+      }
+
+      if (this.sweepPending) {
+        try {
+          const raw = await this.boundedEvaluate({ conn, expression: buildOrphanSweepExpression(styleIds) });
+          const removed = Array.isArray(raw) ? raw.filter((v) => typeof v === "string") : [];
+          if (removed.length > 0) {
+            console.log(
+              `[theme-loader] ${conn.title}: removed ${removed.length} orphaned theme style(s)`,
+            );
+          }
+        } catch (err) {
+          console.warn(`[theme-loader] Could not sweep ${conn.title}:`, err);
+          sweptClean = false;
+        }
+      }
+
+      if (styleIds.length === 0) continue;
 
       let missing: string[];
       try {
-        const raw = await this.cdpEvaluate(conn, buildMissingStylesExpression(styleIds));
-        missing = parseMissingStyles(raw, styleIds);
+        const raw = await this.boundedEvaluate({ conn, expression: buildMissingStylesExpression(styleIds) });
+        missing = parseMissingStyles({ raw, styleIds });
       } catch (err) {
         // Probe failed — leave it for the next tick rather than
         // re-injecting blind into a tab we can't read.
@@ -1086,6 +1160,38 @@ export default class ThemeLoaderBackend implements PluginBackend {
           console.warn(`[theme-loader] Failed to re-inject ${themeId} into ${conn.title}:`, err);
         }
       }
+    }
+
+    if (this.sweepPending && sweptClean) this.sweepPending = false;
+  }
+
+  /**
+   * `cdpEvaluate` with a wall-clock cap.
+   *
+   * `CDPClient.evaluate` queues behind every other evaluate against the
+   * same CEF target — a chain shared process-wide with the badge and
+   * loader injectors — and its own timeout starts only once it reaches
+   * the front. A hung evaluate elsewhere would otherwise stall this pass
+   * for as long as it lasts. Losing the race abandons the result, not the
+   * request; the next tick re-probes.
+   */
+  private async boundedEvaluate(
+    { conn, expression, timeoutMs = VERIFY_STEP_BUDGET_MS }:
+      { conn: CDPConnection; expression: string; timeoutMs?: number },
+  ): Promise<unknown> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.cdpEvaluate(conn, expression),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`evaluate did not settle within ${timeoutMs}ms`)),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -1162,7 +1268,7 @@ export default class ThemeLoaderBackend implements PluginBackend {
         await readPluginStorage<ThemeLoaderStorage>(PLUGIN_ID);
       this.packVariants = packVariants;
       for (const id of activeThemes) {
-        this.activeThemes.set(id, { styleId: safeStyleId(id) });
+        this.activeThemes.set(id, { styleId: styleIdFor(id) });
       }
       if (activeThemes.length > 0) {
         console.log(`[theme-loader] Restored ${activeThemes.length} active theme(s) from disk`);

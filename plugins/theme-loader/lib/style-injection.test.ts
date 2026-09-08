@@ -1,11 +1,13 @@
 import { describe, it, expect } from "bun:test";
 import {
   EMPTY_CSS_MARKER,
+  buildOrphanSweepExpression,
+  styleIdFor,
   buildInjectStyleExpression,
   buildMissingStylesExpression,
   buildRemoveStyleExpression,
   parseMissingStyles,
-} from "./injection-probe";
+} from "./style-injection";
 
 /**
  * The probe runs inside Steam's CEF, so the value that comes back is
@@ -59,21 +61,21 @@ describe("buildMissingStylesExpression", () => {
 
 describe("parseMissingStyles", () => {
   it("keeps ids we asked about", () => {
-    expect(parseMissingStyles(["a", "b"], ["a", "b", "c"])).toEqual(["a", "b"]);
+    expect(parseMissingStyles({ raw: ["a", "b"], styleIds: ["a", "b", "c"] })).toEqual(["a", "b"]);
   });
 
   it("drops ids we did not ask about", () => {
-    expect(parseMissingStyles(["a", "zzz"], ["a"])).toEqual(["a"]);
+    expect(parseMissingStyles({ raw: ["a", "zzz"], styleIds: ["a"] })).toEqual(["a"]);
   });
 
   it("treats a non-array reply as nothing missing, never as everything missing", () => {
     for (const raw of [undefined, null, "a", 3, {}]) {
-      expect(parseMissingStyles(raw, ["a", "b"])).toEqual([]);
+      expect(parseMissingStyles({ raw, styleIds: ["a", "b"] })).toEqual([]);
     }
   });
 
   it("drops non-string entries", () => {
-    expect(parseMissingStyles(["a", 1, null], ["a"])).toEqual(["a"]);
+    expect(parseMissingStyles({ raw: ["a", 1, null], styleIds: ["a"] })).toEqual(["a"]);
   });
 });
 
@@ -162,5 +164,74 @@ describe("buildRemoveStyleExpression", () => {
         getElementById: () => null,
       }),
     ).not.toThrow();
+  });
+});
+
+describe("styleIdFor", () => {
+  it("keeps the readable theme id in the element id", () => {
+    expect(styleIdFor("catppuccin")).toContain("catppuccin");
+    expect(styleIdFor("catppuccin").startsWith("theme-loader-")).toBe(true);
+  });
+
+  it("is stable for the same theme id", () => {
+    expect(styleIdFor("my.theme")).toBe(styleIdFor("my.theme"));
+  });
+
+  /**
+   * The sanitiser maps every character outside [A-Za-z0-9-_] to "_", so
+   * without the hash these two share one <style>: enabling both leaves
+   * one silently overwriting the other, and only one can ever be healed
+   * or removed.
+   */
+  it("separates ids the sanitiser would collapse together", () => {
+    expect(styleIdFor("my.theme")).not.toBe(styleIdFor("my_theme"));
+  });
+
+  it("produces a valid DOM id from an id full of punctuation", () => {
+    expect(styleIdFor("a b/c:d")).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+});
+
+describe("buildOrphanSweepExpression", () => {
+  /** Evaluate against a stub document holding the given style ids. */
+  function run(present: string[], keep: string[]) {
+    const removed: string[] = [];
+    const els = present.map((id) => ({
+      id,
+      parentNode: { removeChild: (e: { id: string }) => removed.push(e.id) },
+    }));
+    const document = {
+      querySelectorAll: (sel: string) => {
+        expect(sel).toBe('style[data-loadout-plugin="theme-loader"]');
+        return els;
+      },
+    };
+    const result = new Function(
+      "document",
+      `return (${buildOrphanSweepExpression(keep)});`,
+    )(document) as string[];
+    return { result, removed };
+  }
+
+  it("removes styles no longer accounted for", () => {
+    const { result, removed } = run(["theme-loader-a", "theme-loader-b"], ["theme-loader-a"]);
+    expect(result).toEqual(["theme-loader-b"]);
+    expect(removed).toEqual(["theme-loader-b"]);
+  });
+
+  it("leaves active styles alone", () => {
+    const { removed } = run(["theme-loader-a"], ["theme-loader-a"]);
+    expect(removed).toEqual([]);
+  });
+
+  it("removes everything when nothing is active", () => {
+    const { removed } = run(["theme-loader-a", "theme-loader-b"], []);
+    expect(removed).toEqual(["theme-loader-a", "theme-loader-b"]);
+  });
+
+  it("is scoped to this plugin's own style elements", () => {
+    // The selector assertion inside run() is the check: a broader
+    // selector would let a sweep delete another plugin's styles.
+    run(["theme-loader-a"], ["theme-loader-a"]);
   });
 });

@@ -1,5 +1,6 @@
 /**
- * DOM-side verification for injected theme CSS.
+ * Building and verifying the JavaScript that puts theme CSS into a Steam
+ * CEF tab, and takes it back out.
  *
  * A live CDP socket only proves the tab still exists — it says nothing
  * about whether our `<style>` element is still in that tab's document.
@@ -11,6 +12,28 @@
  * These helpers are pure so the expression and its result parsing can be
  * unit-tested without a CEF to talk to.
  */
+
+/**
+ * Derive the `<style>` element id for a theme.
+ *
+ * The sanitising pass alone is not injective — it maps every character
+ * outside `[A-Za-z0-9-_]` to `_`, so hand-installed packs `my.theme` and
+ * `my_theme` would share one element: enabling both leaves one silently
+ * overwriting the other, and only one of them can ever be healed or
+ * removed. A short hash of the untouched id restores uniqueness while
+ * keeping the readable prefix that makes these elements identifiable in
+ * DevTools. (Registry ids are UUIDs, so this needs local packs to hit.)
+ */
+export function styleIdFor(themeId: string): string {
+  // djb2. Not cryptographic — this only needs to separate ids that the
+  // sanitiser collapses together.
+  let hash = 5381;
+  for (let i = 0; i < themeId.length; i++) {
+    hash = ((hash << 5) + hash + themeId.charCodeAt(i)) >>> 0;
+  }
+  const safe = themeId.replace(/[^a-zA-Z0-9-_]/g, "_");
+  return `theme-loader-${safe}-${hash.toString(36)}`;
+}
 
 /**
  * Marker written into a `<style>` whose theme assembled to no CSS at all.
@@ -91,6 +114,40 @@ export function buildRemoveStyleExpression(styleId: string): string {
 }
 
 /**
+ * Build the expression that removes theme CSS this plugin injected but no
+ * longer accounts for, returning the ids it removed.
+ *
+ * Removal is otherwise driven entirely by `activeThemes`, which is the
+ * wrong source of truth at the one moment it matters: `disableTheme`
+ * removes the style from the tabs it is *currently* connected to and then
+ * deletes the entry regardless. If the connection list was empty or stale
+ * at that moment — Steam restarting, or every socket dropped after failed
+ * injections — the CSS stays in a tab that is about to be re-adopted, and
+ * nothing ever looks at it again. The theme reads as off everywhere in
+ * the model and is still on screen, and even "Reapply themes" won't clear
+ * it, because that only re-injects what is active.
+ *
+ * Scoped to `[data-loadout-plugin="theme-loader"]` so it can never touch
+ * another plugin's styles, or Steam's own.
+ */
+export function buildOrphanSweepExpression(expectedStyleIds: string[]): string {
+  return `
+    (function() {
+      var keep = ${JSON.stringify(expectedStyleIds)};
+      var els = document.querySelectorAll('style[data-loadout-plugin="theme-loader"]');
+      var removed = [];
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (keep.indexOf(el.id) !== -1) continue;
+        removed.push(el.id);
+        if (el.parentNode) el.parentNode.removeChild(el);
+      }
+      return removed;
+    })()
+  `;
+}
+
+/**
  * Narrow the raw `Runtime.evaluate` value to the style ids we asked
  * about.
  *
@@ -99,7 +156,9 @@ export function buildRemoveStyleExpression(styleId: string): string {
  * is treated as "nothing is missing" rather than as every id missing, so
  * a malformed probe can never trigger a re-injection storm.
  */
-export function parseMissingStyles(raw: unknown, styleIds: string[]): string[] {
+export function parseMissingStyles(
+  { raw, styleIds }: { raw: unknown; styleIds: string[] },
+): string[] {
   if (!Array.isArray(raw)) return [];
   const asked = new Set(styleIds);
   return raw.filter((v): v is string => typeof v === "string" && asked.has(v));
