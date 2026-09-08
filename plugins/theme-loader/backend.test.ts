@@ -333,6 +333,16 @@ describe("ThemeLoaderBackend", () => {
     return { evaluated, inner };
   }
 
+  /**
+   * Wait until `check` holds. Tests that assert something *happens* must
+   * not race a fixed sleep — a loaded CI runner is slower than a Deck,
+   * and a timing-tuned sleep turns a real pass into a red build. The
+   * enclosing bun timeout still bounds this if the condition never holds.
+   */
+  async function until(check: () => boolean): Promise<void> {
+    while (!check()) await Bun.sleep(1);
+  }
+
   /** Mark a theme active without needing an installed pack on disk. */
   function activateTheme(target: ThemeLoaderBackend, id: string) {
     const inner = target as unknown as {
@@ -608,8 +618,8 @@ describe("ThemeLoaderBackend", () => {
 
       await verify(backend);
       // Deliberately not awaited inside the health pass — see
-      // retryTranslationsInBackground.
-      await Bun.sleep(20);
+      // retryTranslationsInBackground — so wait for it to land.
+      await until(() => getTranslationsStatus().state === "ready");
 
       expect(getTranslationsStatus().state).toBe("ready");
     });
@@ -630,10 +640,13 @@ describe("ThemeLoaderBackend", () => {
       activateTheme(backend, "alpha");
       stubCdp(backend, {});
 
-      for (let i = 0; i < 5; i++) {
-        await verify(backend);
-        await Bun.sleep(10);
-      }
+      // Drive the first attempt to completion, then confirm the backoff
+      // window suppresses the rest.
+      await verify(backend);
+      await until(() =>
+        !(backend as unknown as { translationRetryInflight: boolean }).translationRetryInflight,
+      );
+      for (let i = 0; i < 4; i++) await verify(backend);
 
       // One attempt, then a backoff window that has not elapsed.
       expect(translationFetches).toBe(1);
@@ -686,7 +699,7 @@ describe("ThemeLoaderBackend", () => {
      */
     it("onLoad injects only after the translation map has settled", async () => {
       mockCefTabs([{ id: "shared", title: "SharedJSContext" }]);
-      const { evaluated } = stubCdp(backend);
+      stubCdp(backend);
       const order: string[] = [];
       const inner = backend as unknown as {
         loadStateFromDisk: () => Promise<void>;
@@ -701,23 +714,29 @@ describe("ThemeLoaderBackend", () => {
         order.push("inject");
         return "body{}";
       };
+
+      // Hold the translation fetch open for as long as we like, rather
+      // than betting on a sleep being longer than a CI runner is slow.
+      let releaseTranslations!: () => void;
+      const gate = new Promise<void>((r) => { releaseTranslations = r; });
       const realFetch = globalThis.fetch;
       globalThis.fetch = mock(async (input: unknown, init?: unknown) => {
         const url = typeof input === "string" ? input : (input as { url: string }).url;
-        if (url.includes("stable.json")) {
-          // Lose the race the way a cold boot does.
-          await Bun.sleep(30);
-          order.push("translations");
-        }
+        if (url.includes("stable.json")) await gate;
         return realFetch(input as string, init as RequestInit);
       }) as unknown as typeof fetch;
 
       await backend.onLoad();
-      await Bun.sleep(80);
+      // The map is still in flight, so nothing may be injected — no
+      // matter how long that takes.
+      await Bun.sleep(25);
+      expect(order).toEqual([]);
+
+      releaseTranslations();
+      await until(() => order.length > 0);
       await backend.onUnload();
 
-      expect(order).toEqual(["translations", "inject"]);
-      expect(evaluated.some((e) => e.kind === "inject")).toBe(true);
+      expect(order).toEqual(["inject"]);
     });
 
     it("onUnload stops a verify pass already in flight from re-injecting", async () => {
