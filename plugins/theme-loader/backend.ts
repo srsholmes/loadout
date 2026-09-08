@@ -1,11 +1,19 @@
 import type { PluginBackend, EmitPayload } from "@loadout/types";
 import { runCode, runFull } from "@loadout/exec";
-import { CDPClient } from "@loadout/steam-cdp";
+import { CDPClient, listCefTabs } from "@loadout/steam-cdp";
 import { readPluginStorage, writePluginStorage } from "@loadout/plugin-storage";
 import { cp, mkdir, rename, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { isTargetTab } from "./lib/tab-matching";
+import {
+  buildInjectStyleExpression,
+  buildMissingStylesExpression,
+  buildOrphanSweepExpression,
+  buildRemoveStyleExpression,
+  parseMissingStyles,
+  styleIdFor,
+} from "./lib/style-injection";
 import type {
   CommunityThemeEntry,
   ThemeListEntry,
@@ -52,19 +60,74 @@ import {
  * bundled.
  */
 
-interface CEFTab {
-  id: string;
-  title: string;
-  url: string;
-  webSocketDebuggerUrl: string;
-  type: string;
-}
-
 interface CDPConnection {
+  /**
+   * CEF target id from `/json`. Discovery runs repeatedly, so the
+   * connection list has to be matched against the current tab list by
+   * something stable — titles are not unique (two `QuickAccess*` tabs
+   * can be live at once) and the WebSocket URL embeds the same id.
+   */
+  id: string;
+  /** Tab title at connect time. Logging only. */
+  title: string;
   client: CDPClient;
 }
 
 const CDP_TIMEOUT_MS = 5000;
+/** Cadence of the connection/injection health check. */
+const HEALTH_INTERVAL_MS = 5000;
+/**
+ * How long after the plugin loads every health tick also verifies that
+ * the CSS is really in the page.
+ *
+ * Sized for a cold boot: the service starts around login, and Steam can
+ * take a couple of minutes to finish building its CEF tabs and settle
+ * into Big Picture. That whole span is when tabs appear late and get
+ * reloaded, so it is checked aggressively; afterwards the plugin backs
+ * off to {@link STEADY_VERIFY_EVERY_TICKS}.
+ */
+const STARTUP_VERIFY_WINDOW_MS = 180_000;
+/** Steady-state verification cadence, in health ticks (6 × 5 s = 30 s). */
+const STEADY_VERIFY_EVERY_TICKS = 6;
+/**
+ * First delay before re-syncing class translations after a failure, then
+ * doubling to {@link TRANSLATION_RETRY_MAX_MS}.
+ *
+ * Backoff matters here because the failure this recovers from — booting
+ * before wifi associates — is indistinguishable from being permanently
+ * offline, and `ensureTranslations` has no failure memory of its own: it
+ * issues a fresh 30 s request every time it is called with no cache. An
+ * offline Deck would otherwise hit a third-party API for the life of the
+ * session.
+ */
+const TRANSLATION_RETRY_BASE_MS = 15_000;
+const TRANSLATION_RETRY_MAX_MS = 15 * 60_000;
+/**
+ * Wall-clock budget for one verification pass, and for a single CDP
+ * evaluate within it.
+ *
+ * `CDP_TIMEOUT_MS` does not actually bound a probe: `CDPClient.evaluate`
+ * applies its timeout to `send()`, which runs only AFTER an unbounded
+ * wait on that target's shared evaluate chain — and other subsystems hold
+ * long-lived connections to SharedJSContext with a 30 s default. Without
+ * a deadline here, one slow evaluate elsewhere stalls the whole pass, and
+ * the `healthChecking` guard silently drops every tick meanwhile.
+ */
+const VERIFY_PASS_BUDGET_MS = 20_000;
+const VERIFY_STEP_BUDGET_MS = 8_000;
+/**
+ * How long `onLoad` waits for the class-translation map before injecting
+ * restored themes anyway.
+ *
+ * Waiting is right — CSS built with the map is the CSS the user wants —
+ * but `ensureTranslations` is bounded only by its own 30 s fetch timeout,
+ * and a captive portal or black-holing network would leave Steam unthemed
+ * for that whole time with nothing on screen to explain it. A cached map
+ * resolves instantly, so this only bites first-run and cache-cleared
+ * boots; past the cap we inject degraded and the verify pass rebuilds
+ * once the map lands.
+ */
+const TRANSLATIONS_BOOT_WAIT_MS = 8_000;
 
 interface InjectedStyle {
   /** Unique ID for the injected <style> element */
@@ -86,10 +149,6 @@ interface ThemeLoaderStorage {
 
 /** Strict ID pattern to prevent path traversal when installing community themes. */
 const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
-
-function safeStyleId(themeId: string): string {
-  return `theme-loader-${themeId.replace(/[^a-zA-Z0-9-_]/g, "_")}`;
-}
 
 export default class ThemeLoaderBackend implements PluginBackend {
   emit?: (payload: EmitPayload) => void;
@@ -113,23 +172,99 @@ export default class ThemeLoaderBackend implements PluginBackend {
    * active themes folds into this single in-flight promise.
    */
   private inflightReinject: Promise<void> | null = null;
+  /** Re-entrancy guard for `checkHealth` — its verification pass can
+   *  outlast the 5 s tick that scheduled it. */
+  private healthChecking = false;
+  /** Health ticks since load, used to throttle steady-state verification. */
+  private healthTicks = 0;
+  /**
+   * Origin of the startup verify window. Anchored on the FIRST successful
+   * CEF connect, not on `onLoad`: the service starts at login, but Steam
+   * may only be launched much later (or never, in desktop mode), and the
+   * race this window exists for begins when Steam does.
+   */
+  private startupWindowFrom: number | null = null;
+  /**
+   * Set once `onUnload` has run. Every async step that resumes after an
+   * await re-checks it — an in-flight verify pass would otherwise open
+   * sockets into the array unload just cleared, and re-inject the CSS
+   * unload just removed, leaving a disabled plugin's themes on screen
+   * with no live instance able to remove them.
+   */
+  private disposed = false;
+  /** In-flight `tryConnect`, so two passes can't both open a socket to
+   *  the same tab — additive discovery would then keep both forever. */
+  private inflightConnect: Promise<boolean> | null = null;
+  /**
+   * Set when CSS was assembled without the class-translation map, so
+   * what is on screen may carry the authoring build's selectors.
+   *
+   * The DOM probe cannot see this — the `<style>` is present and full of
+   * CSS, it just may not match — so the fact is carried forward and the
+   * styles rebuilt once the map arrives.
+   */
+  private cssBuiltWithoutTranslations = false;
+  /** Earliest time a translation re-sync may be attempted (backoff). */
+  private translationRetryAt = 0;
+  /** Current translation retry delay, doubling to {@link TRANSLATION_RETRY_MAX_MS}. */
+  private translationRetryDelayMs = TRANSLATION_RETRY_BASE_MS;
+  /** True while a background translation re-sync is running. */
+  private translationRetryInflight = false;
+  /** Last payload handed to `emit`, for change detection. */
+  private lastEmitted: string | null = null;
+  /**
+   * A disable may have left CSS behind in a tab we couldn't reach, so the
+   * next verification pass must sweep for orphans. Cleared once a pass
+   * completes having found none.
+   *
+   * Starts true: a fresh instance has never swept, and cannot know what a
+   * previous one left in those tabs.
+   */
+  private sweepPending = true;
+  /** Wall-clock budget for one verification pass. Overridable in tests. */
+  private verifyPassBudgetMs = VERIFY_PASS_BUDGET_MS;
 
   async onLoad(): Promise<void> {
     console.log("[theme-loader] Plugin loaded");
+    this.disposed = false;
+    this.startupWindowFrom = null;
+    this.healthTicks = 0;
+    // A fresh instance has no idea what is already in those tabs. The
+    // previous one may have been killed before it could remove anything,
+    // or — as when the style-id scheme changed — may have written ids
+    // this build no longer recognises, which would then sit in the page
+    // unreferenced and un-removable for as long as Steam ran. Sweep once
+    // on load and let the first clean pass clear the flag.
+    this.sweepPending = true;
     await mkdir(THEME_PACKS_DIR, { recursive: true });
     await this.rescanPacks();
     await this.loadStateFromDisk();
 
-    // Prime the class-translation cache in the background. Themes
-    // wait for this before applying.
-    ensureTranslations()
+    // Prime the class-translation cache. Restored themes must not be
+    // injected ahead of it: pack CSS carries the obfuscated class names
+    // of the Steam build it was authored against, and `assemblePackCss`
+    // silently emits them untranslated when the map is missing. That
+    // injects a `<style>` that is present but matches nothing — a theme
+    // that looks to the user like it simply didn't load.
+    //
+    // At boot that is a live race, and one the injection usually wins:
+    // connecting to CEF on localhost takes milliseconds, while the map
+    // may need a network fetch on a Deck whose wifi hasn't associated
+    // yet. So connect in parallel but gate the inject on the cache.
+    const translationsSettled = ensureTranslations()
       .then(() => this.emitState())
       .catch(() => { /* status reflects the failure */ });
 
     // Try initial connection, but don't block if Steam isn't running.
     // Re-injection folds into `reinjectAllActiveThemes` so a parallel
     // health-check tick can't double-inject the same CSS.
-    this.tryConnect().then(async (connected) => {
+    // Capped: past the cap we inject degraded rather than leave Steam
+    // unthemed behind a hung fetch — see TRANSLATIONS_BOOT_WAIT_MS.
+    const translationsOrTimeout = Promise.race([
+      translationsSettled,
+      Bun.sleep(TRANSLATIONS_BOOT_WAIT_MS),
+    ]);
+    Promise.all([this.tryConnect(), translationsOrTimeout]).then(async ([connected]) => {
       if (connected) {
         await this.reinjectAllActiveThemes();
         if (this.activeThemes.size > 0) {
@@ -140,27 +275,41 @@ export default class ThemeLoaderBackend implements PluginBackend {
       console.log("[theme-loader] Steam CEF not available yet, will retry");
     });
 
-    // Periodically check connection health
+    // Periodically check that we are still connected AND that the CSS
+    // is still in the page — the initial inject above races Steam's own
+    // startup, so it is verified rather than assumed. See `checkHealth`.
     this.healthInterval = setInterval(() => {
-      this.checkHealth();
-    }, 5000);
+      // An unhandled rejection out of a timer would take down the whole
+      // backend process, and this callback is the only place nothing is
+      // waiting on the promise.
+      this.checkHealth().catch((err) => {
+        console.warn("[theme-loader] Health check failed:", err);
+      });
+    }, HEALTH_INTERVAL_MS);
   }
 
   async onUnload(): Promise<void> {
+    // Set BEFORE the awaits below. A verify pass parked on a socket
+    // connect or a pack read would otherwise resume afterwards, push into
+    // the connection array this clears and re-inject the CSS this
+    // removes — leaving an unloaded plugin's themes on screen, held open
+    // by sockets no live instance can close.
+    this.disposed = true;
     clearInterval(this.healthInterval);
+    this.healthInterval = undefined;
 
     // Remove all injected CSS
     for (const [, injected] of this.activeThemes) {
       await this.removeFromAllTabs(injected.styleId);
     }
 
-    // Close all CDP connections. Silent catch: `ws.close()` may throw if
-    // the socket is already CLOSING/CLOSED — harmless on unload.
-    for (const conn of this.connections) {
-      try { conn.client.close(); } catch { /* already closed */ }
-    }
-    this.connections = [];
+    this.closeAllConnections();
     this.connected = false;
+    // Drop in-flight coalescing so a later onLoad on this instance can't
+    // adopt a promise belonging to the previous lifetime.
+    this.inflightReinject = null;
+    this.inflightConnect = null;
+    this.healthChecking = false;
 
     console.log("[theme-loader] Plugin unloaded");
   }
@@ -222,7 +371,7 @@ export default class ThemeLoaderBackend implements PluginBackend {
       }
     }
 
-    const styleId = safeStyleId(id);
+    const styleId = styleIdFor(id);
     try {
       await this.injectToAllTabs(styleId, css);
       this.activeThemes.set(id, { styleId });
@@ -244,6 +393,10 @@ export default class ThemeLoaderBackend implements PluginBackend {
     try {
       await this.removeFromAllTabs(injected.styleId);
       this.activeThemes.delete(id);
+      // Removal only reached the tabs we happened to be connected to, and
+      // the entry is now gone — so nothing else will ever look for this
+      // style again. Ask the next verification pass to sweep for it.
+      this.sweepPending = true;
       await this.saveStateToDisk();
       this.emitState();
       return { success: true };
@@ -268,11 +421,10 @@ export default class ThemeLoaderBackend implements PluginBackend {
 
   /** Manually trigger a reconnection attempt. */
   async reconnect(): Promise<{ success: boolean; error?: string }> {
-    // Silent catch: closing an already-closed WS is a no-op we want.
-    for (const conn of this.connections) {
-      try { conn.client.close(); } catch { /* already closed */ }
-    }
-    this.connections = [];
+    // Wait out any discovery already running, so clearing the list can't
+    // race it into opening a duplicate socket per tab.
+    await this.inflightConnect?.catch(() => false);
+    this.closeAllConnections();
     this.connected = false;
 
     const didConnect = await this.tryConnect();
@@ -575,12 +727,18 @@ export default class ThemeLoaderBackend implements PluginBackend {
       return { success: false, error: `Failed to persist variant selection: ${msg}` };
     }
 
-    // If the theme is currently active, re-inject with the new variant
-    if (this.activeThemes.has(id)) {
+    // If the theme is currently active, re-inject with the new variant.
+    // Replacing the InjectedStyle object (rather than mutating it) makes
+    // object identity a revision marker: an injection that loaded its CSS
+    // before this point can detect that it is now stale and stand down,
+    // instead of overwriting the new variant with the old one.
+    const injected = this.activeThemes.get(id);
+    if (injected) {
+      const fresh = { styleId: injected.styleId };
+      this.activeThemes.set(id, fresh);
       const css = await this.loadThemeCss(id);
-      const injected = this.activeThemes.get(id);
-      if (css !== null && injected) {
-        await this.injectToAllTabs(injected.styleId, css);
+      if (css !== null && this.activeThemes.get(id) === fresh) {
+        await this.injectToAllTabs(fresh.styleId, css);
       }
     }
 
@@ -605,14 +763,32 @@ export default class ThemeLoaderBackend implements PluginBackend {
   // ─── Internal Methods ─────────────────────────────────────────────
 
   private emitState() {
-    this.emit?.({
-      event: "stateChanged",
-      data: {
-        connected: this.connected,
-        activeThemes: Array.from(this.activeThemes.keys()),
-        translations: getTranslationsStatus(),
-      },
-    });
+    const data = {
+      connected: this.connected,
+      activeThemes: Array.from(this.activeThemes.keys()),
+      translations: getTranslationsStatus(),
+    };
+    this.lastEmitted = JSON.stringify(data);
+    this.emit?.({ event: "stateChanged", data });
+  }
+
+  /**
+   * Emit only when the payload actually moved.
+   *
+   * Compares the serialized payload rather than hand-picked fields, so a
+   * field added to `emitState` can't silently go unemitted — and so a
+   * field that ISN'T in the payload (connection count, say) can't cause
+   * an emit no consumer can observe. Discovery runs on a timer now, so
+   * both mistakes are cheap to make and expensive to keep.
+   */
+  private emitStateIfChanged() {
+    const data = {
+      connected: this.connected,
+      activeThemes: Array.from(this.activeThemes.keys()),
+      translations: getTranslationsStatus(),
+    };
+    if (JSON.stringify(data) === this.lastEmitted) return;
+    this.emitState();
   }
 
   /** Rescan the install dir for theme packs. */
@@ -624,44 +800,119 @@ export default class ThemeLoaderBackend implements PluginBackend {
     }
   }
 
-  /** Load the CSS to inject for a given theme id (community pack). */
+  /**
+   * Load the CSS to inject for a given theme id (community pack), or
+   * `null` if no such pack is installed.
+   *
+   * Deliberately still returns CSS when the class-translation map is
+   * missing, and records that it did. Refusing outright is tempting —
+   * pack CSS carries the obfuscated class names of the build it was
+   * authored against, and `assemblePackCss` leaves them alone without
+   * the map — but the map only contains entries where a name actually
+   * CHANGED (`buildMap` skips `variant === current`). A theme authored
+   * against the current Steam build therefore needs no translation at
+   * all, and neither do hand-authored packs or CSS-variable-only
+   * patches. Those work perfectly offline, and refusing would break them
+   * to protect the stale ones. Degraded beats absent; the flag lets
+   * `verifyAndHealInjection` rebuild for real once the map lands.
+   *
+   * `enableTheme` keeps its own hard gate, as it always had — turning a
+   * theme ON is a deliberate act that can be told to wait.
+   */
   private async loadThemeCss(id: string): Promise<string | null> {
     const pack = this.installedPacks.get(id);
-    if (pack) {
-      // Re-read the manifest in case the user edited it, then assemble
-      const manifest = (await readManifest(pack.dir)) ?? pack.manifest;
-      return assemblePackCss(pack.dir, manifest, this.packVariants[id] ?? {});
+    if (!pack) return null;
+    if (getTranslationsStatus().state !== "ready") {
+      this.cssBuiltWithoutTranslations = true;
     }
-    return null;
+    // Re-read the manifest in case the user edited it, then assemble
+    const manifest = (await readManifest(pack.dir)) ?? pack.manifest;
+    return assemblePackCss(pack.dir, manifest, this.packVariants[id] ?? {});
   }
 
-  private async tryConnect(): Promise<boolean> {
-    try {
-      const res = await fetch(`http://localhost:${DEBUG_PORT}/json`, {
-        signal: AbortSignal.timeout(3000),
-      });
-      if (!res.ok) throw new Error(`/json returned ${res.status}`);
+  /**
+   * Discover Steam's target CEF tabs and make sure we hold a live CDP
+   * connection to each one.
+   *
+   * Additive on purpose. Steam brings its tabs up progressively: the
+   * shared context exists long before the Big Picture window, and the
+   * `MainMenu_uid<N>` / `QuickAccess` popups are created later still.
+   * A discovery pass that ran while Steam was still assembling itself
+   * used to be the last one — the tab list was captured once and any tab
+   * born afterwards never received CSS, which is the "themes didn't
+   * apply on boot" race. Re-running discovery now picks up the late
+   * arrivals, and keeping the connections we already hold means doing so
+   * doesn't disturb (or re-flash) the tabs that are already themed.
+   *
+   * Callers that want a hard rebuild — `reconnect()`, behind the UI's
+   * "Reapply themes" button — close and clear `this.connections` first.
+   *
+   * Serialized through {@link inflightConnect}. Two passes running at
+   * once would each compute "tabs I am not connected to" from the same
+   * stale list and both open a socket to the same tab; because discovery
+   * is now additive, both would then be kept on every later pass, and
+   * every injection and probe for that tab would run twice for the life
+   * of the session.
+   */
+  private tryConnect(): Promise<boolean> {
+    if (this.inflightConnect) return this.inflightConnect;
+    const run = this.doConnect();
+    this.inflightConnect = run.finally(() => {
+      this.inflightConnect = null;
+    });
+    return this.inflightConnect;
+  }
 
-      const tabs = (await res.json()) as CEFTab[];
+  private async doConnect(): Promise<boolean> {
+    try {
+      const tabs = await listCefTabs({ debugPort: DEBUG_PORT, timeoutMs: 3000 });
+      if (this.disposed) return false;
       const targetTabs = tabs.filter(isTargetTab);
 
       if (targetTabs.length === 0) {
         console.log("[theme-loader] No target tabs found among:", tabs.map((t) => t.title));
+        // Every connection we hold points at a tab Steam is no longer
+        // advertising. Leaving them in place would report a healthy
+        // tabCount alongside `connected: false` and leak the sockets.
+        this.closeAllConnections();
         this.connected = false;
+        this.emitStateIfChanged();
         return false;
       }
 
-      // Silent catch: closing an already-closed WS is a no-op we want.
+      // Keep every connection that is still live AND still points at a
+      // tab Steam is advertising; drop the rest. Silent catch: closing an
+      // already-closed WS is a no-op we want.
+      const targetIds = new Set(targetTabs.map((t) => t.id));
+      const kept: CDPConnection[] = [];
       for (const conn of this.connections) {
+        if (conn.client.connected && targetIds.has(conn.id)) {
+          kept.push(conn);
+          continue;
+        }
         try { conn.client.close(); } catch { /* already closed */ }
       }
-      this.connections = [];
+      this.connections = kept;
 
+      const connectedIds = new Set(kept.map((c) => c.id));
       for (const tab of targetTabs) {
         if (!tab.webSocketDebuggerUrl) continue;
+        if (connectedIds.has(tab.id)) continue;
         try {
-          const conn = await this.openCDP(tab.webSocketDebuggerUrl);
+          const conn = await this.openCDP({
+            id: tab.id,
+            title: tab.title,
+            wsUrl: tab.webSocketDebuggerUrl,
+          });
+          // `onUnload` may have run during the connect. Close rather than
+          // push: pushing would repopulate the array unload just cleared,
+          // and nothing would ever close the socket again.
+          if (this.disposed) {
+            try { conn.client.close(); } catch { /* already closed */ }
+            return false;
+          }
           this.connections.push(conn);
+          connectedIds.add(tab.id);
           console.log(`[theme-loader] Connected to tab: ${tab.title}`);
         } catch (err) {
           console.warn(`[theme-loader] Failed to connect to ${tab.title}:`, err);
@@ -669,18 +920,33 @@ export default class ThemeLoaderBackend implements PluginBackend {
       }
 
       this.connected = this.connections.length > 0;
-      this.emitState();
+      if (this.connected && this.startupWindowFrom === null) {
+        // Steam is up. The race this plugin exists to survive starts now.
+        this.startupWindowFrom = Date.now();
+      }
+      this.emitStateIfChanged();
       return this.connected;
     } catch {
       this.connected = false;
+      this.emitStateIfChanged();
       return false;
     }
   }
 
-  private async openCDP(wsUrl: string): Promise<CDPConnection> {
+  /** Close and forget every CDP connection. */
+  private closeAllConnections(): void {
+    for (const conn of this.connections) {
+      try { conn.client.close(); } catch { /* already closed */ }
+    }
+    this.connections = [];
+  }
+
+  private async openCDP(
+    { id, title, wsUrl }: { id: string; title: string; wsUrl: string },
+  ): Promise<CDPConnection> {
     const client = new CDPClient(wsUrl);
     await client.connect();
-    return { client };
+    return { id, title, client };
   }
 
   private cdpEvaluate(conn: CDPConnection, expression: string): Promise<unknown> {
@@ -688,48 +954,36 @@ export default class ThemeLoaderBackend implements PluginBackend {
   }
 
   private async injectCSSToTab(conn: CDPConnection, styleId: string, css: string): Promise<void> {
-    const escapedCSS = css.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$/g, "\\$");
-    const js = `
-      (function() {
-        let existing = document.getElementById("${styleId}");
-        if (existing) existing.remove();
-
-        let style = document.createElement("style");
-        style.id = "${styleId}";
-        style.classList.add("theme-loader-style");
-        style.dataset.loadoutPlugin = "theme-loader";
-        document.head.appendChild(style);
-        style.textContent = \`${escapedCSS}\`;
-      })()
-    `;
-
-    await this.cdpEvaluate(conn, js);
+    await this.cdpEvaluate(conn, buildInjectStyleExpression({ styleId, css }));
   }
 
   private async removeCSSFromTab(conn: CDPConnection, styleId: string): Promise<void> {
-    const js = `
-      (function() {
-        let el = document.getElementById("${styleId}");
-        if (el) el.parentNode.removeChild(el);
-      })()
-    `;
-    await this.cdpEvaluate(conn, js);
+    await this.cdpEvaluate(conn, buildRemoveStyleExpression(styleId));
   }
 
   private async injectToAllTabs(styleId: string, css: string): Promise<void> {
-    const liveConnections: CDPConnection[] = [];
+    const failed: CDPConnection[] = [];
 
-    for (const conn of this.connections) {
-      if (!conn.client.connected) continue;
+    for (const conn of [...this.connections]) {
+      if (!conn.client.connected) {
+        failed.push(conn);
+        continue;
+      }
       try {
         await this.injectCSSToTab(conn, styleId, css);
-        liveConnections.push(conn);
       } catch (err) {
-        console.warn(`[theme-loader] Failed to inject to tab:`, err);
+        console.warn(`[theme-loader] Failed to inject to tab ${conn.title}:`, err);
+        failed.push(conn);
       }
     }
 
-    this.connections = liveConnections;
+    if (failed.length > 0) {
+      const dead = new Set(failed);
+      this.connections = this.connections.filter((c) => !dead.has(c));
+      for (const conn of failed) {
+        try { conn.client.close(); } catch { /* already closed */ }
+      }
+    }
     if (this.connections.length === 0) {
       this.connected = false;
     }
@@ -747,21 +1001,243 @@ export default class ThemeLoaderBackend implements PluginBackend {
   }
 
   private async checkHealth(): Promise<void> {
-    const alive = this.connections.filter((c) => c.client.connected);
-    if (alive.length !== this.connections.length) {
-      this.connections = alive;
-      console.log(`[theme-loader] Pruned dead connections, ${alive.length} remaining`);
-    }
+    // The verification pass awaits CDP round-trips, which can outlast the
+    // 5 s tick on a busy Steam. Without this guard the ticks pile up and
+    // each one issues its own re-injection.
+    if (this.healthChecking) return;
+    this.healthChecking = true;
+    try {
+      const alive = this.connections.filter((c) => c.client.connected);
+      if (alive.length !== this.connections.length) {
+        this.connections = alive;
+        console.log(`[theme-loader] Pruned dead connections, ${alive.length} remaining`);
+      }
 
-    if (this.connections.length === 0) {
-      const wasConnected = this.connected;
-      this.connected = false;
-      if (wasConnected) this.emitState();
-      const didReconnect = await this.tryConnect();
-      if (didReconnect) {
+      if (this.connections.length === 0) {
+        const wasConnected = this.connected;
+        this.connected = false;
+        if (wasConnected) this.emitState();
+        const didReconnect = await this.tryConnect();
+        if (!didReconnect) return;
+        // `reinjectAllActiveThemes` coalesces, so this may adopt a pass
+        // that started against the connection list we just replaced —
+        // themes it had already walked past would never reach the new
+        // tabs. Fall through to verification rather than returning, so
+        // the tick that reconnected is also the tick that checks.
         await this.reinjectAllActiveThemes();
       }
+
+      // Connected is not the same as themed — see
+      // `verifyAndHealInjection`. Check on every tick while Steam is
+      // still coming up (that is where the race lives), then settle to
+      // one pass every ~30 s to catch a later reload or a popup opening.
+      this.healthTicks++;
+      const startingUp =
+        this.startupWindowFrom !== null &&
+        Date.now() - this.startupWindowFrom < STARTUP_VERIFY_WINDOW_MS;
+      if (startingUp || this.healthTicks % STEADY_VERIFY_EVERY_TICKS === 0) {
+        await this.verifyAndHealInjection();
+      }
+    } finally {
+      this.healthChecking = false;
     }
+  }
+
+  /**
+   * Ask each connected tab whether our `<style>` elements are actually
+   * present, and re-inject into the tabs that lost them.
+   *
+   * This exists because a live CDP socket is not evidence that the CSS
+   * is live. Two things go wrong around boot, and both leave the socket
+   * looking perfectly healthy:
+   *
+   * - Steam creates its tabs progressively, so a tab born after the
+   *   initial discovery pass has never been injected into. The
+   *   discovery inside {@link tryConnect} is additive, so calling it
+   *   here adopts those tabs without touching the ones already themed.
+   * - Steam reloads the documents it hosts during startup (and when Big
+   *   Picture opens or closes), which wipes every injected `<style>`
+   *   while keeping the CDP target alive.
+   *
+   * Healing is per tab and per style: a tab that still has its CSS is
+   * left completely alone, so fixing a tab that came up late can't flash
+   * the tabs that were fine. This is the automatic form of the
+   * "Reapply themes" button users have been pressing by hand.
+   */
+  private async verifyAndHealInjection(): Promise<void> {
+    if (this.disposed) return;
+    // With nothing active there is normally nothing to check — but a
+    // disable that couldn't reach every tab leaves CSS behind precisely
+    // when the map goes empty, so a pending sweep still runs.
+    if (this.activeThemes.size === 0 && !this.sweepPending) return;
+    // A full re-inject is in flight and covers everything below.
+    if (this.inflightReinject) return;
+
+    // Adopt tabs Steam created after the last discovery pass. Failure is
+    // fine — we still verify whatever connections we already hold.
+    await this.tryConnect().catch(() => false);
+    if (this.disposed) return;
+
+    this.retryTranslationsInBackground();
+
+    // The map arrived after we injected, so every tab may be carrying CSS
+    // built against the wrong Steam build. The DOM probe below would call
+    // all of it healthy — the styles are there, they just may not match —
+    // so rebuild everything before falling through to it.
+    if (this.cssBuiltWithoutTranslations && getTranslationsStatus().state === "ready") {
+      console.log("[theme-loader] Class translations arrived late, rebuilding active themes");
+      this.cssBuiltWithoutTranslations = false;
+      await this.reinjectAllActiveThemes();
+      this.emitStateIfChanged();
+      return;
+    }
+
+    const byStyleId = new Map<string, string>();
+    for (const [themeId, injected] of this.activeThemes) {
+      byStyleId.set(injected.styleId, themeId);
+    }
+    const styleIds = Array.from(byStyleId.keys());
+    const deadline = Date.now() + this.verifyPassBudgetMs;
+    let sweptClean = true;
+
+    for (const conn of [...this.connections]) {
+      if (this.disposed) return;
+      if (!conn.client.connected) continue;
+      if (Date.now() > deadline) {
+        // Out of budget. The remaining tabs are checked next tick rather
+        // than holding the health guard — and with it dead-connection
+        // pruning — open indefinitely.
+        console.warn("[theme-loader] Verification pass out of time; resuming next tick");
+        sweptClean = false;
+        break;
+      }
+
+      if (this.sweepPending) {
+        try {
+          const raw = await this.boundedEvaluate({ conn, expression: buildOrphanSweepExpression(styleIds) });
+          const removed = Array.isArray(raw) ? raw.filter((v) => typeof v === "string") : [];
+          if (removed.length > 0) {
+            console.log(
+              `[theme-loader] ${conn.title}: removed ${removed.length} orphaned theme style(s)`,
+            );
+          }
+        } catch (err) {
+          console.warn(`[theme-loader] Could not sweep ${conn.title}:`, err);
+          sweptClean = false;
+        }
+      }
+
+      if (styleIds.length === 0) continue;
+
+      let missing: string[];
+      try {
+        const raw = await this.boundedEvaluate({ conn, expression: buildMissingStylesExpression(styleIds) });
+        missing = parseMissingStyles({ raw, styleIds });
+      } catch (err) {
+        // Probe failed — leave it for the next tick rather than
+        // re-injecting blind into a tab we can't read.
+        console.warn(`[theme-loader] Could not verify styles in ${conn.title}:`, err);
+        continue;
+      }
+      if (missing.length === 0) continue;
+
+      console.log(
+        `[theme-loader] ${conn.title}: ${missing.length} theme style(s) missing, re-injecting`,
+      );
+      for (const styleId of missing) {
+        const themeId = byStyleId.get(styleId);
+        if (!themeId) continue;
+        const injected = this.activeThemes.get(themeId);
+        if (!injected) continue;
+
+        const css = await this.loadThemeCss(themeId);
+        if (css === null) {
+          // Active but no pack on disk — deleted out of band. Say so once
+          // per pass rather than logging "re-injecting" every tick forever.
+          console.warn(`[theme-loader] Active theme "${themeId}" has no installed pack; skipping`);
+          continue;
+        }
+        // Re-check AFTER the awaits, not just before them: loading a
+        // multi-file pack off an SD card is slow enough for the user to
+        // have disabled the theme or changed its variant in the meantime.
+        // Injecting then would resurrect CSS nothing can remove (disable
+        // has already run and found nothing to remove), or overwrite a
+        // fresh variant with the stale one this pass loaded.
+        if (this.disposed || this.activeThemes.get(themeId) !== injected) continue;
+        try {
+          await this.injectCSSToTab(conn, styleId, css);
+        } catch (err) {
+          console.warn(`[theme-loader] Failed to re-inject ${themeId} into ${conn.title}:`, err);
+        }
+      }
+    }
+
+    if (this.sweepPending && sweptClean) this.sweepPending = false;
+  }
+
+  /**
+   * `cdpEvaluate` with a wall-clock cap.
+   *
+   * `CDPClient.evaluate` queues behind every other evaluate against the
+   * same CEF target — a chain shared process-wide with the badge and
+   * loader injectors — and its own timeout starts only once it reaches
+   * the front. A hung evaluate elsewhere would otherwise stall this pass
+   * for as long as it lasts. Losing the race abandons the result, not the
+   * request; the next tick re-probes.
+   */
+  private async boundedEvaluate(
+    { conn, expression, timeoutMs = VERIFY_STEP_BUDGET_MS }:
+      { conn: CDPConnection; expression: string; timeoutMs?: number },
+  ): Promise<unknown> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.cdpEvaluate(conn, expression),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`evaluate did not settle within ${timeoutMs}ms`)),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Kick off a class-translation re-sync, at most one at a time and with
+   * exponential backoff.
+   *
+   * Deliberately NOT awaited. `ensureTranslations` has no failure memory
+   * — with no cache it issues a fresh request bounded only by its own
+   * 30 s timeout — so awaiting it here would hold the `healthChecking`
+   * guard for that long, and a network that black-holes rather than
+   * refuses would disable dead-connection pruning and reconnection
+   * entirely. The result is picked up by a later pass instead.
+   */
+  private retryTranslationsInBackground(): void {
+    if (getTranslationsStatus().state === "ready") return;
+    if (this.translationRetryInflight) return;
+    if (Date.now() < this.translationRetryAt) return;
+
+    this.translationRetryInflight = true;
+    ensureTranslations()
+      .catch(() => { /* status reflects the failure */ })
+      .finally(() => {
+        this.translationRetryInflight = false;
+        if (getTranslationsStatus().state === "ready") {
+          this.translationRetryDelayMs = TRANSLATION_RETRY_BASE_MS;
+          this.emitStateIfChanged();
+          return;
+        }
+        this.translationRetryAt = Date.now() + this.translationRetryDelayMs;
+        this.translationRetryDelayMs = Math.min(
+          this.translationRetryDelayMs * 2,
+          TRANSLATION_RETRY_MAX_MS,
+        );
+        this.emitStateIfChanged();
+      });
   }
 
   /**
@@ -774,11 +1250,15 @@ export default class ThemeLoaderBackend implements PluginBackend {
   private reinjectAllActiveThemes(): Promise<void> {
     if (this.inflightReinject) return this.inflightReinject;
     const run = (async () => {
-      for (const [id, injected] of this.activeThemes) {
+      for (const [id, injected] of [...this.activeThemes]) {
         const css = await this.loadThemeCss(id);
-        if (css !== null) {
-          await this.injectToAllTabs(injected.styleId, css);
-        }
+        if (css === null) continue;
+        // The loop awaits per theme and `injectToAllTabs` awaits per tab,
+        // so a disable or variant change can land mid-pass. Identity of
+        // the InjectedStyle is the revision marker — see
+        // `setThemePackVariant`.
+        if (this.disposed || this.activeThemes.get(id) !== injected) continue;
+        await this.injectToAllTabs(injected.styleId, css);
       }
     })();
     this.inflightReinject = run.finally(() => {
@@ -798,7 +1278,7 @@ export default class ThemeLoaderBackend implements PluginBackend {
         await readPluginStorage<ThemeLoaderStorage>(PLUGIN_ID);
       this.packVariants = packVariants;
       for (const id of activeThemes) {
-        this.activeThemes.set(id, { styleId: safeStyleId(id) });
+        this.activeThemes.set(id, { styleId: styleIdFor(id) });
       }
       if (activeThemes.length > 0) {
         console.log(`[theme-loader] Restored ${activeThemes.length} active theme(s) from disk`);

@@ -632,9 +632,15 @@ function ThemeLoader() {
                   }`}
                 />
                 <span className="flex-1">
+                  {/* Themes DO still apply without the class-translation
+                      map — it only rewrites class names that changed
+                      between Steam builds, so themes built for this build
+                      are unaffected. Saying they "can't apply" was wrong,
+                      and hid the real symptom: older themes look partly
+                      or wholly unstyled until the sync lands. */}
                   {translations.state === "pending"
                     ? "Syncing community theme support…"
-                    : `Offline — community themes can't apply (${translations.lastError ?? "no network"}).`}
+                    : `Offline — themes built for older Steam versions may look wrong until this syncs (${translations.lastError ?? "no network"}).`}
                 </span>
                 <Button
                   onClick={handleRefreshTranslations}
