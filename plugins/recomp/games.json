@@ -957,7 +957,7 @@
       "description": "Open-source engine replacement for The Elder Scrolls III: Morrowind. Requires original game data from Steam/GOG.",
       "installType": "rom_extract",
       "releaseAssets": {
-        "windows": "OpenMW-*-win64.exe",
+        "windows": "OpenMW-*-Windows-x64.exe",
         "linux": "openmw-*-Linux-64Bit.tar.gz"
       },
       "romInfo": {
@@ -8525,11 +8525,10 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": "AITD_REHAUNTED_*_Win64.zip",
-        "linux": "AITD_REHAUNTED_*_Linux.tar.gz"
+        "linux": null
       },
       "launchCommand": {
-        "windows": "{installDir}/Tatou.exe",
-        "linux": "{installDir}/launch_tatou.sh"
+        "windows": "{installDir}/Tatou.exe"
       },
       "tags": [
         "alone-in-the-dark",

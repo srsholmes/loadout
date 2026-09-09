@@ -100,20 +100,35 @@ async function check(g: Game): Promise<Result> {
   if (!rel) {
     return { id: g.id, repo: g.repo, ok: false, reason: "no releases published" };
   }
-  // Check linux first, then windows (Proton) — whichever is declared.
+  // Check EVERY declared platform, not just the first that matches.
+  //
+  // Returning ok on the first hit hides the exact regression this audit
+  // exists to catch: `banjo-recomp` declares both a Linux and a Windows
+  // glob, and when v1.0.2 moved the Linux asset from `.zip` to `.tar.gz`
+  // the Windows pattern still matched — so the entry would have reported
+  // "ok (matched windows)" for the whole time its Linux build was
+  // silently falling back to Proton. Linux is the platform that matters
+  // on a Deck, so a miss on ANY declared pattern is a failure.
+  const missed: string[] = [];
+  const matched: string[] = [];
   for (const plat of ["linux", "windows"] as const) {
     const pat = assets[plat];
-    if (!pat) continue;
+    if (!pat) continue; // not shipped for this platform — nothing to check
     if (rel.assets.some((a) => globToRe(pat).test(a.name))) {
-      return { id: g.id, repo: g.repo, ok: true, reason: `matched ${plat}` };
+      matched.push(plat);
+    } else {
+      missed.push(`${plat} '${pat}'`);
     }
   }
-  return {
-    id: g.id,
-    repo: g.repo,
-    ok: false,
-    reason: `no asset matches '${pattern}' in latest release`,
-  };
+  if (missed.length > 0) {
+    return {
+      id: g.id,
+      repo: g.repo,
+      ok: false,
+      reason: `no asset matches ${missed.join(" + ")} in latest release`,
+    };
+  }
+  return { id: g.id, repo: g.repo, ok: true, reason: `matched ${matched.join("+")}` };
 }
 
 // Bounded concurrency so we don't hammer the API.

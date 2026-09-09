@@ -617,6 +617,28 @@ export async function installGame(
     // `launchCommand` and must not be flattened.
     if (entry.manualImport || entry.flattenRoot) {
       await flattenSingleRoot(partialDir);
+      // `flattenSingleRoot` is a deliberate no-op unless the archive has
+      // EXACTLY one top-level entry and it's a directory. That guard is
+      // right, but it fails quietly: the day an upstream adds a loose
+      // top-level README beside its versioned wrapper, the hoist stops
+      // happening, `{installDir}/<binary>` no longer resolves, and
+      // `makeExecutable` also returns silently on a missing path — so a
+      // broken install would be promoted and shortcut with no error
+      // anywhere. `flattenRoot` exists precisely because these wrappers
+      // are unstable, so check the launch target before promoting.
+      const flattenedCmd = entry.launchCommand[resolvedPlatform];
+      if (flattenedCmd) {
+        const exe = resolveTemplate(flattenedCmd, partialDir, romPath).split(
+          /\s+/,
+        )[0]!;
+        if (!existsSync(exe)) {
+          throw new Error(
+            `${entry.name}: after flattening the archive root, the launch target ` +
+              `"${basename(exe)}" was not found. The upstream archive layout has ` +
+              `probably changed — this entry's flattenRoot/launchCommand needs updating.`,
+          );
+        }
+      }
     }
     onEvent({
       type: "progress", gameId, stage: "extracting",

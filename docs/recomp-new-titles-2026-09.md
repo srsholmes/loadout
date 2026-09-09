@@ -60,8 +60,17 @@ Windows-via-Proton or broke outright):
   platform assets renamed)
 
 `scripts/audit-urls.ts` is what surfaces these; it is worth running on a
-schedule rather than only during a sweep. It now skips `manualImport`
-entries, which carry no `repo` and could only ever report a false 404.
+schedule rather than only during a sweep. Two fixes went in alongside:
+
+- It now checks **every declared platform** instead of returning ok on the
+  first glob that matches. The old behaviour hid exactly this regression
+  class — `banjo-recomp` declares both a Linux and a Windows glob, so while
+  its Linux asset was unmatched the audit still reported
+  "ok (matched windows)". Tightening it immediately surfaced two more
+  pre-existing breakages that had been masked: `openmw` (Windows glob) and
+  `aitd-rehaunted` (Linux glob).
+- It skips `manualImport` entries, which carry no `repo` and could only ever
+  report a false 404.
 
 ## Deferred, with reasons
 
@@ -103,6 +112,19 @@ entries, which carry no `repo` and could only ever report a false 404.
 
 ## Gotchas worth knowing next time
 
+- **A declared platform whose asset is missing from the newest release is a
+  hard install failure, not a fallback.** `getEffectivePlatformValue()`
+  commits to Linux as soon as `releaseAssets.linux` is a string, so if the
+  resolved release happens to ship Windows only, `resolveAssetUrl` throws
+  `No asset matching …` instead of falling back to the Proton build. This is
+  not hypothetical: `aitd-rehaunted` was live-broken this way (its 2.4.0
+  stable is Windows-only; Linux last appeared in a 2.3.0 *prerelease*, which
+  the resolver skips), and it was fixed here by setting `"linux": null`.
+  The same trap is latent for the `mstan` PS1 entries, whose rolling
+  `shared-staging-*` tag has occasionally carried Windows assets only. If
+  that recurs, either pin `latestAssetUrl` or drop the Linux glob until
+  upstream stabilises — and consider teaching `resolveAssetUrl` to fall back
+  to an older release that does have the platform asset.
 - **`scripts/test-installers.ts --deep` is weaker than it looks.** It
   accepts the launch binary at *any* depth in the extracted tree, so it
   cannot catch a wrong `launchCommand` path or a missing `flattenRoot`.
