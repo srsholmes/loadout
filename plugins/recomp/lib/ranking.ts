@@ -28,4 +28,5 @@ export const HEADLINE_IDS: ReadonlyArray<string> = [
   "dusklight",            // Twilight Princess (recompiled)
   "sm64-decomp",          // Super Mario 64 (Render96 HD, native) — recommended
   "sm64-render96-rt",     // Super Mario 64 (Render96 + Ray Tracing) — premium
+  "dk64-recomp",          // Donkey Kong 64 (recompiled) — 1.0 mainline N64Recomp
 ];

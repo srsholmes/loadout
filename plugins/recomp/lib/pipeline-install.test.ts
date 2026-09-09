@@ -274,3 +274,88 @@ describe("uninstallGame — orphan cleanup (FIX 2)", () => {
     expect(persisted.romPaths?.[entry.id]).toBeUndefined();
   });
 });
+
+describe("installGame — flattenRoot", () => {
+  // Simulate an upstream that wraps the whole build in a version-stamped
+  // top-level folder (Snap64Recomp-1.0.2-linux-x86_64/, LodRecomp-v…/).
+  // The wrapper name changes every release, so the entry can't encode it
+  // in `launchCommand` — `flattenRoot` hoists it instead.
+  function wrapInVersionedDir(binary: string) {
+    return async (dest: string) => {
+      const inner = join(dest, "Thing-1.2.3-linux-x86_64");
+      await mkdir(inner, { recursive: true });
+      await writeFile(join(inner, binary), "#!/bin/sh\n");
+    };
+  }
+
+  it("hoists a single top-level directory when the entry opts in", async () => {
+    const { installGame } = await import("./pipeline");
+    extractProducer = wrapInVersionedDir("test");
+
+    const entry = makeEntry({ flattenRoot: true });
+    await installGame(entry, baseState(), undefined, () => {});
+
+    const installDir = join(sandbox, "games", entry.id);
+    // `{installDir}/test` resolves — the wrapper is gone.
+    expect(existsSync(join(installDir, "test"))).toBe(true);
+    expect(existsSync(join(installDir, "Thing-1.2.3-linux-x86_64"))).toBe(false);
+  });
+
+  it("leaves a stable wrapper directory alone when the entry does not opt in", async () => {
+    const { installGame } = await import("./pipeline");
+    extractProducer = wrapInVersionedDir("test");
+
+    // No `flattenRoot` — this is the `perfect-dark` shape, where the
+    // wrapper is stable and deliberately part of `launchCommand`.
+    const entry = makeEntry();
+    await installGame(entry, baseState(), undefined, () => {});
+
+    const installDir = join(sandbox, "games", entry.id);
+    expect(existsSync(join(installDir, "Thing-1.2.3-linux-x86_64", "test"))).toBe(true);
+    expect(existsSync(join(installDir, "test"))).toBe(false);
+  });
+
+  it("is a no-op for an archive that already extracted flat", async () => {
+    const { installGame } = await import("./pipeline");
+    extractProducer = async (dest) => {
+      await mkdir(dest, { recursive: true });
+      await writeFile(join(dest, "test"), "#!/bin/sh\n");
+      await writeFile(join(dest, "readme.txt"), "hi");
+    };
+
+    const entry = makeEntry({ flattenRoot: true });
+    await installGame(entry, baseState(), undefined, () => {});
+
+    const installDir = join(sandbox, "games", entry.id);
+    expect(existsSync(join(installDir, "test"))).toBe(true);
+    expect(existsSync(join(installDir, "readme.txt"))).toBe(true);
+  });
+});
+
+describe("installGame — flattenRoot launch-target guard", () => {
+  it("fails loudly instead of promoting a broken install when the hoist did not happen", async () => {
+    const { installGame } = await import("./pipeline");
+    const { loadState } = await import("./state");
+
+    // Upstream added a loose top-level file beside the versioned wrapper,
+    // so flattenSingleRoot's "exactly one entry" guard makes it a no-op
+    // and `{installDir}/test` never materialises.
+    extractProducer = async (dest) => {
+      const inner = join(dest, "Thing-1.2.3-linux-x86_64");
+      await mkdir(inner, { recursive: true });
+      await writeFile(join(inner, "test"), "#!/bin/sh\n");
+      await writeFile(join(dest, "README.md"), "loose file");
+    };
+
+    const entry = makeEntry({ flattenRoot: true });
+    await expect(
+      installGame(entry, baseState(), undefined, () => {}),
+    ).rejects.toThrow(/launch target "test" was not found/);
+
+    // And it must not leave a half-installed dir or a persisted record.
+    const installDir = join(sandbox, "games", entry.id);
+    expect(existsSync(installDir)).toBe(false);
+    expect(existsSync(`${installDir}.partial`)).toBe(false);
+    expect((await loadState()).games[entry.id]).toBeUndefined();
+  });
+});
