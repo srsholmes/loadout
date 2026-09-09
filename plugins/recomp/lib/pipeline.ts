@@ -336,8 +336,10 @@ function manualImportPlatform(entry: GameEntry): PlatformName {
  * build in a single versioned top-level folder (e.g.
  * `TimeSplittersRewind_EarlyAccess_V03.3/…`), which would otherwise
  * push the launch binary one level below where the entry's
- * `launchCommand` (`{installDir}/Foo.exe`) expects it. No-op when the
- * archive extracted flat or has multiple top-level entries.
+ * `launchCommand` (`{installDir}/Foo.exe`) expects it. Several GitHub
+ * releases do the same (`Snap64Recomp-1.0.2-linux-x86_64/`), which is
+ * what `GameEntry.flattenRoot` opts into. No-op when the archive
+ * extracted flat or has multiple top-level entries.
  */
 async function flattenSingleRoot(dir: string): Promise<void> {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -608,9 +610,12 @@ export async function installGame(
         ? basename(resolveTemplate(launchCmd, partialDir))
         : undefined;
     await extractArchive(downloadPath, partialDir, appimageBasename);
-    // Manual-import archives commonly wrap the build in one versioned
-    // top-level folder; hoist it so `{installDir}/<binary>` resolves.
-    if (entry.manualImport) {
+    // Manual-import archives — and some GitHub releases — wrap the build
+    // in one versioned top-level folder; hoist it so
+    // `{installDir}/<binary>` resolves. Opt-in per entry, because
+    // entries with a *stable* wrapper (perfect-dark) encode it in
+    // `launchCommand` and must not be flattened.
+    if (entry.manualImport || entry.flattenRoot) {
       await flattenSingleRoot(partialDir);
     }
     onEvent({

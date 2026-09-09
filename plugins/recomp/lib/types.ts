@@ -286,6 +286,20 @@ export interface GameEntry {
   tags: string[];
   website?: string;
   versionPattern?: string;
+  /**
+   * Hoist a single top-level directory out of the extracted archive.
+   *
+   * Some upstreams wrap the whole build in a *version-stamped* folder
+   * (`Snap64Recomp-1.0.2-linux-x86_64/`, `LodRecomp-v0.2.26-linux-x64/`),
+   * so the wrapper's name changes every release and can't be baked into
+   * `launchCommand`. Opt in here and the launch binary sits at
+   * `{installDir}/<binary>` regardless of the release.
+   *
+   * Leave unset when the wrapper name is *stable* (`perfect-dark`'s
+   * `pd-x86_64-linux/`) — those entries encode the directory in
+   * `launchCommand` on purpose, and flattening would break them.
+   */
+  flattenRoot?: boolean;
   preservePaths?: string[];
   releaseChecksums?: Record<string, string>;
   /**

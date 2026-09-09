@@ -45,6 +45,7 @@ interface Game {
   repo: string;
   installType: string;
   releaseAssets?: Record<string, string | null>;
+  manualImport?: { pageUrl: string };
 }
 
 type Result = { id: string; repo: string; ok: boolean; reason: string };
@@ -58,9 +59,15 @@ const games: Game[] = JSON.parse(
 // intentional "in progress / not installable yet" catalog entries (they
 // surface upstream decomp/recomp projects for visibility); they're not
 // download targets, so auditing them as broken would be noise.
+//
+// `manualImport` entries are skipped for the same reason: the user
+// downloads the build from an off-GitHub page (IndieDB/ModDB), so the
+// entry carries no `repo` and the GitHub lookup can only ever 404.
 const targets = games.filter(
   (g) =>
     (g.installType === "prebuilt" || g.installType === "rom_extract") &&
+    !g.manualImport &&
+    g.repo &&
     g.releaseAssets &&
     Object.values(g.releaseAssets).some((v) => typeof v === "string" && v),
 );

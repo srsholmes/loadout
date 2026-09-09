@@ -63,7 +63,7 @@
       "installType": "prebuilt",
       "releaseAssets": {
         "windows": "BanjoRecompiled-*-Windows.zip",
-        "linux": "BanjoRecompiled-*-Linux-X64.zip"
+        "linux": "BanjoRecompiled-*-Linux-X64.tar.gz"
       },
       "launchCommand": {
         "windows": "{installDir}/BanjoRecompiled.exe",
@@ -75,7 +75,7 @@
         "platformer",
         "3d"
       ],
-      "latestVersion": "v1.0.1",
+      "latestVersion": "v1.0.2",
       "steamGridDbId": 35564
     },
     {
@@ -107,7 +107,7 @@
         "3d"
       ],
       "website": "https://shipofharkinian.com",
-      "latestVersion": "9.2.0",
+      "latestVersion": "9.2.3",
       "steamGridDbId": 21202
     },
     {
@@ -168,7 +168,7 @@
         "action-adventure",
         "3d"
       ],
-      "latestVersion": "v0.2.0",
+      "latestVersion": "v0.3.0",
       "steamGridDbId": 5278393
     },
     {
@@ -205,10 +205,12 @@
       "description": "Native PC port of Mega Man 64 via static recompilation. Widescreen, higher framerates, and mod support.",
       "installType": "prebuilt",
       "releaseAssets": {
-        "windows": "MegaMan64Recompiled-*-Windows.zip"
+        "windows": "MegaMan64Recompiled-*-Windows.zip",
+        "linux": "MegaMan64Recompiled-*-Linux-X64.zip"
       },
       "launchCommand": {
-        "windows": "{installDir}/MegaMan64Recompiled.exe"
+        "windows": "{installDir}/MegaMan64Recompiled.exe",
+        "linux": "{installDir}/MegaMan64Recompiled"
       },
       "tags": [
         "mega-man",
@@ -217,8 +219,7 @@
         "3d"
       ],
       "latestVersion": "v0.9.1",
-      "steamGridDbId": 37399,
-      "_reason": "Windows-only: the upstream Linux build ships as a nested zip->tar.gz the installer doesn't unwrap; the Windows build runs via Proton."
+      "steamGridDbId": 37399
     },
     {
       "id": "bmhero-recomp",
@@ -296,7 +297,7 @@
       "name": "Perfect Dark",
       "project": "Perfect Dark (native PC port)",
       "platform": "n64",
-      "repo": "fgsfdsfgs/perfect_dark",
+      "repo": "perfect-dark-pc-port/perfect_dark",
       "description": "Native PC port of Rare's Perfect Dark, built on the N64 decompilation. Adds mouselook, dual-analog support, widescreen, configurable FOV, 60+ FPS and basic mod support. On first launch you must supply your own Perfect Dark ROM (NTSC-final recommended). Linux native build; the port's release ships a per-platform folder, so this entry targets the Linux binary.",
       "installType": "rom_extract",
       "releaseAssets": {
@@ -320,7 +321,7 @@
         "fps",
         "3d"
       ],
-      "website": "https://github.com/fgsfdsfgs/perfect_dark",
+      "website": "https://github.com/perfect-dark-pc-port/perfect_dark",
       "latestVersion": "ci-dev-build",
       "steamGridDbId": 37787
     },
@@ -352,7 +353,7 @@
         "platformer",
         "3d"
       ],
-      "latestVersion": "2.0.0",
+      "latestVersion": "3.0.0",
       "steamGridDbId": 37177
     },
     {
@@ -394,7 +395,7 @@
       "description": "Native PC port of Mario Kart 64 via static recompilation. Widescreen, higher framerates, and mod support.",
       "installType": "prebuilt",
       "releaseAssets": {
-        "linux": "MarioKart_64_Recompiled-*-anylinux-x86_64.AppImage"
+        "linux": "*Recompiled-*-anylinux-x86_64.AppImage"
       },
       "launchCommand": {
         "linux": "{installDir}/MarioKart64Recompiled.appimage"
@@ -492,7 +493,7 @@
       "description": "Native PC port of Star Fox 64 via static recompilation. Widescreen, higher framerates, and mod support.",
       "installType": "prebuilt",
       "releaseAssets": {
-        "linux": "Starfox_64_Recompiled-*-anylinux-x86_64.AppImage"
+        "linux": "*Recompiled-*-anylinux-x86_64.AppImage"
       },
       "launchCommand": {
         "linux": "{installDir}/Starfox64Recompiled.appimage"
@@ -515,7 +516,7 @@
       "description": "Native PC port of Duke Nukem: Zero Hour via static recompilation.",
       "installType": "prebuilt",
       "releaseAssets": {
-        "linux": "DNZH_Recompiled-*-anylinux-x86_64.AppImage"
+        "linux": "*Recompiled-*-anylinux-x86_64.AppImage"
       },
       "launchCommand": {
         "linux": "{installDir}/DNZHRecompiled.appimage"
@@ -582,7 +583,7 @@
         "3d"
       ],
       "website": "https://2ship.equipment",
-      "latestVersion": "4.0.2",
+      "latestVersion": "5.0.1",
       "steamGridDbId": 34302
     },
     {
@@ -590,13 +591,19 @@
       "name": "Star Fox 64",
       "project": "Starship",
       "platform": "n64",
-      "repo": "harbourMasters/Starship",
-      "description": "Native PC port of Star Fox 64 via reverse engineering (HarbourMasters engine). Enhanced with modern features. First launch processes your ROM into game assets (~30s). No GitHub release binaries are published yet.",
+      "repo": "HarbourMasters/Starship",
+      "description": "Native PC port of Star Fox 64 via reverse engineering (HarbourMasters engine). Enhanced with modern features. First launch processes your ROM into game assets (~30s). Supports US 1.0 and US 1.1 Rev A ROMs; EU and JP ROMs can supply replacement voice languages alongside a US ROM.",
       "installType": "rom_extract",
-      "releaseAssets": {},
+      "releaseAssets": {
+        "windows": "Starship-*-Windows.zip",
+        "linux": "Starship-*-Linux.zip"
+      },
       "romInfo": {
-        "description": "Provide your legally owned Star Fox 64 ROM (US v1.0 or v1.1)",
-        "validChecksums": [],
+        "description": "Provide your legally owned Star Fox 64 ROM (US v1.0 or v1.1 Rev A)",
+        "validChecksums": [
+          "d8b1088520f7c5f81433292a9258c1184afa1457",
+          "09f0d105f476b00efa5303a3ebc42e60a7753b7a"
+        ],
         "extractionCommand": "",
         "placeRomAs": "sf64.z64"
       },
@@ -611,9 +618,7 @@
         "3d"
       ],
       "latestVersion": "v2.0.0",
-      "steamGridDbId": 36615,
-      "status": "in_progress",
-      "_reason": "harbourMasters/Starship publishes no GitHub release assets (only git tags); binaries distributed off-GitHub. Star Fox 64 is installable via the 'starfox64-recomp' entry instead."
+      "steamGridDbId": 36615
     },
     {
       "id": "opengoal-jak2",
@@ -863,8 +868,8 @@
       "description": "Open-source reimplementation of Test Drive Unlimited. Work in progress.",
       "installType": "rom_extract",
       "releaseAssets": {
-        "windows": "opentdu_release_Win32_vulkan.zip",
-        "linux": "opentdu_release_unix_vulkan.zip"
+        "windows": "opentdu_release_windows_x64_latest_vulkan.zip",
+        "linux": "opentdu_release_linux_vulkan.zip"
       },
       "romInfo": {
         "description": "Requires original Test Drive Unlimited game files",
@@ -2031,11 +2036,12 @@
       "project": "A decompilation of Super Smash Bros Melee brought to you by a bunch of clever folks.",
       "platform": "gc",
       "repo": "doldecomp/melee",
-      "description": "A decompilation of Super Smash Bros Melee brought to you by a bunch of clever folks.",
+      "description": "Matching decompilation of Super Smash Bros. Melee (NTSC 1.02, GALE01). Reached 100% on 2026-09-07 — all 19,828 functions match and the rebuilt DOL is byte-identical to the original.",
       "installType": "prebuilt",
       "releaseAssets": {},
       "launchCommand": {},
       "status": "in_progress",
+      "_reason": "Decompilation complete (100% as of 2026-09-07) but there is no playable PC port: the project builds a GameCube DOL for Dolphin or real hardware, not a PC binary, and publishes no releases. Port forks appeared within days — jonrosner/melee-native ships a Linux tarball — but that is a v0.1.0 prerelease in which saving does not work. Re-check before promoting.",
       "tags": [],
       "website": null,
       "steamGridDbId": 37285
@@ -2131,13 +2137,14 @@
       "id": "wind-waker",
       "name": "Wind Waker",
       "project": "Decompilation of The Legend of Zelda: The Wind Waker",
-      "platform": "unknown",
+      "platform": "gc",
       "repo": "zeldaret/tww",
       "description": "Decompilation of The Legend of Zelda: The Wind Waker",
       "installType": "prebuilt",
       "releaseAssets": {},
       "launchCommand": {},
       "status": "in_progress",
+      "_reason": "Decompilation in progress (~76% matched as of 2026-09-09). The separate sp00nznet/ww static recompilation is renderer-only by its own README — it does not yet run the game.",
       "tags": [],
       "website": "https://zeldaret.github.io/tww",
       "steamGridDbId": 5358192
@@ -2373,6 +2380,7 @@
       "releaseAssets": {},
       "launchCommand": {},
       "status": "in_progress",
+      "_reason": "Decompilation in progress (~89% matched as of 2026-09-09). No PC port exists; Pikmin 1 does have one — see 'open-nectar'.",
       "tags": [
         "cpp",
         "decompilation",
@@ -2521,6 +2529,7 @@
       "releaseAssets": {},
       "launchCommand": {},
       "status": "in_progress",
+      "_reason": "Decompilation in progress (~81% matched, ~38% fully linked as of 2026-09-09). No PC port exists.",
       "tags": [
         "cplusplus",
         "decompilation",
@@ -2673,11 +2682,12 @@
       "project": "A decompilation of Pikmin brought to you by fans of the series.",
       "platform": "gc",
       "repo": "projectPiki/pikmin",
-      "description": "A decompilation of Pikmin brought to you by fans of the series.",
+      "description": "Matching decompilation of Pikmin (GPIE01), 100% decompiled and fully linked.",
       "installType": "prebuilt",
       "releaseAssets": {},
       "launchCommand": {},
       "status": "in_progress",
+      "_reason": "Decompilation only — no binary is published here. The playable native PC port built on it is catalogued separately as 'open-nectar'.",
       "tags": [
         "cpp",
         "decompilation",
@@ -3397,12 +3407,13 @@
       "name": "Kirby Air Ride",
       "project": "A decompilation of Kirby Air Ride brought to you by a bunch of clever folks.",
       "platform": "gc",
-      "repo": "doldecomp/kar",
+      "repo": "wowjinxy/KAR",
       "description": "A decompilation of Kirby Air Ride brought to you by a bunch of clever folks.",
       "installType": "prebuilt",
       "releaseAssets": {},
       "launchCommand": {},
       "status": "in_progress",
+      "_reason": "Decompilation in early progress (~9%). Note the better-known doldecomp/kar repo has been dormant since February 2025; wowjinxy/KAR is the live effort.",
       "tags": [],
       "website": null,
       "steamGridDbId": 37983
@@ -8266,7 +8277,7 @@
         "3d"
       ],
       "website": "https://github.com/TwilitRealm/dusklight",
-      "latestVersion": "v1.1.1",
+      "latestVersion": "v1.4.1",
       "userDataDir": "~/.local/share/TwilitRealm/Dusklight",
       "mods": [
         {
@@ -8501,7 +8512,7 @@
         "3d"
       ],
       "website": "https://github.com/JRickey/BattleShip",
-      "latestVersion": "v1.5.1",
+      "latestVersion": "v1.6",
       "steamGridDbId": 33624
     },
     {
@@ -8574,7 +8585,7 @@
         "anchorChecksums": ["c5970941fcb201dda99de0d35b623827241d6b8b"]
       },
       "releaseAssets": {
-        "windows": "retip_*-windows-x64-*.zip"
+        "windows": "retip-*-windows-x64-*.zip"
       },
       "launchCommand": {
         "windows": "{installDir}/retip.exe"
@@ -8623,6 +8634,522 @@
       "website": "https://github.com/HollywoodAkeem/SVR07-Recomp",
       "latestVersion": "v1.0",
       "steamGridDbId": 5264777
+    },
+    {
+      "id": "dk64-recomp",
+      "name": "Donkey Kong 64",
+      "project": "Donkey Kong 64: Recompiled",
+      "platform": "n64",
+      "repo": "Rainchus/Donkey-Kong-64-Recompiled",
+      "description": "Native PC port of Donkey Kong 64 via static recompilation. Widescreen, higher framerates, gyro aiming and mod support. Supply your own NTSC-U 1.0 ROM on first launch.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "DK64Recompiled-Windows-Release*.zip",
+        "linux": "DK64Recompiled-Linux-X64-Release*.zip"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/DK64Recompiled.exe",
+        "linux": "{installDir}/DK64Recompiled"
+      },
+      "tags": [
+        "donkey-kong",
+        "n64",
+        "platformer",
+        "3d"
+      ],
+      "latestVersion": "1.0.2",
+      "steamGridDbId": 37695
+    },
+    {
+      "id": "snap64-recomp",
+      "name": "Pokémon Snap",
+      "project": "Snap64: Recompiled",
+      "platform": "n64",
+      "repo": "JackandBeans/Snap64Recomp",
+      "description": "Native PC port of Pokémon Snap via static recompilation. Widescreen, higher framerates and mod support. Supply your own US ROM on first launch.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "Snap64Recomp-*-win64.zip",
+        "linux": "Snap64Recomp-*-linux-x86_64.tar.gz"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/Snap64Recomp.exe",
+        "linux": "{installDir}/Snap64Recomp"
+      },
+      "flattenRoot": true,
+      "tags": [
+        "pokemon",
+        "n64",
+        "rail-shooter",
+        "3d"
+      ],
+      "latestVersion": "v1.0.2",
+      "steamGridDbId": 37585
+    },
+    {
+      "id": "sssv-recomp",
+      "name": "Space Station Silicon Valley",
+      "project": "SSSV: Recompiled",
+      "platform": "n64",
+      "repo": "Cellenseres/SSSV_Recomp",
+      "description": "Native PC port of Space Station Silicon Valley via static recompilation. Supply your own US 1.0 ROM on first launch.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "SSSVRecompiled_*_Windows.zip",
+        "linux": "SSSVRecompiled_*_Linux.tar.gz"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/SSSVRecompiled.exe",
+        "linux": "{installDir}/SSSVRecompiled"
+      },
+      "tags": [
+        "n64",
+        "platformer",
+        "puzzle",
+        "3d"
+      ],
+      "latestVersion": "v0.2.0",
+      "steamGridDbId": 35559
+    },
+    {
+      "id": "troublemakers-recomp",
+      "name": "Mischief Makers",
+      "project": "Trouble Makers (PC Recomp)",
+      "platform": "n64",
+      "repo": "ThiagoLira/trouble-makers-pc-recomp",
+      "description": "Native PC port of Mischief Makers via static recompilation. 60fps, high-resolution rendering and optional widescreen. Upstream publishes a Steam Deck-specific AppImage, which is what this entry installs. Supply your own ROM on first launch.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "TroubleMakers-Windows-X64.zip",
+        "linux": "TroubleMakers-SteamDeck-x86_64.AppImage"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/TroubleMakers.exe",
+        "linux": "{installDir}/TroubleMakers.AppImage"
+      },
+      "tags": [
+        "n64",
+        "platformer",
+        "action",
+        "2d"
+      ],
+      "latestVersion": "v0.8.2",
+      "steamGridDbId": 38272
+    },
+    {
+      "id": "lamborghini-recomp",
+      "name": "Automobili Lamborghini",
+      "project": "Automobili Lamborghini: Recompiled",
+      "platform": "n64",
+      "repo": "alondero/automobililamborghini-recomp",
+      "description": "Native PC port of Automobili Lamborghini via static recompilation. Supply your own ROM on first launch.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "lamborghini-recomp-windows-x64.zip",
+        "linux": "lamborghini-recomp-linux-x64.zip"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/lamborghini_modern.exe",
+        "linux": "{installDir}/lamborghini_modern"
+      },
+      "tags": [
+        "n64",
+        "racing",
+        "3d"
+      ],
+      "latestVersion": "v0.6.2",
+      "steamGridDbId": 38290
+    },
+    {
+      "id": "cvlod-recomp",
+      "name": "Castlevania: Legacy of Darkness",
+      "project": "LoD Recomp",
+      "platform": "n64",
+      "repo": "fliperama86/cvlod_recomp",
+      "description": "Native PC port of Castlevania: Legacy of Darkness via static recompilation. Still stabilising gameplay. Supply your own ROM on first launch.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "LodRecomp-*-windows-x64.zip",
+        "linux": "LodRecomp-*-linux-x64.tar.gz"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/LodRecomp.exe",
+        "linux": "{installDir}/LodRecomp"
+      },
+      "flattenRoot": true,
+      "tags": [
+        "castlevania",
+        "n64",
+        "action-adventure",
+        "3d"
+      ],
+      "latestVersion": "v0.2.26",
+      "steamGridDbId": 12888
+    },
+    {
+      "id": "extremeg-recomp",
+      "name": "Extreme-G",
+      "project": "Extreme-G: Recompiled",
+      "platform": "n64",
+      "repo": "pkgforge-dev/ExtremeGRecomp-AppImage",
+      "description": "Native PC port of Extreme-G via static recompilation. Installed from the pkgforge-dev AppImage rebuild — the canonical project lives on GitLab (sonicdcer/ExtremeGRecomp), which this pipeline cannot fetch from. Supply your own ROM on first launch.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "linux": "*Recompiled-*-anylinux-x86_64.AppImage"
+      },
+      "launchCommand": {
+        "linux": "{installDir}/ExtremeGRecompiled.appimage"
+      },
+      "tags": [
+        "n64",
+        "racing",
+        "3d"
+      ],
+      "latestVersion": "1.0.0",
+      "steamGridDbId": 38774
+    },
+    {
+      "id": "lighthouse",
+      "name": "Banjo-Kazooie",
+      "project": "Lighthouse",
+      "platform": "n64",
+      "repo": "HarbourMasters/Lighthouse",
+      "description": "Native PC port of Banjo-Kazooie via reverse engineering (HarbourMasters engine). First launch asks for your ROM and processes it into game assets. Supports US 1.0, US 1.1, JP and PAL ROMs; extra regions can be added as language packs.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "Lighthouse-*-Win64.zip",
+        "linux": "Lighthouse-*-Linux.zip"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/lighthouse.exe",
+        "linux": "{installDir}/lighthouse.appimage"
+      },
+      "tags": [
+        "banjo",
+        "n64",
+        "platformer",
+        "3d"
+      ],
+      "latestVersion": "1.1.0",
+      "steamGridDbId": 35564
+    },
+    {
+      "id": "golden-balloon",
+      "name": "Diddy Kong Racing",
+      "project": "Golden Balloon",
+      "platform": "n64",
+      "repo": "akratch/goldenballoon",
+      "description": "Native PC port of Diddy Kong Racing built on the decompilation. Widescreen, higher framerates and modern controls. Supply your own US v1.1 ROM on first launch.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "Golden-Balloon-*-windows-x64.zip",
+        "linux": "Golden-Balloon-*-linux-x86_64.AppImage"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/GoldenBalloon.exe",
+        "linux": "{installDir}/GoldenBalloon.AppImage"
+      },
+      "tags": [
+        "donkey-kong",
+        "n64",
+        "racing",
+        "3d"
+      ],
+      "latestVersion": "1.5.2",
+      "steamGridDbId": 36929
+    },
+    {
+      "id": "pokemon-stadium-recomp",
+      "name": "Pokémon Stadium",
+      "project": "Pokémon Stadium: Recompiled",
+      "platform": "n64",
+      "repo": "mstan/PokemonStadiumRecomp",
+      "description": "Native PC port of Pokémon Stadium via static recompilation, including Transfer Pak / GB Tower support with your own Gen 1 cartridge ROMs. Windows-only upstream; runs via Proton. Supply your own US 1.0 ROM on first launch.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "PokemonStadiumRecomp-*-win64.zip"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/PokemonStadiumRecomp.exe"
+      },
+      "tags": [
+        "pokemon",
+        "n64",
+        "strategy",
+        "3d"
+      ],
+      "latestVersion": "v0.4.7-beta",
+      "steamGridDbId": 36269,
+      "_reason": "Windows-only: upstream publishes no Linux asset; the Windows build runs via Proton."
+    },
+    {
+      "id": "roadrash64-recomp",
+      "name": "Road Rash 64",
+      "project": "Road Rash 64: Recompiled",
+      "platform": "n64",
+      "repo": "linkssy2/RoadRash64Recompiled",
+      "description": "Native PC port of Road Rash 64 via static recompilation. Windows-only upstream; runs via Proton. Supply your own ROM on first launch.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "RoadRash64Recompiled-*-Win64.zip"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/RoadRash64Recompiled.exe"
+      },
+      "flattenRoot": true,
+      "tags": [
+        "n64",
+        "racing",
+        "3d"
+      ],
+      "latestVersion": "v1.1.0",
+      "steamGridDbId": 38158,
+      "_reason": "Windows-only: upstream publishes no Linux asset; the Windows build runs via Proton."
+    },
+    {
+      "id": "ape-escape-recomp",
+      "name": "Ape Escape",
+      "project": "Ape Escape Recompiled",
+      "platform": "ps1",
+      "repo": "mstan/ApeEscapeRecomp",
+      "description": "Native PC port of Ape Escape via static recompilation (psxrecomp). Playable preview. On first launch the app asks for your own USA disc image (SCUS-94423) — a .cue/.bin pair, not a bare .iso, since .iso discards the XA sectors used for music and FMV. A retail BIOS is optional: the MIT OpenBIOS is bundled and used by default.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "ApeEscapeRecomp-*-windows-x64.zip",
+        "linux": "ApeEscapeRecomp-*-linux-x86_64.AppImage"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/ApeEscapeRecomp.exe",
+        "linux": "{installDir}/ApeEscapeRecomp.AppImage"
+      },
+      "tags": [
+        "ape-escape",
+        "ps1",
+        "platformer",
+        "3d"
+      ],
+      "latestVersion": "v0.2.1",
+      "steamGridDbId": 36806
+    },
+    {
+      "id": "megamanx6-recomp",
+      "name": "Mega Man X6",
+      "project": "Mega Man X6 Recompiled",
+      "platform": "ps1",
+      "repo": "mstan/MegaManX6Recomp",
+      "description": "Native PC port of Mega Man X6 via static recompilation (psxrecomp). On first launch the app asks for your own USA disc image — a .cue/.bin pair rather than a bare .iso. A retail BIOS is optional: the MIT OpenBIOS is bundled and used by default.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "MegaManX6Recomp-*-windows-x64.zip",
+        "linux": "MegaManX6Recomp-*-linux-x86_64.AppImage"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/MegaManX6Recomp.exe",
+        "linux": "{installDir}/MegaManX6Recomp.AppImage"
+      },
+      "tags": [
+        "mega-man",
+        "ps1",
+        "platformer",
+        "action",
+        "2d"
+      ],
+      "latestVersion": "v1.0.10",
+      "steamGridDbId": 33539
+    },
+    {
+      "id": "tomba2-recomp",
+      "name": "Tomba! 2: The Evil Swine Return",
+      "project": "Tomba! 2 Recompiled",
+      "platform": "ps1",
+      "repo": "mstan/Tomba2Recomp",
+      "description": "Native PC port of Tomba! 2 via static recompilation (psxrecomp). Adds 21:9 support and full-rate OpenGL rendering. On first launch the app asks for your own USA disc image — this is a multi-track disc, so a .cue/.bin set is required rather than a bare .iso. A retail BIOS is optional: the MIT OpenBIOS is bundled and used by default.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "Tomba2Recomp-*-windows-x64.zip",
+        "linux": "Tomba2Recomp-*-linux-x86_64.AppImage"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/Tomba2Recomp.exe",
+        "linux": "{installDir}/Tomba2Recomp.AppImage"
+      },
+      "tags": [
+        "tomba",
+        "ps1",
+        "platformer",
+        "adventure",
+        "2d"
+      ],
+      "latestVersion": "v0.0.9",
+      "steamGridDbId": 36291
+    },
+    {
+      "id": "bloodyroar2-recomp",
+      "name": "Bloody Roar II",
+      "project": "Bloody Roar II Recompiled",
+      "platform": "ps1",
+      "repo": "novapowers0/BloodyRoar2Recomp",
+      "description": "Native PC port of Bloody Roar II via static recompilation, with from-scratch widescreen and bundled enhancement mods (PGXP, fast loading, unlock-all, turbo). This entry installs the USA build (SCUS-94424); a separate European build (SLES-01722) exists upstream. The recompiler translates one specific disc's code, so the two are not interchangeable. On first launch the app asks for your own disc image; a retail BIOS is optional, as MIT OpenBIOS is bundled.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "BloodyRoar2-US-v*.zip",
+        "linux": "BloodyRoar2-US-linux-x64-*.zip"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/BloodyRoar2-US/BloodyRoar2_Recompiled_USA.exe",
+        "linux": "{installDir}/BloodyRoar2-US/BloodyRoar2_Recompiled_USA"
+      },
+      "tags": [
+        "bloody-roar",
+        "ps1",
+        "fighting",
+        "3d"
+      ],
+      "latestVersion": "v0.6.2",
+      "steamGridDbId": 34481
+    },
+    {
+      "id": "psydoom",
+      "name": "Doom",
+      "project": "PsyDoom",
+      "platform": "ps1",
+      "repo": "BodbDearg/PsyDoom",
+      "description": "Native PC port of PlayStation Doom (and Final Doom) built on a reverse engineering of the original PSX executable. Adds uncapped framerates, mouse look and modding support while preserving the PSX renderer and soundtrack. Requires your own PlayStation Doom disc image.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "PsyDoom_*_Windows_x86_64.zip",
+        "linux": "PsyDoom_*_Linux_x86_64.AppImage"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/PsyDoom.exe",
+        "linux": "{installDir}/PsyDoom.AppImage"
+      },
+      "tags": [
+        "doom",
+        "ps1",
+        "fps",
+        "3d"
+      ],
+      "latestVersion": "releases/1.1.1",
+      "steamGridDbId": 2460
+    },
+    {
+      "id": "silent-hill-pc",
+      "name": "Silent Hill",
+      "project": "Silent Hill PC Port",
+      "platform": "ps1",
+      "repo": "SlickAmogus/silent-hill-decomp",
+      "description": "Native PC port of Silent Hill built on the decompilation. Cross-platform beta with a built-in launcher, randomizer and texture/audio override support. Your disc image is staged into the port's gamedata folder; the port identifies discs by their ISO header, so USA and PAL dumps both work.",
+      "installType": "rom_extract",
+      "releaseAssets": {
+        "windows": "SHPC_beta-*.zip",
+        "linux": "SHPC-linux-x64_*.tar.gz"
+      },
+      "romInfo": {
+        "description": "Provide your legally owned Silent Hill PS1 disc image (.bin/.cue). A raw MODE2/2352 .bin preserves the XA audio and FMV a cooked .iso discards.",
+        "validChecksums": [],
+        "extractionCommand": "",
+        "fileType": "data_file",
+        "extensions": [
+          "bin",
+          "iso",
+          "img"
+        ],
+        "placeRomAs": "SHPC-linux-x64/gamedata/disc.bin"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/SilentHillPC.exe",
+        "linux": "{installDir}/SHPC-linux-x64/SilentHillPC"
+      },
+      "tags": [
+        "silent-hill",
+        "ps1",
+        "survival-horror",
+        "3d"
+      ],
+      "latestVersion": "crossplatform-beta",
+      "steamGridDbId": 37313
+    },
+    {
+      "id": "ctr-native",
+      "name": "Crash Team Racing",
+      "project": "CTR Native",
+      "platform": "ps1",
+      "repo": "CTR-tools/ctr-native",
+      "description": "Native PC port of Crash Team Racing built on the reverse engineering effort. Requires your own NTSC-U retail disc image in the common raw MODE2/2352 .bin layout — a cooked 2048-byte .iso does not preserve the XA/STR sectors the game needs for audio and video.",
+      "installType": "rom_extract",
+      "releaseAssets": {
+        "windows": "ctr-native-*-windows-x86.zip",
+        "linux": "ctr-native-*-linux-x86.tar.gz"
+      },
+      "romInfo": {
+        "description": "Provide your legally owned NTSC-U Crash Team Racing disc image as a raw MODE2/2352 .bin (data track starting at byte 0).",
+        "validChecksums": [],
+        "extractionCommand": "",
+        "fileType": "data_file",
+        "extensions": [
+          "bin",
+          "img"
+        ],
+        "placeRomAs": "assets/ctr-u.bin"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/ctr_native.exe",
+        "linux": "{installDir}/ctr_native"
+      },
+      "flattenRoot": true,
+      "tags": [
+        "crash-bandicoot",
+        "ps1",
+        "racing",
+        "3d"
+      ],
+      "latestVersion": "beta-7.1",
+      "steamGridDbId": 36474
+    },
+    {
+      "id": "open-nectar",
+      "name": "Pikmin",
+      "project": "Open Nectar",
+      "platform": "gc",
+      "repo": "SSunnKing/Open-Nectar---Pikmin-Native-PC-Port",
+      "description": "Native PC port of Pikmin built on the decompilation, with the original JAudio sound engine, photo mode and configurable Pikmin limits. Self-contained build — no system dependencies beyond OpenGL. Requires your own legal, uncompressed Pikmin USA Rev. 1 (GPIE01) dump in ISO or GCM format; compressed RVZ/GCZ/WIA images are rejected. Pre-rendered opening and ending cutscenes currently play audio without picture.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "nectar-windows.zip",
+        "linux": "nectar-linux.tar.gz"
+      },
+      "launchCommand": {
+        "windows": "{installDir}/nectar-launcher.exe",
+        "linux": "{installDir}/nectar-linux/nectar-launcher"
+      },
+      "tags": [
+        "pikmin",
+        "gc",
+        "strategy",
+        "3d"
+      ],
+      "latestVersion": "0.3.5",
+      "steamGridDbId": 21114
+    },
+    {
+      "id": "star-fox-adventures",
+      "name": "Star Fox Adventures",
+      "project": "SFA-Decomp",
+      "platform": "gc",
+      "repo": "zcanann/SFA-Decomp",
+      "description": "Matching decompilation of Star Fox Adventures — the most advanced unfinished GameCube decompilation, at roughly 96% matched.",
+      "installType": "prebuilt",
+      "releaseAssets": {},
+      "launchCommand": {},
+      "status": "in_progress",
+      "_reason": "Decompilation in progress (~96% matched, ~99% of functions as of 2026-09-09). No PC port exists yet.",
+      "tags": [
+        "starfox",
+        "gc"
+      ],
+      "website": null,
+      "steamGridDbId": 38820
     }
   ]
 }
