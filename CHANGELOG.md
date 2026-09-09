@@ -8,6 +8,22 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com).
 
 ---
 
+## [v0.10.0] — 2026-09-09
+
+### Added
+- **Nineteen more games in RecompHub, across N64, PlayStation and GameCube** (#281) — Donkey Kong 64, Pokémon Snap, Space Station Silicon Valley, Mischief Makers, Automobili Lamborghini, Castlevania: Legacy of Darkness, Extreme-G, Banjo-Kazooie's Harbour Masters port (Lighthouse) and Diddy Kong Racing's (Golden Balloon), plus Pokémon Stadium and Road Rash 64 through Proton. PlayStation is a real platform here for the first time: Ape Escape, Mega Man X6, Tomba! 2 and Bloody Roar II are static recompilations that bundle an open-source BIOS, so they want nothing but your own disc image, alongside the Doom, Silent Hill and Crash Team Racing native ports. Pikmin arrives as the first GameCube entry beyond Twilight Princess. Each one asks for a disc or ROM you already own and ships no game data, as before.
+- **Star Fox 64 is installable through Harbour Masters' Starship** (#281) — The entry had been sitting in the "Unavailable" tab on the grounds that the project published no downloads. That stopped being true at its 2.0 release and nobody noticed, so a port that had been shipping binaries for months was listed as unavailable.
+
+### Fixed
+- **Games that quietly installed a Windows build when a native Linux one existed** (#281) — When a project renames its download — Banjo-Kazooie's Linux build changed from a `.zip` to a `.tar.gz`, and four others were renamed by their packagers — RecompHub stopped recognising it. Nothing failed visibly: the entry simply fell through to the Windows build and ran it under Proton, so the game still started and there was nothing on screen to say you were running the slower path. Mario Kart 64, Duke Nukem: Zero Hour, Star Fox 64, Viva Piñata and OpenMW were all affected. Mega Man 64 was marked Windows-only for the same reason, and now installs natively too.
+- **Alone in the Dark: ReHaunted could not be installed at all** (#281) — Its most recent stable build is Windows-only, and RecompHub had been told to expect a Linux one, so it committed to the Linux download, failed to find it, and stopped — rather than falling back to the Windows build it could have run under Proton. It now does.
+- **A recompilation whose files moved could be installed and then not start** (#281) — Some projects wrap their whole build in a folder named after the version, which changes with every release. RecompHub can now unwrap those, and — more importantly — checks the game is actually where it expects before finishing. Previously, if a project changed its layout, the install would report success and add a Steam shortcut that pointed at nothing.
+- **The tool that watches for these breakages was missing half of them** (#281) — The maintenance check that verifies every entry's download still resolves stopped at the first platform that matched, so an entry offering both Linux and Windows downloads was reported healthy whenever the Windows one was fine — which is exactly the case above. It now checks every platform an entry declares, and finding that immediately turned up two more broken entries that had been hidden by it.
+
+### Upgrade notes
+- **Klonoa, Valkyrie Profile, Yu-Gi-Oh! Forbidden Memories and SoulCalibur II are deliberately not here**, despite recent releases. Their downloads are not games: they contain the recompiler and a setup wizard that compiles the game on your machine from your own disc, needing Python and a C compiler and several minutes of work. Installing one through RecompHub would land a source tree and start nothing, so they are held back until that can be supported properly.
+- **Super Smash Bros. Melee's decompilation reaching 100% does not make it playable on PC.** It reconstructs the original GameCube program, which still needs a GameCube or an emulator to run; a PC port is separate work that has barely started. The catalogue now says so on the Melee entry rather than staying silent, and Smash 64 remains playable through BattleShip.
+
 ## [v0.9.1] — 2026-09-08
 
 ### Fixed
