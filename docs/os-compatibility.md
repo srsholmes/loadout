@@ -5,6 +5,10 @@ Gaming Mode. Supported targets are **SteamOS**, **Bazzite**, and
 **CachyOS**. There is no macOS or Windows build; the notes below cover
 the differences between the supported Linux distros.
 
+**Anatase is not supported yet** — it ships Handheld Daemon instead of
+InputPlumber, which makes Loadout's wake trigger unreachable. See
+[hhd-integration.md](hhd-integration.md) for what it would take.
+
 ## The Immutability Spectrum
 
 | OS | Filesystem | Notes |
@@ -12,6 +16,7 @@ the differences between the supported Linux distros.
 | **SteamOS** | Fully immutable root. `/usr` read-only. A/B partition scheme (like Android OTA). Home directory survives. | Primary target |
 | **Bazzite** | Immutable via `rpm-ostree` (Fedora Silverblue lineage). Can layer system packages that persist across updates. | Growing community |
 | **CachyOS** | Traditional mutable Arch. No immutability constraints. | Easiest target, least representative |
+| **Anatase** | Immutable `bootc` image, second-generation successor to Bazzite. One image for handhelds, desktops, laptops, HTPCs. | **Not supported** — HHD-first, see below |
 
 **Implication:** The binary, plugins, overlay, and user data live in the home
 partition and survive updates. The **backend** runs as a *system* service
@@ -51,6 +56,25 @@ exact per-distro paths.
 - CEF remote debugging is enabled the same way as on every supported distro — the installer drops Steam's `.cef-enable-remote-debugging` flag — and the debug port is `localhost:8080` everywhere
 - Steam installed as layered RPM (not Flatpak) — same system access as SteamOS
 - `fsync`/`futex2` patched kernel for broader hardware support (ROG Ally, Legion Go, desktops)
+
+## Anatase (not supported yet)
+
+Anatase ships **Handheld Daemon (HHD)** as its handheld input and vendor
+layer, not InputPlumber — and the two are mutually exclusive (HHD grabs the
+physical pad; the upstream InputPlumber COPR build declares
+`Conflicts: hhd`).
+
+That breaks Loadout in a specific way: the overlay's wake trigger is
+*"user-chosen button → `KEY_F16`"*, rendered as an InputPlumber profile, and
+**HHD has no action that emits an arbitrary key**. The trigger isn't
+degraded, it's unreachable. HHD also claims `Ctrl+3`/`Ctrl+4` for its own
+menus, writes the same gamescope atoms, does the same Steam `SIGSTOP`, and
+owns the same TDP/fan/RGB knobs as three Loadout plugins.
+
+There is a clean seam — HHD's `HHD_OVERLAY` env var lets Loadout register as
+HHD's gamescope overlay — plus a live installer bug that would stand
+InputPlumber up next to a running HHD. Both are written up in
+[hhd-integration.md](hhd-integration.md).
 
 ## CachyOS
 

@@ -65,7 +65,7 @@ it's absent.
 | Tool | Gates |
 |---|---|
 | `zenity` / `kdialog` / `yad` (any one) | Native file dialogs — the recomp ROM picker (`@loadout/file-picker`) |
-| `inputplumber` | Controller wake button in games (installer Phase 2 offers to install it) |
+| `inputplumber` | Controller wake button in games (installer Phase 2 offers to install it). **Contraindicated on a Handheld Daemon host** — HHD grabs the pad and the two conflict; see [hhd-integration.md](hhd-integration.md) |
 | `busctl` | InputPlumber and bluetooth DBus calls (ships with systemd) |
 | `flatpak` | flatpak-manager, and flatpak entries in quick-links |
 | `nmcli` | network-info, and the wifi plugin's connection controls |
