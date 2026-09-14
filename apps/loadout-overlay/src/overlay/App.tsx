@@ -816,6 +816,7 @@ function AppInner() {
                 {metrics.charging ? "⚡ " : ""}{Math.round(metrics.batteryPct)}%
               </span>
             )}
+            <CloseOverlayButton />
             <KeyboardToggleButton />
             <Focusable focusKey="sidebar-settings" onActivate={handleShowSettings}>
               <button
@@ -836,7 +837,6 @@ function AppInner() {
                 </svg>
               </button>
             </Focusable>
-            <CloseOverlayButton />
           </div>
         </div>
       </div>
@@ -954,13 +954,26 @@ function KeyboardToggleButton() {
   );
 }
 
-// Footer close button. A deliberately low-key fallback for when the
-// wake shortcut fails to dismiss the overlay (wake delivery, InputPlumber,
-// or the toggle debounce misbehaving). It rides the same `hide` RPC the
-// B button uses at the root route, so it needs no extra host wiring.
-// Dimmer at rest than its siblings: it is a backup, not a primary control.
+// Footer close button. A deliberately low-key fallback for when the wake
+// shortcut fails to dismiss the overlay (wake delivery, InputPlumber, a
+// lost wake binding). It rides the same `hide` RPC the B button uses at
+// the root route, so it needs no extra host wiring — including the host's
+// 600 ms toggle debounce, so a click inside that window of opening is
+// dropped like any other toggle. Dimmer at rest than its siblings: it is
+// a backup, not a primary control.
+//
+// Placement matters for pad users: norigin resolves "down" out of the
+// content zone by corner distance, so the bottom-RIGHT footer button is
+// where an overshoot past a plugin's last row lands. That stays the
+// Settings cog; the X sits at the left end of the trio so a stray press
+// can't close the overlay.
 function CloseOverlayButton() {
   const close = useCallback(() => {
+    // The window is minimised, never destroyed, so spatial-nav focus would
+    // otherwise persist on this button and a reflexive A on the next open
+    // would close the overlay again. Park focus on the sidebar first,
+    // mirroring handleBack.
+    setFocus("sidebar");
     hideOverlay().catch(() => {});
   }, []);
   return (

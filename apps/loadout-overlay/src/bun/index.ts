@@ -540,7 +540,9 @@ function forceCloseOverlay(reason: string): Promise<void> {
   if (steamPid.current === null) steamPid.current = findSteamPid();
   if (steamPid.current !== null) resumeSteam(steamPid.current);
   // Emergency path: release immediately (no resume-burst drain — a wedged
-  // renderer is worse than a replayed edge) and thaw.
+  // renderer is worse than a replayed edge) and thaw. The IP release may
+  // still hold intercept for ≤RELEASE_DRAIN_MAX_MS if a button is down;
+  // callers that exit afterwards must call ipIntercept.shutdown() first.
   intercept.current?.release();
   ipIntercept.current?.release();
   deckHidraw.current?.setNavActive(false);
@@ -911,7 +913,12 @@ void (async () => {
           void Promise.race([
             settled,
             new Promise((r) => setTimeout(r, ATOM_CLEAR_TIMEOUT_MS)),
-          ]).then(() => process.exit(1));
+          ]).then(() => {
+            // A pending IP release drain would die with the process and
+            // strand InterceptMode=3 until the next overlay start resets it.
+            ipIntercept.current?.shutdown();
+            process.exit(1);
+          });
         }
       },
     });

@@ -92,7 +92,7 @@ class RepeatTracker {
 
 // Actions that participate in key repeat — excludes x_up (release-only)
 // and the combo modifiers (Mode/Select).
-type RepeatableAction =
+export type RepeatableAction =
   | "up"
   | "down"
   | "left"
@@ -266,15 +266,22 @@ export class NavController {
   }
 
   /** True while any controller still reports a held button or tilted
-   *  direction. The InputPlumber intercept uses this to hold intercept
-   *  mode on for a beat after the overlay closes, so the release edge of
-   *  the press that closed it still reaches IP's DBus target (see
-   *  ip-intercept.ts, release drain). */
+   *  direction. */
   anyHeld(): boolean {
     for (const st of this.controllers.values()) {
       if (st.held.size > 0) return true;
     }
     return false;
+  }
+
+  /** Every action currently held on any controller. The release drain
+   *  snapshots this at close time and waits for exactly those to lift. */
+  heldActions(): Set<RepeatableAction> {
+    const out = new Set<RepeatableAction>();
+    for (const st of this.controllers.values()) {
+      for (const a of st.held.keys()) out.add(a);
+    }
+    return out;
   }
 
   /**
