@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import {
+  trackWakeEdge,
   parseInputEventLine,
   uiToInputEvent,
   pickCompositePaths,
@@ -141,5 +142,25 @@ describe("pickCompositePaths", () => {
 
   it("returns [] when there are no composite devices", () => {
     expect(pickCompositePaths("/org/shadowblip/InputPlumber\n")).toEqual([]);
+  });
+});
+
+describe("trackWakeEdge", () => {
+  it("adds on press (>= 0.5) and removes on release", () => {
+    const held = new Set<string>();
+    trackWakeEdge(held, "ui_guide", 1);
+    expect(held.has("ui_guide")).toBe(true);
+    trackWakeEdge(held, "ui_quick", 0.5);
+    expect(held.size).toBe(2);
+    trackWakeEdge(held, "ui_guide", 0);
+    expect(held.has("ui_guide")).toBe(false);
+    trackWakeEdge(held, "ui_quick", 0.49);
+    expect(held.size).toBe(0);
+  });
+
+  it("release of a cap never seen is a no-op", () => {
+    const held = new Set<string>();
+    trackWakeEdge(held, "ui_osk", 0);
+    expect(held.size).toBe(0);
   });
 });

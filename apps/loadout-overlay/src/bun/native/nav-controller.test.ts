@@ -308,6 +308,23 @@ describe("NavController — reset + multi-controller", () => {
     expect(f.emitted).toEqual([]);
   });
 
+  it("anyHeld() reflects held buttons across controllers and clears on release/reset", () => {
+    const f = fxController();
+    expect(f.nav.anyHeld()).toBe(false);
+    f.nav.processEvents("ctrl1", [{ kind: "button", button: "A", pressed: true }]);
+    expect(f.nav.anyHeld()).toBe(true);
+    // An idle pump on another controller doesn't clear ctrl1's hold.
+    f.nav.processEvents("ctrl2", []);
+    expect(f.nav.anyHeld()).toBe(true);
+    f.nav.processEvents("ctrl1", [{ kind: "button", button: "A", pressed: false }]);
+    expect(f.nav.anyHeld()).toBe(false);
+    // Any controller holding anything counts.
+    f.nav.processEvents("ctrl2", [{ kind: "button", button: "B", pressed: true }]);
+    expect(f.nav.anyHeld()).toBe(true);
+    f.nav.reset();
+    expect(f.nav.anyHeld()).toBe(false);
+  });
+
   it("separate controllerIds maintain independent held state", () => {
     const f = fxController();
     // Ctrl1 holds A, ctrl2 is in modifier suppression.

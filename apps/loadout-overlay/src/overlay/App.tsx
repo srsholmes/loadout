@@ -836,6 +836,7 @@ function AppInner() {
                 </svg>
               </button>
             </Focusable>
+            <CloseOverlayButton />
           </div>
         </div>
       </div>
@@ -947,6 +948,40 @@ function KeyboardToggleButton() {
         >
           <rect x="3" y="6" width="18" height="12" rx="2" />
           <path strokeLinecap="round" d="M7 10h.01M11 10h.01M15 10h.01M7 14h10" />
+        </svg>
+      </button>
+    </Focusable>
+  );
+}
+
+// Footer close button. A deliberately low-key fallback for when the
+// wake shortcut fails to dismiss the overlay (wake delivery, InputPlumber,
+// or the toggle debounce misbehaving). It rides the same `hide` RPC the
+// B button uses at the root route, so it needs no extra host wiring.
+// Dimmer at rest than its siblings: it is a backup, not a primary control.
+function CloseOverlayButton() {
+  const close = useCallback(() => {
+    hideOverlay().catch(() => {});
+  }, []);
+  return (
+    <Focusable focusKey="footer-close" onActivate={close}>
+      <button
+        type="button"
+        onClick={close}
+        aria-label="Close overlay"
+        title="Close overlay"
+        className="w-7 h-7 rounded-md flex items-center justify-center shrink-0 transition-colors text-base-content/40 hover:text-base-content hover:bg-base-300/70"
+        tabIndex={-1}
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          className="w-4 h-4"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
         </svg>
       </button>
     </Focusable>

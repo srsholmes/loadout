@@ -265,6 +265,18 @@ export class NavController {
     this.controllers.clear();
   }
 
+  /** True while any controller still reports a held button or tilted
+   *  direction. The InputPlumber intercept uses this to hold intercept
+   *  mode on for a beat after the overlay closes, so the release edge of
+   *  the press that closed it still reaches IP's DBus target (see
+   *  ip-intercept.ts, release drain). */
+  anyHeld(): boolean {
+    for (const st of this.controllers.values()) {
+      if (st.held.size > 0) return true;
+    }
+    return false;
+  }
+
   /**
    * Axis → dpad conversion with deadzone. Writes to `edges` and updates
    * `state.held` in place.

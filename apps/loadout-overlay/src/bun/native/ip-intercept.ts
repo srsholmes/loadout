@@ -74,6 +74,22 @@ const COMPOSITE_PATH_RE = /^\/org\/shadowblip\/InputPlumber\/CompositeDevice\d+$
  *  POLL_ACTIVE_MS. */
 const PUMP_MS = 25;
 
+/** Upper bound on how long release() keeps intercept on while waiting for
+ *  the buttons that were down at close time to come back up. A tap is
+ *  ~80-150 ms; this is generous headroom, and well inside the 250 ms
+ *  Steam-resume defer on the close path so the user can't notice it.
+ *
+ *  Why wait at all: IP's DBus target dedupes button events against a
+ *  per-button "last value" that is only cleared when the target detaches
+ *  — never on an InterceptMode change. If the A press that activates a
+ *  "close overlay" control reaches the DBus target but its RELEASE lands
+ *  after we've flipped InterceptMode back to 0, the release goes to the
+ *  gamepad target instead and the DBus target is left believing A is
+ *  still down. The next A press on the next open is then a "duplicate"
+ *  and never emitted — the user has to press twice. Holding intercept
+ *  until NavController sees the release lets the DBus target observe it. */
+const RELEASE_DRAIN_MAX_MS = 400;
+
 /** NavController keys per-controller state by id; the DBus stream is a
  *  single logical controller, so a constant id is fine. */
 const NAV_CONTROLLER_ID = "ip-dbus";
@@ -194,6 +210,16 @@ export function uiToInputEvent(cap: string, value: number): InputEvent | null {
   return { kind: "button", button: m.button, pressed };
 }
 
+/** Track press/release edges of the wake capabilities (ui_guide & co).
+ *  They never enter NavController (they aren't nav), but they ride the
+ *  same DBus target and are subject to the same last-value dedupe — the
+ *  wake button that CLOSES the overlay is the textbook case. The release
+ *  drain waits on this set as well as NavController.anyHeld(). */
+export function trackWakeEdge(held: Set<string>, cap: string, value: number): void {
+  if (value >= 0.5) held.add(cap);
+  else held.delete(cap);
+}
+
 /** Parse one `gdbus monitor` line into a (capability, value) pair, or null.
  *  Line shape:
  *    /org/.../target/dbus0: org.shadowblip.Input.DBusDevice.InputEvent ('ui_up', 1.0)
@@ -278,9 +304,22 @@ export async function startIpIntercept(
   let intercepting = false;
   let pumpTimer: ReturnType<typeof setInterval> | null = null;
 
+  // While draining a release (see RELEASE_DRAIN_MAX_MS) the overlay is
+  // already hidden: keep feeding NavController so held-state tracks the
+  // pad, but don't forward actions to a webview nobody can see.
+  let draining = false;
+  let drainTimer: ReturnType<typeof setInterval> | null = null;
+  /** Wake caps currently down — see trackWakeEdge. */
+  const wakeHeld = new Set<string>();
+  const anythingHeld = (): boolean => nav.anyHeld() || wakeHeld.size > 0;
+
   const nav = new NavController({
-    emit: (a) => opts.onAction(a),
-    emitAxis: (axis, value) => opts.onAxis?.(axis, value),
+    emit: (a) => {
+      if (!draining) opts.onAction(a);
+    },
+    emitAxis: (axis, value) => {
+      if (!draining) opts.onAxis?.(axis, value);
+    },
   });
 
   function feed(cap: string, value: number): void {
@@ -290,9 +329,12 @@ export async function startIpIntercept(
       nav.processEvents(NAV_CONTROLLER_ID, [ev]);
       return;
     }
-    if (UI_WAKE.has(cap) && value >= 0.5) {
-      trace(`[ip-intercept] wake=QamToggle from ${cap}`);
-      opts.onWake("QamToggle");
+    if (UI_WAKE.has(cap)) {
+      trackWakeEdge(wakeHeld, cap, value);
+      if (value >= 0.5) {
+        trace(`[ip-intercept] wake=QamToggle from ${cap}`);
+        opts.onWake("QamToggle");
+      }
       return;
     }
     // Unmapped capability — trace it so an unrecognised wake button or a
@@ -332,10 +374,26 @@ export async function startIpIntercept(
     pumpTimer = null;
   }
 
+  function cancelDrain(): void {
+    if (drainTimer) clearInterval(drainTimer);
+    drainTimer = null;
+    draining = false;
+  }
+
   function doGrab(): void {
-    if (intercepting) return;
+    if (intercepting) {
+      // Re-opened inside the release drain window: InterceptMode is still
+      // GamepadOnly, so just abandon the drain and carry on intercepting.
+      if (draining) {
+        cancelDrain();
+        nav.reset();
+        trace("[ip-intercept] release drain cancelled — re-grabbed");
+      }
+      return;
+    }
     intercepting = true;
     nav.reset();
+    wakeHeld.clear();
     for (const p of composites) {
       setInterceptMode(p, INTERCEPT_GAMEPAD_ONLY).catch(() => {});
     }
@@ -345,15 +403,39 @@ export async function startIpIntercept(
     );
   }
 
-  function doRelease(): void {
-    if (!intercepting) return;
+  function finishRelease(): void {
+    cancelDrain();
     intercepting = false;
     for (const p of composites) {
       setInterceptMode(p, INTERCEPT_OFF).catch(() => {});
     }
     stopPump();
     nav.reset();
+    wakeHeld.clear();
     console.log("[ip-intercept] intercept OFF — InterceptMode=None(0)");
+  }
+
+  function doRelease(): void {
+    if (!intercepting || draining) return;
+    if (!anythingHeld()) {
+      finishRelease();
+      return;
+    }
+    // Something is still held (the A that activated a close control, or
+    // the wake button that closed us). Keep InterceptMode on until its
+    // release edge has reached IP's DBus target, or the deadline passes —
+    // see RELEASE_DRAIN_MAX_MS.
+    draining = true;
+    const startedAt = performance.now();
+    trace("[ip-intercept] release deferred — waiting for held button(s) to release");
+    drainTimer = setInterval(() => {
+      const elapsed = performance.now() - startedAt;
+      if (anythingHeld() && elapsed < RELEASE_DRAIN_MAX_MS) return;
+      trace(
+        `[ip-intercept] release drain ${anythingHeld() ? "timed out" : "complete"} after ${Math.round(elapsed)}ms`,
+      );
+      finishRelease();
+    }, PUMP_MS);
   }
 
   return {
@@ -361,6 +443,7 @@ export async function startIpIntercept(
     grab: doGrab,
     release: doRelease,
     shutdown() {
+      cancelDrain();
       stopPump();
       if (intercepting) {
         // Best-effort synchronous-ish reset so we don't strand the pad.
