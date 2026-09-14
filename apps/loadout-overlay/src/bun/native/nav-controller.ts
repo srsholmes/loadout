@@ -92,7 +92,7 @@ class RepeatTracker {
 
 // Actions that participate in key repeat — excludes x_up (release-only)
 // and the combo modifiers (Mode/Select).
-type RepeatableAction =
+export type RepeatableAction =
   | "up"
   | "down"
   | "left"
@@ -263,6 +263,25 @@ export class NavController {
       if (st.held.has("x")) this.emit("x_up");
     }
     this.controllers.clear();
+  }
+
+  /** True while any controller still reports a held button or tilted
+   *  direction. */
+  anyHeld(): boolean {
+    for (const st of this.controllers.values()) {
+      if (st.held.size > 0) return true;
+    }
+    return false;
+  }
+
+  /** Every action currently held on any controller. The release drain
+   *  snapshots this at close time and waits for exactly those to lift. */
+  heldActions(): Set<RepeatableAction> {
+    const out = new Set<RepeatableAction>();
+    for (const st of this.controllers.values()) {
+      for (const a of st.held.keys()) out.add(a);
+    }
+    return out;
   }
 
   /**

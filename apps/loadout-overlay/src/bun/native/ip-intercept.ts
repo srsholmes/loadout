@@ -58,6 +58,7 @@
 import { runFull, runStreaming } from "@loadout/exec";
 import { NavController, type InputEvent } from "./nav-controller";
 import { trace } from "./trace";
+import { ReleaseDrain } from "./release-drain";
 
 const SERVICE = "org.shadowblip.InputPlumber";
 const COMPOSITE_IFACE = "org.shadowblip.Input.CompositeDevice";
@@ -73,6 +74,16 @@ const COMPOSITE_PATH_RE = /^\/org\/shadowblip\/InputPlumber\/CompositeDevice\d+$
  *  held d-pad directions between signal arrivals. Mirrors the evdev path's
  *  POLL_ACTIVE_MS. */
 const PUMP_MS = 25;
+
+/** Upper bound on how long release() keeps intercept on while waiting for
+ *  the buttons that were down at close time to come back up (see
+ *  release-drain.ts for why). A tap is ~80-150 ms, so the drain normally
+ *  ends well before the 250 ms Steam-resume defer on the close path; a
+ *  hold that outlasts this deadline gets intercept dropped underneath it
+ *  (pre-PR behaviour: the DBus target may then dedupe that button's next
+ *  press once). Kept short because a held direction at close is muted
+ *  for the whole drain rather than reaching the game. */
+const RELEASE_DRAIN_MAX_MS = 400;
 
 /** NavController keys per-controller state by id; the DBus stream is a
  *  single logical controller, so a constant id is fine. */
@@ -194,6 +205,16 @@ export function uiToInputEvent(cap: string, value: number): InputEvent | null {
   return { kind: "button", button: m.button, pressed };
 }
 
+/** Track press/release edges of the wake capabilities (ui_guide & co).
+ *  They never enter NavController (they aren't nav), but they ride the
+ *  same DBus target and are subject to the same last-value dedupe — the
+ *  wake button that CLOSES the overlay is the textbook case. The release
+ *  drain waits on this set as well as NavController.anyHeld(). */
+export function trackWakeEdge(held: Set<string>, cap: string, value: number): void {
+  if (value >= 0.5) held.add(cap);
+  else held.delete(cap);
+}
+
 /** Parse one `gdbus monitor` line into a (capability, value) pair, or null.
  *  Line shape:
  *    /org/.../target/dbus0: org.shadowblip.Input.DBusDevice.InputEvent ('ui_up', 1.0)
@@ -235,7 +256,10 @@ export interface IpInterceptHandle {
   /** Begin intercept — InterceptMode=2 on every composite device. Steam is
    *  starved; nav arrives over DBus. Safe to call when unavailable. */
   grab(): void;
-  /** End intercept — InterceptMode=0; input flows back to Steam. */
+  /** End intercept — InterceptMode=0; input flows back to Steam. Not
+   *  instantaneous: if a nav button or wake cap is still down, the mode
+   *  write is deferred until it lifts or RELEASE_DRAIN_MAX_MS passes, so
+   *  IP's DBus target sees the release (see release-drain.ts). */
   release(): void;
   /** Stop the signal monitor and ensure InterceptMode is back to 0. */
   shutdown(): void;
@@ -278,9 +302,51 @@ export async function startIpIntercept(
   let intercepting = false;
   let pumpTimer: ReturnType<typeof setInterval> | null = null;
 
+  // InterceptMode writes are fire-and-forget busctl subprocesses. Chain
+  // them so a slow OFF (IP busy mid-restart) can never land after a later
+  // ON and leave the overlay open with no nav — the drain shrinks the
+  // OFF→ON gap from ≥600 ms (toggle debounce) to as little as ~200 ms.
+  let modeChain: Promise<void> = Promise.resolve();
+  function queueInterceptMode(mode: typeof INTERCEPT_OFF | typeof INTERCEPT_GAMEPAD_ONLY): void {
+    modeChain = modeChain.then(() =>
+      Promise.all(composites.map((p) => setInterceptMode(p, mode).catch(() => {}))).then(
+        () => undefined,
+      ),
+    );
+  }
+
+  // While draining a release the overlay is already hidden: keep feeding
+  // NavController so held-state tracks the pad, but don't forward actions
+  // to a webview nobody can see.
   const nav = new NavController({
-    emit: (a) => opts.onAction(a),
-    emitAxis: (axis, value) => opts.onAxis?.(axis, value),
+    emit: (a) => {
+      if (!drain.active) opts.onAction(a);
+    },
+    emitAxis: (axis, value) => {
+      if (!drain.active) opts.onAxis?.(axis, value);
+    },
+  });
+  /** Wake caps currently down — see trackWakeEdge. */
+  const wakeHeld = new Set<string>();
+  /** Everything down right now, as drain keys. */
+  function heldKeys(): Set<string> {
+    const out = new Set<string>();
+    for (const a of nav.heldActions()) out.add(`nav:${a}`);
+    for (const c of wakeHeld) out.add(`wake:${c}`);
+    return out;
+  }
+  const drain = new ReleaseDrain({
+    maxMs: RELEASE_DRAIN_MAX_MS,
+    tickMs: PUMP_MS,
+    isHeld: (key) => heldKeys().has(key),
+    onFinish: (outcome, elapsed) => {
+      if (outcome !== "immediate") {
+        trace(
+          `[ip-intercept] release drain ${outcome === "timeout" ? "timed out" : "complete"} after ${Math.round(elapsed)}ms`,
+        );
+      }
+      finishRelease();
+    },
   });
 
   function feed(cap: string, value: number): void {
@@ -288,11 +354,18 @@ export async function startIpIntercept(
     const ev = uiToInputEvent(cap, value);
     if (ev) {
       nav.processEvents(NAV_CONTROLLER_ID, [ev]);
+      // Drive drain completion from the release edge itself rather than
+      // the next pump tick — every ms here is a ms the game is starved.
+      drain.poke();
       return;
     }
-    if (UI_WAKE.has(cap) && value >= 0.5) {
-      trace(`[ip-intercept] wake=QamToggle from ${cap}`);
-      opts.onWake("QamToggle");
+    if (UI_WAKE.has(cap)) {
+      trackWakeEdge(wakeHeld, cap, value);
+      drain.poke();
+      if (value >= 0.5) {
+        trace(`[ip-intercept] wake=QamToggle from ${cap}`);
+        opts.onWake("QamToggle");
+      }
       return;
     }
     // Unmapped capability — trace it so an unrecognised wake button or a
@@ -333,27 +406,50 @@ export async function startIpIntercept(
   }
 
   function doGrab(): void {
-    if (intercepting) return;
+    if (intercepting) {
+      // Re-opened inside the release drain window (only reachable via
+      // forceCloseOverlay, which skips the toggle debounce): InterceptMode
+      // is still GamepadOnly, so just abandon the drain and carry on. No
+      // nav.reset()/wakeHeld.clear() here, unlike a fresh grab — we've been
+      // fed throughout, so the held state is the pad's real state.
+      if (drain.active) {
+        drain.cancel();
+        trace("[ip-intercept] release drain cancelled — re-grabbed");
+      }
+      return;
+    }
     intercepting = true;
     nav.reset();
-    for (const p of composites) {
-      setInterceptMode(p, INTERCEPT_GAMEPAD_ONLY).catch(() => {});
-    }
+    wakeHeld.clear();
+    queueInterceptMode(INTERCEPT_GAMEPAD_ONLY);
     startPump();
     console.log(
       `[ip-intercept] intercept ON — InterceptMode=GamepadOnly(3) on ${composites.length} device(s)`,
     );
   }
 
-  function doRelease(): void {
-    if (!intercepting) return;
+  function finishRelease(): void {
     intercepting = false;
-    for (const p of composites) {
-      setInterceptMode(p, INTERCEPT_OFF).catch(() => {});
-    }
+    queueInterceptMode(INTERCEPT_OFF);
     stopPump();
     nav.reset();
+    wakeHeld.clear();
     console.log("[ip-intercept] intercept OFF — InterceptMode=None(0)");
+  }
+
+  function doRelease(): void {
+    if (!intercepting || drain.active) return;
+    // Snapshot what's down right now (the A that activated a close control,
+    // or the wake button that closed us) and keep InterceptMode on until
+    // exactly those lift, so their release edges reach IP's DBus target.
+    // Finishes synchronously when nothing is held.
+    const held = heldKeys();
+    if (held.size > 0) {
+      trace(
+        `[ip-intercept] release deferred — waiting for ${[...held].join(", ")} to release`,
+      );
+    }
+    drain.start(held);
   }
 
   return {
@@ -361,9 +457,12 @@ export async function startIpIntercept(
     grab: doGrab,
     release: doRelease,
     shutdown() {
+      drain.cancel();
       stopPump();
       if (intercepting) {
-        // Best-effort synchronous-ish reset so we don't strand the pad.
+        // Best-effort reset so we don't strand the pad. Spawned now (not
+        // chained) so a process.exit() right after this still gets the
+        // busctl child off the ground — it outlives us.
         for (const p of composites) setInterceptMode(p, INTERCEPT_OFF).catch(() => {});
         intercepting = false;
       }
