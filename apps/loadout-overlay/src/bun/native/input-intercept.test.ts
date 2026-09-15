@@ -38,6 +38,8 @@ let nextFd = 100;
 /** Queued events per FD: each entry is a batch delivered on the next read. */
 const pendingReads = new Map<number, Uint8Array[]>();
 let ioctlFailFds = new Set<number>();
+/** Paths whose open() fails (rc -1), e.g. a node InputPlumber chmod'd 000. */
+let openFailPaths = new Set<string>();
 // FDs for which EVIOCGKEY should report BTN_MODE (Guide) currently held, so
 // the deferred-grab path (doGrab → defer until Guide released) can be tested.
 const guideHeldFds = new Set<number>();
@@ -55,6 +57,10 @@ mock.module("./ffi", () => ({
     symbols: {
       open: (pathBuf: Buffer, flags: number) => {
         const path = pathBuf.toString("utf8").replace(/\0+$/, "");
+        if (openFailPaths.has(path)) {
+          ffiCalls.push({ kind: "open", path, flags, rc: -1 });
+          return -1;
+        }
         const fd = nextFd++;
         ffiCalls.push({ kind: "open", path, flags, rc: fd });
         return fd;
@@ -207,8 +213,84 @@ beforeEach(() => {
   nextFd = 100;
   pendingReads.clear();
   ioctlFailFds = new Set();
+  openFailPaths = new Set();
   guideHeldFds.clear();
   devicesOnSystem = [];
+});
+
+// ---- Unopenable nodes ------------------------------------------------------
+//
+// InputPlumber chmods the source nodes of a composite it manages to 000, so
+// the overlay (running as the user) can never open them. Such a node never
+// lands in `tracked`, and the 2 s reconcile poll used to treat it as "new"
+// on every tick — two journal lines per node every 2 s, forever.
+
+describe("startInputIntercept — unopenable nodes", () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const opensOf = (path: string) =>
+    ffiCalls.filter((c) => c.kind === "open" && c.path === path);
+
+  it("warns once and stops retrying a node whose open() fails", async () => {
+    devicesOnSystem = [
+      mkDevice("/dev/input/event2", "AT Translated Set 2 keyboard", { isKeyboard: true }),
+      mkDevice("/dev/input/event5", "Xbox pad", { isController: true }),
+    ];
+    openFailPaths = new Set(["/dev/input/event2"]);
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    try {
+      const h = await startInputIntercept({
+        onWake: () => {},
+        onAction: () => {},
+        reconcileIntervalMs: 5,
+      });
+      await sleep(60); // ~12 reconcile ticks
+      h.shutdown();
+    } finally {
+      console.warn = origWarn;
+    }
+    expect(opensOf("/dev/input/event2")).toHaveLength(1);
+    expect(opensOf("/dev/input/event5")).toHaveLength(1);
+    const openWarnings = warnings.filter((w) => w.includes("open failed"));
+    expect(openWarnings).toHaveLength(1);
+    expect(openWarnings[0]).toContain("/dev/input/event2");
+    expect(openWarnings[0]).toContain("will retry");
+  });
+
+  it("retries a failed node once it vanishes and re-appears", async () => {
+    devicesOnSystem = [
+      mkDevice("/dev/input/event2", "AT Translated Set 2 keyboard", { isKeyboard: true }),
+    ];
+    openFailPaths = new Set(["/dev/input/event2"]);
+    const origWarn = console.warn;
+    console.warn = () => {};
+    try {
+      const h = await startInputIntercept({
+        onWake: () => {},
+        onAction: () => {},
+        reconcileIntervalMs: 5,
+      });
+      await sleep(30);
+      expect(opensOf("/dev/input/event2")).toHaveLength(1);
+      // Node goes away (unplug / IP releases it)...
+      devicesOnSystem = [];
+      await sleep(30);
+      // ...and comes back openable.
+      openFailPaths = new Set();
+      devicesOnSystem = [
+        mkDevice("/dev/input/event2", "AT Translated Set 2 keyboard", { isKeyboard: true }),
+      ];
+      await sleep(30);
+      expect(opensOf("/dev/input/event2")).toHaveLength(2);
+      expect(h.deviceCount).toBe(1);
+      h.shutdown();
+    } finally {
+      console.warn = origWarn;
+    }
+  });
 });
 
 // ---- Device selection ------------------------------------------------------
