@@ -356,6 +356,25 @@ describe("RecompBackend", () => {
       ).rejects.toThrow(/supported archive extension/);
     });
 
+    it("importModFromDisk lets .7z and .rar through the extension gate (#125)", async () => {
+      await backend.onLoad();
+      // No game installed on purpose: the gate runs BEFORE the game
+      // lookup, so a rejected extension surfaces as the extension error
+      // and an accepted one as the (later) registry/installed check —
+      // without ever reaching the extractor.
+      const { writeFile, mkdtemp } = await import("node:fs/promises");
+      const { join } = await import("node:path");
+      const { tmpdir } = await import("node:os");
+      const dir = await mkdtemp(join(tmpdir(), "backend-import-7z-"));
+      for (const name of ["Henriko 4K (3.0c).7z", "GoldenEye-Recomp.RAR"]) {
+        const archive = join(dir, name);
+        await writeFile(archive, "not really an archive");
+        const outcome = backend.importModFromDisk("no-such-game", "henriko-4k", archive);
+        await expect(outcome).rejects.not.toThrow(/supported archive extension/);
+        await expect(outcome).rejects.toThrow(/not found in registry/);
+      }
+    });
+
     it("importModFromDisk reports a clear error when the file doesn't exist", async () => {
       await backend.onLoad();
       backend["state"].games["dusklight"] = {

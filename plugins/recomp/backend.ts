@@ -116,22 +116,8 @@ function allowedRootsErrorPhrase(): string {
     .join(", ");
 }
 
-/** Archive extensions the importModFromDisk RPC accepts. Limited to
- *  the formats `lib/pipeline-archive.ts:extractArchive` actually
- *  supports (zip / tar / tar.gz / tgz / appimage). Adding new
- *  extensions here without teaching the extractor first would
- *  surface a confusing "Unsupported archive format" error AFTER
- *  the path-gate accepted the file. */
-const ALLOWED_ARCHIVE_EXTENSIONS = [
-  ".zip", ".tar", ".tar.gz", ".tgz",
-] as const;
-
-function hasAllowedArchiveExtension(absolute: string): boolean {
-  const lower = absolute.toLowerCase();
-  return ALLOWED_ARCHIVE_EXTENSIONS.some((ext) => lower.endsWith(ext));
-}
-
 import { FRANCHISE_GROUPS, HEADLINE_IDS } from "./lib/ranking";
+import { ARCHIVE_EXTENSIONS, hasArchiveExtension } from "./lib/archive-extensions";
 
 function franchiseRank(g: GameInfo): number {
   const tags = g.tags ?? [];
@@ -639,9 +625,9 @@ export default class RecompBackend implements PluginBackend {
         `importGameFromDisk: path '${absolute}' is outside the allowed roots (${allowedRootsErrorPhrase()}).`,
       );
     }
-    if (!hasAllowedArchiveExtension(absolute)) {
+    if (!hasArchiveExtension(absolute)) {
       throw new Error(
-        `importGameFromDisk: '${absolute}' doesn't have a supported archive extension (${ALLOWED_ARCHIVE_EXTENSIONS.join(", ")}).`,
+        `importGameFromDisk: '${absolute}' doesn't have a supported archive extension (${ARCHIVE_EXTENSIONS.join(", ")}).`,
       );
     }
 
@@ -883,9 +869,9 @@ export default class RecompBackend implements PluginBackend {
         `importModFromDisk: path '${absolute}' is outside the allowed roots (${allowedRootsErrorPhrase()}).`,
       );
     }
-    if (!hasAllowedArchiveExtension(absolute)) {
+    if (!hasArchiveExtension(absolute)) {
       throw new Error(
-        `importModFromDisk: '${absolute}' doesn't have a supported archive extension (${ALLOWED_ARCHIVE_EXTENSIONS.join(", ")}).`,
+        `importModFromDisk: '${absolute}' doesn't have a supported archive extension (${ARCHIVE_EXTENSIONS.join(", ")}).`,
       );
     }
     const { entry, mod, installed } = this.resolveModContext(gameId, modId);
