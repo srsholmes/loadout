@@ -23,27 +23,7 @@ import {
   useFocusable,
 } from "@loadout/ui";
 import { steamArtworkUrls } from "@loadout/steam-paths";
-
-/**
- * Archive formats the backend's `importModFromDisk` / extractor can
- * actually unpack (single-token extensions for the file-browser filter:
- * `.tar.gz` → `gz`). The mod catalog sometimes advertises `7z`/`rar`,
- * which the extractor can't handle — filtering the import picker to the
- * intersection with this set stops the user from picking a file that
- * would fail with a confusing post-selection error. Native 7z/rar
- * support is tracked separately.
- */
-const BACKEND_ARCHIVE_EXTS = ["zip", "tar", "tgz", "gz"];
-
-function supportedImportExtensions(accept?: string[]): string[] {
-  const want = (accept ?? []).map((e) => e.replace(/^\./, "").toLowerCase());
-  const inter = want.filter((e) => BACKEND_ARCHIVE_EXTS.includes(e));
-  // If the mod only declared unsupported formats, still filter to the
-  // supported set so the browser shows "no matching entries" (with the
-  // supported list) up front rather than letting an unpickable file
-  // through to a backend rejection.
-  return inter.length > 0 ? inter : BACKEND_ARCHIVE_EXTS;
-}
+import { supportedImportExtensions } from "./lib/archive-extensions";
 
 // ── Internal navigation ──────────────────────────────────────────────
 //
