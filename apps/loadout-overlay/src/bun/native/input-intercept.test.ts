@@ -241,15 +241,16 @@ describe("startInputIntercept — unopenable nodes", () => {
     console.warn = (...args: unknown[]) => {
       warnings.push(args.map(String).join(" "));
     };
+    let h: Awaited<ReturnType<typeof startInputIntercept>> | undefined;
     try {
-      const h = await startInputIntercept({
+      h = await startInputIntercept({
         onWake: () => {},
         onAction: () => {},
         reconcileIntervalMs: 5,
       });
       await sleep(60); // ~12 reconcile ticks
-      h.shutdown();
     } finally {
+      h?.shutdown();
       console.warn = origWarn;
     }
     expect(opensOf("/dev/input/event2")).toHaveLength(1);
@@ -267,8 +268,9 @@ describe("startInputIntercept — unopenable nodes", () => {
     openFailPaths = new Set(["/dev/input/event2"]);
     const origWarn = console.warn;
     console.warn = () => {};
+    let h: Awaited<ReturnType<typeof startInputIntercept>> | undefined;
     try {
-      const h = await startInputIntercept({
+      h = await startInputIntercept({
         onWake: () => {},
         onAction: () => {},
         reconcileIntervalMs: 5,
@@ -286,9 +288,48 @@ describe("startInputIntercept — unopenable nodes", () => {
       await sleep(30);
       expect(opensOf("/dev/input/event2")).toHaveLength(2);
       expect(h.deviceCount).toBe(1);
-      h.shutdown();
     } finally {
+      h?.shutdown();
       console.warn = origWarn;
+    }
+  });
+
+  it("retries after openRetryMs and logs when the node becomes openable", async () => {
+    devicesOnSystem = [
+      mkDevice("/dev/input/event14", "Microsoft X-Box 360 pad", { isController: true }),
+    ];
+    openFailPaths = new Set(["/dev/input/event14"]);
+    const logs: string[] = [];
+    const origWarn = console.warn;
+    const origLog = console.log;
+    console.warn = () => {};
+    console.log = (...args: unknown[]) => {
+      logs.push(args.map(String).join(" "));
+    };
+    let h: Awaited<ReturnType<typeof startInputIntercept>> | undefined;
+    try {
+      h = await startInputIntercept({
+        onWake: () => {},
+        onAction: () => {},
+        reconcileIntervalMs: 5,
+        openRetryMs: 40,
+      });
+      // Inside the retry window: no further attempts.
+      await sleep(20);
+      expect(opensOf("/dev/input/event14")).toHaveLength(1);
+      // InputPlumber releases the node (chmod back) — same path, no
+      // create/delete, so only the timed retry can pick it up.
+      openFailPaths = new Set();
+      await sleep(50);
+      expect(opensOf("/dev/input/event14")).toHaveLength(2);
+      expect(h.deviceCount).toBe(1);
+      expect(logs.some((l) => l.includes("/dev/input/event14") && l.includes("openable now"))).toBe(true);
+      // A recovered node is tracked normally: it is not re-logged as new.
+      expect(logs.filter((l) => l.includes("reconcile:") && l.includes("event14"))).toHaveLength(0);
+    } finally {
+      h?.shutdown();
+      console.warn = origWarn;
+      console.log = origLog;
     }
   });
 });

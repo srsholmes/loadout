@@ -96,17 +96,8 @@ const KEY_F16 = 0xba;
 const O_RDONLY = 0;
 const O_NONBLOCK = 2048;
 
-// ---- Hotplug warning -------------------------------------------------------
+// ---- Unopenable-node diagnostics ------------------------------------------
 
-/**
- * Audit B-024: log a one-line warning when `startDeviceHotplug` returned
- * null (i.e. inotify is unavailable on this kernel/sandbox). The
- * device-hotplug module logs its own init-failure messages but the
- * operational consequence — "controllers added mid-session won't be
- * picked up until the next 2s reconcile poll" — lives here.
- *
- * Exported for tests.
- */
 /** Suffix for the open-failed warning: the node's mode bits, plus the
  *  usual reason when it is 000 (InputPlumber hides the source nodes of a
  *  composite it manages). Empty when stat itself fails. */
@@ -122,6 +113,17 @@ function describeUnopenable(path: string): string {
   }
 }
 
+// ---- Hotplug warning -------------------------------------------------------
+
+/**
+ * Audit B-024: log a one-line warning when `startDeviceHotplug` returned
+ * null (i.e. inotify is unavailable on this kernel/sandbox). The
+ * device-hotplug module logs its own init-failure messages but the
+ * operational consequence — "controllers added mid-session won't be
+ * picked up until the next 2s reconcile poll" — lives here.
+ *
+ * Exported for tests.
+ */
 export function warnIfHotplugDisabled(
   hotplug: DeviceHotplugHandle | null,
   log: (msg: string) => void = console.warn,
@@ -636,6 +638,9 @@ export interface InputInterceptOptions {
   /** Period of the belt-and-braces /proc reconcile poll. Default 2000 ms;
    *  tests shrink it. */
   reconcileIntervalMs?: number;
+  /** How long a node whose open() failed is left alone before the reconcile
+   *  poll retries it. Default 60 000 ms; tests shrink it. */
+  openRetryMs?: number;
 }
 
 export interface InputInterceptHandle {
@@ -698,14 +703,14 @@ export async function startInputIntercept(
   // tick and retry + log forever. We warn once, then retry quietly on a
   // slow cadence so a node that becomes openable later is still picked up.
   const openFailed = new Map<string, number>();
-  const OPEN_RETRY_MS = 60_000;
+  const OPEN_RETRY_MS = opts.openRetryMs ?? 60_000;
 
   function openAndTrack(dev: InputDevice): TrackedDevice | null {
     const pathBuf = Buffer.from(dev.eventPath + "\0");
     const fd = libc.symbols.open(pathBuf, O_RDONLY | O_NONBLOCK);
     if (fd < 0) {
       const firstFailure = !openFailed.has(dev.eventPath);
-      openFailed.set(dev.eventPath, Date.now());
+      openFailed.set(dev.eventPath, performance.now());
       if (firstFailure) {
         console.warn(
           `[input-intercept] open failed for ${dev.eventPath} (${dev.name})` +
@@ -1138,6 +1143,10 @@ export async function startInputIntercept(
     const seen = new Set(all.map((d) => d.eventPath));
     // A node that vanished is forgotten, so a device re-appearing at the
     // same path gets a fresh attempt (and a fresh warning if it fails).
+    // Without inotify, an unplug + replug at the same path that both land
+    // between two polls is invisible here; the new device then just waits
+    // out the remainder of OPEN_RETRY_MS. Accepted: bounded, and the
+    // inotify fast path (handleDeviceAdded) clears the record on create.
     for (const path of [...openFailed.keys()]) {
       if (!seen.has(path)) openFailed.delete(path);
     }
@@ -1152,7 +1161,7 @@ export async function startInputIntercept(
     }
     // Additions: eligible /proc entries we don't already track.
     const trackedPaths = new Set(tracked.map((t) => t.path));
-    const now = Date.now();
+    const now = performance.now();
     for (const dev of all) {
       if (trackedPaths.has(dev.eventPath)) continue;
       if (!isEligible(dev)) continue;
