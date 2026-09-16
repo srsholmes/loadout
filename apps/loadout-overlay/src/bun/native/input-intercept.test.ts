@@ -223,114 +223,145 @@ beforeEach(() => {
 // InputPlumber chmods the source nodes of a composite it manages to 000, so
 // the overlay (running as the user) can never open them. Such a node never
 // lands in `tracked`, and the 2 s reconcile poll used to treat it as "new"
-// on every tick — two journal lines per node every 2 s, forever.
+// on every tick — two journal lines per node every 2 s, forever. The fix
+// warns once and retries with backoff (next poll, doubling, capped), so a
+// transient failure (BT pad node before udev's ACL lands) still recovers
+// fast while a permanent one goes quiet.
 
 describe("startInputIntercept — unopenable nodes", () => {
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  /** Poll until `cond` holds; throws with `what` on timeout. Timing tests
+   *  wait for the condition rather than a fixed sleep so a stalled event
+   *  loop makes them slow, not flaky. */
+  async function until(cond: () => boolean, what: string, timeoutMs = 1000) {
+    const deadline = performance.now() + timeoutMs;
+    while (!cond()) {
+      if (performance.now() > deadline) throw new Error(`timed out: ${what}`);
+      await sleep(2);
+    }
+  }
   const opensOf = (path: string) =>
     ffiCalls.filter((c) => c.kind === "open" && c.path === path);
 
-  it("warns once and stops retrying a node whose open() fails", async () => {
+  type Handle = Awaited<ReturnType<typeof startInputIntercept>>;
+  /** Capture console output for the duration of `fn`; restores in finally. */
+  async function withConsole(
+    fn: (out: { warnings: string[]; logs: string[] }) => Promise<void>,
+  ) {
+    const out = { warnings: [] as string[], logs: [] as string[] };
+    const origWarn = console.warn;
+    const origLog = console.log;
+    console.warn = (...a: unknown[]) => { out.warnings.push(a.map(String).join(" ")); };
+    console.log = (...a: unknown[]) => { out.logs.push(a.map(String).join(" ")); };
+    try {
+      await fn(out);
+    } finally {
+      console.warn = origWarn;
+      console.log = origLog;
+    }
+  }
+  const openWarnings = (w: string[], path: string) =>
+    w.filter((l) => l.includes("open failed") && l.includes(path));
+  const reconcileNewLogs = (l: string[], path: string) =>
+    l.filter((x) => x.includes("reconcile:") && x.includes(path));
+
+  it("warns once and backs off instead of retrying every poll", async () => {
     devicesOnSystem = [
       mkDevice("/dev/input/event2", "AT Translated Set 2 keyboard", { isKeyboard: true }),
       mkDevice("/dev/input/event5", "Xbox pad", { isController: true }),
     ];
     openFailPaths = new Set(["/dev/input/event2"]);
-    const warnings: string[] = [];
-    const origWarn = console.warn;
-    console.warn = (...args: unknown[]) => {
-      warnings.push(args.map(String).join(" "));
-    };
-    let h: Awaited<ReturnType<typeof startInputIntercept>> | undefined;
-    try {
-      h = await startInputIntercept({
-        onWake: () => {},
-        onAction: () => {},
-        reconcileIntervalMs: 5,
-      });
-      await sleep(60); // ~12 reconcile ticks
-    } finally {
-      h?.shutdown();
-      console.warn = origWarn;
-    }
-    expect(opensOf("/dev/input/event2")).toHaveLength(1);
-    expect(opensOf("/dev/input/event5")).toHaveLength(1);
-    const openWarnings = warnings.filter((w) => w.includes("open failed"));
-    expect(openWarnings).toHaveLength(1);
-    expect(openWarnings[0]).toContain("/dev/input/event2");
-    expect(openWarnings[0]).toContain("will retry");
+    await withConsole(async ({ warnings, logs }) => {
+      let h: Handle | undefined;
+      try {
+        h = await startInputIntercept({
+          onWake: () => {},
+          onAction: () => {},
+          reconcileIntervalMs: 5,
+          openRetryMs: 20,
+        });
+        // Wait for at least four attempts (boot + 3 retries: ~5, ~15, ~35 ms).
+        await until(() => opensOf("/dev/input/event2").length >= 4, "4 attempts");
+        await sleep(60); // ~12 more polls at the 20 ms cap → ≤ 3 more attempts
+      } finally {
+        h?.shutdown();
+      }
+      // Every poll would have been ~25 attempts by now.
+      expect(opensOf("/dev/input/event2").length).toBeLessThanOrEqual(8);
+      expect(opensOf("/dev/input/event5")).toHaveLength(1);
+      // The journal signal: one warning, never re-announced as "new".
+      const w = openWarnings(warnings, "/dev/input/event2");
+      expect(w).toHaveLength(1);
+      expect(w[0]).toContain("retrying with backoff");
+      expect(reconcileNewLogs(logs, "/dev/input/event2")).toHaveLength(0);
+    });
   });
 
-  it("retries a failed node once it vanishes and re-appears", async () => {
-    devicesOnSystem = [
-      mkDevice("/dev/input/event2", "AT Translated Set 2 keyboard", { isKeyboard: true }),
-    ];
-    openFailPaths = new Set(["/dev/input/event2"]);
-    const origWarn = console.warn;
-    console.warn = () => {};
-    let h: Awaited<ReturnType<typeof startInputIntercept>> | undefined;
-    try {
-      h = await startInputIntercept({
-        onWake: () => {},
-        onAction: () => {},
-        reconcileIntervalMs: 5,
-      });
-      await sleep(30);
-      expect(opensOf("/dev/input/event2")).toHaveLength(1);
-      // Node goes away (unplug / IP releases it)...
-      devicesOnSystem = [];
-      await sleep(30);
-      // ...and comes back openable.
-      openFailPaths = new Set();
-      devicesOnSystem = [
-        mkDevice("/dev/input/event2", "AT Translated Set 2 keyboard", { isKeyboard: true }),
-      ];
-      await sleep(30);
-      expect(opensOf("/dev/input/event2")).toHaveLength(2);
-      expect(h.deviceCount).toBe(1);
-    } finally {
-      h?.shutdown();
-      console.warn = origWarn;
-    }
-  });
-
-  it("retries after openRetryMs and logs when the node becomes openable", async () => {
+  it("recovers a transient failure on the next poll, not after the cap", async () => {
+    // A freshly paired BT pad: the first open() fails (udev ACL not yet
+    // applied), the node is fine a moment later.
     devicesOnSystem = [
       mkDevice("/dev/input/event14", "Microsoft X-Box 360 pad", { isController: true }),
     ];
     openFailPaths = new Set(["/dev/input/event14"]);
-    const logs: string[] = [];
-    const origWarn = console.warn;
-    const origLog = console.log;
-    console.warn = () => {};
-    console.log = (...args: unknown[]) => {
-      logs.push(args.map(String).join(" "));
-    };
-    let h: Awaited<ReturnType<typeof startInputIntercept>> | undefined;
-    try {
-      h = await startInputIntercept({
-        onWake: () => {},
-        onAction: () => {},
-        reconcileIntervalMs: 5,
-        openRetryMs: 40,
-      });
-      // Inside the retry window: no further attempts.
-      await sleep(20);
-      expect(opensOf("/dev/input/event14")).toHaveLength(1);
-      // InputPlumber releases the node (chmod back) — same path, no
-      // create/delete, so only the timed retry can pick it up.
-      openFailPaths = new Set();
-      await sleep(50);
+    await withConsole(async ({ warnings, logs }) => {
+      let h: Handle | undefined;
+      try {
+        h = await startInputIntercept({
+          onWake: () => {},
+          onAction: () => {},
+          reconcileIntervalMs: 5,
+          openRetryMs: 10_000, // a flat wait this long would strand the pad
+        });
+        expect(opensOf("/dev/input/event14")).toHaveLength(1);
+        openFailPaths = new Set();
+        await until(() => h!.deviceCount === 1, "pad tracked", 500);
+      } finally {
+        h?.shutdown();
+      }
       expect(opensOf("/dev/input/event14")).toHaveLength(2);
-      expect(h.deviceCount).toBe(1);
+      expect(openWarnings(warnings, "/dev/input/event14")).toHaveLength(1);
       expect(logs.some((l) => l.includes("/dev/input/event14") && l.includes("openable now"))).toBe(true);
       // A recovered node is tracked normally: it is not re-logged as new.
-      expect(logs.filter((l) => l.includes("reconcile:") && l.includes("event14"))).toHaveLength(0);
-    } finally {
-      h?.shutdown();
-      console.warn = origWarn;
-      console.log = origLog;
-    }
+      expect(reconcileNewLogs(logs, "/dev/input/event14")).toHaveLength(0);
+    });
+  });
+
+  it("re-warns when the node vanishes and a new one appears at the same path", async () => {
+    devicesOnSystem = [
+      mkDevice("/dev/input/event2", "AT Translated Set 2 keyboard", { isKeyboard: true }),
+    ];
+    openFailPaths = new Set(["/dev/input/event2"]);
+    await withConsole(async ({ warnings }) => {
+      let h: Handle | undefined;
+      try {
+        h = await startInputIntercept({
+          onWake: () => {},
+          onAction: () => {},
+          reconcileIntervalMs: 5,
+          openRetryMs: 10_000,
+        });
+        expect(openWarnings(warnings, "/dev/input/event2")).toHaveLength(1);
+        // Node goes away; the record must be forgotten once a poll sees that.
+        devicesOnSystem = [];
+        await sleep(30);
+        // A different device appears at the same path, still unopenable:
+        // a fresh attempt and a fresh warning, not a silent wait for the cap.
+        devicesOnSystem = [
+          mkDevice("/dev/input/event2", "AT Translated Set 2 keyboard", { isKeyboard: true }),
+        ];
+        await until(
+          () => openWarnings(warnings, "/dev/input/event2").length === 2,
+          "second warning",
+        );
+        // ...and it becomes openable.
+        openFailPaths = new Set();
+        await until(() => h!.deviceCount === 1, "tracked after replug");
+      } finally {
+        h?.shutdown();
+      }
+      expect(openWarnings(warnings, "/dev/input/event2")).toHaveLength(2);
+    });
   });
 });
 

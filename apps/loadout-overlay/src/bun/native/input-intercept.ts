@@ -638,8 +638,9 @@ export interface InputInterceptOptions {
   /** Period of the belt-and-braces /proc reconcile poll. Default 2000 ms;
    *  tests shrink it. */
   reconcileIntervalMs?: number;
-  /** How long a node whose open() failed is left alone before the reconcile
-   *  poll retries it. Default 60 000 ms; tests shrink it. */
+  /** Cap on the retry backoff for a node whose open() failed: the reconcile
+   *  poll retries it after one poll interval, then doubles the wait each
+   *  time up to this cap. Default 60 000 ms; tests shrink it. */
   openRetryMs?: number;
 }
 
@@ -696,26 +697,38 @@ export async function startInputIntercept(
 
   const tracked: TrackedDevice[] = [];
 
-  // Nodes we could not open, keyed by path → ms timestamp of the last
-  // attempt. An unopenable node (InputPlumber chmods the source devices it
-  // owns to 000, and we run as the user) never lands in `tracked`, so
-  // without this the 2 s reconcile poll would treat it as "new" on every
-  // tick and retry + log forever. We warn once, then retry quietly on a
-  // slow cadence so a node that becomes openable later is still picked up.
-  const openFailed = new Map<string, number>();
+  // Nodes we could not open, keyed by path. An unopenable node never lands
+  // in `tracked`, so without this the reconcile poll would treat it as
+  // "new" on every tick and retry + log forever. Two very different causes
+  // land here and open() cannot tell them apart:
+  //   - permanent: InputPlumber chmods the source nodes it owns to 000 and
+  //     we run as the user — they stay unopenable for the session;
+  //   - transient: a freshly paired BT pad whose node inotify reported
+  //     before udev applied the input-group ACL, or a /proc entry whose
+  //     /dev node lags — openable a moment later.
+  // So: warn once, then retry with exponential backoff — the next poll,
+  // then doubling up to OPEN_RETRY_MS. A transient failure recovers within
+  // a poll or two; a permanent one settles at the slow cadence quietly.
+  const openFailed = new Map<string, { at: number; attempts: number }>();
+  const RECONCILE_INTERVAL_MS = opts.reconcileIntervalMs ?? 2000;
   const OPEN_RETRY_MS = opts.openRetryMs ?? 60_000;
+  const retryDelayMs = (attempts: number): number =>
+    Math.min(OPEN_RETRY_MS, RECONCILE_INTERVAL_MS * 2 ** (attempts - 1));
 
   function openAndTrack(dev: InputDevice): TrackedDevice | null {
     const pathBuf = Buffer.from(dev.eventPath + "\0");
     const fd = libc.symbols.open(pathBuf, O_RDONLY | O_NONBLOCK);
     if (fd < 0) {
-      const firstFailure = !openFailed.has(dev.eventPath);
-      openFailed.set(dev.eventPath, performance.now());
-      if (firstFailure) {
+      const prev = openFailed.get(dev.eventPath);
+      openFailed.set(dev.eventPath, {
+        at: performance.now(),
+        attempts: (prev?.attempts ?? 0) + 1,
+      });
+      if (!prev) {
         console.warn(
           `[input-intercept] open failed for ${dev.eventPath} (${dev.name})` +
             describeUnopenable(dev.eventPath) +
-            ` — will retry every ${OPEN_RETRY_MS / 1000}s`,
+            ` — retrying with backoff up to ${OPEN_RETRY_MS / 1000}s`,
         );
       }
       return null;
@@ -1130,7 +1143,6 @@ export async function startInputIntercept(
   // never reach our read() loop, so we cannot rely on it alone. The
   // proc-fs scan is cheap (~10 KB read, few regex matches per block) and
   // catches anything inotify missed.
-  const RECONCILE_INTERVAL_MS = opts.reconcileIntervalMs ?? 2000;
   let reconcileTimer: ReturnType<typeof setInterval> | null = null;
   async function reconcileTracked(): Promise<void> {
     let all: InputDevice[];
@@ -1145,8 +1157,8 @@ export async function startInputIntercept(
     // same path gets a fresh attempt (and a fresh warning if it fails).
     // Without inotify, an unplug + replug at the same path that both land
     // between two polls is invisible here; the new device then just waits
-    // out the remainder of OPEN_RETRY_MS. Accepted: bounded, and the
-    // inotify fast path (handleDeviceAdded) clears the record on create.
+    // out the remainder of its current backoff step. Accepted: bounded,
+    // and the inotify fast path (handleDeviceAdded) clears the record.
     for (const path of [...openFailed.keys()]) {
       if (!seen.has(path)) openFailed.delete(path);
     }
@@ -1165,9 +1177,9 @@ export async function startInputIntercept(
     for (const dev of all) {
       if (trackedPaths.has(dev.eventPath)) continue;
       if (!isEligible(dev)) continue;
-      const lastFailure = openFailed.get(dev.eventPath);
-      if (lastFailure !== undefined) {
-        if (now - lastFailure < OPEN_RETRY_MS) continue;
+      const failure = openFailed.get(dev.eventPath);
+      if (failure) {
+        if (now - failure.at < retryDelayMs(failure.attempts)) continue;
       } else {
         console.log(
           `[input-intercept] reconcile: ${dev.eventPath} '${dev.name}' new — opening`,
