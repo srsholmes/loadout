@@ -40,6 +40,7 @@
 //     so the QAM button can still toggle us off.
 
 import { ptr } from "bun:ffi";
+import { statSync } from "node:fs";
 import {
   libc,
   EVIOCGRAB,
@@ -94,6 +95,23 @@ const KEY_F16 = 0xba;
 // fcntl.h — same as f16-watcher.ts/input-grab.ts used.
 const O_RDONLY = 0;
 const O_NONBLOCK = 2048;
+
+// ---- Unopenable-node diagnostics ------------------------------------------
+
+/** Suffix for the open-failed warning: the node's mode bits, plus the
+ *  usual reason when it is 000 (InputPlumber hides the source nodes of a
+ *  composite it manages). Empty when stat itself fails. */
+function describeUnopenable(path: string): string {
+  try {
+    const mode = statSync(path).mode & 0o777;
+    const octal = mode.toString(8).padStart(3, "0");
+    return mode === 0
+      ? ` [mode ${octal}: hidden by InputPlumber, not readable as the user]`
+      : ` [mode ${octal}]`;
+  } catch {
+    return "";
+  }
+}
 
 // ---- Hotplug warning -------------------------------------------------------
 
@@ -617,6 +635,13 @@ export interface InputInterceptOptions {
    *  desktop apps behind the overlay — the desktop-mode capture, where
    *  Steam isn't frozen and consumers read evdev. Default false. */
   grabDeckBuiltinNodes?: boolean;
+  /** Period of the belt-and-braces /proc reconcile poll. Default 2000 ms;
+   *  tests shrink it. */
+  reconcileIntervalMs?: number;
+  /** Cap on the retry backoff for a node whose open() failed: the reconcile
+   *  poll retries it after one poll interval, then doubles the wait each
+   *  time up to this cap. Default 60 000 ms; tests shrink it. */
+  openRetryMs?: number;
 }
 
 export interface InputInterceptHandle {
@@ -672,14 +697,46 @@ export async function startInputIntercept(
 
   const tracked: TrackedDevice[] = [];
 
+  // Nodes we could not open, keyed by path. An unopenable node never lands
+  // in `tracked`, so without this the reconcile poll would treat it as
+  // "new" on every tick and retry + log forever. Two very different causes
+  // land here and open() cannot tell them apart:
+  //   - permanent: InputPlumber chmods the source nodes it owns to 000 and
+  //     we run as the user — they stay unopenable for the session;
+  //   - transient: a freshly paired BT pad whose node inotify reported
+  //     before udev applied the input-group ACL, or a /proc entry whose
+  //     /dev node lags — openable a moment later.
+  // So: warn once, then retry with exponential backoff — the next poll,
+  // then doubling up to OPEN_RETRY_MS. A transient failure recovers within
+  // a poll or two; a permanent one settles at the slow cadence quietly.
+  const openFailed = new Map<string, { at: number; attempts: number }>();
+  const RECONCILE_INTERVAL_MS = opts.reconcileIntervalMs ?? 2000;
+  const OPEN_RETRY_MS = opts.openRetryMs ?? 60_000;
+  const retryDelayMs = (attempts: number): number =>
+    Math.min(OPEN_RETRY_MS, RECONCILE_INTERVAL_MS * 2 ** (attempts - 1));
+
   function openAndTrack(dev: InputDevice): TrackedDevice | null {
     const pathBuf = Buffer.from(dev.eventPath + "\0");
     const fd = libc.symbols.open(pathBuf, O_RDONLY | O_NONBLOCK);
     if (fd < 0) {
-      console.warn(
-        `[input-intercept] open failed for ${dev.eventPath} (${dev.name})`,
-      );
+      const prev = openFailed.get(dev.eventPath);
+      openFailed.set(dev.eventPath, {
+        at: performance.now(),
+        attempts: (prev?.attempts ?? 0) + 1,
+      });
+      if (!prev) {
+        console.warn(
+          `[input-intercept] open failed for ${dev.eventPath} (${dev.name})` +
+            describeUnopenable(dev.eventPath) +
+            ` — retrying with backoff up to ${OPEN_RETRY_MS / 1000}s`,
+        );
+      }
       return null;
+    }
+    if (openFailed.delete(dev.eventPath)) {
+      console.log(
+        `[input-intercept] ${dev.eventPath} (${dev.name}) is openable now`,
+      );
     }
     // A virtual pad is read for nav (grabOnly=false) on the Deck-alone case,
     // or grab-only when an external IP-managed pad drives nav over DBus.
@@ -1024,6 +1081,9 @@ export async function startInputIntercept(
 
   async function handleDeviceAdded(eventPath: string): Promise<void> {
     if (tracked.some((t) => t.path === eventPath)) return;
+    // inotify says a node was (re)created at this path: it is a different
+    // device from the one we failed to open, so attempt it afresh.
+    openFailed.delete(eventPath);
     let fresh: InputDevice | undefined;
     try {
       const all = await enumerateDevices();
@@ -1051,6 +1111,7 @@ export async function startInputIntercept(
   }
 
   function handleDeviceRemoved(eventPath: string): void {
+    openFailed.delete(eventPath);
     const idx = tracked.findIndex((t) => t.path === eventPath);
     if (idx < 0) return;
     const [t] = tracked.splice(idx, 1);
@@ -1082,7 +1143,6 @@ export async function startInputIntercept(
   // never reach our read() loop, so we cannot rely on it alone. The
   // proc-fs scan is cheap (~10 KB read, few regex matches per block) and
   // catches anything inotify missed.
-  const RECONCILE_INTERVAL_MS = 2000;
   let reconcileTimer: ReturnType<typeof setInterval> | null = null;
   async function reconcileTracked(): Promise<void> {
     let all: InputDevice[];
@@ -1093,6 +1153,15 @@ export async function startInputIntercept(
       return;
     }
     const seen = new Set(all.map((d) => d.eventPath));
+    // A node that vanished is forgotten, so a device re-appearing at the
+    // same path gets a fresh attempt (and a fresh warning if it fails).
+    // Without inotify, an unplug + replug at the same path that both land
+    // between two polls is invisible here; the new device then just waits
+    // out the remainder of its current backoff step. Accepted: bounded,
+    // and the inotify fast path (handleDeviceAdded) clears the record.
+    for (const path of [...openFailed.keys()]) {
+      if (!seen.has(path)) openFailed.delete(path);
+    }
     // Removals: tracked entries whose eventPath has vanished from /proc.
     for (const t of [...tracked]) {
       if (!seen.has(t.path)) {
@@ -1104,12 +1173,18 @@ export async function startInputIntercept(
     }
     // Additions: eligible /proc entries we don't already track.
     const trackedPaths = new Set(tracked.map((t) => t.path));
+    const now = performance.now();
     for (const dev of all) {
       if (trackedPaths.has(dev.eventPath)) continue;
       if (!isEligible(dev)) continue;
-      console.log(
-        `[input-intercept] reconcile: ${dev.eventPath} '${dev.name}' new — opening`,
-      );
+      const failure = openFailed.get(dev.eventPath);
+      if (failure) {
+        if (now - failure.at < retryDelayMs(failure.attempts)) continue;
+      } else {
+        console.log(
+          `[input-intercept] reconcile: ${dev.eventPath} '${dev.name}' new — opening`,
+        );
+      }
       const t = openAndTrack(dev);
       if (t && intercepting && (t.dev.flags.isController || t.grabOnly)) {
         if (!t.grabOnly) applyInterceptMasks(t.fd);
