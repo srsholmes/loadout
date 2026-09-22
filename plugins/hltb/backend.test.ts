@@ -100,7 +100,7 @@ describe("HltbBackend", () => {
       mockFetch.mockImplementation((url: string | URL, _opts?: RequestInit) => {
         const urlStr = typeof url === "string" ? url : url.toString();
 
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({
@@ -112,7 +112,7 @@ describe("HltbBackend", () => {
             ),
           );
         }
-        if (urlStr.includes("/api/bleed")) {
+        if (urlStr.includes("/api/search/site")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({
@@ -156,7 +156,7 @@ describe("HltbBackend", () => {
       let searchCallCount = 0;
       mockFetch.mockImplementation((url: string | URL) => {
         const urlStr = typeof url === "string" ? url : url.toString();
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -184,7 +184,7 @@ describe("HltbBackend", () => {
     it("handles API returning non-200 gracefully", async () => {
       mockFetch.mockImplementation((url: string | URL) => {
         const urlStr = typeof url === "string" ? url : url.toString();
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -202,7 +202,7 @@ describe("HltbBackend", () => {
     it("handles unexpected response format", async () => {
       mockFetch.mockImplementation((url: string | URL) => {
         const urlStr = typeof url === "string" ? url : url.toString();
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -223,7 +223,7 @@ describe("HltbBackend", () => {
       let fetchCount = 0;
       mockFetch.mockImplementation((url: string | URL) => {
         const urlStr = typeof url === "string" ? url : url.toString();
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({
@@ -235,7 +235,7 @@ describe("HltbBackend", () => {
             ),
           );
         }
-        if (urlStr.includes("/api/bleed")) {
+        if (urlStr.includes("/api/search/site")) {
           // First search call (with the first-issued auth) returns 403 to
           // simulate an expired triple; plugin should refresh + retry once.
           if (fetchCount <= 1) {
@@ -284,7 +284,7 @@ describe("HltbBackend", () => {
             ),
           );
         }
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -333,7 +333,7 @@ describe("HltbBackend", () => {
             ),
           );
         }
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -390,7 +390,7 @@ describe("HltbBackend", () => {
             ),
           );
         }
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -429,7 +429,7 @@ describe("HltbBackend", () => {
             ),
           );
         }
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -470,7 +470,7 @@ describe("HltbBackend", () => {
             ),
           );
         }
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -608,7 +608,7 @@ describe("HltbBackend", () => {
       let searchCalls = 0;
       mockFetch.mockImplementation((url: string | URL) => {
         const urlStr = typeof url === "string" ? url : url.toString();
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -643,7 +643,7 @@ describe("HltbBackend", () => {
     it("formats zero and negative seconds as --", async () => {
       mockFetch.mockImplementation((url: string | URL) => {
         const urlStr = typeof url === "string" ? url : url.toString();
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -669,7 +669,7 @@ describe("HltbBackend", () => {
     it("formats sub-hour times as minutes", async () => {
       mockFetch.mockImplementation((url: string | URL) => {
         const urlStr = typeof url === "string" ? url : url.toString();
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -695,15 +695,15 @@ describe("HltbBackend", () => {
   // ── E-013: auxiliary fetch paths ────────────────────────────────
   //
   // Covers the three brittle paths that aren't exercised by the main
-  // /api/bleed tests above:
+  // /api/search/site tests above:
   //
   //   1. fetchNextJsBuildKey: GETs https://howlongtobeat.com/ and scrapes
   //      a build-id out of an inline <script src=...> regex. HLTB rotates
   //      this string every few weeks.
   //   2. searchGame (network failure / parse failure variants): the existing
-  //      cases use /api/find which has been renamed to /api/bleed (and the
+  //      cases use /api/find which has been renamed to /api/search/site (and the
   //      legacy expectations are pre-existing failures). These add coverage
-  //      against the current /api/bleed endpoint for fetch-throws and
+  //      against the current /api/search/site endpoint for fetch-throws and
   //      non-JSON (HTML error page) responses.
   //   3. getGameTimes (the /_next/data deep link): happy path is covered,
   //      these add network failure + parse failure + cache-equivalent (the
@@ -793,15 +793,15 @@ describe("HltbBackend", () => {
     });
   });
 
-  describe("E-013: searchByName via /api/bleed", () => {
-    // The init path now lives under /api/bleed/init; the existing
+  describe("E-013: searchByName via /api/search/site", () => {
+    // The init path now lives under /api/search/site/init; the existing
     // /api/find tests above are pre-existing failures we're not
     // touching in this batch. These cover the current endpoint.
 
-    it("happy path: parses /api/bleed results and formats times", async () => {
+    it("happy path: parses /api/search/site results and formats times", async () => {
       mockFetch.mockImplementation((url: string | URL) => {
         const urlStr = typeof url === "string" ? url : url.toString();
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -809,7 +809,7 @@ describe("HltbBackend", () => {
             ),
           );
         }
-        if (urlStr.endsWith("/api/bleed")) {
+        if (urlStr.endsWith("/api/search/site")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ data: [fakeHltbResult()] }),
@@ -829,7 +829,7 @@ describe("HltbBackend", () => {
     it("returns [] when the auth init fetch throws (network failure)", async () => {
       mockFetch.mockImplementation((url: string | URL) => {
         const urlStr = typeof url === "string" ? url : url.toString();
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.reject(new Error("DNS lookup failed"));
         }
         return Promise.resolve(new Response("", { status: 404 }));
@@ -839,12 +839,12 @@ describe("HltbBackend", () => {
       expect(results).toEqual([]);
     });
 
-    it("returns [] when /api/bleed returns an HTML error page (parse failure)", async () => {
+    it("returns [] when /api/search/site returns an HTML error page (parse failure)", async () => {
       // HLTB's anti-bot middleware sometimes serves an HTML challenge page
       // with a 200 status. response.json() throws — plugin must not crash.
       mockFetch.mockImplementation((url: string | URL) => {
         const urlStr = typeof url === "string" ? url : url.toString();
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -852,7 +852,7 @@ describe("HltbBackend", () => {
             ),
           );
         }
-        if (urlStr.endsWith("/api/bleed")) {
+        if (urlStr.endsWith("/api/search/site")) {
           return Promise.resolve(
             new Response(
               "<html><head><title>Just a moment...</title></head></html>",
@@ -883,7 +883,7 @@ describe("HltbBackend", () => {
       let bleedCalls = 0;
       mockFetch.mockImplementation((url: string | URL) => {
         const urlStr = typeof url === "string" ? url : url.toString();
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -891,7 +891,7 @@ describe("HltbBackend", () => {
             ),
           );
         }
-        if (urlStr.endsWith("/api/bleed")) {
+        if (urlStr.endsWith("/api/search/site")) {
           bleedCalls++;
           return Promise.resolve(
             new Response(
@@ -1052,7 +1052,7 @@ describe("HltbBackend", () => {
           );
         }
         // 2) HLTB auth + search → HLTB gameId
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -1060,7 +1060,7 @@ describe("HltbBackend", () => {
             ),
           );
         }
-        if (urlStr.endsWith("/api/bleed")) {
+        if (urlStr.endsWith("/api/search/site")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({
@@ -1137,7 +1137,7 @@ describe("HltbBackend", () => {
           appDetailsCalled = true;
           return Promise.resolve(new Response("", { status: 404 }));
         }
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -1145,7 +1145,7 @@ describe("HltbBackend", () => {
             ),
           );
         }
-        if (urlStr.endsWith("/api/bleed")) {
+        if (urlStr.endsWith("/api/search/site")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({
@@ -1186,7 +1186,7 @@ describe("HltbBackend", () => {
       let searchCallCount = 0;
       mockFetch.mockImplementation((url: string | URL) => {
         const urlStr = typeof url === "string" ? url : url.toString();
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -1194,7 +1194,7 @@ describe("HltbBackend", () => {
             ),
           );
         }
-        if (urlStr.endsWith("/api/bleed")) {
+        if (urlStr.endsWith("/api/search/site")) {
           searchCallCount++;
           return Promise.resolve(
             new Response(
@@ -1226,7 +1226,7 @@ describe("HltbBackend", () => {
           appDetailsCalled = true;
           return Promise.resolve(new Response("", { status: 404 }));
         }
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -1234,7 +1234,7 @@ describe("HltbBackend", () => {
             ),
           );
         }
-        if (urlStr.endsWith("/api/bleed")) {
+        if (urlStr.endsWith("/api/search/site")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({
@@ -1295,7 +1295,7 @@ describe("HltbBackend", () => {
     it("returns null when HLTB returns no match for the shortcut name", async () => {
       mockFetch.mockImplementation((url: string | URL) => {
         const urlStr = typeof url === "string" ? url : url.toString();
-        if (urlStr.includes("/api/bleed/init")) {
+        if (urlStr.includes("/api/search/site/init")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({ token: "t", hpKey: "hp-k", hpVal: "hp-v" }),
@@ -1303,7 +1303,7 @@ describe("HltbBackend", () => {
             ),
           );
         }
-        if (urlStr.endsWith("/api/bleed")) {
+        if (urlStr.endsWith("/api/search/site")) {
           return Promise.resolve(
             new Response(JSON.stringify({ data: [] }), { status: 200 }),
           );

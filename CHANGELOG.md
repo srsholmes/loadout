@@ -8,6 +8,11 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com).
 
 ---
 
+## [v0.10.1] — 2026-09-22
+
+### Fixed
+- **How Long To Beat had stopped showing any times** (#285) — HowLongToBeat has no public API, and roughly every couple of months it renames the private one its own website uses, to shake off the scrapers and bots that hammer it. It did so again in September, so the plugin's very first request — the one that hands out a session token — started coming back as a "not found" page, and with no token every badge, library card and search quietly came back empty. Nothing in Loadout had changed. The plugin now talks to the renamed endpoint, and the address lives in one place so the next rename is a one-line fix. Separately, a search that returned nothing was being remembered for twelve hours whether it was a genuine miss or a failed request, which would have kept anything you searched for during the outage blank long after the fix arrived. Empty searches are no longer remembered.
+
 ## [v0.10.0] — 2026-09-09
 
 ### Added
