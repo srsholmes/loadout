@@ -145,6 +145,16 @@ const FUZZY_SCORE_THRESHOLD = -2000;
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
+/**
+ * HLTB's search endpoint. They rename this every few weeks to shake
+ * off scrapers (`/api/search` → `/api/find` → `/api/bleed` →
+ * `/api/search/site` as of 2026-09). The init call that issues the
+ * auth triple always lives at `${HLTB_SEARCH_API}/init`, and the
+ * search itself is a POST to `HLTB_SEARCH_API`. When this 404s again,
+ * see the "HLTB Auth" section below for how to find the new name.
+ */
+const HLTB_SEARCH_API = "https://howlongtobeat.com/api/search/site";
+
 const DEFAULT_SETTINGS: HltbSettings = {
   position: "tl",
   showMainStory: true,
@@ -191,7 +201,7 @@ export default class HltbBackend implements PluginBackend {
    */
   constructor() {}
 
-  // HLTB API state (token + anti-abuse headers, all issued by /api/bleed/init)
+  // HLTB API state (token + anti-abuse headers, all issued by `${HLTB_SEARCH_API}/init`)
   private auth: { token: string; hpKey: string; hpVal: string } | null = null;
 
   // Caches
@@ -433,20 +443,20 @@ export default class HltbBackend implements PluginBackend {
 
   // ─── HLTB Auth ─────────────────────────────────────────────────
   //
-  // As of 2026-05 HLTB renamed the endpoints from `/api/find*` to
-  // `/api/bleed*` (presumably to break scrapers — they cycled the name
-  // about every 6 weeks during the 2025-2026 Cloudflare-anti-bot push).
-  // Three request-scoped credentials still flow on every search:
-  // `x-auth-token`, `x-hp-key`, `x-hp-val`. All three are issued by
-  // a single GET `/api/bleed/init?t=<ms>` call and expire per-session.
-  // Search endpoint is always `/api/bleed` (POST). If HLTB returns 404
-  // here again, scan their `_next/static/chunks/*.js` for the next
-  // `/api/<name>/init` template literal — they're consistent about the
-  // pattern.
+  // HLTB rotates the search endpoint name every few weeks to break
+  // scrapers (`/api/find` → `/api/bleed` in 2026-05, → `/api/search/site`
+  // in 2026-09). The shape has been stable across renames: three
+  // request-scoped credentials flow on every search — `x-auth-token`,
+  // `x-hp-key`, `x-hp-val` — all issued by a single GET
+  // `${HLTB_SEARCH_API}/init?t=<ms>` call, and the search is a POST to
+  // `HLTB_SEARCH_API`. If init starts returning 404 again, fetch the
+  // homepage, download the `_next/static/chunks/*.js` it references,
+  // and grep for the `/api/<name>/init?t=${Date.now()}` template
+  // literal — then update `HLTB_SEARCH_API` above.
 
   private async fetchAuth(): Promise<typeof this.auth> {
     try {
-      const url = `https://howlongtobeat.com/api/bleed/init?t=${Date.now()}`;
+      const url = `${HLTB_SEARCH_API}/init?t=${Date.now()}`;
       const response = await fetch(url, {
         method: "GET",
         headers: {
@@ -528,7 +538,7 @@ export default class HltbBackend implements PluginBackend {
         ...searchData,
         [auth.hpKey]: auth.hpVal,
       };
-      return fetch("https://howlongtobeat.com/api/bleed", {
+      return fetch(HLTB_SEARCH_API, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -599,15 +609,24 @@ export default class HltbBackend implements PluginBackend {
       allStyles: formatTime(item.comp_all),
     }));
 
-    this.searchCache.set(normalizedQuery, {
-      data: results,
-      timestamp: Date.now(),
-    });
-    await this.safeDiskSet(
-      `search:${normalizedQuery}`,
-      results,
-      DISK_CACHE_TTL_SEC,
-    );
+    // Don't cache an empty result. `hltbSearch` returns [] both for a
+    // genuine no-match and for any request failure (auth 404 after an
+    // endpoint rename, 429, network down), and we can't tell them
+    // apart here. Caching [] for 12 h — on disk, so it survives a
+    // restart — meant every query typed during the 2026-09 endpoint
+    // outage stayed blank long after the fix shipped. A real no-match
+    // re-querying HLTB on each repeat is a fine price for that.
+    if (results.length > 0) {
+      this.searchCache.set(normalizedQuery, {
+        data: results,
+        timestamp: Date.now(),
+      });
+      await this.safeDiskSet(
+        `search:${normalizedQuery}`,
+        results,
+        DISK_CACHE_TTL_SEC,
+      );
+    }
     return results;
   }
 
@@ -716,7 +735,7 @@ export default class HltbBackend implements PluginBackend {
     opts: { matchSteamAppId: boolean },
   ): Promise<GameTimes | null> {
     try {
-      // HLTB's /api/bleed caps `size` at 25 — anything ≥30 silently
+      // HLTB's search endpoint caps `size` at 25 — anything ≥30 silently
       // returns `{}` with no data array. Keep this ≤25 or the badge
       // will never render.
       const results = await this.hltbSearch(gameName.split(" "), 20);
@@ -940,7 +959,7 @@ export default class HltbBackend implements PluginBackend {
    * metadata. The detail view caches via the same in-process map so
    * navigating back and forth between list and detail is free.
    *
-   * Why two hops: HLTB's search endpoint (/api/bleed) never returns
+   * Why two hops: HLTB's search endpoint never returns
    * platforms / genres / release_world. The /_next/data endpoint
    * does — but it's keyed by HLTB id, not Steam id. Search resolves
    * the id; the deep-link fills in the rest.
