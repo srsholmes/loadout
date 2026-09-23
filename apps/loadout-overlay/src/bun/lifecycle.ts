@@ -10,7 +10,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore — resolved at runtime once electrobun is installed.
-import type { GlobalShortcut as GlobalShortcutType } from "electrobun/bun";
+import type { GlobalShortcut as GlobalShortcutType } from "electrobun/main";
 import { resumeSteam } from "./native/process-control";
 import type { GamescopeAtoms } from "./native/gamescope-atoms";
 import type { InputInterceptHandle } from "./native/input-intercept";

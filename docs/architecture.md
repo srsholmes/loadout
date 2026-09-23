@@ -122,7 +122,7 @@ everything the CEF webview cannot. It owns:
   `isGamescopeMode`, `restartServer`, `overlayHeartbeat`, …), registered via
   Electrobun's `defineRPC` and dispatched in `src/bun/rpc-handlers.ts`.
 
-`process.env.DISPLAY` is detected and set before `electrobun/bun` is imported
+`process.env.DISPLAY` is detected and set before `electrobun/main` is imported
 because the native wrapper dlopens `libNativeWrapper.so` (which opens GTK's
 X11 connection) on module load.
 
@@ -304,14 +304,16 @@ Root `package.json` scripts:
    --minify` (version + build date injected via `--define`) to `dist/loadout`
    — a single self-contained binary (~50–100 MB) with the Bun runtime
    embedded.
-2. Builds the overlay: `vite build` (webview) then `electrobun build
-   --release` (bundles webview + CEF + the Bun main into
-   `apps/loadout-overlay/build/`), then `scripts/inject-patched-wrapper.sh`
-   swaps in a patched `libNativeWrapper.so` (the CEF 100%-CPU-spin fix).
+2. Builds the overlay: `electrobun prepare` (projects the Electrobun 2 SDK
+   into `apps/loadout-overlay/.hutch/devkit`), `vite build` (webview), then
+   `electrobun build --env=dev` (bundles webview + CEF + the Bun main into
+   `apps/loadout-overlay/build/dev-linux-x64/`), then
+   `scripts/inject-bun-shim.sh` wraps the bundled `bun` in a libstdc++
+   preload shim (a webkit2gtk symbol-interposition crash on AMD).
 
 The compiled binary does **not** include the overlay tree, the CEF runtime,
 or the plugin directories — `scripts/install-local.sh` copies the overlay
-build into the install prefix, CEF is fetched by Electrobun at build time,
+build into the install prefix, CEF is fetched by Electrobun (Hutch) at build time,
 and plugins are loaded at runtime from `PLUGINS_DIR`.
 
 ## Comparison with Decky

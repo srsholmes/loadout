@@ -1,19 +1,18 @@
 #!/bin/sh
-# Post-build fixes injected over the artifacts `electrobun build` downloads.
+# Post-build fix injected over the artifacts `electrobun build` produces:
+# a libstdc++ preload shim around the bun binary — see the comment at that
+# step below.
 #
-#   1. Patched libNativeWrapper.so — fixes a 100%-CPU busy-loop in CEF's
-#      browser process; see apps/loadout-overlay/vendor/README.md for the
-#      root cause and how the binary is produced.
-#   2. libstdc++ preload shim around the bun binary — see the comment at
-#      that step below.
+# (This used to also swap in a vendored, patched libNativeWrapper.so for a
+# CEF 100%-CPU spin and an Xlib move/resize crash. Both fixes landed upstream
+# in Electrobun 2.0, so the stock wrapper is used as-is.)
 #
-# This is the single source of truth for both, called from every build
+# This is the single source of truth for the shim, called from every build
 # entry point (scripts/build.sh and apps/loadout-overlay's package.json build
-# scripts) so no path can silently ship the stock artifacts. Run it
-# AFTER `electrobun build`. POSIX-sh, guarded, and idempotent: a missing vendor
-# file just warns and leaves the stock wrapper in place.
+# scripts) so no path can silently ship the stock bun. Run it AFTER
+# `electrobun build`. POSIX-sh and idempotent.
 #
-# Usage: inject-patched-wrapper.sh [OVERLAY_APP_DIR]
+# Usage: inject-bun-shim.sh [OVERLAY_APP_DIR]
 #   OVERLAY_APP_DIR defaults to the apps/loadout-overlay sibling of this
 #   script's directory, so it works regardless of the caller's cwd.
 set -eu
@@ -42,12 +41,10 @@ fi
 # is absent: libstdc++ is in the process either way.
 #
 # The launcher REPLACES LD_PRELOAD for its bun child (upstream electrobun
-# issue), so a unit-level Environment= can't reach the process that matters —
+# issue, unchanged in 2.0 — it sets LD_PRELOAD=./libcef.so outright), so a unit-level Environment= can't reach the process that matters —
 # hence this shim wrapping the bun binary itself. The real fix is rebuilding
 # the wrapper without the webkit link; patchelf --remove-needed does NOT work
 # (Zig emits eager GLOB_DAT relocs for address-taken webkit symbols).
-# This step runs before the wrapper guard below so it applies even when the
-# vendored wrapper is absent.
 # The CEF tree contains space-laden names ("bun Helper (Renderer)", …), so
 # iterate the find output line-by-line rather than word-splitting it.
 shimmed=0
@@ -64,7 +61,7 @@ while IFS= read -r bun; do
 # (as of Arch webkit2gtk 2.52.5-1) leaks libstdc++'s std::call_once
 # internals and splits its TLS state — crashing mesa's LLVM init on
 # radeonsi. Preloading the real libstdc++ restores consistent bindings.
-# See scripts/inject-patched-wrapper.sh for the full story.
+# See scripts/inject-bun-shim.sh for the full story.
 export LD_PRELOAD="libstdc++.so.6${LD_PRELOAD:+:$LD_PRELOAD}"
 exec "$(dirname "$0")/bun.real" "$@"
 SHIM
@@ -75,30 +72,5 @@ $(find "$ELECTROBUN_DIR/build" -type f -name bun -path '*/bin/*' 2>/dev/null)
 EOF
 
 if [ "$shimmed" -gt 0 ]; then
-    echo "[inject-wrapper] installed libstdc++ preload shim over $shimmed bun binary(ies) (webkit2gtk JSC __once_proxy interposition fix)."
-fi
-
-PATCHED="$ELECTROBUN_DIR/vendor/libNativeWrapper.so"
-if [ ! -f "$PATCHED" ]; then
-    echo "[inject-wrapper] WARNING: no vendored wrapper at $PATCHED — using stock wrapper (overlay will spin at 100% CPU)." >&2
-    exit 0
-fi
-
-# The build emits the wrapper under build/<variant>/loadout-overlay-*/bin/.
-# Replace every libNativeWrapper*.so the build produced (the runtime dlopen's
-# libNativeWrapper.so; the _cef.so variant, if present, is harmless to match).
-# Line-by-line for the same space-safety reason as the shim loop above.
-injected=0
-while IFS= read -r so; do
-    [ -n "$so" ] || continue
-    cp -f "$PATCHED" "$so"
-    injected=$((injected + 1))
-done <<EOF
-$(find "$ELECTROBUN_DIR/build" -type f -name 'libNativeWrapper*.so' 2>/dev/null)
-EOF
-
-if [ "$injected" -gt 0 ]; then
-    echo "[inject-wrapper] injected patched libNativeWrapper.so into $injected build artifact(s) (CEF CPU-spin fix)."
-else
-    echo "[inject-wrapper] WARNING: patched wrapper present but no build artifact found under $ELECTROBUN_DIR/build — did 'electrobun build' run?" >&2
+    echo "[inject-shim] installed libstdc++ preload shim over $shimmed bun binary(ies) (webkit2gtk JSC __once_proxy interposition fix)."
 fi

@@ -200,21 +200,27 @@ build() {
     info "  cp $OUTPUT ~/.local/share/loadout/loadout"
     echo ""
 
-    # Build Electrobun overlay. Vite builds the webview (React, tailwind,
-    # alias resolution) then Electrobun bundles it + CEF + Bun main into
-    # apps/loadout-overlay/build/. scripts/install-local.sh copies
-    # that tree into the install prefix.
+    # Build Electrobun overlay. `electrobun prepare` projects Electrobun 2's
+    # SDK into .hutch/devkit (Vite aliases `electrobun/view` onto it), Vite
+    # builds the webview (React, tailwind, alias resolution), then Electrobun
+    # bundles it + CEF + Bun main into apps/loadout-overlay/build/.
+    # scripts/install-local.sh copies that tree into the install prefix.
+    #
+    # --env=dev is deliberate: the release pipeline, install.sh and the
+    # overlay unit (CEF cache under com.loadout.overlay/dev/) all expect the
+    # build/dev-linux-x64/loadout-overlay-dev tree. v1's `--release` flag
+    # was silently ignored and produced exactly that; v2 is explicit.
     ELECTROBUN_DIR="$PROJECT_ROOT/apps/loadout-overlay"
     if [ -f "$ELECTROBUN_DIR/electrobun.config.ts" ]; then
         echo ""
         info "Building Electrobun overlay..."
-        if (cd "$ELECTROBUN_DIR" && bunx vite build 2>&1 && bunx electrobun build --release 2>&1); then
+        if (cd "$ELECTROBUN_DIR" && bunx electrobun prepare 2>&1 && bunx vite build 2>&1 && bunx electrobun build --env=dev 2>&1); then
             success "Electrobun overlay built (see $ELECTROBUN_DIR/build/ for artifacts)"
-            # Swap our patched libNativeWrapper.so over the stock one electrobun
-            # downloaded (CEF 100%-CPU spin fix — see vendor/README.md). Shared
-            # with apps/loadout-overlay's package.json build scripts so every
+            # Wrap the bundled bun in the libstdc++ preload shim (webkit2gtk
+            # JSC symbol-interposition crash — see the script). Shared with
+            # apps/loadout-overlay's package.json build scripts so every
             # build path gets it.
-            sh "$PROJECT_ROOT/scripts/inject-patched-wrapper.sh" "$ELECTROBUN_DIR"
+            sh "$PROJECT_ROOT/scripts/inject-bun-shim.sh" "$ELECTROBUN_DIR"
         else
             warn "Electrobun overlay build failed. Backend binary is still usable."
         fi

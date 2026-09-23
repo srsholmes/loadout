@@ -260,12 +260,9 @@ bun install
 bun run build-and-install    # compile + install to ~/.local/share/, enable services
 ```
 
-The overlay ships a **patched Electrobun native wrapper** (see
-[`apps/loadout-overlay/vendor/README.md`](apps/loadout-overlay/vendor/README.md))
-that fixes a 100% CPU spin in CEF's browser process. `build-and-install` swaps
-it in automatically; `electrobun dev` does not, so the dev-mode overlay runs
-the stock wrapper and pins a CPU core. Build and install to see accurate
-results:
+The overlay is built with Electrobun 2, whose first build downloads its
+toolchain (Hutch) and the Electrobun core + CEF into `~/.hutch`. After a
+change, build and install to test it the way users run it:
 
 ```sh
 bun run build-and-install               # compile + install + enable services
@@ -275,8 +272,8 @@ journalctl --user -u loadout-overlay -f    # follow overlay logs
 
 CEF DevTools are at `http://localhost:9222` (attach any Chromium or use CDP).
 For fast UI iteration with hot reload, `bun run dev:overlay` starts the loader
-dev server + Electrobun (stock wrapper — always confirm with `build-and-install`
-before trusting a change). Full dev/build/test loop:
+dev server + Electrobun (always confirm with `build-and-install` before
+trusting a change). Full dev/build/test loop:
 [docs/plugin-development.md](docs/plugin-development.md).
 
 </details>

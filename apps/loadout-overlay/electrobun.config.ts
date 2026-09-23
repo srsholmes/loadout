@@ -1,11 +1,13 @@
 // Electrobun configuration for the Loadout overlay.
 //
-// Schema sourced from node_modules/electrobun/dist-linux-x64/api/bun/
-// ElectrobunConfig.ts (v1.16). Keep the shapes here aligned with that type
-// definition — the scaffold's first pass was based on doc guesses and didn't
-// match the actual runtime. No top-level `windows` block — windows are
-// constructed at runtime via `new BrowserWindow()`. bundleCEF lives under
-// `linux`, not at the build root.
+// Schema: `ElectrobunConfig` from Electrobun 2.x, projected by Hutch into
+// .hutch/devkit/api/config/ElectrobunConfig.ts on `electrobun prepare`
+// (upstream: package/src/config/ElectrobunConfig.ts). No top-level `windows`
+// block — windows are constructed at runtime via `new BrowserWindow()`.
+// bundleCEF lives under `linux`, not at the build root.
+//
+// v2 dropped `build.targets`: Hutch builds for the current host only, and
+// the Electrobun release pins the bundled CEF / Bun versions.
 
 import pkg from "./package.json" with { type: "json" };
 
@@ -17,12 +19,17 @@ export default {
     description: "Loadout overlay (Electrobun port — research scaffold)",
   },
   build: {
+    // Electrobun 2 defaults to the Cottontail runtime. We stay on Bun: the
+    // main process leans on bun:ffi (libc evdev ioctls, Gamescope atoms) and
+    // Bun-specific APIs throughout, so moving runtimes is its own change.
+    mainProcess: "bun",
     // Bun-side main process entrypoint.
     bun: {
       entrypoint: "src/bun/index.ts",
     },
-    // The webview is built separately by Vite (`bunx vite build` or
-    // `bun run webview:build` from this package) so it can use the
+    // The webview is built separately by Vite (`bun run webview:build`
+    // from this package — it runs `electrobun prepare` first so Vite can
+    // alias `electrobun/view` onto .hutch/devkit) so it can use the
     // shared @overlay React tree via path aliases, tailwind/daisyUI,
     // and the JSX pipeline Electrobun's internal Bun.build doesn't handle.
     // The vite output lands in webview-dist/; we copy it wholesale into
@@ -34,8 +41,6 @@ export default {
     copy: {
       "webview-dist": "views/overlay",
     },
-    // Comma-separated string per schema, not array.
-    targets: "linux-x64,linux-arm64",
     // Linux-specific: bundle CEF so we avoid the system webkit2gtk-4.1
     // dependency and gain proper compositing for the overlay. Picks CEF
     // as the default renderer so BrowserWindow doesn't need an explicit
@@ -91,8 +96,8 @@ export default {
         // launch and updates the CRLSet, which spawns Unzipper + FilePatcher
         // regardless of `disable-component-update` (observed 2026-08-17,
         // CertificateRevocation 10718 → 10720). The real fix is rebuilding
-        // `bun Helper` with `-fno-stack-protector` on main() and vendoring
-        // it next to libNativeWrapper.so — an upstream Electrobun bug.
+        // `bun Helper` with `-fno-stack-protector` on main() — an upstream
+        // Electrobun bug, not fixed as of 2.0.1.
         // Note `--change-stack-guard-on-fork=disable` is not a workaround:
         // the zygote host appends `enable` when building each child's
         // command line, overwriting anything set here.

@@ -1,7 +1,7 @@
 // Overlay open/close state machine. Extracted from index.ts so the pure
 // flag-flipping logic is testable without booting the full Electrobun
 // main process (which dlopens libNativeWrapper.so + opens X11 on
-// `import "electrobun/bun"`). The RPC handlers in index.ts call
+// `import "electrobun/main"`). The RPC handlers in index.ts call
 // `requestShow` / `requestHide` / `requestToggle` to flip flags; the
 // overlay-management loop polls those flags and triggers the actual
 // window + atom + intercept side effects.

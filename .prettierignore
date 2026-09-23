@@ -5,6 +5,7 @@ dist
 .build
 **/.build
 **/.cache
+**/.hutch
 **/build
 **/webview-dist
 .sdk-build

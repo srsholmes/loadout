@@ -1,18 +1,17 @@
-// Electrobun (`electrobun@1.16.x`) ships raw `.ts` source files via its
-// `exports` field instead of `.d.ts` declarations, and one of those
-// source files (`node_modules/electrobun/dist/api/browser/index.ts:36`)
-// has a real type error TypeScript can't suppress with `skipLibCheck`
-// (skipLibCheck only ignores `.d.ts` files, not `.ts` sources reached
-// via import).
+// Electrobun 2 no longer ships its SDK in node_modules at all: the
+// `electrobun` npm package is a CLI bootstrap, and the SDK (raw `.ts`
+// sources, no `.d.ts`) is projected by Hutch into
+// apps/loadout-overlay/.hutch/devkit/ on `electrobun prepare`. That
+// directory is generated, git-ignored, and absent in CI's typecheck job,
+// so we can't point tsconfig at it.
 //
-// Until upstream Electrobun ships proper declarations, this module
-// declaration + the `paths` entry in `tsconfig.json` redirect every
-// `electrobun/{bun,view}` import here so `tsc --noEmit` doesn't try
-// to type-check the upstream source.
+// Instead this module declaration + the `paths` entry in `tsconfig.json`
+// redirect every `electrobun/{main,view}` import here, so `tsc --noEmit`
+// neither needs the devkit nor type-checks upstream source.
 //
-// Runtime resolution (Bun, Vite) is independent of tsconfig `paths`
-// and continues to load the real Electrobun bundle from node_modules,
-// so this shim is type-only.
+// Runtime resolution is independent of tsconfig `paths`: Hutch aliases
+// the main-process bundle onto the devkit itself, and vite.config.ts does
+// the same for the webview. This shim is type-only.
 //
 // Every existing call site uses `@ts-ignore` on the `electrobun/*`
 // import line because the prior workaround was per-import suppression
@@ -20,7 +19,7 @@
 // `any`-typed shim and the day Electrobun ships real types they
 // transition cleanly to documented narrow types.
 
-declare module "electrobun/bun" {
+declare module "electrobun/main" {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   export const BrowserWindow: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

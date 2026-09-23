@@ -48,6 +48,7 @@ export default tseslint.config(
       ".inject-build/**",
       ".vendor-build/**",
       "**/.cache/**",
+      "**/.hutch/**",
       ".claude/**",
       // Electrobun build artefact: dev-linux-x64 bundles + webview-dist
       // Vite output. Both are minified bundles of all our deps; linting

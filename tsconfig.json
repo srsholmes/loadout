@@ -58,7 +58,7 @@
       "@loadout/wake": ["./packages/wake/src"],
       "@loadout/wake/*": ["./packages/wake/src/*"],
       "@overlay/*": ["./apps/loadout-overlay/src/overlay/*"],
-      "electrobun/bun": ["./types/electrobun-shims.d.ts"],
+      "electrobun/main": ["./types/electrobun-shims.d.ts"],
       "electrobun/view": ["./types/electrobun-shims.d.ts"]
     }
   },
@@ -87,6 +87,7 @@
     "dist",
     "**/build/**",
     "**/.cache/**",
+    "**/.hutch/**",
     "**/*.test.ts",
     "**/*.test.tsx",
     "**/*.spec.ts",

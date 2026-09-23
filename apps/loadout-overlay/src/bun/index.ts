@@ -4,7 +4,7 @@
 //   - the evdev worker (emits NavController actions to the webview)
 //   - the X11 / Gamescope atom loop (50 ms active / 500 ms idle)
 
-// DISPLAY detection MUST happen before `electrobun/bun` is imported — the
+// DISPLAY detection MUST happen before `electrobun/main` is imported — the
 // native wrapper dlopens libNativeWrapper.so on module load and that in
 // turn triggers GTK's X11 connection via its ctor. ES module imports run
 // in source order, so placing this side-effect import first guarantees
@@ -15,7 +15,7 @@ const DISPLAY = detectOverlayDisplay();
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore — resolved at runtime once electrobun is installed.
-import { BrowserWindow, BrowserView, GlobalShortcut } from "electrobun/bun";
+import { BrowserWindow, BrowserView, GlobalShortcut } from "electrobun/main";
 import { existsSync, readFileSync } from "node:fs";
 import type {
   ControllerShortcuts,
@@ -203,7 +203,7 @@ const deckWakeRefreshTimer: { current: ReturnType<typeof setInterval> | null } =
 // on close. Keeps React state, WS subscriptions, and spatial-nav focus
 // position across open/close cycles.
 //
-// Electrobun v1.16 gotchas:
+// Electrobun gotchas (noted on v1.16, API unchanged in v2):
 //   - WindowOptions are `frame: {x,y,width,height}`, `titleBarStyle`,
 //     `hidden`; no `label`, `wmClass`, `alwaysOnTop`, `skipTaskbar`,
 //     `resizable`. The X11 bits (WM_CLASS, atoms) land in X11Overlay.
@@ -284,8 +284,7 @@ const overlay = new BrowserWindow({
   // crash was an Xlib thread-safety bug in Electrobun's native wrapper
   // (OnPaint painted the OSR buffer on the CEF UI thread while
   // process_x11_events drained events on the main thread, same Display, no
-  // XInitThreads) — fixed in our patched libNativeWrapper.so (electrobun
-  // #426). See apps/loadout-overlay/vendor/README.md.
+  // XInitThreads) — electrobun #426, fixed upstream in Electrobun 2.0.
   transparent: false,
   hidden: !DESKTOP_SMOKE_TEST,
   url: process.env.ELECTROBUN_DEV_URL ?? "views://overlay/index.html",

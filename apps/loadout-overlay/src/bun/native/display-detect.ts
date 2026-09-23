@@ -93,7 +93,7 @@ export function detectOverlayDisplay(): string {
 /**
  * Run detection and mutate process.env.DISPLAY so Electrobun's GTK/CEF
  * init sees the right value when BrowserWindow is constructed. Call this
- * at the top of bun/index.ts, before importing electrobun/bun.
+ * at the top of bun/index.ts, before importing electrobun/main.
  */
 export function applyDetectedDisplay(): string {
   const display = detectOverlayDisplay();
@@ -104,7 +104,7 @@ export function applyDetectedDisplay(): string {
 // ---- Side-effect import hook ------------------------------------------------
 //
 // ES module semantics resolve imports in source order BEFORE any of the
-// importer's own top-level code runs. Electrobun's `electrobun/bun` entry
+// importer's own top-level code runs. Electrobun's `electrobun/main` entry
 // dlopens libNativeWrapper.so during its module load, which triggers the
 // X11 connection through GTK's ctor path. If we only expose functions
 // here, the importer has no opportunity to run them before the electrobun
