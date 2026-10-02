@@ -8,6 +8,11 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com).
 
 ---
 
+## [v0.10.2] — 2026-10-02
+
+### Fixed
+- **Uninstalling an Epic game from Store Bridge did nothing, and then jammed the plugin** (#286) — Pressing Uninstall on an Epic title looked like it was working and never finished: the game stayed on disk, its Steam shortcut stayed in your library, and no error appeared. Worse, the stuck uninstall held on to the plugin's record of what is installed, so everything queued up behind it — installing another game, adding one to Steam, removing a shortcut, changing a setting — sat waiting as well, until Loadout was restarted. The cause was the uninstall waiting on itself: it locked that record first and then, while holding the lock, went to look up where the Epic download tool lives, which needs the same lock. The uninstall now runs the tool first and only then updates the record. If the tool fails, the game and its shortcut are still left exactly as they were, so you can simply try again.
+
 ## [v0.10.1] — 2026-09-22
 
 ### Fixed
