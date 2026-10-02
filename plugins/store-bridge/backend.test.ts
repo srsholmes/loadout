@@ -33,6 +33,11 @@ mock.module("@loadout/plugin-storage", () => ({
 // it via `configureEpicDriver`. The backend imports the Epic side
 // for its side-effect registration — we replace that with a stub
 // that registers a fake driver.
+// Captured `configureEpicDriver` options. The real Epic driver reads
+// the binary override through these on every call, so the stub's
+// `uninstall` does the same — that's the call that deadlocked when
+// `uninstallGame` ran the driver inside the state mutex.
+let epicOpts: { getOverride: () => Promise<string | undefined> } | undefined;
 mock.module("./lib/stores/epic", () => {
   const driver: StoreDriver = {
     id: "epic",
@@ -56,7 +61,9 @@ mock.module("./lib/stores/epic", () => {
       source: "installed",
       addedToSteam: false,
     }),
-    uninstall: async () => {},
+    uninstall: async () => {
+      await epicOpts?.getOverride();
+    },
     launchSpec: () => ({ exe: "/x.exe", args: "" }),
     identifyInstall: async () => null,
     importExisting: async (id, dir) => ({
@@ -72,7 +79,9 @@ mock.module("./lib/stores/epic", () => {
   };
   registerDriver(driver);
   return {
-    configureEpicDriver: () => {},
+    configureEpicDriver: (opts: typeof epicOpts) => {
+      epicOpts = opts;
+    },
     epicDriver: driver,
     storeInstallDir: (storeId: string) => join(sandbox, "games", storeId),
   };
@@ -123,6 +132,19 @@ describe("StoreBridgeBackend", () => {
     expect(lib[0]?.title).toBe("Fortnite");
     expect(lib[0]?.status).toBe("library");
   });
+
+  it("uninstallGame completes when the driver reads settings mid-uninstall", async () => {
+    const { default: Backend } = await import("./backend");
+    const be = new Backend();
+    await be.onLoad();
+    await be.getLibrary("epic");
+    await be.installGame("epic", "fortnite");
+    await be.uninstallGame("epic", "fortnite");
+    const lib = await be.getLibrary("epic");
+    expect(lib[0]?.status).toBe("library");
+    // The state mutex must be free again afterwards.
+    await be.updateSettings({});
+  }, 2000);
 
   it("installGame transitions a library entry to installed", async () => {
     const { default: Backend } = await import("./backend");
