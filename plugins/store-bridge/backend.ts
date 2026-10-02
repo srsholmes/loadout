@@ -651,8 +651,11 @@ export default class StoreBridgeBackend implements PluginBackend {
     // Wrap the read-modify-write in the state mutex so concurrent
     // uninstalls (or an uninstall racing addInstalledToSteam) can't
     // produce a torn intermediate state. `installed` is re-read
-    // under the mutex so a shortcut added while the driver was
-    // running still gets removed.
+    // under the mutex so a shortcut whose state write landed while
+    // the driver was running still gets removed. An add-to-Steam
+    // still in flight at that point is not covered: its write bails
+    // on the missing record and the shortcut it created is orphaned
+    // (see the re-read guard in `addInstalledToSteam`).
     await this.mutateState(async (s) => {
       const installed = s.stores[storeId]?.installed[gameId];
       if (installed?.steamAppId) {
