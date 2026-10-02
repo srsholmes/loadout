@@ -29,10 +29,20 @@ mock.module("@loadout/plugin-storage", () => ({
   loadoutConfigDir: () => "/tmp/spec",
 }));
 
-// Stub Epic driver so we never actually invoke legendary or wire
-// it via `configureEpicDriver`. The backend imports the Epic side
-// for its side-effect registration — we replace that with a stub
-// that registers a fake driver.
+// Stub Epic driver so we never actually invoke legendary. The
+// backend imports the Epic side for its side-effect registration —
+// we replace that with a stub that registers a fake driver.
+//
+// `configureEpicDriver` only captures its options. The real Epic
+// driver reads the binary override through them on every call, so
+// the stub's `uninstall` does the same — that's the call that
+// deadlocked when `uninstallGame` ran the driver inside the state
+// mutex.
+let epicOpts: { getOverride: () => Promise<string | undefined> } | undefined;
+// Per-test recorders / fault injection for the uninstall path.
+let uninstallCalls: { gameId: string; installDir: string }[] = [];
+let uninstallError: Error | undefined;
+let removedFromSteam: number[] = [];
 mock.module("./lib/stores/epic", () => {
   const driver: StoreDriver = {
     id: "epic",
@@ -56,7 +66,11 @@ mock.module("./lib/stores/epic", () => {
       source: "installed",
       addedToSteam: false,
     }),
-    uninstall: async () => {},
+    uninstall: async (gameId, installDir) => {
+      uninstallCalls.push({ gameId, installDir });
+      await epicOpts?.getOverride();
+      if (uninstallError) throw uninstallError;
+    },
     launchSpec: () => ({ exe: "/x.exe", args: "" }),
     identifyInstall: async () => null,
     importExisting: async (id, dir) => ({
@@ -72,7 +86,9 @@ mock.module("./lib/stores/epic", () => {
   };
   registerDriver(driver);
   return {
-    configureEpicDriver: () => {},
+    configureEpicDriver: (opts: typeof epicOpts) => {
+      epicOpts = opts;
+    },
     epicDriver: driver,
     storeInstallDir: (storeId: string) => join(sandbox, "games", storeId),
   };
@@ -84,7 +100,9 @@ mock.module("./lib/stores/epic", () => {
 // VDF write.
 mock.module("./lib/steam-shortcut", () => ({
   addToSteam: async () => ({ appId: 1, gameId64: "1" }),
-  removeFromSteam: async () => {},
+  removeFromSteam: async (appId: number) => {
+    removedFromSteam.push(appId);
+  },
   shortcutDisplayName: (
     driver: { displayName: string },
     installed: { title: string },
@@ -100,6 +118,9 @@ mock.module("./lib/launcher", () => ({
 beforeEach(async () => {
   sandbox = await mkdtemp(join(tmpdir(), "store-bridge-be-"));
   pluginStorageStore.clear();
+  uninstallCalls = [];
+  uninstallError = undefined;
+  removedFromSteam = [];
 });
 afterEach(async () => {
   await rm(sandbox, { recursive: true, force: true });
@@ -123,6 +144,41 @@ describe("StoreBridgeBackend", () => {
     expect(lib[0]?.title).toBe("Fortnite");
     expect(lib[0]?.status).toBe("library");
   });
+
+  it("uninstallGame completes when the driver reads settings mid-uninstall", async () => {
+    const { default: Backend } = await import("./backend");
+    const be = new Backend();
+    await be.onLoad();
+    await be.getLibrary("epic");
+    await be.installGame("epic", "fortnite");
+    // Without the captured options the stub's settings read is a
+    // no-op and this test would pass vacuously.
+    expect(epicOpts).toBeDefined();
+    await be.uninstallGame("epic", "fortnite");
+    expect(uninstallCalls).toEqual([
+      { gameId: "fortnite", installDir: join(sandbox, "games", "epic", "fortnite") },
+    ]);
+    expect(removedFromSteam).toEqual([1]);
+    const lib = await be.getLibrary("epic");
+    expect(lib[0]?.status).toBe("library");
+    // The state mutex must be free again afterwards.
+    await be.updateSettings({});
+  }, 2000);
+
+  it("uninstallGame leaves the record + shortcut in place when the driver throws", async () => {
+    const { default: Backend } = await import("./backend");
+    const be = new Backend();
+    await be.onLoad();
+    await be.getLibrary("epic");
+    await be.installGame("epic", "fortnite");
+    uninstallError = new Error("legendary uninstall failed (exit 1): boom");
+    await expect(be.uninstallGame("epic", "fortnite")).rejects.toThrow("boom");
+    expect(removedFromSteam).toEqual([]);
+    const lib = await be.getLibrary("epic");
+    expect(lib[0]?.status).toBe("installed");
+    // A failed uninstall must not leave the state mutex held.
+    await be.updateSettings({});
+  }, 2000);
 
   it("installGame transitions a library entry to installed", async () => {
     const { default: Backend } = await import("./backend");

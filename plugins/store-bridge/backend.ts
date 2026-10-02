@@ -632,20 +632,32 @@ export default class StoreBridgeBackend implements PluginBackend {
   async uninstallGame(storeId: StoreId, gameId: string): Promise<void> {
     validateGameId(gameId);
     const driver = this.requireDriver(storeId);
+    // Drive the driver FIRST. If the driver throws (legendary
+    // errors, install path missing), leave the Steam shortcut +
+    // state.json entry in place so the user can retry without
+    // orphaning their shortcut — fix for the MEDIUM bug the
+    // review flagged.
+    //
+    // This has to happen OUTSIDE the state mutex: the Epic driver
+    // resolves its binary through `getOverride` → `readState()`,
+    // which parks on the mutex. Called from inside a mutator it
+    // waits on its own chain — the uninstall never ran and every
+    // later state mutation queued behind it until a restart.
+    const snapshot = await this.readState();
+    await driver.uninstall(
+      gameId,
+      snapshot.stores[storeId]?.installed[gameId]?.installDir ?? "",
+    );
     // Wrap the read-modify-write in the state mutex so concurrent
     // uninstalls (or an uninstall racing addInstalledToSteam) can't
-    // produce a torn intermediate state. Without this, the read of
-    // `installed` here could observe a stale snapshot that a
-    // concurrent mutation has already moved on from — the review
-    // flagged the read-modify-write asymmetry as the MEDIUM bug.
+    // produce a torn intermediate state. `installed` is re-read
+    // under the mutex so a shortcut whose state write landed while
+    // the driver was running still gets removed. An add-to-Steam
+    // still in flight at that point is not covered: its write bails
+    // on the missing record and the shortcut it created is orphaned
+    // (see the re-read guard in `addInstalledToSteam`).
     await this.mutateState(async (s) => {
       const installed = s.stores[storeId]?.installed[gameId];
-      // Drive the driver FIRST. If the driver throws (legendary
-      // errors, install path missing), leave the Steam shortcut +
-      // state.json entry in place so the user can retry without
-      // orphaning their shortcut — fix for the MEDIUM bug the
-      // review flagged.
-      await driver.uninstall(gameId, installed?.installDir ?? "");
       if (installed?.steamAppId) {
         await removeFromSteam(installed.steamAppId);
       }
