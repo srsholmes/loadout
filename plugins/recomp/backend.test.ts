@@ -232,6 +232,67 @@ describe("RecompBackend", () => {
     });
   });
 
+  describe("getBaseGameStatus", () => {
+    // Same HOME sandbox as the settings tests: the allowed-roots gate is
+    // $HOME-relative, so the fake skate. folder must live under it.
+    let sandboxHome: string;
+    const origHome = process.env.HOME;
+    const origXdg = process.env.XDG_CONFIG_HOME;
+
+    beforeEach(async () => {
+      const { mkdtemp } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      sandboxHome = await mkdtemp(join(tmpdir(), "recomp-basegame-"));
+      process.env.HOME = sandboxHome;
+      process.env.XDG_CONFIG_HOME = join(sandboxHome, ".config");
+    });
+
+    afterEach(async () => {
+      const { rm } = await import("node:fs/promises");
+      if (origHome === undefined) delete process.env.HOME;
+      else process.env.HOME = origHome;
+      if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = origXdg;
+      await rm(sandboxHome, { recursive: true, force: true });
+    });
+
+    it("returns null for an entry without a base game", async () => {
+      await backend.onLoad();
+      expect(await backend.getBaseGameStatus("dusklight")).toBeNull();
+    });
+
+    it("accepts a picked folder that holds the required file", async () => {
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const { join } = await import("node:path");
+      await backend.onLoad();
+      const dir = join(sandboxHome, "Skate");
+      await mkdir(dir);
+      await writeFile(join(dir, "Skate.exe"), "MZ");
+      expect(await backend.getBaseGameStatus("reskate", dir)).toEqual({
+        ok: true, dir, source: "picked",
+      });
+    });
+
+    it("reports (never throws) for a folder without the file, a missing path, and a path outside the allowed roots", async () => {
+      const { mkdir } = await import("node:fs/promises");
+      const { join } = await import("node:path");
+      await backend.onLoad();
+      const empty = join(sandboxHome, "Documents");
+      await mkdir(empty);
+      const r1 = await backend.getBaseGameStatus("reskate", empty);
+      expect(r1?.ok).toBe(false);
+      if (r1 && !r1.ok) expect(r1.reason).toContain("Skate.exe");
+      // Half-typed override: the detail page probes as the user types.
+      const r2 = await backend.getBaseGameStatus("reskate", join(sandboxHome, "Ska"));
+      expect(r2?.ok).toBe(false);
+      if (r2 && !r2.ok) expect(r2.reason).toMatch(/not found/);
+      const r3 = await backend.getBaseGameStatus("reskate", "/etc");
+      expect(r3?.ok).toBe(false);
+      if (r3 && !r3.ok) expect(r3.reason).toMatch(/allowed roots/);
+    });
+  });
+
   describe("uninstallGame", () => {
     it("removes from state without throwing when not installed", async () => {
       await backend.onLoad();

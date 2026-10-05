@@ -54,6 +54,13 @@ describe("findSteamAppInstallDir", () => {
     expect(await findSteamAppInstallDir(3354750, [library])).toBeNull();
   });
 
+  it("ignores a manifest whose installdir escapes the library's common/ folder", async () => {
+    const outside = join(sandbox, "elsewhere");
+    await mkdir(outside, { recursive: true });
+    await writeManifest(library, 3354750, "../../elsewhere");
+    expect(await findSteamAppInstallDir(3354750, [library])).toBeNull();
+  });
+
   it("returns null when the manifest's installdir doesn't exist yet", async () => {
     await writeManifest(library, 3354750, "Skate");
     expect(await findSteamAppInstallDir(3354750, [library])).toBeNull();
@@ -131,6 +138,23 @@ describe("linkBaseGameInto", () => {
     expect((await lstat(join(stage, "Data"))).isSymbolicLink()).toBe(true);
     // The release's own file was not replaced.
     expect(await readFile(join(stage, "LICENSE.txt"), "utf-8")).toBe("reskate license");
+  });
+
+  it("does not link names listed in skip (the entry's preservePaths)", async () => {
+    const base = join(sandbox, "Skate");
+    await mkdir(join(base, "Mods"), { recursive: true });
+    await mkdir(join(base, "saves"), { recursive: true });
+    await writeFile(join(base, "Skate.exe"), "MZ");
+    const stage = join(sandbox, "stage");
+    await mkdir(stage);
+
+    const { linked, skipped } = await linkBaseGameInto(stage, base, {
+      skip: ["Mods", "saves/profile.dat"],
+    });
+
+    expect(linked).toEqual(["Skate.exe"]);
+    expect(skipped.sort()).toEqual(["Mods", "saves"]);
+    expect(existsSync(join(stage, "Mods"))).toBe(false);
   });
 
   it("removing the install dir recursively leaves the base game untouched", async () => {

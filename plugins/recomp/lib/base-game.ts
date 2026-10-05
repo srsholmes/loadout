@@ -56,7 +56,12 @@ export async function findSteamAppInstallDir(
     }
     const installdir = content.match(/"installdir"\s+"([^"]+)"/)?.[1];
     if (!installdir) continue;
-    const dir = join(lib, "common", installdir);
+    // Confine to the library's common/ folder: the manifest is user-
+    // writable input and the root backend links whatever this resolves
+    // to, so a `..`-bearing installdir must not steer it elsewhere.
+    const common = resolve(lib, "common");
+    const dir = resolve(common, installdir);
+    if (!dir.startsWith(common + sep)) continue;
     if (existsSync(dir)) return dir;
   }
   return null;
@@ -116,8 +121,11 @@ export async function resolveBaseGameDir(
 /**
  * Symlink every top-level entry of `baseDir` into `stageDir`, skipping
  * names the extracted release already provides (the launcher's own
- * files win). Absolute link targets, so the links survive the
- * pipeline's `.partial` → final `rename`.
+ * files win) and any name in `skip`. The pipeline passes the entry's
+ * `preservePaths` there: those get restored on update with a recursive
+ * copy, which would follow a link and write into the Steam library as
+ * root. Absolute link targets, so the links survive the pipeline's
+ * `.partial` → final `rename`.
  *
  * Refuses nested layouts (one dir inside the other) — linking a folder
  * into its own subtree would make a cycle that every recursive walk
@@ -126,6 +134,7 @@ export async function resolveBaseGameDir(
 export async function linkBaseGameInto(
   stageDir: string,
   baseDir: string,
+  opts: { skip?: readonly string[] } = {},
 ): Promise<{ linked: string[]; skipped: string[] }> {
   const stage = resolve(stageDir);
   const base = resolve(baseDir);
@@ -139,11 +148,14 @@ export async function linkBaseGameInto(
     );
   }
 
+  // preservePaths entries may be nested ("saves/profile.dat"); only the
+  // top-level segment can collide with a link.
+  const skip = new Set((opts.skip ?? []).map((p) => p.split("/")[0]!).filter(Boolean));
   const linked: string[] = [];
   const skipped: string[] = [];
   for (const name of await readdir(base)) {
     const dest = join(stage, name);
-    if (existsSync(dest)) {
+    if (skip.has(name) || existsSync(dest)) {
       skipped.push(name);
       continue;
     }

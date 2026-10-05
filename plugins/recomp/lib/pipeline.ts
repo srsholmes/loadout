@@ -671,7 +671,9 @@ export async function installGame(
         type: "progress", gameId, stage: "linking",
         percent: 0, message: `Linking ${entry.baseGame.name} files from ${baseGameDir}…`,
       });
-      const { linked, skipped } = await linkBaseGameInto(partialDir, baseGameDir);
+      const { linked, skipped } = await linkBaseGameInto(partialDir, baseGameDir, {
+        skip: entry.preservePaths ?? [],
+      });
       onEvent({
         type: "progress", gameId, stage: "linking",
         percent: 100,

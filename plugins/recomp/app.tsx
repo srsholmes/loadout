@@ -1147,8 +1147,11 @@ function GameDetailPage({ gameId }: { gameId: string }) {
   // override in `romPath`). The user is told to install the base game
   // through Steam first, so while it's missing we poll — Steam
   // finishing the download should light up Install by itself.
+  // Only while the game is installable: once installed, the panel is
+  // gone and there's nothing to gate, so don't keep hitting the backend.
+  const baseGameProbeActive = !!game?.baseGame && game.gameStatus === "available";
   useEffect(() => {
-    if (!gameId || !game?.baseGame) {
+    if (!gameId || !baseGameProbeActive) {
       setBaseGameStatus(null);
       return;
     }
@@ -1168,6 +1171,8 @@ function GameDetailPage({ gameId }: { gameId: string }) {
             ok: false,
             reason: err instanceof Error ? err.message : String(err),
           });
+          // The panel says we keep checking — so keep checking.
+          timer = setTimeout(probe, 5000);
         });
     };
     probe();
@@ -1175,7 +1180,7 @@ function GameDetailPage({ gameId }: { gameId: string }) {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [call, gameId, game?.baseGame, romPath]);
+  }, [call, gameId, baseGameProbeActive, romPath]);
 
   // Persist the picked ROM path so it survives navigation away,
   // browser refreshes, install retries, and update operations.
@@ -1309,7 +1314,7 @@ function GameDetailPage({ gameId }: { gameId: string }) {
     setBusy(true);
     setError(null);
     try {
-      await call("installGame", game.id, romPath || undefined);
+      await call("installGame", game.id, romPath.trim() || undefined);
     } catch (err) {
       setBusy(false);
       setError(err instanceof Error ? err.message : String(err));
@@ -1728,7 +1733,7 @@ function GameDetailPage({ gameId }: { gameId: string }) {
         ) : null}
 
         {game.baseGame && game.gameStatus !== "available" && game.installedBaseGameDir ? (
-          <div className="mb-3 text-[11.5px] text-base-content/65 italic">
+          <div className="mt-3 text-[11.5px] text-base-content/65 italic break-all">
             Runs on top of {game.baseGame.name} at {game.installedBaseGameDir}.
           </div>
         ) : null}

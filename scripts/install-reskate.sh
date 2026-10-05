@@ -52,7 +52,13 @@ log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mwarning:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+usage() {
+  # `$0` is "bash" under `curl … | bash`, so read the header from the
+  # file only when it exists; otherwise fall back to a one-liner.
+  if [ -r "$0" ]; then sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+  else echo "usage: install-reskate.sh [--dest DIR] [--version vX.Y.Z] [--run] [--yes]"; fi
+  exit 0
+}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -132,10 +138,18 @@ resolve_version() {
     printf '%s\n' "$VERSION"
     return 0
   fi
-  # /releases/latest is GitHub's "newest non-prerelease, non-draft".
-  curl -fsSL -H 'Accept: application/vnd.github+json' \
-    "https://api.github.com/repos/$REPO/releases/latest" |
-    sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1
+  # github.com/<repo>/releases/latest 302s to /releases/tag/<tag> — the
+  # newest non-prerelease, with no API rate limit. Fall back to the API,
+  # parsed newline-insensitively (its JSON may come compact or pretty).
+  local tag
+  tag=$(curl -fsSI "https://github.com/$REPO/releases/latest" 2>/dev/null |
+    tr -d '\r' | sed -n 's|^[Ll]ocation: .*/releases/tag/\([^/?#[:space:]]*\).*|\1|p' | head -n1)
+  if [ -z "$tag" ]; then
+    tag=$(curl -fsSL -H 'Accept: application/vnd.github+json' \
+      "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null |
+      tr -d '\n' | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p')
+  fi
+  printf '%s\n' "$tag"
 }
 
 # Pull `"sha256": "<hex>"` out of the named block of launcher.json
@@ -171,13 +185,14 @@ fi
 
 MODE=""
 if [ -n "$DEST" ]; then
-  mkdir -p "$DEST"
-  DEST=$(cd "$DEST" && pwd)
+  # Don't create anything yet — nothing is written until the download has
+  # been verified. Resolve to an absolute path if it exists already.
+  [ -d "$DEST" ] && DEST=$(cd "$DEST" && pwd)
   if [ -f "$DEST/Skate.exe" ]; then
     MODE="beside"
   else
     MODE="empty"
-    if [ -n "$(ls -A "$DEST")" ] && [ ! -f "$DEST/ReSkateLauncher.exe" ]; then
+    if [ -d "$DEST" ] && [ -n "$(ls -A "$DEST")" ] && [ ! -f "$DEST/ReSkateLauncher.exe" ]; then
       die "$DEST is neither a skate. folder (no Skate.exe) nor empty. Pick an empty folder or the game folder."
     fi
   fi
@@ -197,7 +212,7 @@ case "$MODE" in
     if [ "$YES" -ne 1 ]; then
       [ -t 0 ] || die "this writes ReSkateLauncher.exe + ReSkate.dll into your skate. folder; re-run with --yes to confirm non-interactively"
       printf 'Install ReSkate beside Skate.exe in that folder? [Y/n] '
-      read -r answer
+      read -r answer || die "aborted"
       case "${answer:-Y}" in [Yy]*) ;; *) die "aborted" ;; esac
     fi
     ;;
@@ -207,8 +222,8 @@ case "$MODE" in
     ;;
 esac
 
-TAG=$(resolve_version)
-[ -n "$TAG" ] || die "could not resolve the latest ReSkate release (GitHub API unreachable or rate-limited); pass --version vX.Y.Z"
+TAG=$(resolve_version || true)
+[ -n "$TAG" ] || die "could not resolve the latest ReSkate release (github.com unreachable?); pass --version vX.Y.Z"
 VER="${TAG#v}"
 ZIP="ReSkate-${VER}.zip"
 BASE="https://github.com/$REPO/releases/download/$TAG"
@@ -238,6 +253,8 @@ fi
 # Only the two files the README names go beside Skate.exe; the licence
 # texts the release ships are kept under licenses/ so they don't mix
 # with the game's own files.
+mkdir -p "$DEST"
+DEST=$(cd "$DEST" && pwd)
 cp -f "$WORK/stage/ReSkateLauncher.exe" "$WORK/stage/ReSkate.dll" "$DEST/"
 mkdir -p "$DEST/licenses"
 [ -f "$WORK/stage/LICENSE.txt" ] && cp -f "$WORK/stage/LICENSE.txt" "$DEST/licenses/ReSkate-LICENSE.txt"
@@ -269,7 +286,7 @@ Run it through Proton, one of:
   b) Loadout's RecompHub plugin ("ReSkate" entry) does the above for you,
      Steam shortcut and artwork included.
 
-  c) This script:  $0 --run
+  c) This script:  install-reskate.sh --run
 
 Controls in game: Insert = ReSkate menu, ~ = console, T = chat.
 Mods go in $DEST/Mods/, logs in $DEST/logs/ReSkate.log.
@@ -289,7 +306,10 @@ if [ "$RUN" -eq 1 ]; then
   [ -n "$PROTON" ] || die "no Proton found under $STEAM — install Proton Experimental from Steam → Library → Tools"
 
   # Share skate.'s own prefix when running beside it (same registry,
-  # same Steam detection), otherwise keep one of our own.
+  # same Steam detection), otherwise keep one of our own. Note a Steam
+  # non-Steam shortcut (option a) gets its OWN prefix, so profiles made
+  # here and there are separate. Running `proton` outside Steam's
+  # container is unsupported-but-works on SteamOS; Flatpak Steam can't.
   if [ "$MODE" = "beside" ]; then
     export STEAM_COMPAT_DATA_PATH="$STEAM/steamapps/compatdata/$SKATE_APPID"
   else

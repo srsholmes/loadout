@@ -591,7 +591,17 @@ export default class RecompBackend implements PluginBackend {
     const entry = this.registry.find((g) => g.id === id);
     if (!entry?.baseGame) return null;
     if (pickedPath) {
-      await this.assertRomPathAllowed(pickedPath, { allowDirectory: true });
+      // A half-typed override is the normal case here (the detail page
+      // probes as the user types), so a path that doesn't exist yet or
+      // sits outside the allowed roots is a status, not a thrown error.
+      try {
+        await this.assertRomPathAllowed(pickedPath, { allowDirectory: true });
+      } catch (err) {
+        return {
+          ok: false,
+          reason: err instanceof Error ? err.message : String(err),
+        };
+      }
     }
     return resolveBaseGameDir(
       entry.baseGame,
