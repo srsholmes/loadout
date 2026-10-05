@@ -35,6 +35,7 @@ import { getEffectivePlatformValue } from "./lib/platform";
 import { pickRomFile } from "./lib/file-picker";
 import { suggestRomsForTitle, type RomSuggestion } from "./lib/rom-suggest";
 import { resolveWithinDir } from "./lib/path-confine";
+import { resolveBaseGameDir, type BaseGameResolution } from "./lib/base-game";
 import { existsSync } from "node:fs";
 
 /**
@@ -242,7 +243,11 @@ export default class RecompBackend implements PluginBackend {
     gameId: string,
     path: string | null,
   ): Promise<string | null> {
-    if (path != null) await this.assertRomPathAllowed(path);
+    if (path != null) {
+      await this.assertRomPathAllowed(path, {
+        allowDirectory: this.romSlotTakesDirectory(gameId),
+      });
+    }
     this.state = await setRomPath(this.state, gameId, path);
     return this.state.romPaths?.[gameId] ?? null;
   }
@@ -260,7 +265,10 @@ export default class RecompBackend implements PluginBackend {
    * primitive. realpath-canonicalize, then require it under the same
    * allow-roots gate `listDirectory` / `importModFromDisk` use.
    */
-  private async assertRomPathAllowed(romPath: string): Promise<void> {
+  private async assertRomPathAllowed(
+    romPath: string,
+    opts: { allowDirectory?: boolean } = {},
+  ): Promise<void> {
     const { realpath, stat } = await import("node:fs/promises");
     let canonical: string;
     try {
@@ -274,10 +282,21 @@ export default class RecompBackend implements PluginBackend {
       );
     }
     // Must be a regular file — a directory/FIFO/device would pass realpath
-    // but then fail mid-install with an opaque EISDIR from `cp`.
-    if (!(await stat(canonical)).isFile()) {
-      throw new Error(`ROM path '${canonical}' is not a regular file.`);
+    // but then fail mid-install with an opaque EISDIR from `cp`. Entries
+    // whose "ROM" is a game folder (`baseGame` overlays, `data_folder`
+    // romInfo) take a directory instead.
+    const st = await stat(canonical);
+    if (opts.allowDirectory ? !(st.isFile() || st.isDirectory()) : !st.isFile()) {
+      throw new Error(
+        `ROM path '${canonical}' is not a regular ${opts.allowDirectory ? "file or folder" : "file"}.`,
+      );
     }
+  }
+
+  /** Whether `gameId`'s ROM slot holds a folder rather than a file. */
+  private romSlotTakesDirectory(gameId: string): boolean {
+    const entry = this.registry.find((g) => g.id === gameId);
+    return !!entry?.baseGame || entry?.romInfo?.fileType === "data_folder";
   }
 
   async pickRomFile(extensions?: string[]): Promise<string | null> {
@@ -557,10 +576,47 @@ export default class RecompBackend implements PluginBackend {
     };
   }
 
+  /**
+   * For `baseGame` entries (ReSkate → skate.): where the base game is,
+   * or why it can't be found yet. The detail page polls this so the
+   * user learns "install skate. through Steam first" BEFORE pressing
+   * Install, and sees which folder the launcher will run on top of
+   * once it's there. `pickedPath` is the user's manual override (the
+   * same value the ROM picker persists); blank ⇒ Steam auto-detect.
+   */
+  async getBaseGameStatus(
+    id: string,
+    pickedPath?: string,
+  ): Promise<BaseGameResolution | null> {
+    const entry = this.registry.find((g) => g.id === id);
+    if (!entry?.baseGame) return null;
+    if (pickedPath) {
+      // A half-typed override is the normal case here (the detail page
+      // probes as the user types), so a path that doesn't exist yet or
+      // sits outside the allowed roots is a status, not a thrown error.
+      try {
+        await this.assertRomPathAllowed(pickedPath, { allowDirectory: true });
+      } catch (err) {
+        return {
+          ok: false,
+          reason: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+    return resolveBaseGameDir(
+      entry.baseGame,
+      pickedPath ?? this.state.romPaths?.[id],
+    );
+  }
+
   async installGame(id: string, romPath?: string): Promise<void> {
     const entry = this.registry.find((g) => g.id === id);
     if (!entry) throw new Error(`Game '${id}' not found in registry`);
-    if (romPath) await this.assertRomPathAllowed(romPath);
+    if (romPath) {
+      await this.assertRomPathAllowed(romPath, {
+        allowDirectory: this.romSlotTakesDirectory(id),
+      });
+    }
 
     const release = this.lockGameOp(id);
 
@@ -1033,6 +1089,7 @@ export default class RecompBackend implements PluginBackend {
         addedToSteam: installed?.addedToSteam ?? false,
         steamAppId: installed?.steamAppId,
         steamGameId64: installed?.steamGameId64,
+        installedBaseGameDir: installed?.baseGameDir,
         hasUpdate,
         gameStatus,
         hasNativeBuild,

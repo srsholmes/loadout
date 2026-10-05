@@ -7,6 +7,19 @@ import { spawn } from "@loadout/exec";
 export { downloadFile } from "./github";
 
 /**
+ * Info-ZIP `unzip` exit status 1 means "one or more warning errors
+ * were encountered, but processing completed successfully". The one
+ * we actually meet is "appears to use backslashes as path separators"
+ * — zips built with PowerShell's Compress-Archive (ReSkate's release
+ * zip) — where unzip has already rewritten the names into real
+ * directories. Anything ≥ 2 is a genuine failure (bad CRC, truncated
+ * archive, disk full, …). Exported for tests.
+ */
+export function unzipSucceeded(exitCode: number | null): boolean {
+  return exitCode === 0 || exitCode === 1;
+}
+
+/**
  * Inspect an archive's member list WITHOUT extracting and reject
  * anything that could write outside the destination directory:
  *
@@ -257,7 +270,7 @@ export async function extractArchive(
       stderr: "pipe",
     });
     const code = await proc.exited;
-    if (code !== 0) {
+    if (!unzipSucceeded(code)) {
       const err = await new Response(proc.stderr).text();
       throw new Error(`unzip failed (exit ${code}): ${err}`);
     }
@@ -349,7 +362,7 @@ async function extractNestedArchives(dir: string): Promise<void> {
           stderr: "pipe",
         });
         const code = await proc.exited;
-        if (code !== 0) {
+        if (!unzipSucceeded(code)) {
           const err = await new Response(proc.stderr).text();
           throw new Error(
             `nested unzip failed for ${name} (exit ${code}): ${err}`,

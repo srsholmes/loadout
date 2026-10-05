@@ -359,3 +359,104 @@ describe("installGame — flattenRoot launch-target guard", () => {
     expect((await loadState()).games[entry.id]).toBeUndefined();
   });
 });
+
+describe("installGame — baseGame overlay (ReSkate → skate.)", () => {
+  const BASE_GAME = {
+    steamAppId: 3354750,
+    name: "skate.",
+    requiredFile: "Skate.exe",
+  };
+
+  function reskateEntry(): GameEntry {
+    return makeEntry({
+      id: "reskate",
+      name: "skate. (ReSkate)",
+      platform: "pc",
+      releaseAssets: { windows: "ReSkate-*.zip", linux: null },
+      launchCommand: { windows: "{installDir}/ReSkateLauncher.exe" },
+      latestAssetUrl: { windows: "https://example.com/ReSkate-1.1.1.zip" },
+      baseGame: BASE_GAME,
+    });
+  }
+
+  /** A fake Steam copy of skate.: the exe, a data folder, a licence. */
+  async function fakeSkateFolder(): Promise<string> {
+    const dir = join(sandbox, "steamapps", "common", "Skate");
+    await mkdir(join(dir, "Data"), { recursive: true });
+    await writeFile(join(dir, "Skate.exe"), "MZ game");
+    await writeFile(join(dir, "Data", "big.cas"), "bytes");
+    await writeFile(join(dir, "LICENSE.txt"), "EA licence");
+    return dir;
+  }
+
+  it("links the base game beside the extracted launcher and records which folder it used", async () => {
+    const { installGame } = await import("./pipeline");
+    const { loadState } = await import("./state");
+    const skate = await fakeSkateFolder();
+    extractProducer = async (dest) => {
+      await mkdir(dest, { recursive: true });
+      await writeFile(join(dest, "ReSkateLauncher.exe"), "MZ launcher");
+      await writeFile(join(dest, "ReSkate.dll"), "MZ runtime");
+      await writeFile(join(dest, "LICENSE.txt"), "GPL-3.0");
+    };
+
+    const entry = reskateEntry();
+    await installGame(entry, baseState(), skate, () => {});
+
+    const installDir = join(sandbox, "games", entry.id);
+    const { lstat, readlink, readFile } = await import("node:fs/promises");
+    // The launcher's own files are there…
+    expect(existsSync(join(installDir, "ReSkateLauncher.exe"))).toBe(true);
+    // …the game's files are symlinks pointing into the Steam copy…
+    expect((await lstat(join(installDir, "Skate.exe"))).isSymbolicLink()).toBe(true);
+    expect(await readlink(join(installDir, "Data"))).toBe(join(skate, "Data"));
+    expect(await readFile(join(installDir, "Data", "big.cas"), "utf-8")).toBe("bytes");
+    // …and on a name clash the release wins.
+    expect(await readFile(join(installDir, "LICENSE.txt"), "utf-8")).toBe("GPL-3.0");
+
+    const persisted = await loadState();
+    expect(persisted.games[entry.id]?.baseGameDir).toBe(skate);
+    expect(persisted.games[entry.id]?.installedPlatform).toBe("windows");
+    expect(steamAdds).toBe(1);
+  });
+
+  it("refuses before downloading when the folder has no Skate.exe", async () => {
+    const { installGame } = await import("./pipeline");
+    const { loadState } = await import("./state");
+    let downloads = 0;
+    downloadProducer = async () => {
+      downloads += 1;
+      throw new Error("must not download");
+    };
+    const notSkate = join(sandbox, "Documents");
+    await mkdir(notSkate, { recursive: true });
+
+    const entry = reskateEntry();
+    await expect(
+      installGame(entry, baseState(), notSkate, () => {}),
+    ).rejects.toThrow(/doesn't contain Skate\.exe/);
+
+    expect(downloads).toBe(0);
+    const installDir = join(sandbox, "games", entry.id);
+    expect(existsSync(installDir)).toBe(false);
+    expect(existsSync(`${installDir}.partial`)).toBe(false);
+    expect((await loadState()).games[entry.id]).toBeUndefined();
+  });
+
+  it("uninstall removes the links and leaves the Steam copy intact", async () => {
+    const { installGame, uninstallGame } = await import("./pipeline");
+    const skate = await fakeSkateFolder();
+    extractProducer = async (dest) => {
+      await mkdir(dest, { recursive: true });
+      await writeFile(join(dest, "ReSkateLauncher.exe"), "MZ launcher");
+    };
+
+    const entry = reskateEntry();
+    const state = await installGame(entry, baseState(), skate, () => {});
+    await uninstallGame(entry.id, state);
+
+    expect(existsSync(join(sandbox, "games", entry.id))).toBe(false);
+    expect(existsSync(join(skate, "Skate.exe"))).toBe(true);
+    expect(existsSync(join(skate, "Data", "big.cas"))).toBe(true);
+  });
+});

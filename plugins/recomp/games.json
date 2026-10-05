@@ -8541,6 +8541,50 @@
       "steamGridDbId": 3276
     },
     {
+      "id": "reskate",
+      "name": "skate. (ReSkate)",
+      "project": "ReSkate",
+      "platform": "pc",
+      "repo": "Dingo-Shenanigans/ReSkate",
+      "description": "Fan-made launcher and runtime for skate. (2025): play offline with your progress saved locally, host Steam lobbies for up to 32 players or join dedicated servers, and load mods from the Thunderstore community. Not affiliated with EA. Needs your own copy of skate. installed through Steam first — RecompHub finds that install and places the launcher beside Skate.exe, as the ReSkate README asks, without copying the 14 GB game. ReSkate supports one game build at a time (Steam build 25414733); set skate. to \"Only update this game when I launch it\" so Steam doesn't move past it. Windows launcher, runs through Proton; in game Insert opens the ReSkate menu.",
+      "installType": "prebuilt",
+      "releaseAssets": {
+        "windows": "ReSkate-*.zip",
+        "linux": null
+      },
+      "launchCommand": {
+        "windows": "{installDir}/ReSkateLauncher.exe"
+      },
+      "baseGame": {
+        "steamAppId": 3354750,
+        "name": "skate.",
+        "requiredFile": "Skate.exe"
+      },
+      "romInfo": {
+        "description": "Your skate. install folder (the one containing Skate.exe). Leave blank to use the copy Steam installed.",
+        "validChecksums": [],
+        "extractionCommand": "",
+        "fileType": "data_folder",
+        "extensions": null
+      },
+      "preservePaths": [
+        "ReSkateLauncher.settings.json",
+        "Mods",
+        "logs"
+      ],
+      "tags": [
+        "skate",
+        "pc",
+        "sports",
+        "skateboarding",
+        "multiplayer",
+        "mods"
+      ],
+      "website": "https://github.com/Dingo-Shenanigans/ReSkate",
+      "latestVersion": "v1.1.1",
+      "steamGridDbId": 5479288
+    },
+    {
       "id": "downpour-recomp",
       "name": "Silent Hill: Downpour",
       "project": "DownpourRecomp",

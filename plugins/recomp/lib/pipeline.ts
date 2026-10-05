@@ -25,6 +25,7 @@ import { downloadFile, githubToken, githubFetch } from "./github";
 import { runSetupScript } from "./installer-host";
 import { chownInstallDirToUser } from "./fs-owner";
 import { setupScriptPathFor } from "./registry";
+import { linkBaseGameInto, resolveBaseGameDir } from "./base-game";
 
 type EventCallback = (event: PipelineEvent) => void;
 
@@ -387,6 +388,19 @@ export async function installGame(
     return state;
   }
 
+  // Base-game overlay (a launcher that runs on top of a Steam-owned
+  // game — ReSkate for skate.): find the base game's folder BEFORE
+  // downloading anything, so "install skate. through Steam first"
+  // reaches the user as the reason the install didn't start, not as
+  // a failure after the release has been fetched. `romPath` doubles
+  // as the user's manual folder override for these entries.
+  let baseGameDir: string | undefined;
+  if (entry.baseGame) {
+    const resolution = await resolveBaseGameDir(entry.baseGame, romPath);
+    if (!resolution.ok) throw new Error(resolution.reason);
+    baseGameDir = resolution.dir;
+  }
+
   const installDir = join(state.installPath || gamesDir(), gameId);
   const partialDir = `${installDir}.partial`;
   const tmpGameDir = join(tempDir(), gameId);
@@ -645,6 +659,30 @@ export async function installGame(
       percent: 100, message: "Extraction complete",
     });
 
+    // Put the base game's files beside the extracted launcher — the
+    // layout upstream documents ("extract beside Skate.exe"), without
+    // copying the game or writing into the Steam library. Symlinks,
+    // absolute, so they survive the `.partial` → installDir rename
+    // below; `rm -rf installDir` on uninstall unlinks them without
+    // following. The release's own files take precedence on a name
+    // clash (both ship a LICENSE.txt, for instance).
+    if (entry.baseGame && baseGameDir) {
+      onEvent({
+        type: "progress", gameId, stage: "linking",
+        percent: 0, message: `Linking ${entry.baseGame.name} files from ${baseGameDir}…`,
+      });
+      const { linked, skipped } = await linkBaseGameInto(partialDir, baseGameDir, {
+        skip: entry.preservePaths ?? [],
+      });
+      onEvent({
+        type: "progress", gameId, stage: "linking",
+        percent: 100,
+        message:
+          `Linked ${linked.length} ${entry.baseGame.name} entries` +
+          (skipped.length > 0 ? ` (${skipped.length} kept from the release)` : ""),
+      });
+    }
+
     // Post-extract commands for ROM-based install types
     if (entry.installType === "rom_extract" || entry.installType === "toolchain" || entry.installType === "custom") {
       // Structured dumps (Xbox 360 disc images / XBLA packages) get
@@ -754,6 +792,7 @@ export async function installGame(
       romPath,
       addedToSteam: false,
       installedPlatform: resolvedPlatform,
+      ...(baseGameDir ? { baseGameDir } : {}),
       ...(carriedInstalledMods
         ? { installedMods: carriedInstalledMods }
         : {}),

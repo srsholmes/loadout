@@ -115,6 +115,11 @@ interface GameInfo {
   // games whose recipes need a ROM.
   repo?: string;
   requiresRom?: boolean;
+  // A Steam-owned retail game this entry runs on top of (ReSkate →
+  // skate.). Drives the "Base game" panel: Steam auto-detect status,
+  // optional folder override, and the Install gate.
+  baseGame?: { steamAppId: number; name: string; requiredFile: string };
+  installedBaseGameDir?: string;
   // Carries the per-game mods catalog from the registry. Used by
   // the detail page to decide whether to show the Mods & extras tab.
   // The actual ModInfo shape (with install state) is fetched lazily
@@ -135,6 +140,11 @@ interface BuildEnvProbe {
   distroId?: string;
   hasRecipe: boolean;
 }
+
+/** Mirror of the backend's `BaseGameResolution`. */
+type BaseGameStatus =
+  | { ok: true; dir: string; source: "picked" | "steam" }
+  | { ok: false; reason: string };
 
 interface PipelineEvent {
   type: "progress" | "complete" | "error" | "rom_required";
@@ -1050,6 +1060,11 @@ function GameDetailPage({ gameId }: { gameId: string }) {
   // tells us whether distrobox+podman are present and the
   // per-distro install hint when not.
   const [buildEnv, setBuildEnv] = useState<BuildEnvProbe | null>(null);
+  // Base-game detection for `baseGame` entries. `null` = not probed
+  // yet (or not a base-game entry). Re-probed when the override path
+  // changes, and every few seconds while the base game is missing so
+  // a Steam download finishing flips the panel without a reload.
+  const [baseGameStatus, setBaseGameStatus] = useState<BaseGameStatus | null>(null);
 
   // Hero banner URL. Installed-and-added-to-Steam games use the
   // loader-local steam-grid route (serves SGDB hero if applied, else
@@ -1127,6 +1142,45 @@ function GameDetailPage({ gameId }: { gameId: string }) {
   useEffect(() => {
     setTab("overview");
   }, [gameId]);
+
+  // Probe where the base game is (Steam auto-detect, or the user's
+  // override in `romPath`). The user is told to install the base game
+  // through Steam first, so while it's missing we poll — Steam
+  // finishing the download should light up Install by itself.
+  // Only while the game is installable: once installed, the panel is
+  // gone and there's nothing to gate, so don't keep hitting the backend.
+  const baseGameProbeActive = !!game?.baseGame && game.gameStatus === "available";
+  useEffect(() => {
+    if (!gameId || !baseGameProbeActive) {
+      setBaseGameStatus(null);
+      return;
+    }
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const probe = () => {
+      void call("getBaseGameStatus", gameId, romPath.trim() || undefined)
+        .then((r) => {
+          if (cancelled) return;
+          const status = r as BaseGameStatus | null;
+          setBaseGameStatus(status);
+          if (status && !status.ok) timer = setTimeout(probe, 5000);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          setBaseGameStatus({
+            ok: false,
+            reason: err instanceof Error ? err.message : String(err),
+          });
+          // The panel says we keep checking — so keep checking.
+          timer = setTimeout(probe, 5000);
+        });
+    };
+    probe();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [call, gameId, baseGameProbeActive, romPath]);
 
   // Persist the picked ROM path so it survives navigation away,
   // browser refreshes, install retries, and update operations.
@@ -1260,7 +1314,7 @@ function GameDetailPage({ gameId }: { gameId: string }) {
     setBusy(true);
     setError(null);
     try {
-      await call("installGame", game.id, romPath || undefined);
+      await call("installGame", game.id, romPath.trim() || undefined);
     } catch (err) {
       setBusy(false);
       setError(err instanceof Error ? err.message : String(err));
@@ -1437,6 +1491,7 @@ function GameDetailPage({ gameId }: { gameId: string }) {
               disabled={
                 busy ||
                 (needsRom && !romPath.trim()) ||
+                (!!game.baseGame && !baseGameStatus?.ok) ||
                 (game.installType === "build_from_source" &&
                   buildEnv !== null &&
                   (!buildEnv.ok || !buildEnv.hasRecipe))
@@ -1605,6 +1660,84 @@ function GameDetailPage({ gameId }: { gameId: string }) {
           </Panel></div>
         ) : null}
 
+        {/* Base-game panel (ReSkate → skate.). The entry is a launcher
+            for a game the user owns on Steam, so the install can't
+            start until Steam has put it on disk. Show where it was
+            found, or exactly what to do (install it in Steam, wait for
+            the download, or point us at the folder). */}
+        {game.baseGame && game.gameStatus === "available" ? (
+          <div className="mt-3"><Panel title={`Needs ${game.baseGame.name} on Steam`}>
+            <Text variant="secondary">
+              {game.name} runs on top of your own copy of {game.baseGame.name}.
+              Install {game.baseGame.name} through Steam first; RecompHub finds that
+              install and places the launcher beside {game.baseGame.requiredFile},
+              without copying the game.
+            </Text>
+            <div
+              className={`mt-3 rounded-lg border p-3 text-sm ${
+                baseGameStatus?.ok
+                  ? "border-accent/30 bg-accent/[0.06]"
+                  : "border-warning/40 bg-warning/10"
+              }`}
+            >
+              {baseGameStatus === null ? (
+                <span className="flex items-center gap-2">
+                  <Spinner size={12} /> Looking for {game.baseGame.name}…
+                </span>
+              ) : baseGameStatus.ok ? (
+                <>
+                  <span className="flex items-center gap-2 font-semibold">
+                    <FaCircleCheck className="text-accent shrink-0" />
+                    {game.baseGame.name} found
+                    {baseGameStatus.source === "steam" ? " in your Steam library" : ""}
+                  </span>
+                  <div className="mt-1 ml-6 break-all text-[11.5px] text-base-content/60">
+                    {baseGameStatus.dir}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <span className="font-semibold">Not ready yet</span>
+                  <div className="mt-1 text-[12px] text-base-content/75">
+                    {baseGameStatus.reason}
+                  </div>
+                  <div className="mt-1 text-[11.5px] text-base-content/55">
+                    Checking again automatically.
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="mt-3 text-[11.5px] text-base-content/60">
+              {game.romInfo?.description ??
+                `Installed ${game.baseGame.name} somewhere else? Point at the folder that contains ${game.baseGame.requiredFile}.`}
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <div className="flex-1 min-w-0">
+                <TextInput
+                  value={romPath}
+                  onChange={setRomPath}
+                  onBlur={() => persistRomPath(romPath)}
+                  placeholder={`Auto-detect from Steam (or path to the ${game.baseGame.name} folder)`}
+                />
+              </div>
+              <Button
+                variant="neutral"
+                size="sm"
+                onClick={() => setBrowserOpen(true)}
+              >
+                Browse…
+              </Button>
+            </div>
+          </Panel></div>
+        ) : null}
+
+        {game.baseGame && game.gameStatus !== "available" && game.installedBaseGameDir ? (
+          <div className="mt-3 text-[11.5px] text-base-content/65 italic break-all">
+            Runs on top of {game.baseGame.name} at {game.installedBaseGameDir}.
+          </div>
+        ) : null}
+
         {needsRom && game.gameStatus === "available" ? (
           <div className="mt-3"><Panel title="ROM required">
             <Text variant="secondary">
@@ -1677,7 +1810,12 @@ function GameDetailPage({ gameId }: { gameId: string }) {
             setBrowserOpen(false);
           }}
           extensions={game.romInfo?.extensions ?? []}
-          title="Select ROM file"
+          pickDirectory={!!game.baseGame}
+          title={
+            game.baseGame
+              ? `Select your ${game.baseGame.name} folder`
+              : "Select ROM file"
+          }
         />
           </>
         ) : null}

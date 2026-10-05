@@ -230,3 +230,36 @@ describe("FIX 2 — path traversal / symlink escape rejected", () => {
     );
   });
 });
+
+describe("extractArchive — Windows-built zip with backslash separators", () => {
+  // PowerShell's Compress-Archive writes member names with `\` (ReSkate's
+  // release zip does). Info-ZIP unzip rewrites them into directories but
+  // exits 1 ("warnings, completed successfully"); that must not be
+  // reported as a failed extraction.
+  it("extracts and does not throw on unzip's warning exit status", async () => {
+    const archive = join(sandbox, "backslash.zip");
+    const { spawn: bunSpawn } = await import("bun");
+    const py = bunSpawn([
+      "python3", "-c",
+      // `create_system = 0` marks the entries as MS-DOS/Windows-made, which
+      // is what makes unzip rewrite the backslashes (and warn): for a
+      // Unix-made zip it keeps them literally in the filename.
+      "import sys,zipfile\n" +
+        "z=zipfile.ZipFile(sys.argv[1],'w')\n" +
+        "for n,d in (('ReSkateLauncher.exe','MZ'),('licenses\\\\lz4-LICENSE.txt','BSD')):\n" +
+        "  zi=zipfile.ZipInfo(n); zi.create_system=0; z.writestr(zi,d)\n" +
+        "z.close()",
+      archive,
+    ], { stdout: "ignore", stderr: "inherit" });
+    expect(await py.exited).toBe(0);
+
+    const dest = join(sandbox, "dest");
+    const { extractArchive, unzipSucceeded } = await import("./pipeline-archive");
+    await extractArchive(archive, dest);
+    expect(existsSync(join(dest, "ReSkateLauncher.exe"))).toBe(true);
+    expect(existsSync(join(dest, "licenses", "lz4-LICENSE.txt"))).toBe(true);
+    expect(unzipSucceeded(1)).toBe(true);
+    expect(unzipSucceeded(2)).toBe(false);
+    expect(unzipSucceeded(null)).toBe(false);
+  });
+});
