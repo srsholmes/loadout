@@ -265,6 +265,26 @@ export interface GameManualImport {
   acceptExtensions?: string[];
 }
 
+/**
+ * A retail PC game the user owns on Steam that this entry runs ON TOP
+ * of, rather than replaces — ReSkate for skate. is the first. Upstream's
+ * install step is "extract the launcher beside the game's own exe"; the
+ * pipeline reproduces that by symlinking the Steam install's contents
+ * beside the extracted release (see `lib/base-game.ts`). The user must
+ * install the base game through Steam first; the detail page says so
+ * and the install refuses to start until `requiredFile` is on disk.
+ */
+export interface BaseGameInfo {
+  /** Steam app id, used to find the install via `appmanifest_<id>.acf`. */
+  steamAppId: number;
+  /** Display name of the base game, for the detail page + messages. */
+  name: string;
+  /** File at the base game's root whose presence proves the install
+   *  is complete (`Skate.exe`). A manifest exists from the moment a
+   *  Steam download starts, so this is the real "it's there" check. */
+  requiredFile: string;
+}
+
 export interface GameEntry {
   id: string;
   name: string;
@@ -277,6 +297,10 @@ export interface GameEntry {
   launchCommand: PlatformCommand;
   romInfo?: RomInfo;
   toolchain?: ToolchainInfo;
+  /** Set when the entry is a launcher/runtime for a Steam-owned game
+   *  rather than a standalone port. Optional user override of the
+   *  detected folder travels in the entry's `romPath` slot. */
+  baseGame?: BaseGameInfo;
   /** True when the entry needs a user-supplied ROM. Sourced from
    *  `Manifest.requiresRom` for directory-scanned entries. The
    *  install pipeline + UI gate the ROM picker on this. */
@@ -371,6 +395,10 @@ export interface InstalledGame {
    *  backwards-compat with state files written before this field
    *  existed (assumed = current platform when absent). */
   installedPlatform?: "linux" | "windows";
+  /** For `baseGame` entries: the base game's folder whose contents
+   *  were symlinked beside the launcher at install time. Shown on the
+   *  detail page so the user can see which copy it runs on top of. */
+  baseGameDir?: string;
   /** For `build_from_source` installs, the launch command the
    *  recipe (or the auto-generated distrobox wrapper) declared.
    *  Persisted so `addInstalledToSteam` can re-register the
@@ -427,6 +455,9 @@ export interface GameInfo extends GameEntry {
   addedToSteam: boolean;
   steamAppId?: number;
   steamGameId64?: string;
+  /** For `baseGame` entries that are installed: the base game folder
+   *  the launcher was linked against (`InstalledGame.baseGameDir`). */
+  installedBaseGameDir?: string;
 }
 
 export type ModStatus = "not_installed" | "installing" | "installed";
