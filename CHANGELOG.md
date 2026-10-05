@@ -8,6 +8,15 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com).
 
 ---
 
+## [v0.11.0] — 2026-10-05
+
+### Added
+- **skate. is playable offline, and modded, through ReSkate in RecompHub** (#287) — ReSkate is a fan-made launcher for skate. (2025) that lets you play without EA's servers, with your skater and progress saved on your own machine, host lobbies for up to 32 players or join dedicated servers, and load mods from the Thunderstore community. It is a Windows program that has to sit beside the game's own files, so until now it meant finding your Steam folder by hand, copying files into it, adding the launcher to Steam yourself and forcing Proton. RecompHub now does all of that: you install skate. through Steam as normal, open the ReSkate entry, and the page tells you whether your copy has been found and where. Press Install and the launcher is placed beside the game and added to your library with Proton set, artwork included. The game itself is never copied — at 14 GB that would have doubled the space it takes — and nothing is written into your Steam folder, so Steam's own verify-and-repair never sees anything unexpected. If skate. is still downloading, the page says so and checks again on its own until it arrives. Set skate. to "Only update this game when I launch it": ReSkate supports one game build at a time, and Steam moving past it means the launcher has to fetch that build back. Two things upstream has not sorted out yet under Proton: hosting a lobby (joining works), and the newest versions have reports of custom maps failing to load.
+- **A standalone installer for ReSkate outside Loadout** — `scripts/install-reskate.sh` does the same job from a terminal on any Linux machine with Steam: finds skate. in any of your Steam libraries, downloads the launcher, checks both files against the release's own published checksums, places them beside the game and prints the Steam and Proton steps. It can also launch the game through Proton directly.
+
+### Fixed
+- **Some downloads failed to install with a complaint about "backslashes as path separators"** (#287) — Release archives built on Windows with PowerShell's archiving tool record their folder names with backslashes. The extractor on the device handles that fine and merely warns about it, but it signals the warning with an exit code that RecompHub read as a failure, so the install stopped with everything already correctly unpacked. ReSkate's release is one of these; the warning is now recognised for what it is, while genuine failures such as a truncated download still stop the install.
+
 ## [v0.10.2] — 2026-10-02
 
 ### Fixed
