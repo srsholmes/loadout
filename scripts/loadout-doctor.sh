@@ -69,8 +69,8 @@ section "2. Required tools"
 for t in xdotool xprop xrandr pgrep tar systemctl; do have "$t"; done
 echo ""
 echo "  optional:"
-for t in zenity kdialog yad busctl flatpak nmcli iw unzip zip bsdtar \
-         podman distrobox legendary openrgb ectool lsusb udevadm inputplumber; do
+for t in busctl flatpak nmcli iw unzip zip \
+         podman legendary openrgb ectool lsusb udevadm inputplumber; do
     have "$t"
 done
 

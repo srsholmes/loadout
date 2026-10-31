@@ -549,7 +549,7 @@ function StepHeader({
     },
     artwork: {
       title: "Artwork (optional)",
-      sub: "A SteamGridDB API key unlocks high-res cover art across the recomp catalog, store-bridge, the SteamGridDB plugin and any homepage tile that doesn't already have art. Skip if you'd rather plain tiles — it's just visuals.",
+      sub: "A SteamGridDB API key unlocks high-res cover art across store-bridge, the SteamGridDB plugin and any homepage tile that doesn't already have art. Skip if you'd rather plain tiles — it's just visuals.",
     },
     plugins: {
       title: "Choose your plugins",

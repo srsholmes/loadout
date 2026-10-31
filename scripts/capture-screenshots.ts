@@ -136,7 +136,6 @@ const PAGE_RECIPES: Record<string, PageShot[]> = {
       ],
     },
   ],
-  recomp: [{ name: "detail", steps: [{ kind: "tile" }] }],
   hltb: [{ name: "detail", steps: [{ kind: "tile" }] }],
   // The landing shot is the Library (available games) tab; only the
   // Installed tab is captured as a sub-page. Downloads/Detected/detail
@@ -342,14 +341,13 @@ async function scrollRandom(cdp: CDP): Promise<boolean> {
 const GRID_TILE_THRESHOLD = 6;
 
 // Plugins whose grid we keep pinned to the top instead of random-
-// scrolling: their hero/top row is the intended look (RecompHub's hero
-// row, TDP's controls, PlayTime's headline + day filters).
+// scrolling: their hero/top row is the intended look (TDP's controls,
+// PlayTime's headline + day filters).
 const NO_SCROLL = new Set([
   // Its recipes position the page deliberately (scroll to top after opening a
   // sub-page whose windowed grid inherited the previous view's offset), and
   // `varyGridView` would undo that a moment later.
   "collections",
-  "recomp",
   "tdp-control",
   "playtime",
 ]);
@@ -443,7 +441,7 @@ async function clickText(cdp: CDP, label: string): Promise<boolean> {
 }
 
 // A click target may not exist yet — plugin headers/grids that fetch data
-// (recomp, hltb, steamgriddb, launch-options) render their gear/tiles only
+// (hltb, steamgriddb, launch-options) render their gear/tiles only
 // after the load resolves. Poll for the element before giving up so a slow
 // fetch doesn't read as "page absent".
 const CLICK_TRIES = 6;

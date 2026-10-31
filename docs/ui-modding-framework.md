@@ -66,7 +66,7 @@ Plugins declare their UI surface in the **`plugin` field of their
 
 | `type`     | Description                                                       | Status |
 |------------|-------------------------------------------------------------------|--------|
-| `overlay`  | Floating widget rendered by the **Electrobun overlay shell**.     | **Used** (e.g. `quick-links`, `recomp`) |
+| `overlay`  | Floating widget rendered by the **Electrobun overlay shell**.     | **Used** (e.g. `quick-links`) |
 | `qam`      | Tab in the Quick Access Menu sidebar.                             | **Defined but disabled** — QAM patching is commented out in the injector ("no plugins currently use it usefully") |
 | `menu`     | Item in Steam's main menu; navigates to a `route` when activated. | **Wired** (menu-patcher) but no plugin uses it |
 | `css`      | CSS-only plugin (injects manifest `styles`, no React component).  | **Wired** but no plugin uses it |

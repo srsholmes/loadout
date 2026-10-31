@@ -359,17 +359,14 @@ REQUIRED_TOOLS="xdotool xprop xrandr pgrep tar systemctl"
 # of the alternatives present.
 optional_tools() {
     cat <<'EOF'
-zenity|kdialog|yad	native file dialogs (recomp ROM picker)
 inputplumber	controller wake button in games (Phase 2 installs this)
 busctl	InputPlumber / bluetooth DBus calls
 flatpak	flatpak-manager, and flatpak entries in quick-links
 nmcli	network-info, and the wifi plugin's connection controls
 iw	wifi plugin radio recovery
-unzip	sound-loader packs and recomp archives
+unzip	sound-loader packs
 zip	sound-loader pack export
-bsdtar	recomp disc-image extraction
-podman	recomp build environment
-distrobox	recomp build environment
+podman	SteamOS webkit closure build, building ryzenadj for tdp-control
 legendary	store-bridge (Epic Games library)
 openrgb	rgb-control
 ectool	fan-control

@@ -47,7 +47,7 @@ interface PluginMeta {
 /**
  * Plugin ids whose default Title-Case rendering is wrong because of
  * embedded acronyms (HLTB, RGB, TDP, IPC, …) or branded names
- * (SteamGridDB, ProtonDB, RecompHub, …). The fallback name-from-id
+ * (SteamGridDB, ProtonDB, …). The fallback name-from-id
  * derivation handles the long tail of plugins; this table is the
  * targeted override for the cases where it produces something
  * obviously wrong on the user-facing READMEs + gallery.
@@ -59,7 +59,6 @@ const DISPLAY_NAME_OVERRIDES: Record<string, string> = {
   "rgb-control": "RGB Control",
   steamgriddb: "SteamGridDB",
   "protondb-badges": "ProtonDB Badges",
-  recomp: "RecompHub",
   "handy-dictation": "Dictation",
 };
 
@@ -250,8 +249,6 @@ const PLUGIN_ABOUT: Record<string, string> = {
     "Tracks how long you play each game, including non-Steam titles, with per-day breakdowns and an all-time view that merges in Steam's own lifetime hours — so you can actually see where your time goes.",
   "protondb-badges":
     "Adds ProtonDB compatibility ratings to your Steam library — a tier badge on every game tile plus per-game detail in the home widget — so you know whether something is likely to run well on Linux/Proton before you install it.",
-  recomp:
-    "Browse, install, and launch community recompilations and native ports of classic games — you supply your own game files and it handles the rest, turning supported retro titles into properly native Linux builds.",
   "rgb-control":
     "Control the RGB lighting on Linux handhelds via OpenRGB, sysfs LEDs, and platform-specific interfaces — set colours and effects, or kill the lights to save battery, without reaching for extra desktop tools.",
   "sound-loader":
@@ -308,7 +305,6 @@ function templateFor(meta: PluginMeta): string {
  * (landing) screenshot. Order here is the order they appear.
  */
 const FEATURED: readonly string[] = [
-  "recomp",
   "store-bridge",
   "steamgriddb",
   "theme-loader",
