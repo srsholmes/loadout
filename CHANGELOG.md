@@ -8,6 +8,11 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com).
 
 ---
 
+## [v0.11.1] — 2026-10-31
+
+### Removed
+- **RecompHub** (#289) — the plugin for browsing, installing, and playing recompiled/decompiled retro games is no longer part of Loadout; we don't want to maintain it going forward. Already-installed games and their Steam shortcuts are untouched — this only affects what ships in new releases.
+
 ## [v0.11.0] — 2026-10-05
 
 ### Added
