@@ -110,25 +110,6 @@ const config: KnipConfig = {
       entry: ["app.tsx", "backend.ts", "**/*.{test,spec}.{ts,tsx}"],
       project: "**/*.{ts,tsx,css}",
     },
-
-    // recomp additionally ships dynamic-loaded game/mod setup modules and
-    // operator scripts on top of the standard plugin entries.
-    "plugins/recomp": {
-      entry: [
-        "app.tsx",
-        "backend.ts",
-        "**/*.{test,spec}.{ts,tsx}",
-        // Per-game/per-mod setup modules are dynamic-imported at install
-        // time via games.json `setupModule` (lib/mods.ts), never statically
-        // referenced.
-        "games/*/setup.ts",
-        "games/*/mods/*/setup.ts",
-        // Maintainer tooling run ad hoc via `bun plugins/recomp/scripts/...`
-        // (catalog audits, installer smoke tests).
-        "scripts/*.ts",
-      ],
-      project: "**/*.{ts,tsx,css}",
-    },
   },
 };
 

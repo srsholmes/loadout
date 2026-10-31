@@ -64,16 +64,14 @@ it's absent.
 
 | Tool | Gates |
 |---|---|
-| `zenity` / `kdialog` / `yad` (any one) | Native file dialogs — the recomp ROM picker (`@loadout/file-picker`) |
 | `inputplumber` | Controller wake button in games (installer Phase 2 offers to install it) |
 | `busctl` | InputPlumber and bluetooth DBus calls (ships with systemd) |
 | `flatpak` | flatpak-manager, and flatpak entries in quick-links |
 | `nmcli` | network-info, and the wifi plugin's connection controls |
 | `iw` | wifi plugin radio recovery |
-| `unzip` | sound-loader packs, recomp archives |
+| `unzip` | sound-loader packs |
 | `zip` | sound-loader pack export |
-| `bsdtar` | recomp disc-image extraction |
-| `podman`, `distrobox` | recomp build environment (and the SteamOS webkit closure build) |
+| `podman` | the SteamOS webkit closure build, and building ryzenadj for tdp-control |
 | `legendary` | store-bridge — Epic Games library |
 | `openrgb` | rgb-control |
 | `ectool` | fan-control |

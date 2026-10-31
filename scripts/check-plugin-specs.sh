@@ -87,14 +87,12 @@ is_type_only_module() {
 # Lib modules with an explicit reason to not carry a direct spec.
 # Each entry needs a one-line justification immediately above. Keep
 # the list short — direct unit tests are cheaper than indirect.
-# Empty: the plugins that needed exemptions (recomp) are not part of
-# the minimal PoC; re-add entries when those plugins are migrated back.
 EXEMPT_LIB=""
 
 # Scoped to the plugins whose lib/ trees have been ratcheted onto the
-# rule. recomp is back in scope — its lib modules now carry sibling
-# specs. store-bridge stays out until its lib coverage lands.
-SPEC_SCOPED_LIB_DIRS="plugins/recomp/lib"
+# rule. Empty: none are currently scoped. store-bridge stays out
+# until its lib coverage lands.
+SPEC_SCOPED_LIB_DIRS=""
 for dir in $SPEC_SCOPED_LIB_DIRS; do
   [ -d "$dir" ] || continue
   for lib in $(find "$dir" -type f -name '*.ts' 2>/dev/null); do
