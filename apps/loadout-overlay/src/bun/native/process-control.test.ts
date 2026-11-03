@@ -56,12 +56,16 @@ mock.module("./ffi", () => ({
 type FsState = {
   procEntries: string[];
   commByPid: Record<string, string>;
+  procUnreadable?: boolean;
 };
 let fsState: FsState;
 
 mock.module("node:fs", () => ({
   readdirSync: (path: string) => {
-    if (path === "/proc") return fsState.procEntries;
+    if (path === "/proc") {
+      if (fsState.procUnreadable) throw new Error("EACCES");
+      return fsState.procEntries;
+    }
     throw new Error(`unexpected readdirSync: ${path}`);
   },
   readFileSync: (path: string) => {
@@ -79,7 +83,7 @@ mock.module("node:fs", () => ({
 
 // isGameModeActive is re-exported from @loadout/steam-paths and tested there
 // (gaming-mode.test.ts) — no need to re-test the same impl here.
-const { findSteamPid, suspendSteam, resumeSteam } =
+const { findSteamPids, suspendSteam, resumeSteam, suspendAllSteam, resumeAllSteam } =
   await import("./process-control");
 
 beforeEach(() => {
@@ -88,57 +92,89 @@ beforeEach(() => {
   fsState = { procEntries: [], commByPid: {} };
 });
 
-describe("findSteamPid", () => {
+describe("findSteamPids", () => {
   it("returns the pid whose /proc/<pid>/comm is exactly 'steam'", () => {
     fsState.procEntries = ["1", "42", "3372", "9999"];
     fsState.commByPid["1"] = "systemd";
     fsState.commByPid["42"] = "Xorg";
     fsState.commByPid["3372"] = "steam";
     fsState.commByPid["9999"] = "bash";
-    expect(findSteamPid()).toBe(3372);
+    expect(findSteamPids()).toEqual([3372]);
   });
 
   it("does NOT match steamwebhelper (Steam's UI child)", () => {
     fsState.procEntries = ["100", "200"];
     fsState.commByPid["100"] = "steamwebhelper";
     fsState.commByPid["200"] = "steamwebhe"; // 10-char truncation paranoia
-    expect(findSteamPid()).toBeNull();
+    expect(findSteamPids()).toEqual([]);
   });
 
   it("does NOT match partial prefixes like 'steamcmd'", () => {
     fsState.procEntries = ["55"];
     fsState.commByPid["55"] = "steamcmd";
-    expect(findSteamPid()).toBeNull();
+    expect(findSteamPids()).toEqual([]);
   });
 
   it("ignores non-numeric /proc entries (self, cpuinfo, ...)", () => {
     fsState.procEntries = ["self", "cpuinfo", "meminfo", "3372"];
     fsState.commByPid["3372"] = "steam";
-    expect(findSteamPid()).toBe(3372);
+    expect(findSteamPids()).toEqual([3372]);
   });
 
   it("tolerates a process disappearing between readdir and readFile", () => {
     // proc lists 777 but no comm entry (ENOENT) — skip and keep scanning.
     fsState.procEntries = ["777", "888"];
     fsState.commByPid["888"] = "steam";
-    expect(findSteamPid()).toBe(888);
+    expect(findSteamPids()).toEqual([888]);
   });
 
-  it("returns null when /proc is unreadable", () => {
-    // Override readdirSync to throw for this test only.
-    mock.module("node:fs", () => ({
-      readdirSync: () => {
-        throw new Error("EACCES");
-      },
-      readFileSync: () => {
-        throw new Error("should not be called");
-      },
-    }));
-    // Re-import after mock change not feasible in bun test without
-    // module cache tricks — instead, verify via empty proc: the
-    // happy path already covers the catch.
+  it("returns nothing when /proc is unreadable", () => {
+    fsState.procUnreadable = true;
+    expect(findSteamPids()).toEqual([]);
+  });
+
+  it("returns both the launcher and the containerised client", () => {
+    // Real layout: steam(3653) → … → pv-adverb → steam(3809). The launcher
+    // sorts first and holds no hidraw fds; the client is the one that matters.
+    fsState.procEntries = ["3653", "3699", "3809", "4035"];
+    fsState.commByPid["3653"] = "steam";
+    fsState.commByPid["3699"] = "srt-client-cont";
+    fsState.commByPid["3809"] = "steam";
+    fsState.commByPid["4035"] = "steamwebhelper";
+    expect(findSteamPids()).toEqual([3653, 3809]);
+  });
+});
+
+describe("suspendAllSteam / resumeAllSteam", () => {
+  beforeEach(() => {
+    fsState.procEntries = ["3653", "3809"];
+    fsState.commByPid["3653"] = "steam";
+    fsState.commByPid["3809"] = "steam";
+  });
+
+  it("freezes every steam process, not just the first", () => {
+    expect(suspendAllSteam()).toBe(true);
+    expect(killCalls).toEqual([
+      { pid: 3653, sig: 19 },
+      { pid: 3809, sig: 19 },
+    ]);
+  });
+
+  it("thaws every steam process", () => {
+    resumeAllSteam();
+    expect(killCalls).toEqual([
+      { pid: 3653, sig: 18 },
+      { pid: 3809, sig: 18 },
+    ]);
+  });
+
+  it("reports false when nothing was frozen", () => {
+    killReturn = -1;
+    expect(suspendAllSteam()).toBe(false);
     fsState.procEntries = [];
-    expect(findSteamPid()).toBeNull();
+    killCalls.length = 0;
+    expect(suspendAllSteam()).toBe(false);
+    expect(killCalls).toEqual([]);
   });
 });
 

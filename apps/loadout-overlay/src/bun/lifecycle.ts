@@ -2,7 +2,7 @@
 // management loop and the SIGINT/SIGTERM-driven shutdown ladder.
 // Extracted from index.ts so the orchestrator stays a wire-up file,
 // not a 600-LOC monolith. Both functions need to read/write the same
-// pieces of module-global state index.ts owns (steamPid cache, the
+// pieces of module-global state index.ts owns (the
 // pending close-path SIGCONT timer, the management-loop running flag),
 // so they take dependency-injected refs rather than touching the
 // orchestrator's bindings directly. `{ current: T }` wrappers match
@@ -11,7 +11,7 @@
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore — resolved at runtime once electrobun is installed.
 import type { GlobalShortcut as GlobalShortcutType } from "electrobun/bun";
-import { resumeSteam } from "./native/process-control";
+import { resumeAllSteam } from "./native/process-control";
 import type { GamescopeAtoms } from "./native/gamescope-atoms";
 import type { InputInterceptHandle } from "./native/input-intercept";
 import type { IpInterceptHandle } from "./native/ip-intercept";
@@ -86,8 +86,6 @@ export interface ShutdownDeps {
    * exit and the helper logs spurious "process exited" noise.
    */
   pendingResumeTimer: Ref<ReturnType<typeof setTimeout> | null>;
-  /** Cached Steam PID — null if we never opened the overlay this session. */
-  steamPid: Ref<number | null>;
   /** Gamescope X11 atoms object; .hide() zeroes STEAM_OVERLAY=1. */
   atoms: GamescopeAtoms;
   /** Input interceptor handle — may be null if it failed to start. */
@@ -119,7 +117,7 @@ export async function shutdown(deps: ShutdownDeps): Promise<void> {
   // Audit B-027: cancel the pending close-path SIGCONT timer. Steam is
   // resumed unconditionally below; running the deferred resume after
   // process.exit(0) is harmless but logs a benign "process exited"
-  // error from the resumeSteam helper, which is noise on shutdown.
+  // error from the resume helper, which is noise on shutdown.
   if (deps.pendingResumeTimer.current !== null) {
     clearTimeout(deps.pendingResumeTimer.current);
     deps.pendingResumeTimer.current = null;
@@ -130,7 +128,7 @@ export async function shutdown(deps: ShutdownDeps): Promise<void> {
     // the only recovery is a hard reboot. Do this FIRST, before any
     // other teardown that might hang. SIGCONT on a running process
     // is a no-op, so calling this unconditionally is safe.
-    if (deps.steamPid.current !== null) resumeSteam(deps.steamPid.current);
+    resumeAllSteam();
     // Critical #2: zero the Gamescope atoms so we never exit with
     // STEAM_OVERLAY=1 still on the window — that would leave the
     // overlay visually on top with no way for the user to dismiss it.

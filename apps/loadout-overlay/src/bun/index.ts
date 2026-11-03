@@ -47,9 +47,9 @@ import { watch as fsWatch, type FSWatcher } from "node:fs";
 import { dirname, basename } from "node:path";
 import type { WebviewMessages } from "@loadout/types";
 import {
-  findSteamPid,
-  suspendSteam,
-  resumeSteam,
+  findSteamPids,
+  suspendAllSteam,
+  resumeAllSteam,
   isGameModeActive,
 } from "./native/process-control";
 
@@ -132,16 +132,10 @@ import { cleanupUpdateArtifacts, reapOldGeneration } from "./lib/updater";
 // the BrowserView.defineRPC call below (which feeds them into the RPC
 // factory).
 
-// Cached on first open — stable for the session. `findSteamPid()` is
-// a /proc scan; we don't want to run it on every toggle. Wrapped in
-// a ref (B-030 step 2) so shutdown() in ./lifecycle can read the
-// latest value without re-exporting a setter.
-const steamPid: { current: number | null } = { current: null };
-
 // Audit B-027: handle for the close-path 250ms deferred SIGCONT. Held
 // so shutdown() can cancel it and so back-to-back close events
-// reset rather than stack timers. Wrapped in a ref (B-030 step 2)
-// alongside steamPid for the same reason.
+// reset rather than stack timers. Wrapped in a ref (B-030 step 2) so
+// shutdown() in ./lifecycle sees the latest value without a setter.
 const pendingResumeTimer: { current: ReturnType<typeof setTimeout> | null } = {
   current: null,
 };
@@ -222,7 +216,6 @@ const rpc = BrowserView.defineRPC({
     shortcuts,
     gamescopeMode,
     cachedSteamSoundsPath,
-    steamPid,
     lastHeartbeat,
     webviewEverAlive,
   }),
@@ -467,10 +460,12 @@ const DECK_RESUME_DRAIN_MS = 500;
 // prior session may have frozen Steam under a different policy than this one.
 // SIGCONT on a running process is a kernel no-op, so this is always safe.
 {
-  const bootSteamPid = findSteamPid();
-  if (bootSteamPid !== null) {
-    resumeSteam(bootSteamPid);
-    trace("[overlay] startup: SIGCONT Steam (thaw any stale freeze)");
+  const bootSteamPids = findSteamPids();
+  if (bootSteamPids.length > 0) {
+    resumeAllSteam();
+    trace(
+      `[overlay] startup: SIGCONT Steam PIDs ${bootSteamPids.join(", ")} (thaw any stale freeze)`,
+    );
   }
 }
 
@@ -537,8 +532,7 @@ function forceCloseOverlay(reason: string): Promise<void> {
     clearTimeout(pendingReleaseTimer);
     pendingReleaseTimer = null;
   }
-  if (steamPid.current === null) steamPid.current = findSteamPid();
-  if (steamPid.current !== null) resumeSteam(steamPid.current);
+  resumeAllSteam();
   // Emergency path: release immediately (no resume-burst drain — a wedged
   // renderer is worse than a replayed edge) and thaw. The IP release may
   // still hold intercept for ≤RELEASE_DRAIN_MAX_MS if a button is down;
@@ -624,28 +618,21 @@ function toggleOverlay(source: string) {
     // TASK_STOPPED earlier (a prior session with the flag on, a stuck
     // suspend, etc.) the only recovery without this is a reboot. SIGCONT
     // on a running process is a kernel no-op, so this is free.
-    if (steamPid.current === null) steamPid.current = findSteamPid();
-    if (steamPid.current !== null) {
-      const pid = steamPid.current;
-      // Audit B-027: track the handle so shutdown() can cancel a
-      // pending resume; otherwise the deferred SIGCONT fires post-exit
-      // and logs spurious "process exited" noise from the helper.
-      if (pendingResumeTimer.current !== null) clearTimeout(pendingResumeTimer.current);
-      pendingResumeTimer.current = setTimeout(() => {
-        pendingResumeTimer.current = null;
-        resumeSteam(pid);
-        if (deferRelease) {
-          if (pendingReleaseTimer !== null) clearTimeout(pendingReleaseTimer);
-          pendingReleaseTimer = setTimeout(() => {
-            pendingReleaseTimer = null;
-            intercept.current?.release();
-          }, DECK_RESUME_DRAIN_MS);
-        }
-      }, 250);
-    } else if (deferRelease) {
-      // No Steam pid found — nothing to drain; release now rather than never.
-      intercept.current?.release();
-    }
+    // Audit B-027: track the handle so shutdown() can cancel a
+    // pending resume; otherwise the deferred SIGCONT fires post-exit
+    // and logs spurious "process exited" noise from the helper.
+    if (pendingResumeTimer.current !== null) clearTimeout(pendingResumeTimer.current);
+    pendingResumeTimer.current = setTimeout(() => {
+      pendingResumeTimer.current = null;
+      resumeAllSteam();
+      if (deferRelease) {
+        if (pendingReleaseTimer !== null) clearTimeout(pendingReleaseTimer);
+        pendingReleaseTimer = setTimeout(() => {
+          pendingReleaseTimer = null;
+          intercept.current?.release();
+        }, DECK_RESUME_DRAIN_MS);
+      }
+    }, 250);
     steamFrozenThisOpen = false;
     state.isOpen = false;
     broadcastOverlayVisibility();
@@ -716,15 +703,12 @@ function toggleOverlay(source: string) {
     // doRelease() no-ops when not intercepting, so this is free otherwise.
     intercept.current?.release();
     if (suspendSteamEnabled && isGameModeActive()) {
-      if (steamPid.current === null) steamPid.current = findSteamPid();
-      if (steamPid.current !== null) {
-        // Track what ACTUALLY happened: steamPid is cached for the session, so
-        // after Steam restarts the SIGSTOP can fail with ESRCH/EPERM. Assuming
-        // success made every later close take the deferred-release path and
-        // hold the grabs ~750ms for a drain that never happens.
-        steamFrozenThisOpen = suspendSteam(steamPid.current);
-        if (steamFrozenThisOpen) startFreezeWatchdog();
-      }
+      // Track what ACTUALLY happened: the SIGSTOP can fail or find no Steam.
+      // Assuming success made every later close take the deferred-release
+      // path and hold the grabs ~750ms for a drain that never happens.
+      steamFrozenThisOpen = suspendAllSteam();
+      if (steamFrozenThisOpen) startFreezeWatchdog();
+      trace(`[toggle] Steam freeze: ${steamFrozenThisOpen ? "frozen" : "NOT frozen"}`);
     } else if (suspendSteamEnabled) {
       trace("[toggle] desktop mode (no gamescope) — skipping Steam freeze");
     }
@@ -1093,7 +1077,7 @@ if (!shortcutRegistered) {
 // ---- X11 / Gamescope loop + shutdown ---------------------------------------
 // Audit B-030 step 2 (2026-05): the management loop and the
 // SIGINT/SIGTERM-driven shutdown ladder now live in ./lifecycle so the
-// orchestrator stays a wire-up file. Mutable singletons (steamPid,
+// orchestrator stays a wire-up file. Mutable singletons (
 // pendingResumeTimer, managementLoopRunning) are passed as `{ current: T }`
 // refs so the lifecycle helpers and the in-file toggleOverlay see the
 // same value without a setter dance.
@@ -1146,7 +1130,6 @@ function runShutdown(): Promise<void> {
   return shutdown({
     running: managementLoopRunning,
     pendingResumeTimer,
-    steamPid,
     atoms,
     intercept,
     ipIntercept,

@@ -2,7 +2,7 @@
 // gamepad and keyboard events can't bleed through to the game underneath.
 // Port of src-tauri/src/process_control.rs from the Tauri overlay.
 //
-// Only the main `steam` PID is frozen — NOT the game process, NOT
+// Only `steam` processes are frozen — NOT the game process, NOT
 // steamwebhelper (a child of steam that shows the UI). Game continues
 // running in the background; the OS just stops delivering input events
 // while its parent Steam is in TASK_STOPPED state.
@@ -23,19 +23,32 @@ const SIGCONT = 18;
 const SIGSTOP = 19;
 
 /**
- * Scan /proc for a process whose comm is exactly "steam". Steam's
+ * Scan /proc for every process whose comm is exactly "steam". Steam's
  * kernel comm name is 5 chars, so the 15-char TASK_COMM_LEN limit
  * is a non-issue. We deliberately ignore steamwebhelper (15-char
  * truncated to "steamwebhelper" — no match) and anything starting
  * with "steam" that isn't exact.
+ *
+ * There can be more than one: the 64-bit client runs in a pressure-vessel
+ * container, so the tree is
+ *   steam (launcher) → srt-client-cont → srt-bwrap → pv-adverb → steam (client)
+ * and BOTH share the comm. Only the inner client holds the controllers'
+ * hidraw fds, and the launcher sorts first in /proc, so acting on a single
+ * "the Steam PID" silently freezes the launcher while the client keeps
+ * reading the pad. Callers must signal all of them.
+ *
+ * Scanned fresh on every call rather than cached: Steam can restart under a
+ * long-lived overlay, and a cached PID would then miss it (or hit a recycled
+ * PID). This only runs on user-driven toggles, not in a hot loop.
  */
-export function findSteamPid(): number | null {
+export function findSteamPids(): number[] {
   let entries: string[];
   try {
     entries = readdirSync("/proc");
   } catch {
-    return null;
+    return [];
   }
+  const pids: number[] = [];
   for (const entry of entries) {
     const pid = Number(entry);
     if (!Number.isFinite(pid) || pid <= 0) continue;
@@ -46,9 +59,9 @@ export function findSteamPid(): number | null {
       // Process gone between readdir and readFile — normal, skip.
       continue;
     }
-    if (comm === "steam") return pid;
+    if (comm === "steam") pids.push(pid);
   }
-  return null;
+  return pids;
 }
 
 // Steam Gaming Mode detection lives in @loadout/steam-paths so the overlay
@@ -94,6 +107,20 @@ export function resumeSteam(pid: number): boolean {
   const ok = sendSignal(pid, SIGCONT, "SIGCONT");
   if (ok) console.log(`[process-control] resumed Steam (PID ${pid})`);
   return ok;
+}
+
+/** SIGSTOP every Steam process. Returns true if at least one was frozen, which
+ *  is what the close path's drain logic and the watchdog need to know. Caller
+ *  must pair this with resumeAllSteam(). */
+export function suspendAllSteam(): boolean {
+  const results = findSteamPids().map((pid) => suspendSteam(pid));
+  return results.includes(true);
+}
+
+/** SIGCONT every Steam process. Safe to call unconditionally: SIGCONT on a
+ *  running process is a kernel no-op. */
+export function resumeAllSteam(): void {
+  for (const pid of findSteamPids()) resumeSteam(pid);
 }
 
 /** SIGTERM the given PID. Used by the "Restart Steam" maintenance
