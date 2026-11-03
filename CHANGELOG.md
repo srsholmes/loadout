@@ -8,6 +8,11 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com).
 
 ---
 
+## [v0.11.2] — 2026-11-03
+
+### Fixed
+- **External controllers drove Steam behind the open overlay** (#290) — With a Bluetooth or USB pad connected, pressing buttons in the overlay also moved around Steam's interface underneath it. Loadout pauses Steam while the overlay is open to stop exactly this, but Steam now runs as two processes with the same name, and Loadout was only pausing the launcher rather than the client that actually reads the controller. Every Steam process is now paused while the overlay is open and resumed when it closes. Restarting Steam from inside the overlay resumes Steam first, so the restart isn't held up by the pause.
+
 ## [v0.11.1] — 2026-10-31
 
 ### Removed
