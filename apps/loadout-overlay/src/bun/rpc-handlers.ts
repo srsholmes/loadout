@@ -8,7 +8,7 @@
 // module-global state index.ts owns. Rather than reach back into
 // orchestrator bindings (which would couple the two files at the wrong
 // seam), the factory takes a `deps` bag and the closures capture that.
-// Mutable singletons (`steamPid`, `shortcuts`) are passed as
+// Mutable singletons (`shortcuts`) are passed as
 // `{ current: T }` refs so handlers can read AND write them — same
 // pattern lib/ uses elsewhere and shutdown.ts/lifecycle.ts adopts.
 //
@@ -22,8 +22,9 @@
 import { readFile } from "node:fs/promises";
 import type { Ref } from "./lifecycle";
 import {
-  findSteamPid,
+  findSteamPids,
   resumeSteam,
+  resumeAllSteam,
   terminateSteam,
   killSteam,
   isPidAlive,
@@ -71,10 +72,6 @@ export interface RpcHandlerDeps {
   /** Resolved Steam UI sounds dir, or null if no Steam install found.
    *  Constant for the session. */
   cachedSteamSoundsPath: string | null;
-  /** Cached Steam PID — mutated by forceUnfreezeSteam (sets it on
-   *  successful SIGCONT) and restartSteam (clears it after kill so
-   *  the next toggle rediscovers the respawned PID). */
-  steamPid: Ref<number | null>;
   /** Last time the webview sent an `overlayHeartbeat` (Date.now() ms). The
    *  freeze watchdog in index.ts reads this to detect a hung overlay. */
   lastHeartbeat: Ref<number>;
@@ -169,7 +166,7 @@ export function buildRpcHandlers(deps: RpcHandlerDeps) {
         params?: unknown,
       ): Promise<{ success: boolean; error?: string; path?: string }> =>
         exportLogs(params),
-      // Emergency SIGCONT — finds the "steam" comm PID and resumes it.
+      // Emergency SIGCONT — finds the "steam" comm PIDs and resumes them.
       // Exposed as a maintenance button so a user stuck with frozen
       // Steam (e.g. crashed overlay left it TASK_STOPPED, or the
       // close-path SIGCONT landed before the PID got cached) can
@@ -177,13 +174,14 @@ export function buildRpcHandlers(deps: RpcHandlerDeps) {
       // harmless, so this is safe to click when nothing is wrong.
       forceUnfreezeSteam: async (): Promise<{ success: boolean; error?: string }> => {
         try {
-          const pid = findSteamPid();
-          if (pid === null) {
+          const pids = findSteamPids();
+          if (pids.length === 0) {
             return { success: false, error: "Steam process not found" };
           }
-          deps.steamPid.current = pid;
-          const ok = resumeSteam(pid);
-          if (!ok) return { success: false, error: `SIGCONT to PID ${pid} failed` };
+          const failed = pids.filter((pid) => !resumeSteam(pid));
+          if (failed.length > 0) {
+            return { success: false, error: `SIGCONT to PID ${failed.join(", ")} failed` };
+          }
           return { success: true };
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -204,10 +202,15 @@ export function buildRpcHandlers(deps: RpcHandlerDeps) {
       // Audit B-022: the ladder itself is in lib/restart-steam.ts so
       // the timing tradeoff is unit-tested without a real Steam.
       restartSteam: async (): Promise<{ success: boolean; error?: string }> => {
-        const pid = findSteamPid();
-        if (pid === null) {
+        const pids = findSteamPids();
+        if (pids.length === 0) {
           return { success: false, error: "Steam process not found" };
         }
+        // This RPC is reached from inside the open overlay, where Steam is
+        // frozen: a stopped client can't act on `steam -shutdown`, and SIGTERM
+        // stays pending until it's continued. Thaw first or the graceful step
+        // always burns its timeout and we end up SIGKILLing a healthy client.
+        resumeAllSteam();
         await runRestartSteamLadder({
           trySpawnShutdown: () => {
             try {
@@ -225,20 +228,16 @@ export function buildRpcHandlers(deps: RpcHandlerDeps) {
               return false;
             }
           },
-          isPidAlive: () => isPidAlive(pid),
+          isPidAlive: () => pids.some((pid) => isPidAlive(pid)),
           terminate: () => {
-            terminateSteam(pid);
+            for (const pid of pids) terminateSteam(pid);
           },
           kill: () => {
-            killSteam(pid);
+            for (const pid of pids) killSteam(pid);
           },
           delay: (ms: number) => new Promise((r) => setTimeout(r, ms)),
         });
-        // gamescope-session-plus respawns Steam with a new PID — drop
-        // the cached one so the next overlay-open's SIGSTOP/SIGCONT
-        // cycle rediscovers it.
-        deps.steamPid.current = null;
-        console.log(`[overlay] restartSteam fired (old PID ${pid})`);
+        console.log(`[overlay] restartSteam fired (old PIDs ${pids.join(", ")})`);
         return { success: true };
       },
       // Power off / reboot the machine. Delegated to systemd via
